@@ -1,8 +1,10 @@
 """Python gateway SDK adapters: signer discovery and the paid runner call.
 
-The only module that imports ``livepeer_gateway`` (enforced by tests/structure). It codes against
-SDK #71 (``auth_ids`` and ``payment_sent`` on results and errors), which is required for M2 and
-pinned in pyproject.toml (docs/references/upstream-baseline.md).
+The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
+comes from the SDK's ``on_payment_session`` callback (eliteprox/livepeer-python-gateway PR 5, pinned
+in pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it for every session the signer
+signs, just before the paid request goes out. The adapter derives ``auth_ids`` and ``payment_sent``
+from those sessions, so the engine keeps owning failover and cost attribution.
 """
 
 import json
@@ -19,7 +21,7 @@ from livepeer_gateway.errors import (
     SkipPaymentCycle,
 )
 from livepeer_gateway.live_runner import LiveRunnerInstance, LiveRunnerPriceInfo, call_runner
-from livepeer_gateway.remote_signer import RemoteSignerError
+from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
 
 from livepeer_builder.contracts import AttemptOutcome, JobRequest, NetworkRate, Runner, RunnerReply
 from livepeer_builder.errors import RunnerCallError
@@ -56,6 +58,25 @@ class SignerDiscoverySource:
         return tuple(runners_from_entries(entries))
 
 
+class _SignedSessions:
+    """Collects what the signer signed during one call (``on_payment_session``).
+
+    A reported session means the signer charged the allocation. It counts as payment sent even if
+    the SDK then finds the payment unusable and does not send it: that is conservative, so the
+    engine never fails over (or retries) work that may already be paid for.
+    """
+
+    def __init__(self) -> None:
+        self.signed = False
+        self.auth_ids: list[str] = []
+
+    def __call__(self, session: LivePaymentSession) -> None:
+        self.signed = True
+        auth_id = session.auth_id
+        if auth_id and auth_id not in self.auth_ids:
+            self.auth_ids.append(auth_id)
+
+
 class SdkRunnerTransport:
     """``call_runner`` with the actor's credential as the signer bearer. Unpaid when there is none."""
 
@@ -75,6 +96,7 @@ class SdkRunnerTransport:
             price_info=_price_info(runner.rate),
         )
         url = runner.url.rstrip("/") + request.path
+        sessions = _SignedSessions()
         try:
             result = await call_runner(
                 url,
@@ -85,12 +107,20 @@ class SdkRunnerTransport:
                 signer_headers={"Authorization": f"Bearer {credential}"} if paid else None,
                 timeout=request.timeout_s,
                 max_payment_challenge_retries=self._retries,
+                on_payment_session=sessions if paid else None,
             )
         except LivepeerGatewayError as error:
-            raise call_error(error, url) from error
+            raise call_error(
+                error, url, payment_sent=sessions.signed, auth_ids=tuple(sessions.auth_ids)
+            ) from error
         except (aiohttp.ClientError, OSError) as error:
-            raise RunnerCallError(network_kind(error), str(error), payment_sent=False) from error
-        auth_ids = tuple(getattr(result, "auth_ids", ()) or ())
+            raise RunnerCallError(
+                network_kind(error),
+                str(error),
+                payment_sent=sessions.signed,
+                auth_ids=tuple(sessions.auth_ids),
+            ) from error
+        auth_ids = tuple(sessions.auth_ids)
         content = result.content if result.content is not None else json.dumps(result.data).encode()
         return RunnerReply(
             status_code=200,
@@ -99,12 +129,18 @@ class SdkRunnerTransport:
             data=result.data if result.content is None else None,
             auth_ids=auth_ids,
             manifest_id=result.session_id or None,
-            payment_sent=bool(result.session_id) or bool(auth_ids),
+            payment_sent=sessions.signed or bool(result.session_id),
         )
 
 
-def call_error(error: LivepeerGatewayError, runner_url: str) -> RunnerCallError:
-    """Map an SDK error to an attempt outcome without losing payment evidence."""
+def call_error(
+    error: LivepeerGatewayError,
+    runner_url: str,
+    *,
+    payment_sent: bool,
+    auth_ids: tuple[str, ...] = (),
+) -> RunnerCallError:
+    """Map an SDK error to an attempt outcome, with the payment evidence the callback collected."""
     kind: AttemptOutcome
     status: int | None = None
     body: str | None = None
@@ -115,8 +151,7 @@ def call_error(error: LivepeerGatewayError, runner_url: str) -> RunnerCallError:
     elif isinstance(error, LivepeerHTTPError):
         # An HTTP error from any other URL came from the signer.
         orchestrator_specific = error.status_code in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES
-        paid = bool(getattr(error, "payment_sent", False))
-        kind = "payment_refused" if orchestrator_specific and not paid else "payment"
+        kind = "payment_refused" if orchestrator_specific and not payment_sent else "payment"
         status = error.status_code
     elif isinstance(error, _PAYMENT_ERRORS):
         kind = "payment"
@@ -125,8 +160,8 @@ def call_error(error: LivepeerGatewayError, runner_url: str) -> RunnerCallError:
     return RunnerCallError(
         kind,
         str(error),
-        payment_sent=bool(getattr(error, "payment_sent", False)),
-        auth_ids=tuple(getattr(error, "auth_ids", ()) or ()),
+        payment_sent=payment_sent,
+        auth_ids=auth_ids,
         status_code=status,
         body=body,
     )

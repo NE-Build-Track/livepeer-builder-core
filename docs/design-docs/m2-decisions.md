@@ -62,5 +62,5 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 - **A1 (accepted).** `lpb_usage_rows` keeps a cache of Batteries usage rows for attribution and reconciliation.
   Batteries remains the authority. Retention is configurable.
 - **A2 (accepted).** Retention never deletes `uncertain` jobs automatically.
-- **A3 (accepted).** The SDK is pinned to fork commit `3250c08` (the #71 head) until John's simplified PR lands on
-  `releases/m2`.
+- **A3 (accepted; updated 12 October).** The SDK was pinned to fork commit `3250c08` (the #71 head) until John's simplified PR lands on
+  `releases/m2`. It is now pinned to the head of that PR, eliteprox PR 5 (`a097f2c`, the `on_payment_session` callback), until it merges (T1).

@@ -18,9 +18,10 @@ dependencies = [
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "cryptography>=42",
-    # M2 exception (docs/references/upstream-baseline.md): SDK #71 on the eliteprox fork.
-    # Re-pin to eliteprox/livepeer-python-gateway releases/m2 once John's PR merges.
-    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@3250c08cb6424d339614f1e9095064fbe7e6da6e",
+    # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
+    # eliteprox/livepeer-python-gateway PR 5 (on_payment_session). Re-pin to its merge commit on
+    # releases/m2 once it merges with the lowercase "state" fix (tech debt T1, T9).
+    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@a097f2cd002912f6acab795e2fddeb1504aee01d",
 ]
 
 [project.optional-dependencies]

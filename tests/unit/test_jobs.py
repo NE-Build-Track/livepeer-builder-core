@@ -204,16 +204,17 @@ async def test_admission_refuses_before_dispatch(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
 ) -> None:
     engine = await provisioned(make_engine, admin, "alice", max_concurrent_jobs=1)
-    release = asyncio.Event()
+    release, entered = asyncio.Event(), asyncio.Event()
 
     class Slow(ScriptedTransport):
         async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+            entered.set()  # the first job now holds the only admission slot
             await release.wait()
             return ScriptedTransport.ok()
 
     engine.jobs._transport = Slow()
     first = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
-    await asyncio.sleep(0.05)
+    await entered.wait()  # wait for the condition, not a fixed time
     with pytest.raises(NoCapacity):
         await engine.jobs.run(alice, JobRequest(app=APP))
     release.set()

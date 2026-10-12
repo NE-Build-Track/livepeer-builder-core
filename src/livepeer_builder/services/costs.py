@@ -270,8 +270,9 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
 def fees_of(rows: Iterable[UsageRow]) -> Fees:
     applied = [row for row in rows if row.status == "applied"]
     eth = sum((row.computed_fee_eth or Decimal(0) for row in applied), Decimal(0))
+    # No applied rows means nothing was charged: a known zero. None means some charge lacks a USD price.
     usd: Decimal | None = None
-    if applied and all(row.computed_fee_usd is not None for row in applied):
+    if all(row.computed_fee_usd is not None for row in applied):
         usd = sum((row.computed_fee_usd or Decimal(0) for row in applied), Decimal(0))
     return Fees(fee_eth=eth, fee_usd=usd, row_count=len(applied))
 

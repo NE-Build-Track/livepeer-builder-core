@@ -34,6 +34,8 @@ application. Delivery track: Cloud SPE Build Track, milestone **M2** (target 16 
 ```sh
 uv sync --all-extras                     # install (Python 3.12, uv)
 uv run pytest                            # unit, store (SQLite) and structural tests
+uv run pytest --cov --cov-report=json && uv run python scripts/check_coverage.py   # coverage gates
+uv run diff-cover coverage.xml --compare-branch=origin/releases/m2 --fail-under=90  # needs --cov-report=xml
 LPB_TEST_POSTGRES_URL=postgresql+asyncpg://... uv run pytest tests/store   # also on Postgres
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                              # strict

@@ -36,7 +36,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | ISS-09 Dynamic capability discovery | M3 | `DiscoveryService` (implemented); capability resolution is T3 |
 | ISS-10 Network rates and pricing assumptions | M3 | `Offering.rate_low/high` (implemented) |
 | ISS-11 Scoped allocation provisioning and management | M3 | `PaymentsService` (implemented) |
-| ISS-12 SDK payment authorization and remote signing | M3 | `SdkRunnerTransport` (implemented); blocked by T9 and T10 for a funded proof |
+| ISS-12 SDK payment authorization and remote signing | M3 | `SdkRunnerTransport` (implemented); blocked by T10 for a funded proof (T9 fixed in SDK PR 5) |
 | ISS-13 First funded payment configuration | M3 | `deploy/dev-stack` |
 | ISS-14 Durable submission and immediate execution | M3 | `JobService.run` (implemented) |
 | ISS-15 Owned job history and basic results | M3 | `GET /v1/jobs`, `ResultRef` (implemented) |
@@ -61,7 +61,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 | Ref | Interface | Status (12 October) |
 | --- | --- | --- |
-| H1 | Python gateway SDK | Pinned to fork `3250c08` (SDK #71). **Open:** #71 must be simplified and merged (T1); it must read node's `"state"` key (T9). #70 and multipart deferred |
+| H1 | Python gateway SDK | Pinned to eliteprox PR 5 `84ec542` (`on_payment_session`; node `"state"` fix, T9 resolved). **Open:** merge into `releases/m2`, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
 | H3 | Remote signer and orchestrator/Live Runner | livepeer/node `1432123`. **Open:** the signer rejects orchestrators whose address ≠ ticket recipient (T10) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; public orchestrators are blocked by T10 |

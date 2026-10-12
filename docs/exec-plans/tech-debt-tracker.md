@@ -4,7 +4,7 @@ Known shortcuts and gaps. Each entry names its exit condition.
 
 | # | Debt | Why it exists | Exit condition |
 | --- | --- | --- | --- |
-| T1 | The SDK is pinned by direct reference to the **head of eliteprox/livepeer-python-gateway PR 5** (`84ec542`: the `on_payment_session` callback plus the lowercase `"state"` fix); it can't be published to PyPI | PR 5 (formerly livepeer #71) isn't merged into `releases/m2` yet | Re-pin to PR 5's merge commit on `releases/m2`; later, a released version |
+| T1 | The SDK is pinned by direct reference to the **head of eliteprox/livepeer-python-gateway PR 5** (`dca9cd69`: the `on_payment_session` callback, the lowercase `"state"` fix, and callback errors that do not restart the challenge); it can't be published to PyPI | PR 5 (formerly livepeer #71) isn't merged into `releases/m2` yet | Re-pin to PR 5's merge commit on `releases/m2`; later, a released version |
 | T2 | Idempotency: interim 409 semantics | John owns the final design (D11) | John's PR merged; engine.md updated |
 | T3 | Capability → app resolution is not implemented (callers name `app`) | Not in M2 scope | Descriptor/config resolver contract (later milestone) |
 | T4 | No metrics endpoint (Prometheus) | The harness asks for observability; M2 has structured logs only | Add `/metrics` with job, discovery and cost-sync counters |

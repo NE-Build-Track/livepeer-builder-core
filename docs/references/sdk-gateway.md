@@ -1,6 +1,6 @@
 # Python gateway SDK (as relied on by the engine)
 
-Baseline `44df061` plus **eliteprox/livepeer-python-gateway PR 5**, which replaced livepeer #71. Pinned temporarily to its head `84ec542`; see [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
+Baseline `44df061` plus **eliteprox/livepeer-python-gateway PR 5**, which replaced livepeer #71. Pinned temporarily to its head `dca9cd69`; see [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
 
 | SDK surface | Engine use |
 | --- | --- |

@@ -61,7 +61,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 | Ref | Interface | Status (12 October) |
 | --- | --- | --- |
-| H1 | Python gateway SDK | Pinned to eliteprox PR 5 `84ec542` (`on_payment_session`; node `"state"` fix, T9 resolved). **Open:** merge into `releases/m2`, then re-pin (T1). #70 and multipart deferred |
+| H1 | Python gateway SDK | Pinned to eliteprox PR 5 `dca9cd69` (`on_payment_session`; node `"state"` fix, T9 resolved; callback errors do not restart the challenge). **Open:** merge into `releases/m2`, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
 | H3 | Remote signer and orchestrator/Live Runner | livepeer/node `1432123`. **Open:** the signer rejects orchestrators whose address ≠ ticket recipient (T10) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; public orchestrators are blocked by T10 |

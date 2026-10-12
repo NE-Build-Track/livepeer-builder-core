@@ -56,7 +56,7 @@ CostStatus = Literal["none", "pending", "observed", "corrected"]
 
 class Fees(Contract):
     fee_eth: Decimal = Decimal(0)
-    fee_usd: Decimal | None = None  # None unless every row was priced in USD
+    fee_usd: Decimal | None = Decimal(0)  # None when any applied row lacks a USD price; zero when no rows
     row_count: int = 0
 
 

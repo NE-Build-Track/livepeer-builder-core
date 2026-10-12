@@ -34,6 +34,9 @@ lpb = "livepeer_builder.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-cov>=5",
+    "hypothesis>=6.100",
+    "diff-cover>=9",
     "pytest-asyncio>=0.24",
     "mypy>=1.11",
     "ruff>=0.6",
@@ -77,6 +80,28 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["livepeer_gateway", "livepeer_gateway.*", "aiohttp", "aiohttp.*"]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+branch = true  # both sides of every condition: paid/unpaid, refused/failed, signer/runner
+source = ["livepeer_builder"]
+# SQLAlchemy's async engine runs connection setup and migrations inside greenlets; trace them too.
+concurrency = ["greenlet", "thread"]
+omit = [
+    # Alembic loads env.py by file path (not import), so coverage can't attribute it. Every migration
+    # test in tests/store/test_durability.py executes it.
+    "src/livepeer_builder/store/migrations/env.py",
+]
+
+[tool.coverage.report]
+fail_under = 95  # ratcheted floor for the whole package; per-layer floors in scripts/check_coverage.py
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "^\\s*\\.\\.\\.$",  # Protocol method bodies
+    "@overload",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

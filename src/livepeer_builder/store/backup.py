@@ -46,6 +46,13 @@ def verify(path: Path) -> str:
     """Integrity-check a database file and return its schema revision."""
     if not path.exists():
         raise InvalidRequest(f"{path} does not exist")
+    try:
+        return _verify(path)
+    except sqlite3.DatabaseError as exc:  # not a SQLite database at all (e.g. a truncated copy)
+        raise InvalidRequest(f"{path} is not a readable SQLite database: {exc}") from exc
+
+
+def _verify(path: Path) -> str:
     with sqlite3.connect(path) as conn:
         status = conn.execute("PRAGMA integrity_check").fetchone()[0]
         if status != "ok":

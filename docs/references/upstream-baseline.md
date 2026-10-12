@@ -14,7 +14,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 ## The M2 SDK exception
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
-`84ec5425102f5b27899eed069b29c901f4e41fd3`. That is the head of
+`dca9cd69c554651f5bdacd9641d27bcec339b1c3`. That is the head of
 **eliteprox/livepeer-python-gateway PR 5** ("Report each signed payment session from call_runner",
 moved from livepeer #71, targeting `releases/m2`).
 
@@ -23,7 +23,10 @@ fields on results and errors, so the engine derives both from the callback.
 
 - PyPI `livepeer-gateway` 1.0.0 has no payment-session reporting, so installing from PyPI would break
   job cost attribution. That defect was found in the prototype on 12 October.
-- `84ec542` also reads livepeer/node's lowercase `"state"` key, which resolves T9.
+- `84ec542` reads livepeer/node's lowercase `"state"` key, which resolves T9.
+- `dca9cd69` reports the signed session after the payment is obtained. A callback error, including
+  `SignerRefreshRequired`, belongs to the caller and does not restart the payment challenge. The
+  engine's callback only records `auth_id`s, so this does not change attribution.
 - Exit condition: tech debt T1 (re-pin to the merge commit).
 
 ## Licenses

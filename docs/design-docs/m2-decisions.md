@@ -63,4 +63,4 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
   Batteries remains the authority. Retention is configurable.
 - **A2 (accepted).** Retention never deletes `uncertain` jobs automatically.
 - **A3 (accepted; updated 12 October).** The SDK was pinned to fork commit `3250c08` (the #71 head) until John's simplified PR lands on
-  `releases/m2`. It is now pinned to the head of that PR, eliteprox PR 5 (`84ec542`: the `on_payment_session` callback and the lowercase `"state"` fix), until it merges (T1).
+  `releases/m2`. It is now pinned to the head of that PR, eliteprox PR 5 (`dca9cd69`: the `on_payment_session` callback, the lowercase `"state"` fix, and callback errors that do not restart the challenge), until it merges (T1).

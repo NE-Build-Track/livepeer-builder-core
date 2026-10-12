@@ -164,11 +164,14 @@ async def _serve(_: argparse.Namespace) -> None:
 
 
 async def _gen_docs(args: argparse.Namespace) -> int:
+    from livepeer_builder.docs_diagrams import render_contracts, render_interfaces
     from livepeer_builder.docs_gen import render_db_schema, render_openapi
 
     outputs = {
         args.out / "openapi.json": await render_openapi(),
         args.out / "db-schema.md": render_db_schema(),
+        args.out / "interfaces.md": render_interfaces(),
+        args.out / "contracts.md": render_contracts(),
     }
     stale = [str(path) for path, text in outputs.items() if not path.exists() or path.read_text() != text]
     if args.check:

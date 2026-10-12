@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)")
-CODE_REF = re.compile(r"((?:docs/[\w./-]+|ARCHITECTURE)\.md)(#[\w-]+)?")
+CODE_REF = re.compile(r"(?<![\w./-])((?:docs/[\w./-]+|ARCHITECTURE)\.md)(#[\w-]+)?")
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 PLAN_SECTIONS = ["## Status", "## Goal", "## Acceptance", "## Progress", "## Decision log"]
 ENTRY_POINTS = [ROOT / "AGENTS.md", ROOT / "docs" / "index.md"]

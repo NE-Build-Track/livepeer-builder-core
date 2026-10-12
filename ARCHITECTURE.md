@@ -74,6 +74,9 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `EngineStore` (+ repos) | `SqlStore` | — (one store; two databases) |
 | `EventFeed`, `SessionManager` | reserved (raise 501) | — implemented in M3 / M4 |
 
+How to replace each default with an enterprise implementation, with class diagrams and runnable
+examples, is in [docs/design-docs/extending-the-engine.md](docs/design-docs/extending-the-engine.md).
+
 ## Third-party boundaries
 
 Each third-party package is confined to one module so a dependency change has one blast radius

@@ -5,6 +5,7 @@
 | [core-beliefs.md](core-beliefs.md) | Accepted | Partly enforced by `tests/structure/` |
 | [m2-decisions.md](m2-decisions.md) | Accepted 12 October 2026 | Yes. Each decision names where it lives |
 | [m2-review-2026-10-12.md](m2-review-2026-10-12.md) | Record of the 12 October review: findings, prototype defects and their guards | Yes |
+| [extending-the-engine.md](extending-the-engine.md) | How enterprises replace the defaults through the interfaces: class diagrams, wiring, rules, runnable examples | Yes. Examples run in `tests/unit/test_extension_examples.py` |
 | [architecture-diagrams.md](architecture-diagrams.md) | Context, components, integration modes, key sequences, state machines (Mermaid) | Yes. Names match the code; the ER diagram is generated |
 | [builder-layer-proposal.md](builder-layer-proposal.md) | The 1 October proposal: each idea and its disposition here | Yes |
 

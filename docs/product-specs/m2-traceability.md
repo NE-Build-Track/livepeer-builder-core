@@ -58,7 +58,8 @@ change that moves a ticket.
 | --- | --- |
 | One distribution with `[server]` and `[postgres]` extras; dev versions from git | `pyproject.toml` (hatchling + hatch-vcs) |
 | Imports and starts without the reference app, PymtHouse or private source | `lpb smoke`; verified by a clean install of the built wheel (12 October) |
-| Public interfaces documented | [ARCHITECTURE.md](../../ARCHITECTURE.md), [contracts/](../contracts/index.md), package-root exports in `livepeer_builder/__init__.py` |
+| Public interfaces documented | [ARCHITECTURE.md](../../ARCHITECTURE.md), [contracts/](../contracts/index.md), generated [interfaces](../generated/interfaces.md) and [contracts](../generated/contracts.md) class diagrams |
+| Enterprise extension proven without core patches | [extending-the-engine.md](../design-docs/extending-the-engine.md); `tests/unit/test_extension_examples.py` |
 | Layering and third-party confinement enforced | `tests/structure/test_layers.py` |
 | Durable default store (no silent in-memory store) | `config.py` `DEFAULT_DATABASE_URL`; `test_settings_from_environment` |
 | SDK dependency survives installation | Direct-reference pin, verified to include `auth_ids` (T1) |

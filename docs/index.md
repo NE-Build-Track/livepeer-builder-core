@@ -9,7 +9,7 @@ This directory is the repository's system of record. Agents and humans read the 
 | [exec-plans/](../docs/PLANS.md) | Active and completed execution plans, plus the tech-debt tracker |
 | [product-specs/](product-specs/index.md) | The builder outcomes the engine serves |
 | [references/](references/index.md) | Upstream pins, wire formats, and runtime evidence |
-| [generated/](generated/db-schema.md) | Generated database and REST schemas (`lpb gen-docs`) |
+| [generated/](generated/db-schema.md) | Generated schemas and diagrams (`lpb gen-docs`): [DB and ER](generated/db-schema.md), [interfaces](generated/interfaces.md), [contracts](generated/contracts.md), OpenAPI |
 | [PLANS.md](PLANS.md) | How plans work, and the M2 plan index |
 | [QUALITY_SCORE.md](QUALITY_SCORE.md) | Quality grade for each domain and layer |
 | [RELIABILITY.md](RELIABILITY.md) | Configuration, operations, backup/restore, failure behavior |

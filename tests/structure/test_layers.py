@@ -55,7 +55,7 @@ REMEDIATION = {
 def layer_of(path: Path) -> str:
     relative = path.relative_to(SRC)
     head = relative.parts[0]
-    if head in ("cli.py", "docs_gen.py", "__init__.py"):
+    if head in ("cli.py", "docs_gen.py", "docs_diagrams.py", "__init__.py"):
         return "entry"
     return head.removesuffix(".py")
 
@@ -85,7 +85,7 @@ def test_layer_edges(path: Path) -> None:
         if not module.startswith("livepeer_builder."):
             continue
         target = module.split(".")[1]
-        target_layer = "entry" if target in ("cli", "docs_gen") else target
+        target_layer = "entry" if target in ("cli", "docs_gen", "docs_diagrams") else target
         if target_layer == layer or target_layer in allowed:
             continue
         pytest.fail(

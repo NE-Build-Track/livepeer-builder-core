@@ -10,7 +10,7 @@ change that moves a ticket.
 | Pinned revisions | [references/upstream-baseline.md](../references/upstream-baseline.md); `pyproject.toml` (SDK pin) |
 | Behavior rechecked; runtime evidence | [evidence/2026-10-07-arbitrum-run.md](../references/evidence/2026-10-07-arbitrum-run.md), [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) |
 | Upstream wire formats relied on | [batteries-api.md](../references/batteries-api.md), [node-signer.md](../references/node-signer.md), [sdk-gateway.md](../references/sdk-gateway.md) |
-| **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); blocked by T9 and T10 |
+| **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); blocked by T10 (T9 fixed in SDK PR 5) |
 
 ## ISS-02: Engine contracts
 
@@ -50,7 +50,7 @@ change that moves a ticket.
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |
 | Stable references (`auth_id` join) | `services/costs.py::classify`, `lpb_attempt_auth_ids` | `test_failed_after_payment_and_forged_manifest_reconcile` | [payments.md#correlation](../contracts/payments.md#correlation) |
 | Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md): balanced reconciliation |
-| **Open** | SDK #71 upstream position; T9 (SDK `"state"` key); T10 (signer rejects address ≠ recipient); Mode B (M4) | | |
+| **Open** | SDK PR 5 merge into `releases/m2` (T1; T9 fixed in `84ec542`); T10 (signer rejects address ≠ recipient); Mode B (M4) | | |
 
 ## ISS-05: Core packages
 

@@ -218,12 +218,8 @@ def test_sdk_reads_auth_id_from_go_livepeer_state() -> None:
     assert _payment_session(_signed_state("State", "auth-go")).auth_id == "auth-go"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="T9: SDK PR 5 reads only go-livepeer's 'State'; livepeer/node returns 'state'. "
-    "When the fix lands this test passes: remove this marker and close T9.",
-)
 def test_sdk_reads_auth_id_from_livepeer_node_state() -> None:
+    """T9 regression guard: livepeer/node lowercases the signer state keys (SDK PR 5, 84ec542)."""
     assert _payment_session(_signed_state("state", "auth-node")).auth_id == "auth-node"
 
 

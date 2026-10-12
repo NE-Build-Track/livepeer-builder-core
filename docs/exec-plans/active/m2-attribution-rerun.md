@@ -2,7 +2,7 @@
 
 ## Status
 
-Owner: John. Follow-up to ISS-01 (decision 6 on #7). **First run done on 12 October; blocked on T9 for a clean pass.**
+Owner: John. Follow-up to ISS-01 (decision 6 on #7). **First run done on 12 October. T9 is fixed in SDK PR 5; a clean funded pass is blocked by T10.**
 
 ## Goal
 
@@ -13,7 +13,7 @@ and the SDK with #71, driving it through this engine instead of prototype script
 
 - [x] Stack from [deploy/dev-stack](../../../deploy/dev-stack/README.md) with pins recorded
 - [x] Per-actor spend equals Batteries `spent_*` (reconciliation `balanced`, 12 October, with the T9 shim)
-- [ ] The same, without the shim, after SDK #71 reads node's `"state"` key (T9)
+- [ ] The same, without the shim, now that SDK PR 5 reads node's `"state"` key (T9 fixed, `84ec542`). Needs an orchestrator the node signer accepts (T10)
 - [ ] A forged `manifest_id` is `unattributed`, not attributed
 - [ ] A rejected-ticket charge is classified `failed_after_payment`
 - [ ] A public orchestrator the node signer accepts (T10)

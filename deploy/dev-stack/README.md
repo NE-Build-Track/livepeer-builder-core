@@ -59,7 +59,7 @@ Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliatio
 
 - **T10:** the node signer requires an orchestrator's address to equal its ticket recipient. The
   public orchestrators tested differ, so signing fails with 400.
-- **T9:** SDK #71 does not read node's lower-case `"state"` key, so `auth_id`s come back empty and
+- ~~**T9**~~ **Resolved** in SDK PR 5 `84ec542`, which reads node's lower-case `"state"` key. Before the fix, `auth_id`s came back empty and
   costs stay `pending`.
 
 See [the evidence](../../docs/references/evidence/2026-10-12-dev-stack-paid-run.md) and the

@@ -1,0 +1,11 @@
+# Batteries, from its examples/compose sample. The webhook and Kafka stay on loopback (the signer shares
+# this container's network namespace). The management API binds all interfaces so the engine can reach it.
+DBPath = "/data/clearinghouse.db"
+CredsFile = "/run/secrets/clearinghouse.toml"
+EnableAuthWebhook = ":8080"
+EnableManagementAPI = "0.0.0.0:8081"
+UnsafeHTTPBind = true
+EnableKafka = true
+EnableAccounting = true
+KafkaBind = "127.0.0.1:9092"
+KafkaTopic = "livepeer-signing"

@@ -1,0 +1,95 @@
+"""Cost contracts: provider usage rows, per-job projections, classification and reconciliation.
+
+Network cost is the expected value of tickets at signing (docs/contracts/payments.md). It is not
+settlement and not a retail price. Missing evidence is ``pending``, never zero.
+"""
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import Field
+
+from livepeer_builder.contracts.common import Contract, Money
+
+UsageStatus = Literal["applied", "quarantined", "ignored", "duplicate"]
+
+
+class UsageRow(Contract):
+    """One Batteries ``GET /v1/usage`` item. Batteries remains the authority; this is a cached copy."""
+
+    id: str
+    event_id: str | None
+    status: UsageStatus
+    manifest_id: str | None
+    allocation_id: str | None
+    payment_session_id: str | None  # the signer auth_id: joins a charge to an attempt
+    request_id: str | None
+    pipeline: str | None
+    computed_fee_eth: Decimal | None
+    computed_fee_usd: Decimal | None
+    currency: str | None
+    created_at: datetime
+
+
+class UsagePage(Contract):
+    items: tuple[UsageRow, ...]
+    next_cursor: str = ""
+
+
+class SyncCheckpoint(Contract):
+    resume_cursor: str | None
+    filters: dict[str, str] = Field(default_factory=dict)
+
+
+class SyncReport(Contract):
+    pages: int
+    rows_seen: int
+    rows_new: int
+    jobs_updated: int = 0
+
+
+CostClass = Literal["delivered", "failed_after_payment", "uncertain", "pending"]
+CostStatus = Literal["none", "pending", "observed", "corrected"]
+
+
+class Fees(Contract):
+    fee_eth: Decimal = Decimal(0)
+    fee_usd: Decimal | None = None  # None unless every row was priced in USD
+    row_count: int = 0
+
+
+class AttemptCost(Contract):
+    attempt_number: int
+    cost_class: CostClass
+    fees: Fees
+
+
+class JobCost(Contract):
+    job_id: UUID
+    status: CostStatus
+    fees: Fees
+    attempts: tuple[AttemptCost, ...]
+    first_observed_at: datetime | None
+    updated_at: datetime | None
+
+
+class CostSummary(Contract):
+    start: datetime
+    end: datetime
+    by_class: dict[CostClass, Fees]
+    jobs_with_cost: int
+    jobs_pending: int  # reported beside the totals, never folded into them
+
+
+class Reconciliation(Contract):
+    """Batteries spent = delivered + failed_after_payment + uncertain + unattributed (per allocation)."""
+
+    application_id: str
+    actor_id: str | None
+    allocation_id: str
+    provider_spent: Money | None
+    by_class: dict[CostClass, Fees]
+    unattributed: Fees
+    balanced: bool | None  # None when the provider figure is unavailable

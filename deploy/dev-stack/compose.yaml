@@ -1,0 +1,56 @@
+# livepeer-builder dev stack. Optional; not part of CI. See README.md.
+#
+# Batteries (embedded Kafka) + livepeer/node remote signer + the engine. Orchestrators are assumed to
+# exist on the network: the signer discovers and pays the ones listed in config/signer.toml.
+# Upstream sources are pinned to the M2 baseline commits (docs/references/upstream-baseline.md).
+name: livepeer-builder-dev
+
+services:
+  clearinghouse:
+    image: livepeer-builder-dev/clearinghouse:ca09e47
+    build:
+      context: https://github.com/eliteprox/clearinghouse-batteries.git#ca09e47c067682fb48c3f15425546fb6aa5b6659
+      dockerfile: examples/compose/Dockerfile
+    command: [serve, --config-file, /etc/clearinghouse.toml]
+    volumes:
+      - paid-state:/data
+      - ./config/clearinghouse.toml:/etc/clearinghouse.toml:ro
+      - ./secrets:/run/secrets:ro
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8081/readyz]
+      interval: 5s
+      retries: 12
+
+  signer:
+    image: livepeer-builder-dev/node:1432123
+    build:
+      context: https://github.com/eliteprox/node.git#1432123688e7e4ad8149c1989865890854cdf37a
+      dockerfile: docker/Dockerfile
+    user: "0:0"  # dev only: lets the container read bind-mounted secrets regardless of host uid
+    network_mode: service:clearinghouse  # Kafka and the webhook listen on this namespace's loopback
+    entrypoint: ["/usr/local/bin/livepeer-signer"]
+    command: [--data-dir, /data/node, --config, /etc/signer.toml]
+    environment:
+      SSL_CERT_DIR: /etc/ssl/certs:/etc/ssl/pinned  # system CAs + orchestrator certs pinned by config/pin-orchestrator-certs.py
+    volumes:
+      - paid-state:/data
+      - ./config/signer.toml:/etc/signer.toml:ro
+      - ./config/pinned-certs:/etc/ssl/pinned:ro
+      - ./secrets:/run/secrets:ro
+    depends_on:
+      clearinghouse:
+        condition: service_healthy
+
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/dev-stack/engine/Dockerfile
+    image: livepeer-builder-dev/engine:local
+    env_file: [.env]
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: [engine-data:/data]
+    depends_on: [signer]
+
+volumes:
+  engine-data:
+  paid-state:

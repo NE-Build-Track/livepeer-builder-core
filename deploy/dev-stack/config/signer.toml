@@ -1,0 +1,26 @@
+# livepeer/node signer (on-chain: needs a funded broadcaster deposit and reserve on Arbitrum One).
+Listen = "0.0.0.0:8937"
+MetricsListen = "127.0.0.1:8938"
+RPCURLFile = "/run/secrets/rpc-url"
+KeystoreFile = "/run/secrets/keystore.json"
+KeystorePasswordFile = "/run/secrets/keystore-password"
+MaxHourlyPrice = "100"
+MaxFixedPrice = "1"
+AuthWebhookFile = "/run/secrets/webhook-url"
+AuthWebhookHeadersFile = "/run/secrets/webhook-headers"
+# The signer discovers and pays only these public on-chain orchestrators (public hosts need no grants).
+Orchestrators = [
+  "https://orch-us-central.xodeapp.xyz:18935",
+  "https://us-central-metrics.speedybird.xyz:28935",
+  "https://orch-eu-central.open-pool.com:443",
+  "https://hky.eliteencoder.net:8936",
+]
+DiscoveryGrants = []
+
+[Kafka]
+Broker = "kafka://127.0.0.1:9092"
+Topic = "livepeer-signing"
+AuthMethod = "scram-sha-512"
+UsernameFile = "/run/secrets/kafka-username"
+PasswordFile = "/run/secrets/kafka-password"
+OutboxDB = "/data/signer-events.sqlite"

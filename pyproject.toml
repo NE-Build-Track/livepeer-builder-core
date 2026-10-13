@@ -1,0 +1,113 @@
+[build-system]
+requires = ["hatchling>=1.25", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livepeer-builder"
+dynamic = ["version"]
+description = "Builder engine for Livepeer: discovery, paid jobs, access control, and network-cost reporting"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Mike Zupper" }]
+dependencies = [
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "alembic>=1.13",
+    "aiosqlite>=0.20",
+    "cryptography>=42",
+    # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
+    # eliteprox/livepeer-python-gateway PR 5 (on_payment_session, the lowercase "state" fix,
+    # and callback errors that do not restart the payment challenge).
+    # Re-pin to its merge commit on releases/m2 once it merges (tech debt T1).
+    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@dca9cd69c554651f5bdacd9641d27bcec339b1c3",
+]
+
+[project.optional-dependencies]
+server = ["fastapi>=0.115", "uvicorn>=0.30"]
+postgres = ["asyncpg>=0.29"]
+
+[project.scripts]
+lpb = "livepeer_builder.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5",
+    "hypothesis>=6.100",
+    "diff-cover>=9",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "asyncpg>=0.29",
+]
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/livepeer_builder"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "scripts", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC", "RUF", "T20", "S", "PT"]
+ignore = ["S101"]  # assert is how pytest checks
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "PT018", "E501"]  # fixture tokens, temp paths, compact asserts
+"src/livepeer_builder/cli.py" = ["T201"]  # the CLI prints its results
+
+[tool.mypy]
+strict = true
+mypy_path = "src"
+packages = ["livepeer_builder"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["livepeer_gateway", "livepeer_gateway.*", "aiohttp", "aiohttp.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+branch = true  # both sides of every condition: paid/unpaid, refused/failed, signer/runner
+source = ["livepeer_builder"]
+# SQLAlchemy's async engine runs connection setup and migrations inside greenlets; trace them too.
+concurrency = ["greenlet", "thread"]
+omit = [
+    # Alembic loads env.py by file path (not import), so coverage can't attribute it. Every migration
+    # test in tests/store/test_durability.py executes it.
+    "src/livepeer_builder/store/migrations/env.py",
+]
+
+[tool.coverage.report]
+fail_under = 95  # ratcheted floor for the whole package; per-layer floors in scripts/check_coverage.py
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "^\\s*\\.\\.\\.$",  # Protocol method bodies
+    "@overload",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "postgres: needs LPB_TEST_POSTGRES_URL (CI runs a Postgres service)",
+]

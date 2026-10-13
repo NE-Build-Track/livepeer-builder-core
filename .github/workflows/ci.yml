@@ -1,0 +1,94 @@
+# ISS-07: development builds and continuous checks. Builds are CI artifacts only; nothing is published.
+name: ci
+
+on:
+  push:
+    branches: [main, "releases/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_PYTHON: "3.12"
+
+jobs:
+  checks:
+    name: lint, types, docs, tests (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs derives the dev version from git history
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run python scripts/check_docs.py
+      - run: uv run lpb gen-docs --check
+      - name: Tests with branch coverage
+        run: uv run pytest -q --cov --cov-report=xml --cov-report=json --cov-report=term
+      - name: Per-layer coverage floors
+        run: uv run python scripts/check_coverage.py >> "$GITHUB_STEP_SUMMARY"
+      - name: Diff coverage (changed lines)
+        if: github.event_name == 'pull_request'
+        run: uv run diff-cover coverage.xml --compare-branch=origin/${{ github.base_ref }} --fail-under=90
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 14
+
+  postgres:
+    name: store suite (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lpb
+          POSTGRES_PASSWORD: lpb
+          POSTGRES_DB: lpb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lpb" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      LPB_TEST_POSTGRES_URL: postgresql+asyncpg://lpb:lpb@127.0.0.1:5432/lpb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest tests/store -q -m "postgres or not postgres"
+
+  build-install:
+    name: dev build + clean-install smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Build versioned dev packages
+        run: uv build
+      - name: Wheel ships its migrations
+        run: uv run --frozen --all-extras pytest tests/store/test_packaging.py -q
+      - name: Install the wheel into a clean environment and run the smoke check
+        run: |
+          uv venv /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/*.whl
+          mkdir -p /tmp/smoke && cd /tmp/smoke
+          LPB_DATABASE_URL=sqlite+aiosqlite:///./smoke.db /tmp/clean/bin/lpb smoke
+          LPB_DATABASE_URL=sqlite+aiosqlite:///./smoke.db /tmp/clean/bin/lpb revision
+      - uses: actions/upload-artifact@v4
+        with:
+          name: livepeer-builder-dist
+          path: dist/
+          retention-days: 14

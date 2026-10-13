@@ -1,0 +1,130 @@
+"""Job contracts: requests, attempts, failures, results and measured usage (docs/contracts/engine.md)."""
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import Field
+
+from livepeer_builder.contracts.common import Contract
+
+ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
+
+HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+
+class JobRequest(Contract):
+    app: str = Field(min_length=1)  # the runner app a discovery entry advertises
+    path: str = ""  # appended to the runner URL; must start with "/" when set
+    method: HttpMethod = "POST"
+    payload: dict[str, Any] | None = None
+    operation_ref: str | None = Field(default=None, max_length=200)  # the caller's retry key
+    capability: str | None = None  # label only in M2; resolution is a later contract
+    model: str | None = None
+    mode: ExecutionMode = "immediate"
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    timeout_s: float = Field(default=300.0, gt=0, le=3600)
+
+
+# "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment
+# params, price above the session ceiling). Safe to fail over. "payment": any other payment failure.
+AttemptOutcome = Literal[
+    "in_flight", "succeeded", "refused", "unreachable", "payment_refused", "payment", "timeout", "http"
+]
+
+
+class Attempt(Contract):
+    """One runner call. Written as ``in_flight`` before the call, updated after it."""
+
+    job_id: UUID
+    number: int
+    runner_url: str | None
+    orchestrator_url: str | None
+    auth_ids: tuple[str, ...]  # signer payment sessions opened: the cost key
+    manifest_id: str | None  # the orchestrator's label; never a billing key
+    payment_sent: bool
+    outcome: AttemptOutcome
+    status_code: int | None
+    started_at: datetime
+    ended_at: datetime | None
+
+
+FailureKind = Literal[
+    "no_offering",
+    "no_capacity",
+    "not_provisioned",
+    "refused",
+    "unreachable",
+    "payment",
+    "timeout",
+    "runner_rejected",
+    "runner_error",
+    "interrupted",
+]
+
+
+class Failure(Contract):
+    kind: FailureKind
+    message: str
+    status_code: int | None = None  # the runner's own status, when it answered
+    body: str | None = None  # the runner's own words, bounded
+    payment_sent: bool = False
+
+
+JobState = Literal["queued", "running", "succeeded", "failed", "uncertain"]  # "queued" is reserved (async)
+
+
+class ResultRef(Contract):
+    """Where a result lives. M2 keeps immediate results inline (not retained) and records their shape."""
+
+    storage: Literal["inline", "stored"]  # "stored" is reserved for async results (ISS-26)
+    content_type: str
+    size_bytes: int
+    sha256: str
+    location: str | None = None
+
+
+class MeasuredUsage(Contract):
+    """Work done, in units the capability defines. Retains its source and is never equated with cost."""
+
+    quantities: dict[str, int]
+    source: Literal["app_reported", "engine_meter"]
+    reported_at: datetime
+
+
+class Job(Contract):
+    id: UUID
+    actor_id: str
+    application_id: str
+    operation_ref: str | None
+    mode: ExecutionMode
+    app: str
+    capability: str | None
+    model: str | None
+    state: JobState
+    attempts: tuple[Attempt, ...]
+    failure: Failure | None
+    result: ResultRef | None
+    usage: MeasuredUsage | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class RunnerReply(Contract):
+    """What a RunnerTransport returns for one successful call."""
+
+    status_code: int
+    content: bytes
+    content_type: str
+    data: dict[str, Any] | None
+    auth_ids: tuple[str, ...]
+    manifest_id: str | None
+    payment_sent: bool
+
+
+class JobResult(Contract):
+    job: Job
+    status_code: int
+    content: bytes
+    content_type: str
+    data: dict[str, Any] | None

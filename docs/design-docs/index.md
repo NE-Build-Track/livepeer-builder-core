@@ -1,0 +1,18 @@
+# Design docs
+
+| Document | Status | Verified against code |
+| --- | --- | --- |
+| [core-beliefs.md](core-beliefs.md) | Accepted | Partly enforced by `tests/structure/` |
+| [m2-decisions.md](m2-decisions.md) | Accepted 12 October 2026 | Yes. Each decision names where it lives |
+| [m2-review-2026-10-12.md](m2-review-2026-10-12.md) | Record of the 12 October review: findings, prototype defects and their guards | Yes |
+| [extending-the-engine.md](extending-the-engine.md) | How enterprises replace the defaults through the interfaces: class diagrams, wiring, rules, runnable examples | Yes. Examples run in `tests/unit/test_extension_examples.py` |
+| [architecture-diagrams.md](architecture-diagrams.md) | Context, components, integration modes, key sequences, state machines (Mermaid) | Yes. Names match the code; the ER diagram is generated |
+| [builder-layer-proposal.md](builder-layer-proposal.md) | The 1 October proposal: each idea and its disposition here | Yes |
+
+These documents feed the design (they are not in this repository):
+
+- the Build Track baseline and architecture companion (Cloud-SPE/Network-Engineering-SPE,
+  `docs/design-docs/self-sovereign-open-builder-stack-draft.md`, `open-builder-architecture-and-sequences.md`);
+- the 1 October builder-layer proposal (`docs/references/analysis/2026-10-01-Builder-Layer-Abstraction-and-Two-Application-Review.md`);
+- John's integration drafts on `eliteprox/Network-Engineering-SPE` branch `jm/builder-integration-plans`
+  (`300c127`). They were harvested into `docs/contracts/`.

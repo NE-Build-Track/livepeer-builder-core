@@ -1,0 +1,2777 @@
+{
+  "components": {
+    "schemas": {
+      "AccessKey": {
+        "additionalProperties": false,
+        "description": "An engine-issued key, as inspected. The token itself is never stored or returned again.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "actor",
+              "admin",
+              "service"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "key_id",
+          "kind",
+          "actor_id",
+          "application_id",
+          "permissions",
+          "label",
+          "created_at",
+          "revoked_at"
+        ],
+        "title": "AccessKey",
+        "type": "object"
+      },
+      "Allowance": {
+        "additionalProperties": false,
+        "description": "The allocation as the provider reports it. A cap that can overshoot: funds are not reserved.",
+        "properties": {
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "available": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "granted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allocation_id",
+          "status",
+          "granted",
+          "spent",
+          "available"
+        ],
+        "title": "Allowance",
+        "type": "object"
+      },
+      "Attempt": {
+        "additionalProperties": false,
+        "description": "One runner call. Written as ``in_flight`` before the call, updated after it.",
+        "properties": {
+          "auth_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Auth Ids",
+            "type": "array"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Id"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "orchestrator_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator Url"
+          },
+          "outcome": {
+            "enum": [
+              "in_flight",
+              "succeeded",
+              "refused",
+              "unreachable",
+              "payment_refused",
+              "payment",
+              "timeout",
+              "http"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "payment_sent": {
+            "title": "Payment Sent",
+            "type": "boolean"
+          },
+          "runner_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Url"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          }
+        },
+        "required": [
+          "job_id",
+          "number",
+          "runner_url",
+          "orchestrator_url",
+          "auth_ids",
+          "manifest_id",
+          "payment_sent",
+          "outcome",
+          "status_code",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "Attempt",
+        "type": "object"
+      },
+      "AttemptCost": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "cost_class": {
+            "enum": [
+              "delivered",
+              "failed_after_payment",
+              "uncertain",
+              "pending"
+            ],
+            "title": "Cost Class",
+            "type": "string"
+          },
+          "fees": {
+            "$ref": "#/components/schemas/Fees"
+          }
+        },
+        "required": [
+          "attempt_number",
+          "cost_class",
+          "fees"
+        ],
+        "title": "AttemptCost",
+        "type": "object"
+      },
+      "CostSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "by_class": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Fees"
+            },
+            "propertyNames": {
+              "enum": [
+                "delivered",
+                "failed_after_payment",
+                "uncertain",
+                "pending"
+              ]
+            },
+            "title": "By Class",
+            "type": "object"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "jobs_pending": {
+            "title": "Jobs Pending",
+            "type": "integer"
+          },
+          "jobs_with_cost": {
+            "title": "Jobs With Cost",
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "by_class",
+          "jobs_with_cost",
+          "jobs_pending"
+        ],
+        "title": "CostSummary",
+        "type": "object"
+      },
+      "EngineEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "operation_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Ref"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "type": {
+            "enum": [
+              "job.created",
+              "job.finished",
+              "usage.reported",
+              "cost.observed",
+              "cost.corrected"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "id",
+          "type",
+          "schema_version",
+          "occurred_at",
+          "application_id",
+          "actor_id",
+          "job_id",
+          "operation_ref",
+          "payload"
+        ],
+        "title": "EngineEvent",
+        "type": "object"
+      },
+      "EngineHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "allocation_mode": {
+            "enum": [
+              "per_application",
+              "per_actor"
+            ],
+            "title": "Allocation Mode",
+            "type": "string"
+          },
+          "cost_sync_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync At"
+          },
+          "cost_sync_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync Error"
+          },
+          "discovery_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Error"
+          },
+          "discovery_fresh": {
+            "title": "Discovery Fresh",
+            "type": "boolean"
+          },
+          "discovery_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Observed At"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "running_jobs": {
+            "title": "Running Jobs",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ready",
+          "discovery_fresh",
+          "discovery_observed_at",
+          "discovery_error",
+          "cost_sync_at",
+          "cost_sync_error",
+          "running_jobs",
+          "allocation_mode",
+          "version"
+        ],
+        "title": "EngineHealth",
+        "type": "object"
+      },
+      "EventPage": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EngineEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "events",
+          "next_cursor"
+        ],
+        "title": "EventPage",
+        "type": "object"
+      },
+      "Failure": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "kind": {
+            "enum": [
+              "no_offering",
+              "no_capacity",
+              "not_provisioned",
+              "refused",
+              "unreachable",
+              "payment",
+              "timeout",
+              "runner_rejected",
+              "runner_error",
+              "interrupted"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "payment_sent": {
+            "default": false,
+            "title": "Payment Sent",
+            "type": "boolean"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          }
+        },
+        "required": [
+          "kind",
+          "message"
+        ],
+        "title": "Failure",
+        "type": "object"
+      },
+      "Fees": {
+        "additionalProperties": false,
+        "properties": {
+          "fee_eth": {
+            "default": "0",
+            "title": "Fee Eth",
+            "type": "string"
+          },
+          "fee_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "0",
+            "title": "Fee Usd"
+          },
+          "row_count": {
+            "default": 0,
+            "title": "Row Count",
+            "type": "integer"
+          }
+        },
+        "title": "Fees",
+        "type": "object"
+      },
+      "FundRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "FundRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IssueKeyBody": {
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "application_id": {
+            "default": "default",
+            "title": "Application Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "actor",
+            "enum": [
+              "actor",
+              "admin",
+              "service"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permissions"
+          }
+        },
+        "required": [
+          "actor_id"
+        ],
+        "title": "IssueKeyBody",
+        "type": "object"
+      },
+      "IssuedKey": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/AccessKey"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "token"
+        ],
+        "title": "IssuedKey",
+        "type": "object"
+      },
+      "Job": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/Attempt"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "capability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capability"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Failure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "immediate",
+              "async"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "operation_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Ref"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "uncertain"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasuredUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor_id",
+          "application_id",
+          "operation_ref",
+          "mode",
+          "app",
+          "capability",
+          "model",
+          "state",
+          "attempts",
+          "failure",
+          "result",
+          "usage",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "Job",
+        "type": "object"
+      },
+      "JobCost": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptCost"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "fees": {
+            "$ref": "#/components/schemas/Fees"
+          },
+          "first_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Observed At"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "none",
+              "pending",
+              "observed",
+              "corrected"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "fees",
+          "attempts",
+          "first_observed_at",
+          "updated_at"
+        ],
+        "title": "JobCost",
+        "type": "object"
+      },
+      "JobRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "minLength": 1,
+            "title": "App",
+            "type": "string"
+          },
+          "capability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capability"
+          },
+          "max_attempts": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "method": {
+            "default": "POST",
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "mode": {
+            "default": "immediate",
+            "enum": [
+              "immediate",
+              "async"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "operation_ref": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Ref"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "timeout_s": {
+            "default": 300.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 3600.0,
+            "title": "Timeout S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "title": "JobRequest",
+        "type": "object"
+      },
+      "MeasuredUsage": {
+        "additionalProperties": false,
+        "description": "Work done, in units the capability defines. Retains its source and is never equated with cost.",
+        "properties": {
+          "quantities": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Quantities",
+            "type": "object"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "app_reported",
+              "engine_meter"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantities",
+          "source",
+          "reported_at"
+        ],
+        "title": "MeasuredUsage",
+        "type": "object"
+      },
+      "Money-Input": {
+        "additionalProperties": false,
+        "description": "An exact amount in one currency. Serialized as a decimal string, never a float.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "Money",
+        "type": "object"
+      },
+      "Money-Output": {
+        "additionalProperties": false,
+        "description": "An exact amount in one currency. Serialized as a decimal string, never a float.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "Money",
+        "type": "object"
+      },
+      "NetworkRate": {
+        "additionalProperties": false,
+        "description": "A rate as the orchestrator advertises it (wholesale network price, not retail).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency",
+          "unit"
+        ],
+        "title": "NetworkRate",
+        "type": "object"
+      },
+      "Offering": {
+        "additionalProperties": false,
+        "description": "One runner app, as a builder sees it.",
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "rate_high": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NetworkRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_low": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NetworkRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ready_count": {
+            "title": "Ready Count",
+            "type": "integer"
+          },
+          "runner_count": {
+            "title": "Runner Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "app",
+          "modes",
+          "rate_low",
+          "rate_high",
+          "runner_count",
+          "ready_count",
+          "observed_at"
+        ],
+        "title": "Offering",
+        "type": "object"
+      },
+      "ProvisionBody": {
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "title": "ProvisionBody",
+        "type": "object"
+      },
+      "ProvisionedActor": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "application_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ProvisionedActor",
+        "type": "object"
+      },
+      "Reconciliation": {
+        "additionalProperties": false,
+        "description": "Batteries spent = delivered + failed_after_payment + uncertain + unattributed (per allocation).",
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "balanced": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Balanced"
+          },
+          "by_class": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Fees"
+            },
+            "propertyNames": {
+              "enum": [
+                "delivered",
+                "failed_after_payment",
+                "uncertain",
+                "pending"
+              ]
+            },
+            "title": "By Class",
+            "type": "object"
+          },
+          "provider_spent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unattributed": {
+            "$ref": "#/components/schemas/Fees"
+          }
+        },
+        "required": [
+          "application_id",
+          "actor_id",
+          "allocation_id",
+          "provider_spent",
+          "by_class",
+          "unattributed",
+          "balanced"
+        ],
+        "title": "Reconciliation",
+        "type": "object"
+      },
+      "ResultRef": {
+        "additionalProperties": false,
+        "description": "Where a result lives. M2 keeps immediate results inline (not retained) and records their shape.",
+        "properties": {
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "storage": {
+            "enum": [
+              "inline",
+              "stored"
+            ],
+            "title": "Storage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "storage",
+          "content_type",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "ResultRef",
+        "type": "object"
+      },
+      "RotateBody": {
+        "properties": {
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_ref"
+        ],
+        "title": "RotateBody",
+        "type": "object"
+      },
+      "Runner": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity"
+          },
+          "capacity_available": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Available"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "orchestrator_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator Url"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NetworkRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Id"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "app",
+          "runner_id",
+          "mode",
+          "orchestrator_url",
+          "capacity",
+          "capacity_available",
+          "rate"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "SecretRef": {
+        "additionalProperties": false,
+        "description": "A handle to a secret held by a SecretStore. Databases, records and logs hold only this.",
+        "properties": {
+          "ref": {
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "SecretRef",
+        "type": "object"
+      },
+      "Session": {
+        "additionalProperties": false,
+        "description": "A persistent runner session. The engine proxies all traffic; clients never see the app URL.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "opened_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opened At"
+          },
+          "proxy_path": {
+            "title": "Proxy Path",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "opening",
+              "open",
+              "closed",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_id",
+          "application_id",
+          "actor_id",
+          "app",
+          "state",
+          "proxy_path",
+          "opened_at",
+          "closed_at"
+        ],
+        "title": "Session",
+        "type": "object"
+      },
+      "SessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "idle_timeout_s": {
+            "default": 300,
+            "exclusiveMinimum": 0.0,
+            "title": "Idle Timeout S",
+            "type": "integer"
+          },
+          "max_duration_s": {
+            "default": 3600,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Duration S",
+            "type": "integer"
+          },
+          "operation_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Ref"
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "title": "SessionRequest",
+        "type": "object"
+      },
+      "StatusBody": {
+        "properties": {
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "StatusBody",
+        "type": "object"
+      },
+      "SyncReport": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs_updated": {
+            "default": 0,
+            "title": "Jobs Updated",
+            "type": "integer"
+          },
+          "pages": {
+            "title": "Pages",
+            "type": "integer"
+          },
+          "rows_new": {
+            "title": "Rows New",
+            "type": "integer"
+          },
+          "rows_seen": {
+            "title": "Rows Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pages",
+          "rows_seen",
+          "rows_new"
+        ],
+        "title": "SyncReport",
+        "type": "object"
+      },
+      "UsageBody": {
+        "properties": {
+          "quantities": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Quantities",
+            "type": "object"
+          }
+        },
+        "required": [
+          "quantities"
+        ],
+        "title": "UsageBody",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "livepeer-builder",
+    "version": "generated"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/readyz": {
+      "get": {
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz"
+      }
+    },
+    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation": {
+      "post": {
+        "operationId": "provision_v1_admin_applications__application_id__actors__actor_id__allocation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Provision"
+      }
+    },
+    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/fund": {
+      "post": {
+        "operationId": "fund_v1_admin_applications__application_id__actors__actor_id__allocation_fund_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fund"
+      }
+    },
+    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/revoke": {
+      "post": {
+        "operationId": "revoke_v1_admin_applications__application_id__actors__actor_id__allocation_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke"
+      }
+    },
+    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/rotate-key": {
+      "post": {
+        "operationId": "rotate_v1_admin_applications__application_id__actors__actor_id__allocation_rotate_key_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rotate"
+      }
+    },
+    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/status": {
+      "post": {
+        "operationId": "set_status_v1_admin_applications__application_id__actors__actor_id__allocation_status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Status"
+      }
+    },
+    "/v1/admin/costs/sync": {
+      "post": {
+        "operationId": "sync_costs_v1_admin_costs_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sync Costs"
+      }
+    },
+    "/v1/admin/keys": {
+      "get": {
+        "operationId": "list_keys_v1_admin_keys_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "application_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccessKey"
+                  },
+                  "title": "Response List Keys V1 Admin Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Keys"
+      },
+      "post": {
+        "operationId": "issue_key_v1_admin_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue Key"
+      }
+    },
+    "/v1/admin/keys/{key_id}/revoke": {
+      "post": {
+        "operationId": "revoke_key_v1_admin_keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Key"
+      }
+    },
+    "/v1/admin/reconciliation": {
+      "get": {
+        "operationId": "reconcile_v1_admin_reconciliation_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "application_id",
+            "required": false,
+            "schema": {
+              "default": "default",
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reconciliation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile"
+      }
+    },
+    "/v1/allowance": {
+      "get": {
+        "operationId": "allowance_v1_allowance_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Allowance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Allowance"
+      }
+    },
+    "/v1/costs/summary": {
+      "get": {
+        "operationId": "cost_summary_v1_costs_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cost Summary"
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "events_v1_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Events"
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "operationId": "list_jobs_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  },
+                  "title": "Response List Jobs V1 Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs"
+      },
+      "post": {
+        "operationId": "run_job_v1_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "The runner's own status, content type and body"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Job"
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job"
+      }
+    },
+    "/v1/jobs/{job_id}/cost": {
+      "get": {
+        "operationId": "job_cost_v1_jobs__job_id__cost_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCost"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Cost"
+      }
+    },
+    "/v1/jobs/{job_id}/result": {
+      "get": {
+        "operationId": "get_result_v1_jobs__job_id__result_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Result"
+      }
+    },
+    "/v1/jobs/{job_id}/usage": {
+      "post": {
+        "operationId": "report_usage_v1_jobs__job_id__usage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Usage"
+      }
+    },
+    "/v1/offerings": {
+      "get": {
+        "operationId": "offerings_v1_offerings_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "App"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Offering"
+                  },
+                  "title": "Response Offerings V1 Offerings Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Offerings"
+      }
+    },
+    "/v1/runners": {
+      "get": {
+        "operationId": "runners_v1_runners_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": true,
+            "schema": {
+              "title": "App",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Runner"
+                  },
+                  "title": "Response Runners V1 Runners Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Runners"
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "open_session_v1_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Session"
+      }
+    }
+  }
+}

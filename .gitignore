@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# livepeer-builder
+*.db
+*.db-wal
+*.db-shm
+*.db.bak
+deploy/dev-stack/secrets/
+deploy/dev-stack/.env
+deploy/dev-stack/config/pinned-certs/
+coverage.json

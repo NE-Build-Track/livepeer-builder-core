@@ -24,11 +24,11 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | --- | --- | --- |
 | ISS-01 Baseline | [completed/iss-01-baseline.md](exec-plans/completed/iss-01-baseline.md) | John, Mike |
 | ISS-02 Engine contracts | [active/iss-02-engine-contracts.md](exec-plans/active/iss-02-engine-contracts.md) | John, Mike |
-| ISS-03 Access | [active/iss-03-access.md](exec-plans/active/iss-03-access.md) | John, Mike |
+| ISS-03 Access | [completed/iss-03-access.md](exec-plans/completed/iss-03-access.md) | John, Mike |
 | ISS-04 Payments | [active/iss-04-payments.md](exec-plans/active/iss-04-payments.md) | John, Mike |
 | ISS-05 Core packages | [active/iss-05-core-packages.md](exec-plans/active/iss-05-core-packages.md) | John, Mike |
-| ISS-06 SQLite records | [active/iss-06-records.md](exec-plans/active/iss-06-records.md) | John, Mike |
-| ISS-07 Builds and CI | [active/iss-07-ci.md](exec-plans/active/iss-07-ci.md) | John, Mike |
+| ISS-06 SQLite records | [completed/iss-06-records.md](exec-plans/completed/iss-06-records.md) | John, Mike |
+| ISS-07 Builds and CI | [completed/iss-07-ci.md](exec-plans/completed/iss-07-ci.md) | John, Mike |
 | Evidence re-run | [active/m2-attribution-rerun.md](exec-plans/active/m2-attribution-rerun.md) | John |
 
 Nothing closes without Mike's review. Josh reviews engine code.

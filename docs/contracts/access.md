@@ -90,6 +90,9 @@ Both are generic: no enterprise logic lives in the engine.
 
 ## Boundaries
 
+- **End users:** an end user never needs an engine key. Enterprises enroll and authenticate their
+  users with their own identity provider (imported mode, JWT bearer or a trusted backend); `lpk_`
+  keys are for standalone callers and operators.
 - **Browser:** browsers never hold admin, management or payment credentials. A browser reaches the
   engine through the enterprise backend, or directly with a JWT whose audience is the engine. CORS is
   off by default.

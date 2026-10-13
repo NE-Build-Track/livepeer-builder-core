@@ -68,6 +68,32 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest tests/store -q -m "postgres or not postgres"
 
+  container:
+    name: engine image + container smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs reads the version from .git inside the image
+          persist-credentials: false  # .git is copied into the build; keep the token out of it
+      - name: Build the engine image (deploy/dev-stack/engine/Dockerfile)
+        run: docker build -f deploy/dev-stack/engine/Dockerfile -t livepeer-builder-engine:ci .
+      - name: Runs as a non-root user
+        run: test "$(docker run --rm --entrypoint id livepeer-builder-engine:ci -u)" != "0"
+      - name: lpb smoke inside the image
+        run: docker run --rm livepeer-builder-engine:ci lpb smoke
+      - name: The served engine is ready and refuses unauthenticated jobs
+        run: |
+          docker run -d --name engine -p 127.0.0.1:8080:8080 livepeer-builder-engine:ci
+          for _ in $(seq 30); do curl -fsS -o /dev/null http://127.0.0.1:8080/readyz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8080/readyz
+          status=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/v1/jobs \
+            -H 'Content-Type: application/json' -d '{"app":"smoke"}')
+          test "$status" = "401"
+      - name: Engine logs
+        if: failure()
+        run: docker logs engine || true
+
   build-install:
     name: dev build + clean-install smoke
     runs-on: ubuntu-latest

@@ -2,8 +2,8 @@
 
 ## Status
 
-Owners: John, Mike. GitHub: #12. **Implemented in this scaffold; tests pass on SQLite and
-PostgreSQL 16 locally.**
+Owners: John, Mike. GitHub: #12. **Accepted by Mike on 13 October.** Tests pass on SQLite and
+PostgreSQL 16 in CI on `releases/m2`.
 
 ## Goal
 
@@ -21,11 +21,12 @@ representative records. Make retention configurable and documented.
 - [x] Retention configurable and documented: [contracts/persistence.md](../../contracts/persistence.md#retention)
 - [x] Provider ledger stays authoritative (usage rows are a cache; assumption A1)
 - [x] Mike accepted assumptions A1 and A2 (12 October) in [m2-decisions.md](../../design-docs/m2-decisions.md)
-- [ ] Mike's review
+- [x] Mike's review (13 October)
 
 ## Progress
 
 - [x] 2026-10-12: Store, two migrations, backup, retention, with durability tests.
+- [x] 2026-10-13: Coverage work fixed `lpb verify` on a non-SQLite file (now `InvalidRequest`); Mike accepted.
 
 ## Decision log
 

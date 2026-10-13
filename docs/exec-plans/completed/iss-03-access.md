@@ -2,8 +2,8 @@
 
 ## Status
 
-Owners: John, Mike. GitHub: #9. **The design was accepted on 12 October; the contract doc and the
-protocols are in this scaffold.**
+Owners: John, Mike. GitHub: #9. **Accepted by Mike on 13 October.** Evidence is on `releases/m2`;
+JWT bearer and trusted-backend implementations remain M4 work (T7).
 
 ## Goal
 
@@ -17,13 +17,15 @@ ownership scope and permitted operations, across imported and service modes, wit
 - [x] Browser and admin trust boundaries; credential lifecycle table
 - [x] Enterprise service mode: JWT bearer and trusted backend defined
 - [x] Request fields cannot establish identity (`test_request_fields_cannot_establish_identity`)
-- [ ] Mike's review
+- [x] No additional user-facing engine key: [access.md#boundaries](../../contracts/access.md#boundaries)
+- [x] Mike's review (13 October)
 
 ## Progress
 
 - [x] 2026-10-12: Contract written; API-key adapter, policy, one-time admin bootstrap and
       `SecretStore` implemented.
-- [ ] M4: `JwtBearerAuthenticator`, `ServiceCredentialAuthenticator`, RFC 9728 metadata.
+- [x] 2026-10-13: Stated that end users never need an engine key; Mike reviewed and accepted.
+- [ ] M4 (not this ticket): `JwtBearerAuthenticator`, `ServiceCredentialAuthenticator`, RFC 9728 metadata.
 
 ## Decision log
 

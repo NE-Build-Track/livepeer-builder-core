@@ -2,8 +2,8 @@
 
 ## Status
 
-Owners: John, Mike. GitHub: #11. **The scaffold meets the acceptance locally; CI evidence comes with
-ISS-07.**
+Owners: John, Mike. GitHub: #11. **Meets the acceptance on `releases/m2`, with CI green; waiting on
+Josh's code review and the SDK re-pin (T1).**
 
 ## Goal
 
@@ -19,7 +19,7 @@ against a versioned development build.
 - [x] No silent in-memory store; SQLite file by default
 - [x] SDK dependency pinned so an installed build gets SDK #71 (`auth_ids`); see tech debt
 - [x] `lpb smoke` import/start/health/stop check
-- [ ] The CI clean-install job is green on a versioned dev build (ISS-07)
+- [x] The CI clean-install job is green on a versioned dev build (ISS-07)
 - [ ] Josh's code review; Mike's review
 
 ## Progress

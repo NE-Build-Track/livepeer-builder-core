@@ -1,6 +1,6 @@
 # M2 traceability: tickets → code → tests → docs
 
-Status as of 12 October 2026 (an uncommitted scaffold on `releases/m2`). Update this file in the same
+Status as of 13 October 2026 (`releases/m2`, CI green). Update this file in the same
 change that moves a ticket.
 
 ## ISS-01: Integration baseline (accepted 12 October)
@@ -28,7 +28,7 @@ change that moves a ticket.
 | Failover when the signer refuses one orchestrator (D26) | `adapters/sdk.py::call_error`, `services/jobs.py` | `test_signer_refusal_for_one_orchestrator_fails_over`, `test_caller_side_payment_refusal_does_not_fail_over`, `test_sdk_errors_keep_payment_evidence` | [engine.md](../contracts/engine.md#behavior-the-contract-fixes) |
 | **Open** | Final idempotency semantics (John's PR, D11 / T2) | | |
 
-## ISS-03: Access (design accepted)
+## ISS-03: Access (accepted 13 October)
 
 | Need | Code | Tests | Doc |
 | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ change that moves a ticket.
 | Standalone API keys (hashed, scoped, revocable; inspection without disclosure) | `services/keys.py`, `adapters/auth.py` | `test_issued_key_authenticates_and_revocation_stops_it` | [access.md#modes](../contracts/access.md#modes) |
 | Ownership and admin boundary | `services/policy.py` | `test_policy_needs_permission_and_ownership`, `test_admin_operations_need_an_admin_credential`, `test_other_actors_jobs_are_invisible` | [access.md#defaultpolicy](../contracts/access.md#defaultpolicy) |
 | One-time admin bootstrap | `KeyService.bootstrap_admin`, `lpb bootstrap-admin` | `test_bootstrap_admin_is_one_time` | [access.md#boundaries](../contracts/access.md#boundaries) |
+| No additional user-facing engine key | `adapters/auth.py`, imported mode | `tests/unit/test_extension_examples.py` | [access.md#boundaries](../contracts/access.md#boundaries) |
 | Unchecked fields can't establish identity | `adapters/auth.py` | `test_request_fields_cannot_establish_identity` | [access.md#boundaries](../contracts/access.md#boundaries) |
 | Payment-key custody | `adapters/secrets.py` | `test_secret_stores`, `test_payment_key_is_stored_encrypted_and_only_referenced` | [SECURITY.md](../SECURITY.md) |
 | JWT bearer, trusted backend, MCP metadata (**defined**, M4) | — | — | [access.md#service-mode](../contracts/access.md#service-mode) |
@@ -64,23 +65,25 @@ change that moves a ticket.
 | Durable default store (no silent in-memory store) | `config.py` `DEFAULT_DATABASE_URL`; `test_settings_from_environment` |
 | SDK dependency survives installation | Direct-reference pin, verified to include `auth_ids` (T1) |
 
-## ISS-06: SQLite records
+## ISS-06: SQLite records (accepted 13 October)
 
 | Need | Where |
 | --- | --- |
 | Store behind `EngineStore`, vendor-neutral | `store/sql.py`, `store/schema.py`; `tests/store/test_contract.py` on SQLite and PostgreSQL 16 |
 | Migrations as package data; drift check | `store/migrations/`, `store/migrate.py`; `test_migrations_match_the_schema`, `test_built_wheel_contains_migrations` |
 | Restart; migration over retained records | `test_records_survive_restart_and_interrupted_jobs_resolve`, `test_upgrade_preserves_records_written_at_each_revision` |
-| Backup and restore | `store/backup.py`, `lpb backup/verify/restore`; `test_sqlite_backup_and_restore` |
+| Backup and restore | `store/backup.py`, `lpb backup/verify/restore`; `test_sqlite_backup_and_restore`, `tests/unit/test_cli.py`, `tests/store/test_edges.py` |
 | Configurable retention | `store/retention.py`, `LPB_RETENTION_*`; `test_retention_keeps_uncertain_and_recent_jobs` |
 | Provider ledger stays authoritative | [persistence.md](../contracts/persistence.md); assumption A1 |
 | Assumptions | A1–A2 accepted by Mike (12 October) |
 
-## ISS-07: Builds and CI
+## ISS-07: Builds and CI (accepted 13 October)
 
 | Need | Where |
 | --- | --- |
 | Lint, types, docs, generated-docs drift, tests | `.github/workflows/ci.yml` job `checks` |
 | PostgreSQL store suite | job `postgres` |
 | Versioned dev build and clean-install smoke | job `build-install` (artifact `livepeer-builder-dist`) |
-| **Open** | First green run after the branch is pushed |
+| Branch-coverage gates (total, per layer, changed lines) | job `checks`; `scripts/check_coverage.py`; [QUALITY_SCORE.md#test-coverage](../QUALITY_SCORE.md#test-coverage) |
+| Engine container: non-root image, `lpb smoke`, `/readyz`, 401 without a credential | job `container`; `deploy/dev-stack/engine/Dockerfile`, `.dockerignore` |
+| Green on `releases/m2` | CI push runs on `releases/**` |

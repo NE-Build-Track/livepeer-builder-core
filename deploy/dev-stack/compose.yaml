@@ -7,7 +7,7 @@ name: livepeer-builder-dev
 
 services:
   clearinghouse:
-    image: livepeer-builder-dev/clearinghouse:ca09e47
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/clearinghouse:ca09e47
     build:
       context: https://github.com/eliteprox/clearinghouse-batteries.git#ca09e47c067682fb48c3f15425546fb6aa5b6659
       dockerfile: examples/compose/Dockerfile
@@ -22,7 +22,7 @@ services:
       retries: 12
 
   signer:
-    image: livepeer-builder-dev/node:1432123
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:1432123
     build:
       context: https://github.com/eliteprox/node.git#1432123688e7e4ad8149c1989865890854cdf37a
       dockerfile: docker/Dockerfile
@@ -45,7 +45,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/dev-stack/engine/Dockerfile
-    image: livepeer-builder-dev/engine:local
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/engine:local
     env_file: [.env]
     ports: ["127.0.0.1:8080:8080"]
     volumes: [engine-data:/data]

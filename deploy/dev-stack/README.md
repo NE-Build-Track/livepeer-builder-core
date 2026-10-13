@@ -69,7 +69,17 @@ See [the evidence](../../docs/references/evidence/2026-10-12-dev-stack-paid-run.
 
 - **`secrets/`, `.env` and `config/pinned-certs/` are git-ignored.** Keep the RPC URL and keys only
   there.
-- **Containers run as root** (`user: "0:0"`) so bind-mounted secrets stay readable. This is dev only.
+- **Image registry:** `IMAGE_REGISTRY` in `.env` prefixes the images this stack builds
+  (`<registry>/livepeer-builder-dev/{clearinghouse,node,engine}`). This environment uses
+  `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
+  image is an explicit `docker compose push <service>`. Base images (`python`, Go) still come from
+  Docker Hub.
+- **The clearinghouse and signer containers run as root** (`user: "0:0"`) so bind-mounted secrets
+  stay readable. This is dev only.
+- **The engine image runs as `lpb` (uid 10001)**, and `/.dockerignore` keeps `secrets/`, `.env`,
+  `.venv` and caches out of the build context. An `engine-data` volume created by an older, root-run
+  image needs its ownership fixed once:
+  `docker compose run --rm --user 0 engine chown -R 10001:10001 /data`.
 - **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) has no
   `grants.*`. The grant is created with the operator CLI.
 - **Pinned certificates** are trust-on-first-use. Re-run `config/pin-orchestrator-certs.py` when an

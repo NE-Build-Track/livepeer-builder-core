@@ -3,7 +3,8 @@
 ## Status
 
 Owners: John, Mike. GitHub: #10. **Decided on 12 October; contract and implementation are in this
-scaffold.** Waiting on the SDK #71 upstream position.
+scaffold.** Paid jobs on public orchestrators reconciled on 14 October. Waiting on the correlation key
+(T11: Josh prefers ManifestID to `auth_id`, livepeer-python-gateway#74) and SDK PR 5 (T1).
 
 ## Goal
 
@@ -16,17 +17,21 @@ decision on the gap.
 - [x] Allocation mapping and modes; explicit provisioning: [contracts/payments.md](../../contracts/payments.md)
 - [x] Least-privilege management operations
 - [x] Reporting access (`/v1/usage`, allocation read); units (`Money`, USD default)
-- [x] Stable references: `(allocation_id, payment_session_id)`; `manifest_id` is a label
+- [x] Stable references: `(allocation_id, payment_session_id)`; `manifest_id` is a label (under review, D20, T11)
 - [x] Repeat-command semantics (idempotency keys; replays)
 - [x] Batteries gaps delivered upstream (#5, #6, #7)
-- [ ] SDK #71: upstream maintainers' position recorded on the PR (John asks; Josh helps if it stalls)
+- [ ] SDK PR 5 (formerly #71): upstream position recorded. Josh answered on #74 (14 October); the key
+      question (T11) is open
 - [ ] Mike's review
 
 ## Progress
 
 - [x] 2026-10-12: Payments service, Batteries adapter, cost sync, classification and reconciliation,
       with tests.
-- [ ] Re-run the attribution evidence on the new baseline (see the evidence plan).
+- [x] 2026-10-14: Paid jobs on public orchestrators with no shim; reconciliation balanced
+      ([evidence](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)).
+- [ ] Finish the attribution re-run: forged-manifest and rejected-ticket cases
+      ([m2-attribution-rerun](m2-attribution-rerun.md)).
 
 ## Decision log
 

@@ -1,6 +1,6 @@
 # M2 traceability: tickets → code → tests → docs
 
-Status as of 13 October 2026 (`releases/m2`, CI green). Update this file in the same
+Status as of 14 October 2026 (`releases/m2`, CI green). Update this file in the same
 change that moves a ticket.
 
 ## ISS-01: Integration baseline (accepted 12 October)
@@ -8,9 +8,9 @@ change that moves a ticket.
 | Need | Where |
 | --- | --- |
 | Pinned revisions | [references/upstream-baseline.md](../references/upstream-baseline.md); `pyproject.toml` (SDK pin) |
-| Behavior rechecked; runtime evidence | [evidence/2026-10-07-arbitrum-run.md](../references/evidence/2026-10-07-arbitrum-run.md), [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) |
+| Behavior rechecked; runtime evidence | [evidence/2026-10-07-arbitrum-run.md](../references/evidence/2026-10-07-arbitrum-run.md), [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md), [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md) |
 | Upstream wire formats relied on | [batteries-api.md](../references/batteries-api.md), [node-signer.md](../references/node-signer.md), [sdk-gateway.md](../references/sdk-gateway.md) |
-| **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); blocked by T10 (T9 fixed in SDK PR 5) |
+| **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); T9 and T10 resolved; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)). Forged-manifest and rejected-ticket cases remain |
 
 ## ISS-02: Engine contracts
 
@@ -50,8 +50,8 @@ change that moves a ticket.
 | Least-privilege management credential | `deploy/dev-stack/config/init-secrets.py` | dev-stack run | [batteries-api.md](../references/batteries-api.md) |
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |
 | Stable references (`auth_id` join) | `services/costs.py::classify`, `lpb_attempt_auth_ids` | `test_failed_after_payment_and_forged_manifest_reconcile` | [payments.md#correlation](../contracts/payments.md#correlation) |
-| Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md): balanced reconciliation |
-| **Open** | SDK PR 5 merge into `releases/m2` (T1; T9 fixed in `84ec542`); T10 (signer rejects address ≠ recipient); Mode B (M4) | | |
+| Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) and [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md): balanced reconciliation |
+| **Open** | SDK PR 5 merge into `releases/m2` (T1; T9 fixed in `84ec542`); T11 (correlation key: `auth_id` or ManifestID, livepeer-python-gateway#74); Mode B (M4) | | |
 
 ## ISS-05: Core packages
 

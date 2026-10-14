@@ -17,9 +17,9 @@
 | **Expected value (EV)** | Ticket face value × win probability. What Batteries charges at signing: **network cost** |
 | **Grant** | The operator-funded Batteries budget that allocations draw from. The engine has no `grants.*` permission |
 | **Live Runner** | An application server registered with an orchestrator. Single-shot or persistent mode |
-| **`manifest_id`** | The orchestrator's session label. Stored, but **never** a billing key (clients can forge it) |
+| **`manifest_id`** | The orchestrator's session label. Stored as a label; not the billing key (D20). Under review as the key in place of `auth_id` (T11) |
 | **Mode A / Mode B** | Self-operated payments, or a hosted payment operator (deferred to M4) |
-| **Node key vs recipient** | An orchestrator's operational signing account vs its registered account that tickets pay. The node signer currently requires them to be equal (T10) |
+| **Node key vs recipient** | An orchestrator's operational signing account vs its registered account that tickets pay. Since `f970be6` the node signer pays the recipient and ignores the node address (T10) |
 | **`operation_ref`** | The caller's retry key; one dispatch per (application, actor, ref) |
 | **`per_actor` / `per_application`** | Allocation modes: one allocation per actor (default), or one shared configured key |
 | **Remote signer** | The livepeer/node service that signs payment tickets for gateways, after Batteries authorizes |

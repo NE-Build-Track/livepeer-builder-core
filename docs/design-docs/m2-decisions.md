@@ -43,7 +43,7 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 | D17 | Two allocation modes; **`per_actor` is the default** for enterprise deployments. There is no silent fallback to a shared key | `services/payments.py` |
 | D18 | **No auto-provisioning.** Provisioning is an explicit admin command. A zero amount sets up identity without money; funding is a separate explicit command with an `operation_ref` | [payments.md#provisioning](../contracts/payments.md#provisioning) |
 | D19 | Units: `Money(amount, currency)` throughout. Cost carries `fee_eth` and `fee_usd`. **USD grants are the default** | `contracts/common.py` |
-| D20 | Correlation key: `(allocation_id, payment_session_id)`. `manifest_id` is a label only, because a client can forge it (7 Oct evidence) | [payments.md#correlation](../contracts/payments.md#correlation) |
+| D20 | Correlation key: `(allocation_id, payment_session_id)`. `manifest_id` is a label only, because a client can forge it (7 Oct evidence). **Under review (14 October):** Josh doesn't want the SDK to expose `AuthID` from the opaque signer state and proposes ManifestID instead ([livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)). The node signer requires the ManifestID to equal `Auth.SessionID`, but both come from the caller's `OrchestratorInfo` and the signer doesn't verify them against the orchestrator, so a holder of the allocation's key can still label a charge with another job's manifest; `auth_id` comes from the webhook and can't be chosen by the caller. Open: is a ManifestID unique to one payment challenge, and is that forgery limit acceptable while the engine is the only key holder (T11) | [payments.md#correlation](../contracts/payments.md#correlation) |
 | D21 | Rejected-ticket charges are accepted and documented: network cost is expected value at signing and is not adjusted | [payments.md#cost-classification](../contracts/payments.md#cost-classification) |
 | D22 | Cost classification: `delivered` / `failed_after_payment` / `uncertain` / `pending`, plus `unattributed` and reconciliation | `services/costs.py` |
 | D23 | Mode B (hosted payment operator) is deferred to M4 (P4). It is recorded as a gap | [payments.md#mode-b](../contracts/payments.md#mode-b) |
@@ -53,9 +53,9 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 
 | # | Decision | Where |
 | --- | --- | --- |
-| D25 | **T10: no upstream change to the node signer for now** (Mike, 12 October). The signer's address-equals-recipient check stays as is. Public orchestrators with a separate node key can't be paid by the dev stack until this is revisited | [tech-debt T10](../exec-plans/tech-debt-tracker.md) |
-
+| D25 | ~~**T10: no upstream change to the node signer for now** (Mike, 12 October).~~ **Superseded 13 October:** Mike filed [livepeer/node#1](https://github.com/livepeer/node/issues/1), and Josh fixed it in `f970be6` (the signer uses `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`). The dev stack now pins `f970be6` | [tech-debt T10](../exec-plans/tech-debt-tracker.md) |
 | D26 | **Fail over when the signer refuses a specific orchestrator before payment** (Mike, 12 October). The outcome is `payment_refused` (signer 400/481); caller-side refusals (402 and others) don't fail over | [engine.md](../contracts/engine.md#behavior-the-contract-fixes), `services/jobs.py` |
+| D27 | **Orchestrators serve CA-signed TLS certificates; the signer won't skip verification** (Josh, 13 October; Mike agreed). [livepeer/node#2](https://github.com/livepeer/node/issues/2) was closed as not planned. Mike will move the orchestrators the build track uses to publicly trusted certificates. Until then the dev stack pins their certificates (`config/pin-orchestrator-certs.py`) | [dev-stack README](../../deploy/dev-stack/README.md) |
 
 ## Assumptions accepted by Mike (12 October)
 

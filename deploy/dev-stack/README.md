@@ -7,7 +7,7 @@ the payment side and the engine:
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | livepeer/node `1432123` remote signer. It discovers and pays the orchestrators listed in `config/signer.toml` |
+| `signer` | livepeer/node `f970be6` remote signer. It discovers and pays the orchestrators listed in `config/signer.toml` |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080` |
 
 Upstream sources are built from the M2 baseline commits
@@ -55,15 +55,15 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
 
 Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliation?actor_id=alice`.
 
-## Known blockers (12 October)
+## Status (14 October)
 
-- **T10:** the node signer requires an orchestrator's address to equal its ticket recipient. The
-  public orchestrators tested differ, so signing fails with 400.
-- ~~**T9**~~ **Resolved** in SDK PR 5 `84ec542`, which reads node's lower-case `"state"` key. Before the fix, `auth_id`s came back empty and
-  costs stay `pending`.
+- **T10 resolved:** the signer at `f970be6` pays orchestrators whose ticket recipient differs from
+  their node address. Paid jobs on public orchestrators succeed and reconcile.
+- **T9 resolved:** SDK PR 5 reads node's lower-case `"state"` key, so attempts record their `auth_id`
+  with no shim.
 
-See [the evidence](../../docs/references/evidence/2026-10-12-dev-stack-paid-run.md) and the
-[tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
+See [the 14 October evidence](../../docs/references/evidence/2026-10-14-dev-stack-public-orchestrators.md)
+and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
 
 ## Notes
 
@@ -82,7 +82,9 @@ See [the evidence](../../docs/references/evidence/2026-10-12-dev-stack-paid-run.
   `docker compose run --rm --user 0 engine chown -R 10001:10001 /data`.
 - **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) has no
   `grants.*`. The grant is created with the operator CLI.
-- **Pinned certificates** are trust-on-first-use. Re-run `config/pin-orchestrator-certs.py` when an
-  orchestrator rotates its certificate, and only list orchestrators you intend to pay.
+- **Pinned certificates** are trust-on-first-use and **temporary** (T12). Orchestrators are to serve
+  CA-signed certificates (D27); once the ones listed do, drop the script and the `pinned-certs` mount.
+  Until then, re-run `config/pin-orchestrator-certs.py` when an orchestrator rotates its certificate,
+  and only list orchestrators you intend to pay.
 - **Docker network error:** if Docker reports "all predefined address pools have been fully
   subnetted", run `docker network prune`.

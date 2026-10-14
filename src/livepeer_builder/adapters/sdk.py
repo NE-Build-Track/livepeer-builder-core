@@ -29,7 +29,7 @@ from livepeer_builder.errors import RunnerCallError
 _BODY_LIMIT = 4096
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
-# may succeed. 400 = incomplete/expired params (incl. address != recipient, T10); 481 = price ceiling.
+# may succeed. 400 = incomplete/expired params; 481 = price ceiling.
 # Caller- or signer-side refusals (402 allowance, 403 forbidden, 502 webhook, 503 outbox) are not here.
 _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
 

@@ -44,8 +44,7 @@ is the cost key), `payment_sent`, `outcome` (`in_flight`, `succeeded`, `refused`
    and the outcome is `refused`, `unreachable` or `payment_refused`. After payment, the job is bound to
    that runner.
    - **`payment_refused`:** the signer refused to pay *this orchestrator* before anything was sent. The
-     signer statuses are 400 (incomplete or expired payment params, including address ≠ recipient,
-     T10) and 481 (price above the session ceiling). Another orchestrator may succeed.
+     signer statuses are 400 (incomplete or expired payment params) and 481 (price above the session ceiling). Another orchestrator may succeed.
    - **`payment`:** caller- or signer-side refusals, such as 402 (allowance exhausted), 403, 502
      (webhook) and 503 (outbox). These do **not** fail over, because every orchestrator would fail the
      same way.

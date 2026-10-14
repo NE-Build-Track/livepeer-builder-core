@@ -22,7 +22,7 @@ dependencies = [
     # eliteprox/livepeer-python-gateway PR 5 (on_payment_session, the lowercase "state" fix,
     # and callback errors that do not restart the payment challenge).
     # Re-pin to its merge commit on releases/m2 once it merges (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@dca9cd69c554651f5bdacd9641d27bcec339b1c3",
+    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@6e4bffdc8a7eedddd122ecea1348cc35ac9d3d14",
 ]
 
 [project.optional-dependencies]

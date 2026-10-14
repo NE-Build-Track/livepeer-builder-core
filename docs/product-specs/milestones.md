@@ -61,7 +61,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 | Ref | Interface | Status (14 October) |
 | --- | --- | --- |
-| H1 | Python gateway SDK | Pinned to eliteprox PR 5 `dca9cd69` (`on_payment_session`; node `"state"` fix, T9 resolved; callback errors do not restart the challenge). **Open:** merge into `releases/m2`, then re-pin (T1). #70 and multipart deferred |
+| H1 | Python gateway SDK | Pinned to eliteprox PR 5 `6e4bffdc` (`on_payment_session`; node `"state"` fix, T9 resolved; callback errors do not restart the challenge). **Open:** merge into `releases/m2`, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
 | H3 | Remote signer and orchestrator/Live Runner | livepeer/node `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |

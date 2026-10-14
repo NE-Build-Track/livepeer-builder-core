@@ -2,7 +2,7 @@
 
 ## Status
 
-Owner: John. Follow-up to ISS-01 (decision 6 on #7). **First run done on 12 October. T9 is fixed in SDK PR 5; a clean funded pass is blocked by T10.**
+Owner: John. Follow-up to ISS-01 (decision 6 on #7). **Clean funded pass on public orchestrators done on 14 October (T9 and T10 resolved). The forged-manifest and rejected-ticket cases remain.**
 
 ## Goal
 
@@ -13,15 +13,16 @@ and the SDK with #71, driving it through this engine instead of prototype script
 
 - [x] Stack from [deploy/dev-stack](../../../deploy/dev-stack/README.md) with pins recorded
 - [x] Per-actor spend equals Batteries `spent_*` (reconciliation `balanced`, 12 October, with the T9 shim)
-- [ ] The same, without the shim, now that SDK PR 5 reads node's `"state"` key (T9 fixed, `84ec542`). Needs an orchestrator the node signer accepts (T10)
+- [x] The same, without the shim (14 October: node `f970be6`, SDK PR 5; reconciliation `balanced`)
 - [ ] A forged `manifest_id` is `unattributed`, not attributed
 - [ ] A rejected-ticket charge is classified `failed_after_payment`
-- [ ] A public orchestrator the node signer accepts (T10)
-- [x] Results recorded: [2026-10-12-dev-stack-paid-run](../../references/evidence/2026-10-12-dev-stack-paid-run.md)
+- [x] A public orchestrator the node signer accepts (14 October: speedybird and xode)
+- [x] Results recorded: [2026-10-12-dev-stack-paid-run](../../references/evidence/2026-10-12-dev-stack-paid-run.md), [2026-10-14-dev-stack-public-orchestrators](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)
 
 ## Progress
 
 - [x] 2026-10-12: Paid run with livepeer/node, Batteries `ca09e47`, `xode` (guarded) and the mock Live Runner. Found T9.
+- [x] 2026-10-14: Paid run on node `f970be6` against public orchestrators: three jobs `delivered`, reconciliation `balanced`, no shims.
 
 ## Decision log
 

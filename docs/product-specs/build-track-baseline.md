@@ -145,5 +145,5 @@ it. **No SLA, automatic refund or recovery guarantee** follows from the design. 
 | Representative acceptance capabilities | Open (ISS-19) |
 | Supported deployment guarantees; service-assurance and recourse boundaries | **Decided for M2:** no HA, no exactly-once, no SLA or recourse ([engine.md](../contracts/engine.md#deployment-performance-and-recovery-assumptions)) |
 | Ongoing owners | Open (repository transfer to the Livepeer organization) |
-| Funded acceptance environment | Partly evidenced: [dev-stack paid run](../references/evidence/2026-10-12-dev-stack-paid-run.md). Blocked by T9 and T10 |
+| Funded acceptance environment | Evidenced: [dev-stack paid run](../references/evidence/2026-10-12-dev-stack-paid-run.md) and [public orchestrators](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md). T9 and T10 resolved |
 | Final-release acceptance procedure | Open (M5, ISS-39) |

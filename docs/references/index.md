@@ -9,3 +9,4 @@
 | [sdk-gateway.md](sdk-gateway.md) | SDK calls the adapters depend on |
 | [evidence/2026-10-07-arbitrum-run.md](evidence/2026-10-07-arbitrum-run.md) | Real-node attribution evidence (7 October, previous baseline) |
 | [evidence/2026-10-12-dev-stack-paid-run.md](evidence/2026-10-12-dev-stack-paid-run.md) | Paid dev-stack run on the new baseline: provisioning, attribution, reconciliation, the SDK #71 gap |
+| [evidence/2026-10-14-dev-stack-public-orchestrators.md](evidence/2026-10-14-dev-stack-public-orchestrators.md) | Paid jobs on public orchestrators with node `f970be6`: attribution without shims, balanced reconciliation |

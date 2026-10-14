@@ -58,7 +58,10 @@ them as `Decimal`.
 
 A charge joins an attempt by **`(allocation_id, payment_session_id ∈ attempt.auth_ids)`**.
 `manifest_id` is a label only: the 7 October run showed a client can put any string there
-([evidence](../references/evidence/2026-10-07-arbitrum-run.md)).
+([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). The node signer requires it to equal
+the `Auth.SessionID` in the caller's `OrchestratorInfo`, which the caller also supplies, so this still
+holds. **Under review (D20, T11):** upstream prefers ManifestID to `auth_id`
+([livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
 
 ## Cost classification
 

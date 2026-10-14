@@ -1,6 +1,5 @@
 """Adapters: the Batteries wire format, SDK error mapping, secret stores, and settings."""
 
-import base64
 import json
 from decimal import Decimal
 from types import SimpleNamespace
@@ -8,8 +7,6 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from livepeer_gateway.errors import LivepeerHTTPError
-from livepeer_gateway.live_runner import LivePaymentChallenge
-from livepeer_gateway.remote_signer import LivePaymentSession
 
 from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource, allowance_from_body
@@ -124,18 +121,18 @@ def test_sdk_errors_keep_payment_evidence() -> None:
     assert call_error(exhausted, runner_url, payment_sent=False).kind == "payment"  # caller-side: no failover
 
     after_signing = call_error(
-        LivepeerHTTPError(400, signer), runner_url, payment_sent=True, auth_ids=("auth-7",)
+        LivepeerHTTPError(400, signer), runner_url, payment_sent=True, manifest_ids=("m-7",)
     )
-    assert (after_signing.kind, after_signing.payment_sent, after_signing.auth_ids) == (
+    assert (after_signing.kind, after_signing.payment_sent, after_signing.manifest_ids) == (
         "payment",
         True,
-        ("auth-7",),
+        ("m-7",),
     )
 
 
 class _Session:
-    def __init__(self, auth_id: str) -> None:
-        self.auth_id = auth_id
+    def __init__(self, manifest_id: str) -> None:
+        self.manifest_id = manifest_id
 
 
 def _runner() -> Runner:
@@ -148,23 +145,23 @@ def _runner() -> Runner:
 async def test_transport_collects_signed_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
     async def paid_twice(url: str, **kwargs: object) -> SimpleNamespace:
         callback = kwargs["on_payment_session"]
-        callback(_Session("auth-1"))  # type: ignore[operator]
-        callback(_Session("auth-2"))  # type: ignore[operator]  # the runner answered 402 again
-        callback(_Session("auth-2"))  # type: ignore[operator]  # reported twice: kept once
+        callback(_Session("m-1"))  # type: ignore[operator]
+        callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
+        callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
         return SimpleNamespace(
             content=b'{"ok": 1}', data={}, content_type="application/json", session_id="m-1"
         )
 
     monkeypatch.setattr(sdk, "call_runner", paid_twice)
     reply = await SdkRunnerTransport("https://signer.example").call(_runner(), JobRequest(app="a/b"), "lpg_k")
-    assert (reply.auth_ids, reply.payment_sent, reply.manifest_id) == (("auth-1", "auth-2"), True, "m-1")
+    assert (reply.manifest_ids, reply.payment_sent) == (("m-1", "m-2", "m-2"), True)
 
 
 async def test_transport_failures_carry_the_sessions_signed_before_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def signed_then_500(url: str, **kwargs: object) -> SimpleNamespace:
-        kwargs["on_payment_session"](_Session("auth-9"))  # type: ignore[operator]
+        kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
         raise LivepeerHTTPError(500, url, body="boom")
 
     monkeypatch.setattr(sdk, "call_runner", signed_then_500)
@@ -172,10 +169,10 @@ async def test_transport_failures_carry_the_sessions_signed_before_them(
         await SdkRunnerTransport("https://signer.example").call(
             _runner(), JobRequest(app="a/b", path="/x"), "lpg_k"
         )
-    assert (failed.value.kind, failed.value.payment_sent, failed.value.auth_ids) == (
+    assert (failed.value.kind, failed.value.payment_sent, failed.value.manifest_ids) == (
         "http",
         True,
-        ("auth-9",),
+        ("m-9",),
     )
 
     async def refused_by_signer(url: str, **kwargs: object) -> SimpleNamespace:
@@ -197,30 +194,6 @@ async def test_unpaid_calls_register_no_callback(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(sdk, "call_runner", free)
     reply = await SdkRunnerTransport(None).call(_runner(), JobRequest(app="a/b"), None)
     assert seen["on_payment_session"] is None and reply.payment_sent is False
-
-
-def _signed_state(key: str, auth_id: str) -> dict[str, str]:
-    inner = base64.standard_b64encode(json.dumps({"AuthID": auth_id, "StateID": "s"}).encode()).decode()
-    signature_key = "Sig" if key == "State" else "sig"  # go-livepeer capitalizes; livepeer/node doesn't
-    return {key: inner, signature_key: "c2ln"}
-
-
-def _payment_session(state: dict[str, str]) -> LivePaymentSession:
-    challenge = LivePaymentChallenge(
-        payment_params="x", manifest_id="m", payment_url="https://orch.example/pay"
-    )
-    session = LivePaymentSession("https://signer.example", type="fixed", challenge=challenge)
-    session._state = state
-    return session
-
-
-def test_sdk_reads_auth_id_from_go_livepeer_state() -> None:
-    assert _payment_session(_signed_state("State", "auth-go")).auth_id == "auth-go"
-
-
-def test_sdk_reads_auth_id_from_livepeer_node_state() -> None:
-    """T9 regression guard: livepeer/node lowercases the signer state keys (SDK PR 5, 84ec542)."""
-    assert _payment_session(_signed_state("state", "auth-node")).auth_id == "auth-node"
 
 
 def test_discovery_entries_become_runners() -> None:

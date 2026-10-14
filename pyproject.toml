@@ -19,10 +19,9 @@ dependencies = [
     "aiosqlite>=0.20",
     "cryptography>=42",
     # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
-    # eliteprox/livepeer-python-gateway PR 5 (on_payment_session, the lowercase "state" fix,
-    # and callback errors that do not restart the payment challenge).
-    # Re-pin to its merge commit on releases/m2 once it merges (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@dca9cd69c554651f5bdacd9641d27bcec339b1c3",
+    # livepeer-python-gateway#77 (on_payment_session reports LivePaymentSession.manifest_id).
+    # Re-pin to its merge commit on main once it merges, then to a release (tech debt T1).
+    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@c7f425b2db45060fc7db79cce98732ffa4632df1",
 ]
 
 [project.optional-dependencies]

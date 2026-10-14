@@ -11,6 +11,7 @@ from livepeer_builder.contracts.common import Contract
 ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+SessionMatch = Literal["unmatched", "matched", "ambiguous"]
 
 
 class JobRequest(Contract):
@@ -33,6 +34,20 @@ AttemptOutcome = Literal[
 ]
 
 
+class SignedSession(Contract):
+    """One session the signer signed for an attempt.
+
+    ``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to
+    the Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays
+    ``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session
+    and one log entry share the key, and ``ambiguous`` when they do not.
+    """
+
+    manifest_id: str
+    payment_session_id: str | None = None
+    match: SessionMatch = "unmatched"
+
+
 class Attempt(Contract):
     """One runner call. Written as ``in_flight`` before the call, updated after it."""
 
@@ -40,8 +55,8 @@ class Attempt(Contract):
     number: int
     runner_url: str | None
     orchestrator_url: str | None
-    auth_ids: tuple[str, ...]  # signer payment sessions opened: the cost key
-    manifest_id: str | None  # the orchestrator's label; never a billing key
+    allocation_id: str | None  # the allocation whose key paid; None when the call was unpaid
+    sessions: tuple[SignedSession, ...]  # one entry per signed session, in signing order
     payment_sent: bool
     outcome: AttemptOutcome
     status_code: int | None
@@ -117,8 +132,7 @@ class RunnerReply(Contract):
     content: bytes
     content_type: str
     data: dict[str, Any] | None
-    auth_ids: tuple[str, ...]
-    manifest_id: str | None
+    manifest_ids: tuple[str, ...]  # one per signed session, in signing order
     payment_sent: bool
 
 

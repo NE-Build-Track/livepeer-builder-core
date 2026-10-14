@@ -68,7 +68,7 @@ async def test_payment_key_is_stored_encrypted_and_only_referenced(
         actors_dump = str((await conn.execute(select(t.actors))).all())
         secrets_dump = str((await conn.execute(select(t.secrets))).all())
     assert secret not in actors_dump and secret not in secrets_dump  # never plaintext at rest
-    assert await engine.payments.credential(alice) == secret
+    assert (await engine.payments.credential(alice)).token == secret
 
 
 async def test_funding_needs_an_operation_ref_and_applies_once(
@@ -106,18 +106,19 @@ async def test_rotation_replaces_the_key_and_revokes_the_old_one(
 ) -> None:
     engine = await make_engine()
     before = await engine.payments.provision(admin, provision_request())
-    old_secret = await engine.payments.credential(alice)
+    old_secret = (await engine.payments.credential(alice)).token
     after = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     assert after.allocation_id == before.allocation_id and after.api_key_id != before.api_key_id
     assert manager.keys[before.api_key_id][2] is True  # old key revoked upstream
-    assert await engine.payments.credential(alice) not in (None, old_secret)
+    assert (await engine.payments.credential(alice)).token not in (None, old_secret)
 
 
 async def test_per_application_mode_uses_the_configured_key(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
 ) -> None:
     engine = await make_engine(allocation_mode="per_application", shared_payment_key="lpg_shared")
-    assert await engine.payments.credential(alice) == "lpg_shared"
+    shared = await engine.payments.credential(alice)
+    assert shared.token == "lpg_shared" and shared.allocation_id is None
     with pytest.raises(InvalidRequest, match="per_actor"):
         await engine.payments.provision(admin, provision_request())
 

@@ -14,14 +14,16 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
 3. The signer signs and **persists one `create_signed_ticket` event per signing request before
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
-4. The SDK (#71) returns the `auth_ids` on results and errors. The engine records them on the attempt.
+4. The SDK ([#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)) calls
+   `on_payment_session` with each signed session. The engine records that session's `manifest_id`
+   on its own session log, with the allocation whose key paid.
 
 ## Allocation modes
 
 | Mode | Allocation | Who enforces a user's cap | Per-user spend |
 | --- | --- | --- | --- |
 | `per_actor` (**default**) | One allocation and key per actor | The signer, at authorization | Exact: the allocation's own `spent_*` |
-| `per_application` | One allocation and key from settings (`LPB_SHARED_PAYMENT_KEY`) | Nobody per user; the enterprise must | Only through the engine's `auth_id` join |
+| `per_application` | One allocation and key from settings (`LPB_SHARED_PAYMENT_KEY`, `LPB_SHARED_ALLOCATION_ID`) | Nobody per user; the enterprise must | Only through the engine's session log, which records that allocation |
 
 In `per_actor` mode there is **no fallback** to a shared key. An unprovisioned actor's job fails
 before payment with `not_provisioned`.
@@ -56,12 +58,21 @@ them as `Decimal`.
 
 ## Correlation
 
-A charge joins an attempt by **`(allocation_id, payment_session_id ∈ attempt.auth_ids)`**.
-`manifest_id` is a label only: the 7 October run showed a client can put any string there
-([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). The node signer requires it to equal
-the `Auth.SessionID` in the caller's `OrchestratorInfo`, which the caller also supplies, so this still
-holds. **Under review (D20, T11):** upstream prefers ManifestID to `auth_id`
-([livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
+A charge joins an attempt by **`(allocation_id, payment_session_id)`**. The engine does not learn
+`payment_session_id` from the SDK. Each attempt records the allocation whose key paid and one
+session-log entry per signed `manifest_id` (`lpb_payment_sessions`). Cost sync resolves an entry
+when exactly one applied usage row-set and one log entry share `(allocation_id, manifest_id)`, and
+stores that row's `payment_session_id` as `matched`.
+
+If Batteries has no session for the key yet, the entry stays `unmatched` and the attempt's cost is
+`pending`. If more than one Batteries session or more than one log entry shares the key, every
+entry is `ambiguous`: the attempt is `uncertain`, those rows stay `unattributed`, and reconciliation
+still balances. A later sync can turn a `matched` entry into `ambiguous`.
+
+`manifest_id` is the lookup, not the cost key. The 7 October run showed a client can put any string
+there ([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). A manifest on another
+allocation does not attribute. Whether a fresh manifest per challenge is an orchestrator guarantee
+is open (T13, [livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
 
 ## Cost classification
 

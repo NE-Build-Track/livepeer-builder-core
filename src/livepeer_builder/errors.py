@@ -98,9 +98,9 @@ class RunnerCallError(EngineError):
     """One runner call failed. Raised by a RunnerTransport.
 
     ``payment_sent`` is True once tickets went out with the request: the job is then bound to this
-    runner and must not fail over. ``auth_ids`` lists the signer payment sessions the call opened,
-    which can be non-empty even when ``payment_sent`` is False, because the signer charges when it
-    signs.
+    runner and must not fail over. ``manifest_ids`` lists the orchestrator sessions the signer
+    signed, one per session in signing order. It can be non-empty even when ``payment_sent`` is
+    False, because the signer charges when it signs.
     """
 
     def __init__(
@@ -109,13 +109,13 @@ class RunnerCallError(EngineError):
         message: str,
         *,
         payment_sent: bool,
-        auth_ids: tuple[str, ...] = (),
+        manifest_ids: tuple[str, ...] = (),
         status_code: int | None = None,
         body: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.payment_sent = payment_sent
-        self.auth_ids = auth_ids
+        self.manifest_ids = manifest_ids
         self.status_code = status_code
         self.body = body

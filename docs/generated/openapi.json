@@ -2042,6 +2042,37 @@
         "summary": "Sync Costs"
       }
     },
+    "/v1/admin/grant/fund": {
+      "post": {
+        "operationId": "fund_grant_v1_admin_grant_fund_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fund Grant"
+      }
+    },
     "/v1/admin/keys": {
       "get": {
         "operationId": "list_keys_v1_admin_keys_get",

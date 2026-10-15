@@ -28,14 +28,15 @@ before payment with `not_provisioned`.
 
 ## Provisioning
 
-**There is no automatic provisioning.** Every money-moving command is explicit, needs the
-`admin.allocations` operation (an admin credential), and carries an idempotency key of
-`base64url(sha256(engine_id:operation:step))`.
+**There is no automatic provisioning.** Every money-moving command is explicit and needs the
+`admin.allocations` operation (an admin credential). Allocation and key writes carry an idempotency
+key of `base64url(sha256(engine_id:operation:step))`.
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
 | `provision(application, actor, amount)` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | per actor; a repeat returns the original |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | per `operation_ref` (required) |
+| `fund_grant(FundRequest(amount, operation_ref))` | `POST /v1/grants/{LPB_GRANT_ID}/fund` | `fund-grant:{grant_id}:{operation_ref}` |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | per `operation_ref` |
@@ -43,8 +44,9 @@ before payment with `not_provisioned`.
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
-- **The engine's management credential** is least-privilege: `allocations.*`, `api_keys.*` and
-  `usage.read`. It has **no `grants.*`**. The operator creates and funds the grant.
+- **The engine's management credential** is least-privilege: `allocations.*`, `api_keys.*`,
+  `usage.read`, and `grants.fund` for the configured grant (`LPB_GRANT_ID`). It has **no `grants.*`**.
+  The operator creates the grant. `POST /v1/admin/grant/fund` adds funds to that grant only.
 
 ## Units
 

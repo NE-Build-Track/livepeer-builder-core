@@ -5,15 +5,16 @@ Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
 
 - **Auth:** `Livepeer-Clearinghouse-Token: <management secret>`. A permission covers **every**
   resource of its type. There is no per-grant scoping (that is the [Mode B](../contracts/payments.md#mode-b) gap).
-- **Engine credential:** `allocations.create`, `allocations.fund`, `allocations.read`,
-  `allocations.status`, `allocations.revoke`, `api_keys.create`, `api_keys.read`, `api_keys.revoke`,
-  `usage.read`. **No `grants.*`.**
+- **Engine credential:** `grants.fund` (the configured grant, `LPB_GRANT_ID`, only), `allocations.create`,
+  `allocations.fund`, `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`,
+  `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.**
 
 | Engine call | Route | Notes |
 | --- | --- | --- |
 | `create_key_for_grant` | `POST /v1/api-keys` `{grant_id, name, amount_usd \| amount_eth}` | Atomic: a funded allocation plus a key. Returns `{allocation_id, id, api_key}`. Needs `allocations.create` and `.fund` |
 | `create_key` | `POST /v1/api-keys` `{allocation_id, name}` | Key rotation |
 | `fund_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation |
+| `fund_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | Funds `LPB_GRANT_ID` only. `Idempotency-Key` is `fund-grant:{grant_id}:{operation_ref}` |
 | `set_allocation_status` | `PATCH /v1/allocations/{id}/status` `{status: active \| paused}` | |
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
 | `revoke_key` | `POST /v1/api-keys/{id}/revoke` | |

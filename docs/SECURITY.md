@@ -22,7 +22,7 @@ See [contracts/access.md](contracts/access.md#boundaries).
   bootstrap and no static admin token.
 - **Payment calls:** the caller's credential stops at the engine. Only the actor's allocation key
   goes to the signer.
-- **Management API:** the engine uses a least-privilege Batteries credential with no `grants.*`.
+- **Management API:** the engine uses a least-privilege Batteries credential. It may `grants.fund` the configured grant (`LPB_GRANT_ID`) and has no `grants.*`.
   Batteries keeps replayed API-key secrets in its idempotency table, so protect Batteries backups like
   a vault.
 

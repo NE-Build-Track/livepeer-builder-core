@@ -80,8 +80,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `.venv` and caches out of the build context. An `engine-data` volume created by an older, root-run
   image needs its ownership fixed once:
   `docker compose run --rm --user 0 engine chown -R 10001:10001 /data`.
-- **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) has no
-  `grants.*`. The grant is created with the operator CLI.
+- **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) may
+  `grants.fund` the configured grant and has no `grants.*`. The grant is created with the operator CLI.
 - **Pinned certificates** are trust-on-first-use and **temporary** (T12). Orchestrators are to serve
   CA-signed certificates (D27); once the ones listed do, drop the script and the `pinned-certs` mount.
   Until then, re-run `config/pin-orchestrator-certs.py` when an orchestrator rotates its certificate,

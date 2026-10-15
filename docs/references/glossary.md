@@ -15,7 +15,7 @@
 | **Cost class** | `delivered`, `failed_after_payment`, `uncertain` or `pending`, plus `unattributed` at reconciliation |
 | **Engine API key (`lpk_…`)** | A caller credential the engine issues; only its hash is stored |
 | **Expected value (EV)** | Ticket face value × win probability. What Batteries charges at signing: **network cost** |
-| **Grant** | The operator-funded Batteries budget that allocations draw from. The engine has no `grants.*` permission |
+| **Grant** | The operator-created Batteries budget that allocations draw from. The engine may `grants.fund` `LPB_GRANT_ID` only, and has no `grants.*` permission |
 | **Live Runner** | An application server registered with an orchestrator. Single-shot or persistent mode |
 | **`manifest_id`** | The orchestrator's session label. Stored as a label; not the billing key (D20). Under review as the key in place of `auth_id` (T11) |
 | **Mode A / Mode B** | Self-operated payments, or a hosted payment operator (deferred to M4) |

@@ -103,6 +103,10 @@ async def test_provisioning_needs_a_provider_and_a_grant(
     )  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="grant_id"):
         await no_grant.payments.provision(admin, provision())
+    with pytest.raises(ProviderUnavailable, match="management API"):
+        await no_provider.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
+    with pytest.raises(ProviderUnavailable, match="grant_id"):
+        await no_grant.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
 
 
 async def test_per_application_without_a_key_is_unpaid(

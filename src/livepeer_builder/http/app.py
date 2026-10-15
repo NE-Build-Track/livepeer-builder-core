@@ -239,6 +239,11 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     async def fund(actor: Actor, application_id: str, actor_id: str, body: FundRequest) -> ProvisionedActor:
         return await engine.payments.fund(actor, application_id, actor_id, body)
 
+    @app.post("/v1/admin/grant/fund", status_code=204)
+    async def fund_grant(actor: Actor, body: FundRequest) -> Response:
+        await engine.payments.fund_grant(actor, body)
+        return Response(status_code=204)
+
     @app.post(base + "/status", response_model=ProvisionedActor)
     async def set_status(
         actor: Actor, application_id: str, actor_id: str, body: StatusBody

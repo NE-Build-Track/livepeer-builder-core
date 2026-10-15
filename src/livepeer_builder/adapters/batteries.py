@@ -2,7 +2,8 @@
 
 The only module that knows the Batteries wire format. Baseline: eliteprox/clearinghouse-batteries
 ``ca09e47`` (docs/references/upstream-baseline.md). Every route needs the least-privilege management
-credential in ``Livepeer-Clearinghouse-Token``; it has no ``grants.*`` permission.
+credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` the configured grant
+(``LPB_GRANT_ID``). It has no ``grants.*``.
 """
 
 import json
@@ -58,6 +59,14 @@ class BatteriesClient:
         await self._request(
             "POST",
             f"/v1/allocations/{allocation_id}/fund",
+            json=_amount_fields(amount),
+            idempotency_key=idempotency_key,
+        )
+
+    async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
+        await self._request(
+            "POST",
+            f"/v1/grants/{grant_id}/fund",
             json=_amount_fields(amount),
             idempotency_key=idempotency_key,
         )

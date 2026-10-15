@@ -57,6 +57,7 @@ async def test_management_writes_use_the_documented_routes() -> None:
     )
     key = await client.create_key("a1", "rotated", "idem-r")
     await client.fund_allocation("a1", Money(amount=Decimal("0.5"), currency="ETH"), "idem-f")
+    await client.fund_grant("g1", Money(amount=Decimal("2.5"), currency="USD"), "idem-g")
     await client.set_allocation_status("a1", "paused")
     await client.revoke_allocation("a1")
     await client.revoke_key("k1")
@@ -65,12 +66,14 @@ async def test_management_writes_use_the_documented_routes() -> None:
     assert [(r.method, r.url.path) for r in seen] == [
         ("POST", "/v1/api-keys"),
         ("POST", "/v1/allocations/a1/fund"),
+        ("POST", "/v1/grants/g1/fund"),
         ("PATCH", "/v1/allocations/a1/status"),
         ("POST", "/v1/allocations/a1/revoke"),
         ("POST", "/v1/api-keys/k1/revoke"),
     ]
     assert seen[1].content == b'{"amount_eth":"0.5"}' and seen[1].headers["Idempotency-Key"] == "idem-f"
-    assert "Idempotency-Key" not in seen[2].headers  # status changes are naturally repeatable
+    assert seen[2].content == b'{"amount_usd":"2.5"}' and seen[2].headers["Idempotency-Key"] == "idem-g"
+    assert "Idempotency-Key" not in seen[3].headers  # status changes are naturally repeatable
 
 
 async def test_owned_clients_close_and_empty_bodies_are_fine() -> None:

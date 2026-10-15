@@ -26,8 +26,9 @@ allow = ["grants.*", "allocations.*", "api_keys.*", "sessions.*",
 id = "builder-engine"
 secret = "{engine}"
 [credentials.management]
-allow = ["allocations.create", "allocations.fund", "allocations.read", "allocations.status",
-         "allocations.revoke", "api_keys.create", "api_keys.read", "api_keys.revoke", "usage.read"]
+allow = ["grants.fund", "allocations.create", "allocations.fund", "allocations.read",
+         "allocations.status", "allocations.revoke", "api_keys.create", "api_keys.read",
+         "api_keys.revoke", "usage.read"]
 
 [[credentials]]
 id = "signer"

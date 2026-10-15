@@ -144,6 +144,20 @@ class PaymentsService:
         )
         return await self._update_status(actor, "active" if actor.status == "exhausted" else actor.status)
 
+    async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
+        """Add funds to the configured grant (``LPB_GRANT_ID``). An actor key cannot call this."""
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        if request.amount.currency != self._currency or request.amount.amount <= 0:
+            raise InvalidRequest(f"funding must be a positive amount in {self._currency}")
+        manager = self._require_manager()
+        if self._grant_id is None:
+            raise ProviderUnavailable("no grant_id is configured for provisioning")
+        await manager.fund_grant(
+            self._grant_id,
+            request.amount,
+            f"fund-grant:{self._grant_id}:{request.operation_ref}",
+        )
+
     async def set_status(
         self, admin: ActorContext, application_id: str, actor_id: str, status: AllocationStatus
     ) -> ProvisionedActor:

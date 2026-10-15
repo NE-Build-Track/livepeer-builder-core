@@ -123,6 +123,7 @@ class FakeAllocationManager:
         self.keys: dict[str, tuple[str, str, bool]] = {}  # api_key_id -> (allocation, secret, revoked)
         self.replays: dict[str, object] = {}
         self.calls: list[str] = []
+        self.funded_grants: list[tuple[str, Money, str]] = []
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
@@ -154,6 +155,13 @@ class FakeAllocationManager:
         allocation.granted += amount.amount
         if allocation.status == "exhausted":
             allocation.status = "active"
+
+    async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
+        self.calls.append("fund_grant")
+        if idempotency_key in self.replays:
+            return
+        self.replays[idempotency_key] = True
+        self.funded_grants.append((grant_id, amount, idempotency_key))
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
         self.allocations[allocation_id].status = status

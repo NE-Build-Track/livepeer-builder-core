@@ -90,6 +90,24 @@ async def test_funding_needs_an_operation_ref_and_applies_once(
         )
 
 
+async def test_funding_the_configured_grant_applies_once(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    with pytest.raises(AccessDenied):
+        await engine.payments.fund_grant(alice, request)
+    await engine.payments.fund_grant(admin, request)
+    await engine.payments.fund_grant(admin, request)  # a retry
+    assert manager.funded_grants == [("grant_1", usd("10"), "fund-grant:grant_1:topup-1")]
+    with pytest.raises(InvalidRequest):
+        await engine.payments.fund_grant(admin, FundRequest(amount=usd("0"), operation_ref="zero"))
+    with pytest.raises(InvalidRequest):
+        await engine.payments.fund_grant(
+            admin, FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth")
+        )
+
+
 async def test_revoke_forgets_the_key(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
 ) -> None:

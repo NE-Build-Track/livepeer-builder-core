@@ -69,6 +69,14 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert bad.status_code == 404  # revoked: no longer provisioned
 
 
+async def test_grant_fund_is_admin_only(api) -> None:  # type: ignore[no-untyped-def]
+    client, _engine, admin, alice = api
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
+    assert (await client.post("/v1/admin/grant/fund", json=body, headers=alice)).status_code == 403
+    funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    assert funded.status_code == 204 and funded.content == b""
+
+
 async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTransport) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
     await client.post(ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}}, headers=admin)

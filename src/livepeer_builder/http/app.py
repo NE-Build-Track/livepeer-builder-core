@@ -185,6 +185,10 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     async def job_cost(actor: Actor, job_id: UUID) -> JobCost:
         return await engine.costs.for_job(actor, job_id)
 
+    @app.get("/v1/costs/projections", response_model=list[JobCost])
+    async def cost_projections(actor: Actor, limit: Annotated[int, Query(ge=1, le=25)] = 25) -> list[JobCost]:
+        return await engine.costs.recent(actor, limit)
+
     @app.get("/v1/costs/summary", response_model=CostSummary)
     async def cost_summary(
         actor: Actor,

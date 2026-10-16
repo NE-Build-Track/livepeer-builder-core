@@ -50,6 +50,22 @@ async def test_upgrade_preserves_records_written_at_each_revision(
     await engine.dispose()
 
 
+async def test_projection_migration_preserves_attempt_auth_ids(database_url: str, clock: FixedClock) -> None:
+    engine = create_engine(database_url)
+    await upgrade(engine, "0002")
+    store = SqlStore(engine)
+    job = make_job(clock)
+    await store.create_job(job, None)
+    await store.start_attempt(make_attempt(job.id, clock))
+    await store.finish_attempt(make_attempt(job.id, clock, auth_ids=("auth-1",)))
+
+    await upgrade(engine)
+
+    loaded = await store.get_job(job.id)
+    assert loaded is not None and loaded.attempts[0].auth_ids == ("auth-1",)
+    await engine.dispose()
+
+
 async def test_migrations_match_the_schema(database_url: str) -> None:
     engine = create_engine(database_url)
     await upgrade(engine)

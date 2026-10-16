@@ -182,6 +182,7 @@ cost_projections = Table(
     Column("fee_eth", String(AMOUNT), nullable=False),
     Column("fee_usd", String(AMOUNT), nullable=True),
     Column("row_count", Integer, nullable=False),
+    Column("attempts", JSON, nullable=False, server_default=text("'[]'")),
     Column("first_observed_at", UTCDateTime, nullable=True),
     Column("updated_at", UTCDateTime, nullable=False),
 )

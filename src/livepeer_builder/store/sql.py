@@ -2,11 +2,10 @@
 
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, event, exists, func, insert, select, update
+from sqlalchemy import and_, delete, event, exists, false, func, insert, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -16,7 +15,6 @@ from livepeer_builder.contracts import (
     AccessKey,
     Attempt,
     Failure,
-    Fees,
     Job,
     JobCost,
     JobState,
@@ -30,6 +28,7 @@ from livepeer_builder.contracts import (
 from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.migrate import upgrade
+from livepeer_builder.store.rows import projection
 
 _CHUNK = 500
 
@@ -276,6 +275,25 @@ class SqlStore:
                 found.update(UUID(value) for value in (await conn.execute(query)).scalars())
         return found
 
+    async def jobs_for_projection(self, auth_ids: Sequence[str]) -> list[Job]:
+        touched = t.attempt_auth_ids.c.auth_id.in_(auth_ids) if auth_ids else false()
+        needs_projection = or_(
+            touched,
+            t.cost_projections.c.job_id.is_(None),
+            t.cost_projections.c.status == "pending",
+            t.jobs.c.completed_at > t.cost_projections.c.updated_at,
+        )
+        selected = (
+            select(t.jobs.c.id)
+            .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)
+            .outerjoin(t.attempt_auth_ids, t.attempt_auth_ids.c.job_id == t.jobs.c.id)
+            .where(needs_projection)
+            .distinct()
+        )
+        query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
+        async with self.engine.connect() as conn:
+            return await _load_jobs(conn, list((await conn.execute(query)).mappings()))
+
     async def usage_for_auth_ids(self, auth_ids: Sequence[str]) -> list[UsageRow]:
         rows: list[UsageRow] = []
         async with self.engine.connect() as conn:
@@ -298,19 +316,35 @@ class SqlStore:
             row = (await conn.execute(query)).mappings().first()
         if row is None:
             return None
-        fee_usd = row["fee_usd"]
-        return JobCost(
-            job_id=job_id,
-            status=row["status"],
-            fees=Fees(
-                fee_eth=Decimal(row["fee_eth"]),
-                fee_usd=None if fee_usd is None else Decimal(fee_usd),
-                row_count=row["row_count"],
-            ),
-            attempts=(),
-            first_observed_at=row["first_observed_at"],
-            updated_at=row["updated_at"],
+        return projection(row)
+
+    async def projections_between(
+        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    ) -> list[JobCost]:
+        query = (
+            select(t.cost_projections)
+            .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
+            .where(
+                t.jobs.c.application_id == application_id,
+                t.jobs.c.created_at >= start,
+                t.jobs.c.created_at < end,
+            )
         )
+        if actor_id is not None:
+            query = query.where(t.jobs.c.actor_id == actor_id)
+        async with self.engine.connect() as conn:
+            return [projection(row) for row in (await conn.execute(query)).mappings()]
+
+    async def recent_projections(
+        self, application_id: str, actor_id: str | None, limit: int
+    ) -> list[JobCost]:
+        recent = select(t.jobs.c.id).where(t.jobs.c.application_id == application_id)
+        if actor_id is not None:
+            recent = recent.where(t.jobs.c.actor_id == actor_id)
+        recent = recent.order_by(t.jobs.c.created_at.desc()).limit(limit)
+        query = select(t.cost_projections).where(t.cost_projections.c.job_id.in_(recent))
+        async with self.engine.connect() as conn:
+            return [projection(row) for row in (await conn.execute(query)).mappings()]
 
     async def save_projection(self, cost: JobCost) -> None:
         values = {
@@ -318,6 +352,7 @@ class SqlStore:
             "fee_eth": str(cost.fees.fee_eth),
             "fee_usd": None if cost.fees.fee_usd is None else str(cost.fees.fee_usd),
             "row_count": cost.fees.row_count,
+            "attempts": [attempt.model_dump(mode="json") for attempt in cost.attempts],
             "first_observed_at": cost.first_observed_at,
             "updated_at": cost.updated_at,
         }

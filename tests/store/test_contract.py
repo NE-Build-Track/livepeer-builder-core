@@ -8,6 +8,7 @@ import pytest
 
 from livepeer_builder.contracts import (
     AccessKey,
+    AttemptCost,
     Failure,
     Fees,
     JobCost,
@@ -123,11 +124,17 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
     await sql.finish_attempt(make_attempt(job.id, clock, auth_ids=("s1",)))
     assert [r.id for r in await sql.unattributed_usage("a1")] == ["2"]
 
+    attempt_cost = AttemptCost(
+        attempt_number=1,
+        cost_class="delivered",
+        fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1),
+    )
     projection = JobCost(
-        job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(),
+        job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(attempt_cost,),
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
     await sql.save_projection(projection)
     await sql.save_projection(projection.model_copy(update={"status": "corrected"}))
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
+    assert loaded.attempts == (attempt_cost,)

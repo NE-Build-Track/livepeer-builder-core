@@ -58,6 +58,7 @@ erDiagram
         string fee_eth
         string fee_usd
         integer row_count
+        json attempts
         datetime first_observed_at
         datetime updated_at
     }
@@ -179,6 +180,7 @@ the cost service (`auth_id` = Batteries `payment_session_id`).
 | `fee_eth` | VARCHAR(64) | no |  |
 | `fee_usd` | VARCHAR(64) | yes |  |
 | `row_count` | INTEGER | no |  |
+| `attempts` | JSON | no |  |
 | `first_observed_at` | DATETIME | yes |  |
 | `updated_at` | DATETIME | no |  |
 

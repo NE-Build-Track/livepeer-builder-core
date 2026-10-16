@@ -104,8 +104,14 @@ async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTrans
         await client.post(f"/v1/jobs/{job_id}/usage", json={"quantities": {"tokens": 3}}, headers=alice)
     ).status_code == 200
     assert (await client.get(f"/v1/jobs/{job_id}/result", headers=alice)).status_code == 501
+    before = await client.get("/v1/costs/summary", headers=alice)
+    assert before.status_code == 200 and before.json()["jobs_pending"] == 0
+    assert (await client.get("/v1/costs/projections", headers=alice)).json() == []
+    await client.post("/v1/admin/costs/sync", headers=admin)
     summary = await client.get("/v1/costs/summary", headers=alice)
     assert summary.status_code == 200 and summary.json()["jobs_pending"] == 1
+    projections = (await client.get("/v1/costs/projections", headers=alice)).json()
+    assert len(projections) == 1 and projections[0]["job_id"] == job_id
     actor_key = next(k["key_id"] for k in keys if k["kind"] == "actor")
     assert (await client.post(f"/v1/admin/keys/{actor_key}/revoke", headers=admin)).status_code == 204
     assert (await client.get("/v1/jobs", headers=alice)).status_code == 401  # revoked key

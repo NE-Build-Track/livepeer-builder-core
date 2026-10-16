@@ -14,7 +14,9 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 ## The M2 SDK exception
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
-`e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4`. That is the head of
+`e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4` on
+[livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway).
+That is the head of
 **[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)**
 ("Report each signed payment session from call_runner", against `main`).
 

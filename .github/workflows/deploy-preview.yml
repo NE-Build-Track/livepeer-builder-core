@@ -1,0 +1,85 @@
+name: Deploy preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  resolve:
+    name: Resolve pull request
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      sha: ${{ steps.pr.outputs.sha }}
+      ref_name: ${{ steps.pr.outputs.ref_name }}
+    steps:
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+        run: |
+          case "$PR" in
+            ''|*[!0-9]*) echo "pr must be a pull request number" >&2; exit 1 ;;
+          esac
+          sha=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+          ref_name=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefName --jq .headRefName)
+          if ! printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "pull request $PR has no head commit" >&2
+            exit 1
+          fi
+          case "$ref_name" in
+            *[!A-Za-z0-9._/-]*|"") echo "pull request $PR has an unexpected branch name" >&2; exit 1 ;;
+          esac
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref_name=$ref_name" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy engine
+    needs: resolve
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-preview-engine
+      cancel-in-progress: false
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ needs.resolve.outputs.number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm the pull request head
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$SHA"
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy engine
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_PREVIEW_TOKEN }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          REF_NAME: ${{ needs.resolve.outputs.ref_name }}
+          PR: ${{ needs.resolve.outputs.number }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_PREVIEW_TOKEN is not set. Create a Railway project token for the preview environment." >&2
+            exit 1
+          fi
+          cp deploy/railway/engine/railway.toml railway.toml
+          railway up . \
+            --service engine \
+            --ci \
+            -m "preview PR #$PR ($REF_NAME) engine $SHA"
+          rm -f railway.toml

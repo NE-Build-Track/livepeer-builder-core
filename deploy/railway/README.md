@@ -1,11 +1,11 @@
-# Railway preview
+# Railway
 
-This directory deploys the engine to the Railway **preview** environment. Production, Batteries,
-and the signer still deploy from
-[gateway-integration-lab](https://github.com/NE-Build-Track/gateway-integration-lab).
+This directory deploys the engine from this checkout. Batteries and the signer still deploy from
+[gateway-integration-lab](https://github.com/NE-Build-Track/gateway-integration-lab). The local
+payment stack remains [deploy/dev-stack](../dev-stack/README.md).
 
 The image is this checkout (`pip install ".[server,postgres]"`), not a pinned clone of the
-repository. The local payment stack remains [deploy/dev-stack](../dev-stack/README.md).
+repository.
 
 ## What runs
 
@@ -16,18 +16,31 @@ repository. The local payment stack remains [deploy/dev-stack](../dev-stack/READ
 | signer | | yes |
 | Postgres | Railway database; not a deploy target | yes |
 
-The preview environment already has Batteries, the signer, and the engine's `LPB_*` variables.
-This workflow does not redeploy those services and does not set `RAILWAY_TOKEN`.
+Each Railway environment already has Batteries, the signer, and the engine's `LPB_*` variables.
+This workflow does not redeploy those services.
 
-## Deploy
+## Environments
 
-The workflow is manual (`workflow_dispatch`). Opening or merging a pull request does not deploy.
-Add `RAILWAY_PREVIEW_TOKEN` to this repository's Actions secrets first. That value is the Railway
-project token already bound to the preview environment, the same one the lab uses. The workflow
-does not pass `--project` or `--environment`.
+The workflow reads `RAILWAY_TOKEN` from a GitHub environment. The token is a Railway project token,
+so the workflow does not pass `--project` or `--environment`. Put the secret on the GitHub
+environment, not on the repository: a repository secret of the same name is used when the
+environment secret is missing.
 
-Run **Deploy preview** and enter the pull request number. The job checks out that pull request,
-copies `engine/railway.toml` to the repository root for the upload, and runs:
+| Git ref | GitHub environment | Railway token |
+| --- | --- | --- |
+| `main`, `releases/*` | `production` | production project token |
+| any other branch | `preview` | preview project token |
+
+A push deploys the engine. **Deploy** can also be run by hand for the selected branch. Limit the
+`production` environment's deployment branches to `main` and `releases/*` so a branch job cannot
+select it. Required reviewers on `production` gate that deploy.
+
+The lab still has its own production engine deploy. Until that workflow stops deploying the engine,
+either repository can replace the production engine.
+
+## Upload
+
+The job copies `engine/railway.toml` to the repository root for the upload, then runs:
 
 ```sh
 railway up . --service engine --ci
@@ -41,8 +54,8 @@ out of the image. The copied `railway.toml` is not committed.
 `entrypoint.py migrate` before the new process starts, and the process refuses a database that is
 behind the package.
 
-Health is `GET /livez` on the engine's public preview domain. Swagger is at `/docs`. Authorize
-sends `Authorization: Bearer`. The engine still enforces its own checks.
+Health is `GET /livez` on the engine's public domain. Swagger is at `/docs`. Authorize sends
+`Authorization: Bearer`. The engine still enforces its own checks.
 
 Kafka and the authorization webhook stay on the project private network. Do not attach a public
 proxy to Batteries or the signer.

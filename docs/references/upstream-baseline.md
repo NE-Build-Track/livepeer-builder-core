@@ -6,7 +6,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 
 | Component | Repository | Baseline commit | Used by |
 | --- | --- | --- | --- |
-| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (plus [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) at `c7f425b`) | `adapters/sdk.py` |
+| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (plus [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) at `e6d243b`) | `adapters/sdk.py` |
 | Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `f970be644c55e41f77ef3ee8f085f516074f4cc8` (14 October; was `1432123`). It adds Josh's fix for T10 | dev stack; [node-signer.md](node-signer.md) |
 | Clearinghouse Batteries | [eliteprox/clearinghouse-batteries](https://github.com/eliteprox/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659` | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
@@ -14,7 +14,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 ## The M2 SDK exception
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
-`c7f425b2db45060fc7db79cce98732ffa4632df1`. That is the head of
+`e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4`. That is the head of
 **[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)**
 ("Report each signed payment session from call_runner", against `main`).
 

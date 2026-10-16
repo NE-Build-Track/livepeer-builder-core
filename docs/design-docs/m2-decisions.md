@@ -62,4 +62,4 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 - **A1 (accepted).** `lpb_usage_rows` keeps a cache of Batteries usage rows for attribution and reconciliation.
   Batteries remains the authority. Retention is configurable.
 - **A2 (accepted).** Retention never deletes `uncertain` jobs automatically.
-- **A3 (accepted; updated 14 October).** The SDK is pinned to `c7f425b` ([livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)): `on_payment_session` reports `LivePaymentSession.manifest_id` and does not decode signer state. Re-pin when that PR merges, then to a release (T1).
+- **A3 (accepted; updated 16 October).** The SDK is pinned to `e6d243b` ([livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)): `on_payment_session` reports `LivePaymentSession.manifest_id` and does not decode signer state. Re-pin when that PR merges, then to a release (T1).

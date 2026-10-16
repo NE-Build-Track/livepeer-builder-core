@@ -1,7 +1,6 @@
-# Builds the engine from this checkout for Railway preview.
-# Context is the repository root (see /.dockerignore). The preview workflow copies
-# railway.toml to that root before `railway up`, because the Python package has to
-# be in the Docker context.
+# Builds the engine from this checkout for Railway.
+# Context is the repository root (see /.dockerignore), because the Python package
+# has to be in the Docker context.
 FROM python:3.12.7-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 WORKDIR /src

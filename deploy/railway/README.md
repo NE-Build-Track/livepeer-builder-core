@@ -40,14 +40,30 @@ either repository can replace the production engine.
 
 ## Upload
 
-The job copies `engine/railway.toml` to the repository root for the upload, then runs:
+The job runs:
 
 ```sh
 railway up --service engine --ci
 ```
 
 The repository root is the Docker context. Uploading only `engine/` would leave the Python package
-out of the image. The copied `railway.toml` is not committed.
+out of the image.
+
+## Engine service settings
+
+Railway does not read a `railway.toml` from the upload. The engine's build and deploy settings live
+on the engine service in each Railway environment, and every environment needs all of them:
+
+| Setting | Value |
+| --- | --- |
+| Dockerfile path | `deploy/railway/engine/Dockerfile` |
+| Pre-deploy command | `python3 -u /usr/local/bin/entrypoint.py migrate` |
+| Healthcheck path | `/livez` |
+| Healthcheck timeout | `300` seconds |
+| Restart policy | always, 10 retries |
+
+Without the pre-deploy command, production never migrates. Without the healthcheck, Railway
+replaces the running engine as soon as the new container starts, even if it then exits.
 
 `LPB_DATABASE_URL` may use Railway's `postgresql://` scheme. The entrypoint rewrites it to
 `postgresql+asyncpg://` and does not log the URL. `LPB_AUTO_MIGRATE=false`, so the process does

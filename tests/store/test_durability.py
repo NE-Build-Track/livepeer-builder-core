@@ -114,6 +114,29 @@ async def test_session_log_drops_auth_ids_and_projections_keep_attempts(
     await engine.dispose()
 
 
+async def test_projection_attempts_survive_a_lab_0003_database(database_url: str) -> None:
+    engine = create_engine(database_url)
+    await upgrade(engine, "0003")
+    async with engine.begin() as conn:  # the lab's 0003 added the attempt list and kept auth ids
+        await conn.execute(
+            text("ALTER TABLE lpb_cost_projections ADD COLUMN attempts JSON NOT NULL DEFAULT '[]'")
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE lpb_attempt_auth_ids ("
+                "auth_id VARCHAR(200) NOT NULL, job_id VARCHAR(36) NOT NULL, attempt_number INTEGER NOT NULL, "
+                "PRIMARY KEY (auth_id, job_id, attempt_number), "
+                "FOREIGN KEY (job_id, attempt_number) REFERENCES lpb_attempts (job_id, number) ON DELETE CASCADE)"
+            )
+        )
+    await upgrade(engine)
+    assert await current_revision(engine) == head_revision()
+    async with engine.connect() as conn:
+        tables = await conn.run_sync(lambda sync: set(inspect(sync).get_table_names()))
+    assert "lpb_attempt_auth_ids" not in tables
+    await engine.dispose()
+
+
 async def test_migrations_match_the_schema(database_url: str) -> None:
     engine = create_engine(database_url)
     await upgrade(engine)

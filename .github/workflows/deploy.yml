@@ -57,11 +57,9 @@ jobs:
             echo "RAILWAY_TOKEN is not set on the ${TARGET} GitHub environment." >&2
             exit 1
           fi
-          cp deploy/railway/engine/railway.toml railway.toml
           # No path argument. `railway up .` treats "." as a subdirectory
           # prefix and exits with "prefix not found" before uploading.
           railway up \
             --service engine \
             --ci \
             -m "${TARGET} ${REF_NAME} engine ${SHA}"
-          rm -f railway.toml

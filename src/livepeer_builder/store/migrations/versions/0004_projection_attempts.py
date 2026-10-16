@@ -6,6 +6,9 @@ Create Date: 2026-10-16
 
 Cost reads use the stored projection. Revision 0003 already replaced attempt auth ids with the
 session log; this revision only adds the attempt list.
+
+Railway databases migrated by gateway-integration-lab builds ran an earlier 0003 that already added
+the attempt list, so the column is only added when it is missing.
 """
 
 from collections.abc import Sequence
@@ -20,6 +23,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("lpb_cost_projections")}
+    if "attempts" in columns:
+        return
     op.add_column(
         "lpb_cost_projections",
         sa.Column("attempts", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),

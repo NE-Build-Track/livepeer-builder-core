@@ -114,6 +114,18 @@ async def test_session_log_drops_auth_ids_and_projections_keep_attempts(
     await engine.dispose()
 
 
+async def test_projection_attempts_survive_a_lab_0003_database(database_url: str) -> None:
+    engine = create_engine(database_url)
+    await upgrade(engine, "0003")
+    async with engine.begin() as conn:  # the lab's 0003 also added the attempt list
+        await conn.execute(
+            text("ALTER TABLE lpb_cost_projections ADD COLUMN attempts JSON NOT NULL DEFAULT '[]'")
+        )
+    await upgrade(engine)
+    assert await current_revision(engine) == head_revision()
+    await engine.dispose()
+
+
 async def test_migrations_match_the_schema(database_url: str) -> None:
     engine = create_engine(database_url)
     await upgrade(engine)

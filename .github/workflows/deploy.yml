@@ -1,0 +1,67 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  target:
+    name: Choose environment
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.set.outputs.name }}
+    steps:
+      - name: Select preview or production
+        id: set
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/heads/releases/*)
+              echo "name=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "name=preview" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+  deploy:
+    name: Deploy engine (${{ needs.target.outputs.name }})
+    needs: target
+    runs-on: ubuntu-latest
+    environment: ${{ needs.target.outputs.name }}
+    concurrency:
+      group: deploy-engine-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy engine
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ needs.target.outputs.name }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN is not set on the ${TARGET} GitHub environment." >&2
+            exit 1
+          fi
+          cp deploy/railway/engine/railway.toml railway.toml
+          # No path argument. `railway up .` treats "." as a subdirectory
+          # prefix and exits with "prefix not found" before uploading.
+          railway up \
+            --service engine \
+            --ci \
+            -m "${TARGET} ${REF_NAME} engine ${SHA}"
+          rm -f railway.toml

@@ -50,9 +50,11 @@ The repository root is the Docker context. Uploading only `engine/` would leave 
 out of the image. The copied `railway.toml` is not committed.
 
 `LPB_DATABASE_URL` may use Railway's `postgresql://` scheme. The entrypoint rewrites it to
-`postgresql+asyncpg://` and does not log the URL. `LPB_AUTO_MIGRATE=false`: Railway runs
-`entrypoint.py migrate` before the new process starts, and the process refuses a database that is
-behind the package.
+`postgresql+asyncpg://` and does not log the URL. `LPB_AUTO_MIGRATE=false`, so the process does
+not migrate as it starts. Railway runs `entrypoint.py migrate` before the new process starts.
+On preview that command only checks the revision (`RAILWAY_ENVIRONMENT_NAME=preview`) and leaves
+the shared database unchanged. On production it applies the packaged migrations, then checks.
+Either way the deploy stops when the database is not at the package head.
 
 Health is `GET /livez` on the engine's public domain. Swagger is at `/docs`. Authorize sends
 `Authorization: Bearer`. The engine still enforces its own checks.

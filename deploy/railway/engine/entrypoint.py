@@ -94,11 +94,15 @@ def migrate() -> int:
 
     Railway runs this as the pre-deploy command. A non-zero exit stops the
     deployment, so the previous engine keeps serving.
+
+    Preview shares one Postgres across every branch, so a preview deploy only
+    checks the revision. Production applies the packaged migrations first.
     """
     prepare_database_url()
-    code = lpb("migrate")
-    if code != 0:
-        return code
+    if os.environ.get("RAILWAY_ENVIRONMENT_NAME") != "preview":
+        code = lpb("migrate")
+        if code != 0:
+            return code
     return lpb("revision")
 
 
@@ -110,9 +114,8 @@ def main() -> None:
     if sys.argv[1:] not in ([], ["serve"]):
         sys.exit("usage: entrypoint.py [serve|migrate]")
     prepare_database_url()
-    # Preview sets LPB_AUTO_MIGRATE=false and migrates in pre-deploy.
-    # Refuse to serve a database that is behind the package rather than
-    # migrating from the process that is about to take traffic.
+    # LPB_AUTO_MIGRATE=false: refuse a database that is not at package head
+    # rather than migrating from the process that is about to take traffic.
     if not EngineSettings.from_env().auto_migrate:
         code = lpb("revision")
         if code != 0:

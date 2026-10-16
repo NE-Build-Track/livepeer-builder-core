@@ -1,4 +1,4 @@
-"""Add the payment-session log and persisted projection attempts.
+"""Replace attempt auth ids with the engine's own payment-session log.
 
 Revision ID: 0003
 Revises: 0002
@@ -23,6 +23,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column("lpb_attempts", sa.Column("allocation_id", sa.String(200), nullable=True))
     op.drop_column("lpb_attempts", "manifest_id")
+    op.drop_table("lpb_attempt_auth_ids")
     op.create_table(
         "lpb_payment_sessions",
         sa.Column("job_id", sa.String(36), primary_key=True),
@@ -39,16 +40,22 @@ def upgrade() -> None:
     )
     op.create_index("lpb_payment_sessions_manifest", "lpb_payment_sessions", ["manifest_id"])
     op.create_index("lpb_payment_sessions_session", "lpb_payment_sessions", ["payment_session_id"])
-    op.add_column(
-        "lpb_cost_projections",
-        sa.Column("attempts", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
-    )
 
 
 def downgrade() -> None:
-    op.drop_column("lpb_cost_projections", "attempts")
     op.drop_index("lpb_payment_sessions_session", table_name="lpb_payment_sessions")
     op.drop_index("lpb_payment_sessions_manifest", table_name="lpb_payment_sessions")
     op.drop_table("lpb_payment_sessions")
+    op.create_table(
+        "lpb_attempt_auth_ids",
+        sa.Column("auth_id", sa.String(200), primary_key=True),
+        sa.Column("job_id", sa.String(36), primary_key=True),
+        sa.Column("attempt_number", sa.Integer(), primary_key=True),
+        sa.ForeignKeyConstraint(
+            ["job_id", "attempt_number"],
+            ["lpb_attempts.job_id", "lpb_attempts.number"],
+            ondelete="CASCADE",
+        ),
+    )
     op.add_column("lpb_attempts", sa.Column("manifest_id", sa.String(200), nullable=True))
     op.drop_column("lpb_attempts", "allocation_id")

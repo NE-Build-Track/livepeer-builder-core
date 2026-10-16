@@ -5,16 +5,21 @@ Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
 
 - **Auth:** `Livepeer-Clearinghouse-Token: <management secret>`. A permission covers **every**
   resource of its type. There is no per-grant scoping (that is the [Mode B](../contracts/payments.md#mode-b) gap).
-- **Engine credential:** `grants.fund` (the configured grant, `LPB_GRANT_ID`, only), `allocations.create`,
+- **Engine credential** (`LPB_BATTERIES_TOKEN`): `grants.fund`, `allocations.create`,
   `allocations.fund`, `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`,
-  `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.**
+  `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.** `grants.fund` covers every
+  grant. The engine only sends `LPB_GRANT_ID`.
+- **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Required when
+  `LPB_BATTERIES_URL` is set.
 
 | Engine call | Route | Notes |
 | --- | --- | --- |
 | `create_key_for_grant` | `POST /v1/api-keys` `{grant_id, name, amount_usd \| amount_eth}` | Atomic: a funded allocation plus a key. Returns `{allocation_id, id, api_key}`. Needs `allocations.create` and `.fund` |
 | `create_key` | `POST /v1/api-keys` `{allocation_id, name}` | Key rotation |
 | `fund_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation |
-| `fund_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | Funds `LPB_GRANT_ID` only. `Idempotency-Key` is `fund-grant:{grant_id}:{operation_ref}` |
+| `fund_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | The engine sends `LPB_GRANT_ID` only. `Idempotency-Key` is `fund-grant:{grant_id}:{operation_ref}` |
+| `list_grants` | `GET /v1/grants` | Operator token. `{items: [...]}` |
+| `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*}` | Operator token. `grants.create` |
 | `set_allocation_status` | `PATCH /v1/allocations/{id}/status` `{status: active \| paused}` | |
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
 | `revoke_key` | `POST /v1/api-keys/{id}/revoke` | |

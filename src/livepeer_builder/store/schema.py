@@ -110,17 +110,6 @@ attempts = Table(
     Column("ended_at", UTCDateTime, nullable=True),
 )
 
-attempt_auth_ids = Table(
-    "lpb_attempt_auth_ids",
-    metadata,
-    Column("auth_id", String(ID), primary_key=True),
-    Column("job_id", String(36), primary_key=True),
-    Column("attempt_number", Integer, primary_key=True),
-    ForeignKeyConstraint(
-        ["job_id", "attempt_number"], ["lpb_attempts.job_id", "lpb_attempts.number"], ondelete="CASCADE"
-    ),
-)
-
 payment_sessions = Table(
     "lpb_payment_sessions",
     metadata,

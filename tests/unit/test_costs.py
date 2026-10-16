@@ -118,6 +118,13 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.5")
     assert observed.attempts[0].cost_class == "delivered"
 
+    await engine.store.save_projection(observed.model_copy(update={"attempts": ()}))
+    assert (await engine.costs.for_job(alice, job.id)).attempts == ()
+    rebuilt_sync = await engine.costs.sync_once()  # no new usage; the empty attempt list is stale
+    assert rebuilt_sync.rows_new == 0
+    rebuilt = await engine.costs.for_job(alice, job.id)
+    assert rebuilt.attempts[0].cost_class == "delivered" and rebuilt.fees.fee_eth == Decimal("0.5")
+
     again = await engine.costs.sync_once()  # re-reads the last page; nothing is applied twice
     assert again.rows_new == 0
 

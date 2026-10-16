@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned, ProviderUnavailable
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FakeAllocationManager
@@ -118,6 +118,11 @@ async def test_operator_lists_and_creates_grants(
     assert created == manager.grants[0]
     assert created.name == "ops" and created.total == "5"
     assert await engine.payments.list_grants(admin) == [created]
+    engine.payments._grants = None
+    with pytest.raises(ProviderUnavailable, match="LPB_BATTERIES_OPERATOR_TOKEN"):
+        await engine.payments.list_grants(admin)
+    with pytest.raises(ProviderUnavailable, match="LPB_BATTERIES_OPERATOR_TOKEN"):
+        await engine.payments.create_grant(admin, "ops", usd("1"))
 
 
 async def test_funding_the_configured_grant_applies_once(

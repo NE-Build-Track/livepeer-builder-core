@@ -63,7 +63,7 @@ class PaymentsService:
         self._clock = clock
         self._engine_id = engine_id
         self._manager = manager
-        self._grants = grants or manager
+        self._grants = grants
         self._grant_id = grant_id
         self._currency = currency
         self._shared_secret = shared_secret
@@ -158,8 +158,7 @@ class PaymentsService:
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
-        client = self._grants or self._require_manager()
-        return await client.list_grants()
+        return await self._require_grants().list_grants()
 
     async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
@@ -167,8 +166,7 @@ class PaymentsService:
             raise InvalidRequest("a grant name is required")
         if amount.currency != self._currency or amount.amount <= 0:
             raise InvalidRequest(f"a grant needs a positive amount in {self._currency}")
-        client = self._grants or self._require_manager()
-        return await client.create_grant(name.strip(), amount)
+        return await self._require_grants().create_grant(name.strip(), amount)
 
     async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
         """Add funds to the configured grant (``LPB_GRANT_ID``). An actor key cannot call this."""
@@ -250,6 +248,11 @@ class PaymentsService:
         if self._manager is None:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
+
+    def _require_grants(self) -> AllocationManager:
+        if self._grants is None:
+            raise ProviderUnavailable("LPB_BATTERIES_OPERATOR_TOKEN is not configured")
+        return self._grants
 
     def _now(self) -> datetime:
         return self._clock.now()

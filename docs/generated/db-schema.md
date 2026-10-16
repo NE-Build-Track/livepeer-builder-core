@@ -30,11 +30,6 @@ erDiagram
         datetime created_at
         datetime updated_at
     }
-    lpb_attempt_auth_ids {
-        string auth_id PK
-        string job_id PK
-        integer attempt_number PK
-    }
     lpb_attempts {
         string job_id PK
         integer number PK
@@ -107,7 +102,6 @@ erDiagram
         datetime created_at
         datetime synced_at
     }
-    lpb_attempts ||--o{ lpb_attempt_auth_ids : "attempt_number, job_id"
     lpb_attempts ||--o{ lpb_payment_sessions : "attempt_number, job_id"
     lpb_jobs ||--o{ lpb_attempts : "job_id"
     lpb_jobs ||--o| lpb_cost_projections : "job_id"
@@ -148,14 +142,6 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `status` | VARCHAR(16) | no |  |
 | `created_at` | DATETIME | no |  |
 | `updated_at` | DATETIME | no |  |
-
-## `lpb_attempt_auth_ids`
-
-| Column | Type | Null | Key |
-| --- | --- | --- | --- |
-| `auth_id` | VARCHAR(200) | no | PK |
-| `job_id` | VARCHAR(36) | no | PK |
-| `attempt_number` | INTEGER | no | PK |
 
 ## `lpb_attempts`
 

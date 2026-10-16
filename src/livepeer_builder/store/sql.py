@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, event, exists, false, func, insert, or_, select, update
+from sqlalchemy import and_, delete, event, exists, func, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -28,7 +28,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import schema as t
-from livepeer_builder.store.matching import match_payment_sessions
+from livepeer_builder.store.matching import jobs_needing_projection, match_payment_sessions
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.rows import chunks, projection, usage_row
 
@@ -278,17 +278,10 @@ class SqlStore:
             return await match_payment_sessions(conn, rows)
 
     async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]:
-        touched = t.jobs.c.id.in_([str(job_id) for job_id in job_ids]) if job_ids else false()
-        needs_projection = or_(
-            touched,
-            t.cost_projections.c.job_id.is_(None),
-            t.cost_projections.c.status == "pending",
-            t.jobs.c.completed_at > t.cost_projections.c.updated_at,
-        )
         selected = (
             select(t.jobs.c.id)
             .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)
-            .where(needs_projection)
+            .where(jobs_needing_projection([str(job_id) for job_id in job_ids]))
             .distinct()
         )
         query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
@@ -342,11 +335,14 @@ class SqlStore:
     async def recent_projections(
         self, application_id: str, actor_id: str | None, limit: int
     ) -> list[JobCost]:
-        recent = select(t.jobs.c.id).where(t.jobs.c.application_id == application_id)
+        query = (
+            select(t.cost_projections)
+            .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
+            .where(t.jobs.c.application_id == application_id)
+        )
         if actor_id is not None:
-            recent = recent.where(t.jobs.c.actor_id == actor_id)
-        recent = recent.order_by(t.jobs.c.created_at.desc()).limit(limit)
-        query = select(t.cost_projections).where(t.cost_projections.c.job_id.in_(recent))
+            query = query.where(t.jobs.c.actor_id == actor_id)
+        query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
         async with self.engine.connect() as conn:
             return [projection(row) for row in (await conn.execute(query)).mappings()]
 

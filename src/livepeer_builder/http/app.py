@@ -12,6 +12,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -117,6 +118,14 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
                 await engine.stop()
 
     app = FastAPI(title="livepeer-builder", version=engine.health().version, lifespan=lifespan)
+    # Credentials are bearer tokens, never cookies, so a wildcard origin cannot ride ambient auth.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=[JOB_ID_HEADER, "Retry-After", "WWW-Authenticate"],
+    )
     _install_error_handlers(app, engine)
 
     async def actor_from(request: Request) -> ActorContext:

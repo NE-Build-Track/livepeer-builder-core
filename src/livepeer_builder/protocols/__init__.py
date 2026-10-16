@@ -16,6 +16,7 @@ from livepeer_builder.contracts import (
     AuthRequest,
     EventPage,
     Failure,
+    GrantRecord,
     Job,
     JobCost,
     JobRequest,
@@ -125,6 +126,10 @@ class AllocationManager(Protocol):
     async def revoke_key(self, api_key_id: str) -> None: ...
 
     async def read_allocation(self, allocation_id: str) -> Allowance: ...
+
+    async def list_grants(self) -> list[GrantRecord]: ...
+
+    async def create_grant(self, name: str, amount: Money) -> GrantRecord: ...
 
 
 class UsageSource(Protocol):

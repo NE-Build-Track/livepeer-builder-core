@@ -55,6 +55,34 @@ async def test_create_key_for_grant_is_one_idempotent_call() -> None:
     assert seen[0].headers["Idempotency-Key"] == "idem-1"
 
 
+async def test_create_grant_returns_the_response_record() -> None:
+    def handle(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={"id": "grant_9", "name": "ops", "status": "active", "currency": "usd", "total_units": "10"},
+        )
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    grant = await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"))
+    assert (grant.id, grant.name, grant.status, grant.currency, grant.total) == (
+        "grant_9",
+        "ops",
+        "active",
+        "USD",
+        "10",
+    )
+
+    def missing_id(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json={"name": "ops"})
+
+    client = BatteriesClient(
+        "https://batteries.test", "t", client=mock_client(httpx.MockTransport(missing_id))
+    )
+    with pytest.raises(ProviderError, match="missing id") as error:
+        await client.create_grant("ops", Money(amount=Decimal("1"), currency="USD"))
+    assert error.value.status_code == 200
+
+
 async def test_provider_errors_and_outages_are_distinct() -> None:
     def conflict(_: httpx.Request) -> httpx.Response:
         return httpx.Response(409, json={"error": "idempotency key reused"})

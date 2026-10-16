@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     Allowance,
+    GrantRecord,
     JobRequest,
     Money,
     NetworkRate,
@@ -124,11 +125,14 @@ class FakeAllocationManager:
         self.replays: dict[str, object] = {}
         self.calls: list[str] = []
         self.funded_grants: list[tuple[str, Money, str]] = []
+        self.grants: list[GrantRecord] = []
+        self.last_grant_id = ""
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
         self.calls.append("create_key_for_grant")
+        self.last_grant_id = grant_id
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
         allocation = f"alloc_{len(self.allocations) + 1}"
@@ -172,6 +176,22 @@ class FakeAllocationManager:
     async def revoke_key(self, api_key_id: str) -> None:
         allocation, secret, _ = self.keys[api_key_id]
         self.keys[api_key_id] = (allocation, secret, True)
+
+    async def list_grants(self) -> list[GrantRecord]:
+        self.calls.append("list_grants")
+        return list(self.grants)
+
+    async def create_grant(self, name: str, amount: Money) -> GrantRecord:
+        self.calls.append("create_grant")
+        grant = GrantRecord(
+            id=f"grant_{len(self.grants) + 1}",
+            name=name,
+            status="active",
+            currency=amount.currency,
+            total=format(amount.amount, "f"),
+        )
+        self.grants.append(grant)
+        return grant
 
     async def read_allocation(self, allocation_id: str) -> Allowance:
         allocation = self.allocations[allocation_id]

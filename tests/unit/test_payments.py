@@ -32,6 +32,17 @@ async def test_provisioning_is_explicit_and_admin_only(
     actor = await engine.payments.provision(admin, provision_request())
     assert actor.status == "active" and actor.currency == "USD"
     assert manager.calls == ["create_key_for_grant"]  # one atomic call: allocation + key + funding
+    assert manager.last_grant_id == "grant_1"
+
+
+async def test_provision_uses_the_grant_on_the_request(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    await engine.payments.provision(
+        admin, provision_request().model_copy(update={"grant_id": "grant_chosen"})
+    )
+    assert manager.last_grant_id == "grant_chosen"
 
 
 async def test_repeat_provisioning_returns_the_original(

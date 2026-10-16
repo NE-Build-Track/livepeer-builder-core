@@ -14,7 +14,15 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from livepeer_builder.contracts import Allowance, Currency, Money, NewAllocationKey, UsagePage, UsageRow
+from livepeer_builder.contracts import (
+    Allowance,
+    Currency,
+    GrantRecord,
+    Money,
+    NewAllocationKey,
+    UsagePage,
+    UsageRow,
+)
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
@@ -82,6 +90,23 @@ class BatteriesClient:
 
     async def read_allocation(self, allocation_id: str) -> Allowance:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{allocation_id}"))
+
+    async def list_grants(self) -> list[GrantRecord]:
+        body = await self._request("GET", "/v1/grants")
+        items = body.get("items")
+        if not isinstance(items, list):
+            return []
+        return [grant_from_item(item) for item in items if isinstance(item, dict)]
+
+    async def create_grant(self, name: str, amount: Money) -> GrantRecord:
+        created = await self._request(
+            "POST",
+            "/v1/grants",
+            json={"name": name, "status": "active", "sponsor": name, **_amount_fields(amount)},
+        )
+        if not created.get("id"):
+            raise ProviderError(200, "grant response missing id")
+        return grant_from_item(created)
 
     async def _request(
         self,
@@ -157,6 +182,16 @@ def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
         computed_fee_usd=_decimal(item.get("computed_fee_usd")),
         currency=_text(item.get("currency")),
         created_at=datetime.fromtimestamp(int(item["created_at_ms"]) / 1000, tz=UTC),
+    )
+
+
+def grant_from_item(item: dict[str, Any]) -> GrantRecord:
+    return GrantRecord(
+        id=str(item.get("id", "")),
+        name=str(item.get("name", "")),
+        status=str(item.get("status", "")),
+        currency=str(item.get("currency", "")).upper() or "USD",
+        total=str(item.get("total_units", "")),
     )
 
 

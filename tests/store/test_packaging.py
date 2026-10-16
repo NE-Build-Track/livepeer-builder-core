@@ -22,4 +22,4 @@ def test_built_wheel_contains_migrations() -> None:
         pytest.skip("no wheel in dist/ (CI builds one before running this check)")
     names = zipfile.ZipFile(wheels[-1]).namelist()
     assert "livepeer_builder/store/migrations/env.py" in names
-    assert any(name.startswith("livepeer_builder/store/migrations/versions/0002") for name in names)
+    assert any(name.startswith("livepeer_builder/store/migrations/versions/0003") for name in names)

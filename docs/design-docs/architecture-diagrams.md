@@ -200,7 +200,7 @@ sequenceDiagram
     J->>DB: job_by_operation_ref → 409 if already used
     J->>Adm: admit(app) → NoCapacity 503 if full (before payment)
     J->>DB: create_job(state=running, fingerprint)
-    J->>Pay: credential(actor) → lpg_ key, or NotProvisioned (fail, nothing paid)
+    J->>Pay: credential(actor) → PaymentCredential(token, allocation_id), or NotProvisioned
     loop each candidate (SelectionPolicy order, max_attempts)
         J->>DB: start_attempt(outcome=in_flight)
         J->>T: call(runner, request, credential)
@@ -215,12 +215,12 @@ sequenceDiagram
             Sg->>Bat: authorize webhook (nested Authorization)
             Bat-->>Sg: status 200 + auth_id (or 402 if exhausted → no failover)
             Sg->>Sg: persist create_signed_ticket event (outbox) before replying
-            Sg-->>T: payment + signed state (auth_id)
+            Sg-->>T: payment
             T->>O: request + Livepeer-Payment
             alt runner answers 2xx
                 O-->>T: result
-                T-->>J: RunnerReply(auth_ids, payment_sent=true)
-                J->>DB: finish_attempt(succeeded, auth_ids) + finish_job(succeeded, ResultRef)
+                T-->>J: RunnerReply(manifest_ids, payment_sent=true)
+                J->>DB: finish_attempt(succeeded, allocation_id, sessions) + finish_job(succeeded, ResultRef)
                 J-->>A: JobResult (+ Livepeer-Job-Id)
             else timeout or unreachable after payment
                 J->>DB: finish_job(uncertain) — never retried
@@ -250,9 +250,9 @@ sequenceDiagram
             W->>DB: apply_usage(new rows, checkpoint) in one transaction
         end
     end
-    C->>DB: jobs_for_auth_ids(new rows' payment_session_id)
+    C->>DB: match_sessions(new rows) on (allocation_id, manifest_id)
     loop each affected job
-        C->>DB: usage_for_auth_ids(job's auth_ids)
+        C->>DB: usage_for_payment_sessions(matched payment_session_id)
         C->>C: classify → delivered / failed_after_payment / uncertain / pending
         C->>DB: save_projection(observed, or corrected if the total changed)
     end
@@ -273,7 +273,7 @@ sequenceDiagram
     Op->>C: GET /v1/admin/reconciliation?actor_id=alice
     C->>Pay: allocation_for(app, actor)
     C->>DB: jobs_between(app, actor) → classify each attempt
-    C->>DB: unattributed_usage(allocation) (rows with no matching auth_id)
+    C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)
     Pay->>Bat: GET /v1/allocations/{id} → spent_usd
     C-->>Op: by_class + unattributed + balanced (spent == sum)

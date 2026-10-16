@@ -3,7 +3,7 @@
 Conventions (docs/contracts/persistence.md):
 - Money and fees are exact decimal strings, summed in Python. Never floats.
 - Timestamps are timezone-aware UTC (``UTCDateTime`` restores the zone SQLite drops).
-- Lists live in child tables when they are queried (attempt auth ids), JSON otherwise.
+- Lists live in child tables when they are queried (payment sessions), JSON otherwise.
 - Every change to this file needs an Alembic migration; tests/store/test_migrations.py checks drift.
 """
 
@@ -102,7 +102,7 @@ attempts = Table(
     Column("number", Integer, primary_key=True),
     Column("runner_url", Text, nullable=True),
     Column("orchestrator_url", Text, nullable=True),
-    Column("manifest_id", String(ID), nullable=True),
+    Column("allocation_id", String(ID), nullable=True),
     Column("payment_sent", Boolean, nullable=False),
     Column("outcome", String(16), nullable=False),
     Column("status_code", Integer, nullable=True),
@@ -120,6 +120,22 @@ attempt_auth_ids = Table(
         ["job_id", "attempt_number"], ["lpb_attempts.job_id", "lpb_attempts.number"], ondelete="CASCADE"
     ),
 )
+
+payment_sessions = Table(
+    "lpb_payment_sessions",
+    metadata,
+    Column("job_id", String(36), primary_key=True),
+    Column("attempt_number", Integer, primary_key=True),
+    Column("seq", Integer, primary_key=True),
+    Column("manifest_id", String(ID), nullable=False),
+    Column("payment_session_id", String(ID), nullable=True),
+    Column("match_status", String(16), nullable=False),
+    ForeignKeyConstraint(
+        ["job_id", "attempt_number"], ["lpb_attempts.job_id", "lpb_attempts.number"], ondelete="CASCADE"
+    ),
+)
+Index("lpb_payment_sessions_manifest", payment_sessions.c.manifest_id)
+Index("lpb_payment_sessions_session", payment_sessions.c.payment_session_id)
 
 # -- 0002: payments and cost projections --------------------------------------------------------------
 

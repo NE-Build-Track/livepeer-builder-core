@@ -113,7 +113,8 @@ async def test_per_application_without_a_key_is_unpaid(
     make_engine: EngineFactory, alice: ActorContext
 ) -> None:
     engine = await make_engine(allocation_mode="per_application", shared_allocation_id="alloc_shared")
-    assert await engine.payments.credential(alice) is None  # off-chain: calls go unpaid
+    unpaid = await engine.payments.credential(alice)  # off-chain: calls go unpaid
+    assert unpaid.token is None and unpaid.allocation_id is None
     assert await engine.payments.allocation_for("default", "alice") == "alloc_shared"
 
 
@@ -307,7 +308,7 @@ async def test_payment_refused_after_signing_is_a_payment_failure(
     engine = await make_engine(runners=(runner(url="https://r1"), runner(url="https://r2")))
     await engine.payments.provision(admin, provision())
     engine.jobs._transport = ScriptedTransport(
-        [RunnerCallError("payment_refused", "late refusal", payment_sent=True, auth_ids=("a1",))]
+        [RunnerCallError("payment_refused", "late refusal", payment_sent=True, manifest_ids=("m1",))]
     )
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))

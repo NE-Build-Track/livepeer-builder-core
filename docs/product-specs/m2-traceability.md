@@ -10,7 +10,7 @@ change that moves a ticket.
 | Pinned revisions | [references/upstream-baseline.md](../references/upstream-baseline.md); `pyproject.toml` (SDK pin) |
 | Behavior rechecked; runtime evidence | [evidence/2026-10-07-arbitrum-run.md](../references/evidence/2026-10-07-arbitrum-run.md), [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md), [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md) |
 | Upstream wire formats relied on | [batteries-api.md](../references/batteries-api.md), [node-signer.md](../references/node-signer.md), [sdk-gateway.md](../references/sdk-gateway.md) |
-| **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); T9 and T10 resolved; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)). Forged-manifest and rejected-ticket cases remain |
+| **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); T10 and T11 resolved; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)). Forged-manifest and rejected-ticket cases remain. A caller-owned reference is T13 |
 
 ## ISS-02: Engine contracts
 
@@ -49,9 +49,9 @@ change that moves a ticket.
 | Explicit provisioning; idempotent money moves; rotation and revocation | `services/payments.py`, `adapters/batteries.py` | `tests/unit/test_payments.py` (9 tests), `test_create_key_for_grant_is_one_idempotent_call` | [payments.md#provisioning](../contracts/payments.md#provisioning) |
 | Least-privilege management credential | `deploy/dev-stack/config/init-secrets.py` | dev-stack run | [batteries-api.md](../references/batteries-api.md) |
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |
-| Stable references (`auth_id` join) | `services/costs.py::classify`, `lpb_attempt_auth_ids` | `test_failed_after_payment_and_forged_manifest_reconcile` | [payments.md#correlation](../contracts/payments.md#correlation) |
+| Stable references (session log → `payment_session_id`) | `services/costs.py::classify`, `store/matching.py`, `lpb_payment_sessions` | `test_failed_after_payment_and_forged_manifest_reconcile`, `test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed` | [payments.md#correlation](../contracts/payments.md#correlation) |
 | Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) and [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md): balanced reconciliation |
-| **Open** | SDK PR 5 merge into `releases/m2` (T1; T9 fixed in `84ec542`); T11 (correlation key: `auth_id` or ManifestID, livepeer-python-gateway#74); Mode B (M4) | | |
+| **Open** | SDK #77 merge into `main` (T1); a caller-owned reference so `manifest_id` is a label only (T13); Mode B (M4) | | |
 
 ## ISS-05: Core packages
 
@@ -63,7 +63,7 @@ change that moves a ticket.
 | Enterprise extension proven without core patches | [extending-the-engine.md](../design-docs/extending-the-engine.md); `tests/unit/test_extension_examples.py` |
 | Layering and third-party confinement enforced | `tests/structure/test_layers.py` |
 | Durable default store (no silent in-memory store) | `config.py` `DEFAULT_DATABASE_URL`; `test_settings_from_environment` |
-| SDK dependency survives installation | Direct-reference pin, verified to include `auth_ids` (T1) |
+| SDK dependency survives installation | Direct-reference pin, verified to include `on_payment_session` and `manifest_id` (T1) |
 
 ## ISS-06: SQLite records (accepted 13 October)
 

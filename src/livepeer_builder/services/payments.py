@@ -23,6 +23,7 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     Operation,
+    PaymentCredential,
     ProvisionedActor,
     ProvisionRequest,
     ResourceRef,
@@ -70,15 +71,21 @@ class PaymentsService:
 
     # -- CredentialResolver ---------------------------------------------------------------------
 
-    async def credential(self, actor: ActorContext) -> str | None:
+    async def credential(self, actor: ActorContext) -> PaymentCredential:
         if self.mode == "per_application":
             if self._shared_secret is None:
-                return None  # unpaid (offchain) operation
-            return await self._secrets.get(self._shared_secret)
+                return PaymentCredential(token=None, allocation_id=None)  # unpaid (offchain)
+            return PaymentCredential(
+                token=await self._secrets.get(self._shared_secret),
+                allocation_id=self._shared_allocation_id,
+            )
         provisioned = await self._store.get_actor(actor.application_id, actor.actor_id)
         if provisioned is None or provisioned.status == "revoked":
             raise NotProvisioned(f"actor {actor.actor_id!r} has no allocation; an admin must provision it")
-        return await self._secrets.get(provisioned.secret_ref)
+        return PaymentCredential(
+            token=await self._secrets.get(provisioned.secret_ref),
+            allocation_id=provisioned.allocation_id,
+        )
 
     # -- AllowanceReader --------------------------------------------------------------------------
 

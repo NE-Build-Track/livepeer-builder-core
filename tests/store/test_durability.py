@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import insert
+from sqlalchemy import insert, select, text
 
 from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -44,8 +44,12 @@ async def test_upgrade_preserves_records_written_at_each_revision(
     store = SqlStore(engine)
     loaded = await store.get_job(job.id)
     assert loaded is not None and loaded.operation_ref == "r"
-    await downgrade(engine, "0001")  # downgrades keep execution records
-    assert (await SqlStore(engine).get_job(job.id)) is not None
+    await downgrade(engine, "0001")  # the job row survives; 0001 has no session log
+    async with engine.connect() as conn:
+        kept = await conn.execute(
+            text("SELECT operation_ref FROM lpb_jobs WHERE id = :id"), {"id": str(job.id)}
+        )
+    assert kept.scalar_one() == "r"
     await upgrade(engine)
     await engine.dispose()
 
@@ -53,16 +57,27 @@ async def test_upgrade_preserves_records_written_at_each_revision(
 async def test_projection_migration_preserves_attempt_auth_ids(database_url: str, clock: FixedClock) -> None:
     engine = create_engine(database_url)
     await upgrade(engine, "0002")
-    store = SqlStore(engine)
     job = make_job(clock)
-    await store.create_job(job, None)
-    await store.start_attempt(make_attempt(job.id, clock))
-    await store.finish_attempt(make_attempt(job.id, clock, auth_ids=("auth-1",)))
+    async with engine.begin() as conn:
+        await conn.execute(insert(t.jobs).values(
+            id=str(job.id), application_id="default", actor_id="alice", mode="immediate",
+            app="a/b", state="succeeded", created_at=clock.now(), completed_at=clock.now(),
+        ))  # fmt: skip
+        await conn.execute(insert(t.attempts).values(
+            job_id=str(job.id), number=1, payment_sent=True, outcome="succeeded",
+            started_at=clock.now(), ended_at=clock.now(),
+        ))  # fmt: skip
+        await conn.execute(
+            insert(t.attempt_auth_ids).values(auth_id="auth-1", job_id=str(job.id), attempt_number=1)
+        )
 
     await upgrade(engine)
 
-    loaded = await store.get_job(job.id)
-    assert loaded is not None and loaded.attempts[0].auth_ids == ("auth-1",)
+    async with engine.connect() as conn:
+        kept = await conn.execute(
+            select(t.attempt_auth_ids.c.auth_id).where(t.attempt_auth_ids.c.job_id == str(job.id))
+        )
+    assert kept.scalar_one() == "auth-1"
     await engine.dispose()
 
 
@@ -137,7 +152,7 @@ async def test_retention_keeps_uncertain_and_recent_jobs(database_url: str, cloc
     for job in (old, unresolved):
         await store.create_job(job, None)
         await store.start_attempt(make_attempt(job.id, clock))
-        await store.finish_attempt(make_attempt(job.id, clock, auth_ids=(f"auth-{job.id}",)))
+        await store.finish_attempt(make_attempt(job.id, clock, manifest_ids=(f"m-{job.id}",)))
     clock.advance(timedelta(days=40).total_seconds())
     await store.create_job(
         recent.model_copy(update={"created_at": clock.now(), "completed_at": clock.now()}), None

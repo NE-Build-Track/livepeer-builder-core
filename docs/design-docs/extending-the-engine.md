@@ -157,7 +157,8 @@ named here show each one.
 | `SecretStore` | Return an opaque `SecretRef`, never the secret. Never log secret values. `get` raises `NotFound` for unknown refs. Rotation is `put` new, then `delete` old |
 | `SelectionPolicy` | Pure and fast: order candidates, don't call the network. The engine applies `max_attempts` and the failover-before-payment rule |
 | `DiscoverySource` | Return contract `Runner`s. Raising keeps the last good snapshot (`discovery_error` in health) |
-| `RunnerTransport` | Raise `RunnerCallError` with an accurate **`payment_sent`** and **`auth_ids`**. Failover, `uncertain` and cost attribution all depend on them. Use `payment_refused` only for orchestrator-specific refusals before payment |
+| `CredentialResolver` | Return a `PaymentCredential` with the signer bearer and the allocation that bearer spends. `token` is `None` for an unpaid call |
+| `RunnerTransport` | Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them. Use `payment_refused` only for orchestrator-specific refusals before payment |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result |
 | `UsageSource` | Opaque cursor. Raise `CursorMismatch` on a rejected cursor so the worker resyncs. Rows are immutable per `id` |
 | `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write |

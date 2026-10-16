@@ -1,10 +1,11 @@
 """Row-to-contract mappings shared by the SQL store."""
 
+from collections.abc import Iterable
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from livepeer_builder.contracts import AttemptCost, Fees, JobCost
+from livepeer_builder.contracts import AttemptCost, Fees, JobCost, UsageRow
 
 
 def projection(row: Any) -> JobCost:
@@ -21,3 +22,13 @@ def projection(row: Any) -> JobCost:
         first_observed_at=row["first_observed_at"],
         updated_at=row["updated_at"],
     )
+
+
+def usage_row(row: Any) -> UsageRow:
+    data = {key: row[key] for key in UsageRow.model_fields}
+    return UsageRow.model_validate(data)
+
+
+def chunks(values: list[str], size: int = 500) -> Iterable[list[str]]:
+    for start in range(0, len(values), size):
+        yield values[start : start + size]

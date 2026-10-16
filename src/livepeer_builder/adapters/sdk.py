@@ -1,10 +1,10 @@
 """Python gateway SDK adapters: signer discovery and the paid runner call.
 
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
-comes from the SDK's ``on_payment_session`` callback (eliteprox/livepeer-python-gateway PR 5, pinned
-in pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it for every session the signer
-signs, just before the paid request goes out. The adapter derives ``auth_ids`` and ``payment_sent``
-from those sessions, so the engine keeps owning failover and cost attribution.
+comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#77, pinned in
+pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it for every session the signer
+signs, just before the paid request goes out. The adapter derives ``manifest_ids`` and
+``payment_sent`` from those sessions, so the engine keeps owning failover and cost attribution.
 """
 
 import json
@@ -68,13 +68,12 @@ class _SignedSessions:
 
     def __init__(self) -> None:
         self.signed = False
-        self.auth_ids: list[str] = []
+        self.manifest_ids: list[str] = []
 
     def __call__(self, session: LivePaymentSession) -> None:
         self.signed = True
-        auth_id = session.auth_id
-        if auth_id and auth_id not in self.auth_ids:
-            self.auth_ids.append(auth_id)
+        if session.manifest_id:
+            self.manifest_ids.append(session.manifest_id)
 
 
 class SdkRunnerTransport:
@@ -111,24 +110,22 @@ class SdkRunnerTransport:
             )
         except LivepeerGatewayError as error:
             raise call_error(
-                error, url, payment_sent=sessions.signed, auth_ids=tuple(sessions.auth_ids)
+                error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
             ) from error
         except (aiohttp.ClientError, OSError) as error:
             raise RunnerCallError(
                 network_kind(error),
                 str(error),
                 payment_sent=sessions.signed,
-                auth_ids=tuple(sessions.auth_ids),
+                manifest_ids=tuple(sessions.manifest_ids),
             ) from error
-        auth_ids = tuple(sessions.auth_ids)
         content = result.content if result.content is not None else json.dumps(result.data).encode()
         return RunnerReply(
             status_code=200,
             content=content,
             content_type=result.content_type or "application/json",
             data=result.data if result.content is None else None,
-            auth_ids=auth_ids,
-            manifest_id=result.session_id or None,
+            manifest_ids=tuple(sessions.manifest_ids),
             payment_sent=sessions.signed or bool(result.session_id),
         )
 
@@ -138,7 +135,7 @@ def call_error(
     runner_url: str,
     *,
     payment_sent: bool,
-    auth_ids: tuple[str, ...] = (),
+    manifest_ids: tuple[str, ...] = (),
 ) -> RunnerCallError:
     """Map an SDK error to an attempt outcome, with the payment evidence the callback collected."""
     kind: AttemptOutcome
@@ -161,7 +158,7 @@ def call_error(
         kind,
         str(error),
         payment_sent=payment_sent,
-        auth_ids=auth_ids,
+        manifest_ids=manifest_ids,
         status_code=status,
         body=body,
     )

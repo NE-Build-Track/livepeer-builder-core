@@ -1,6 +1,6 @@
 """SqlStore: the EngineStore over SQLAlchemy Core (async). SQLite by default, PostgreSQL via [postgres]."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -22,15 +22,15 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SignedSession,
     SyncCheckpoint,
     UsageRow,
 )
 from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import schema as t
+from livepeer_builder.store.matching import match_payment_sessions
 from livepeer_builder.store.migrate import upgrade
-from livepeer_builder.store.rows import projection
-
-_CHUNK = 500
+from livepeer_builder.store.rows import chunks, projection, usage_row
 
 
 def create_engine(url: str) -> AsyncEngine:
@@ -198,17 +198,22 @@ class SqlStore:
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
-        auth_key = and_(
-            t.attempt_auth_ids.c.job_id == str(attempt.job_id),
-            t.attempt_auth_ids.c.attempt_number == attempt.number,
+        session_key = and_(
+            t.payment_sessions.c.job_id == str(attempt.job_id),
+            t.payment_sessions.c.attempt_number == attempt.number,
         )
         async with self.engine.begin() as conn:
             await conn.execute(update(t.attempts).where(key).values(_attempt_values(attempt)))
-            await conn.execute(delete(t.attempt_auth_ids).where(auth_key))
-            for auth_id in dict.fromkeys(attempt.auth_ids):
+            await conn.execute(delete(t.payment_sessions).where(session_key))
+            for seq, session in enumerate(attempt.sessions):
                 await conn.execute(
-                    insert(t.attempt_auth_ids).values(
-                        auth_id=auth_id, job_id=str(attempt.job_id), attempt_number=attempt.number
+                    insert(t.payment_sessions).values(
+                        job_id=str(attempt.job_id),
+                        attempt_number=attempt.number,
+                        seq=seq,
+                        manifest_id=session.manifest_id,
+                        payment_session_id=session.payment_session_id,
+                        match_status=session.match,
                     )
                 )
 
@@ -252,7 +257,7 @@ class SqlStore:
         synced_at = datetime.now(UTC)
         async with self.engine.begin() as conn:
             seen: set[str] = set()
-            for chunk in _chunks([row.id for row in rows]):
+            for chunk in chunks([row.id for row in rows]):
                 found = await conn.execute(select(t.usage_rows.c.id).where(t.usage_rows.c.id.in_(chunk)))
                 seen.update(found.scalars())
             for row in rows:
@@ -267,16 +272,13 @@ class SqlStore:
                 await conn.execute(insert(t.cost_cursor).values(id=1, **cursor))
         return new
 
-    async def jobs_for_auth_ids(self, auth_ids: Sequence[str]) -> set[UUID]:
-        found: set[UUID] = set()
-        async with self.engine.connect() as conn:
-            for chunk in _chunks(list(auth_ids)):
-                query = select(t.attempt_auth_ids.c.job_id).where(t.attempt_auth_ids.c.auth_id.in_(chunk))
-                found.update(UUID(value) for value in (await conn.execute(query)).scalars())
-        return found
+    async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]:
+        """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute."""
+        async with self.engine.begin() as conn:
+            return await match_payment_sessions(conn, rows)
 
-    async def jobs_for_projection(self, auth_ids: Sequence[str]) -> list[Job]:
-        touched = t.attempt_auth_ids.c.auth_id.in_(auth_ids) if auth_ids else false()
+    async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]:
+        touched = t.jobs.c.id.in_([str(job_id) for job_id in job_ids]) if job_ids else false()
         needs_projection = or_(
             touched,
             t.cost_projections.c.job_id.is_(None),
@@ -286,7 +288,6 @@ class SqlStore:
         selected = (
             select(t.jobs.c.id)
             .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)
-            .outerjoin(t.attempt_auth_ids, t.attempt_auth_ids.c.job_id == t.jobs.c.id)
             .where(needs_projection)
             .distinct()
         )
@@ -294,21 +295,24 @@ class SqlStore:
         async with self.engine.connect() as conn:
             return await _load_jobs(conn, list((await conn.execute(query)).mappings()))
 
-    async def usage_for_auth_ids(self, auth_ids: Sequence[str]) -> list[UsageRow]:
+    async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]:
         rows: list[UsageRow] = []
         async with self.engine.connect() as conn:
-            for chunk in _chunks(list(auth_ids)):
+            for chunk in chunks(list(payment_session_ids)):
                 query = select(t.usage_rows).where(t.usage_rows.c.payment_session_id.in_(chunk))
-                rows.extend(_usage_row(row) for row in (await conn.execute(query)).mappings())
+                rows.extend(usage_row(row) for row in (await conn.execute(query)).mappings())
         return rows
 
     async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]:
-        attributed = exists().where(t.attempt_auth_ids.c.auth_id == t.usage_rows.c.payment_session_id)
+        attributed = exists().where(
+            t.payment_sessions.c.payment_session_id == t.usage_rows.c.payment_session_id,
+            t.payment_sessions.c.match_status == "matched",
+        )
         query = select(t.usage_rows).where(
             t.usage_rows.c.allocation_id == allocation_id, t.usage_rows.c.status == "applied", ~attributed
         )
         async with self.engine.connect() as conn:
-            return [_usage_row(row) for row in (await conn.execute(query)).mappings()]
+            return [usage_row(row) for row in (await conn.execute(query)).mappings()]
 
     async def get_projection(self, job_id: UUID) -> JobCost | None:
         query = select(t.cost_projections).where(t.cost_projections.c.job_id == str(job_id))
@@ -387,20 +391,21 @@ class SqlStore:
 async def _load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
     ids = [row["id"] for row in rows]
     attempts_by_job: dict[str, list[dict[str, Any]]] = {job_id: [] for job_id in ids}
-    auth_by_attempt: dict[tuple[str, int], list[str]] = {}
-    for chunk in _chunks(ids):
+    sessions_by_attempt: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for chunk in chunks(ids):
         found = await conn.execute(
             select(t.attempts).where(t.attempts.c.job_id.in_(chunk)).order_by(t.attempts.c.number)
         )
         for attempt in found.mappings():
             attempts_by_job[attempt["job_id"]].append(dict(attempt))
-        auth = await conn.execute(
-            select(t.attempt_auth_ids)
-            .where(t.attempt_auth_ids.c.job_id.in_(chunk))
-            .order_by(t.attempt_auth_ids.c.auth_id)
+        sessions = await conn.execute(
+            select(t.payment_sessions)
+            .where(t.payment_sessions.c.job_id.in_(chunk))
+            .order_by(t.payment_sessions.c.seq)
         )
-        for link in auth.mappings():
-            auth_by_attempt.setdefault((link["job_id"], link["attempt_number"]), []).append(link["auth_id"])
+        for session in sessions.mappings():
+            key = (session["job_id"], session["attempt_number"])
+            sessions_by_attempt.setdefault(key, []).append(dict(session))
     jobs: list[Job] = []
     for row in rows:
         attempts = tuple(
@@ -409,8 +414,15 @@ async def _load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
                 number=a["number"],
                 runner_url=a["runner_url"],
                 orchestrator_url=a["orchestrator_url"],
-                auth_ids=tuple(auth_by_attempt.get((a["job_id"], a["number"]), ())),
-                manifest_id=a["manifest_id"],
+                allocation_id=a["allocation_id"],
+                sessions=tuple(
+                    SignedSession(
+                        manifest_id=session["manifest_id"],
+                        payment_session_id=session["payment_session_id"],
+                        match=session["match_status"],
+                    )
+                    for session in sessions_by_attempt.get((a["job_id"], a["number"]), ())
+                ),
                 payment_sent=bool(a["payment_sent"]),
                 outcome=a["outcome"],
                 status_code=a["status_code"],
@@ -461,7 +473,7 @@ def _job_values(job: Job) -> dict[str, Any]:
 
 
 def _attempt_values(attempt: Attempt) -> dict[str, Any]:
-    values = attempt.model_dump(exclude={"auth_ids"})
+    values = attempt.model_dump(exclude={"sessions"})
     values["job_id"] = str(attempt.job_id)
     return values
 
@@ -473,11 +485,6 @@ def _usage_values(row: UsageRow) -> dict[str, Any]:
     return values
 
 
-def _usage_row(row: Any) -> UsageRow:
-    data = {key: row[key] for key in UsageRow.model_fields}
-    return UsageRow.model_validate(data)
-
-
 def _actor(row: Any) -> ProvisionedActor:
     data = {key: row[key] for key in ProvisionedActor.model_fields if key != "secret_ref"}
     return ProvisionedActor.model_validate(data | {"secret_ref": SecretRef(ref=row["secret_ref"])})
@@ -487,8 +494,3 @@ def _access_key(row: Any) -> AccessKey:
     data = {key: row[key] for key in AccessKey.model_fields}
     data["permissions"] = tuple(row["permissions"])
     return AccessKey.model_validate(data)
-
-
-def _chunks(values: list[str]) -> Iterable[list[str]]:
-    for start in range(0, len(values), _CHUNK):
-        yield values[start : start + _CHUNK]

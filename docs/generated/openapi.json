@@ -125,12 +125,16 @@
         "additionalProperties": false,
         "description": "One runner call. Written as ``in_flight`` before the call, updated after it.",
         "properties": {
-          "auth_ids": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Auth Ids",
-            "type": "array"
+          "allocation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allocation Id"
           },
           "ended_at": {
             "anyOf": [
@@ -148,17 +152,6 @@
             "format": "uuid",
             "title": "Job Id",
             "type": "string"
-          },
-          "manifest_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Manifest Id"
           },
           "number": {
             "title": "Number",
@@ -204,6 +197,13 @@
             ],
             "title": "Runner Url"
           },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SignedSession"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
           "started_at": {
             "format": "date-time",
             "title": "Started At",
@@ -226,8 +226,8 @@
           "number",
           "runner_url",
           "orchestrator_url",
-          "auth_ids",
-          "manifest_id",
+          "allocation_id",
+          "sessions",
           "payment_sent",
           "outcome",
           "status_code",
@@ -1669,6 +1669,42 @@
           "app"
         ],
         "title": "SessionRequest",
+        "type": "object"
+      },
+      "SignedSession": {
+        "additionalProperties": false,
+        "description": "One session the signer signed for an attempt.\n\n``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to\nthe Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays\n``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session\nand one log entry share the key, and ``ambiguous`` when they do not.",
+        "properties": {
+          "manifest_id": {
+            "title": "Manifest Id",
+            "type": "string"
+          },
+          "match": {
+            "default": "unmatched",
+            "enum": [
+              "unmatched",
+              "matched",
+              "ambiguous"
+            ],
+            "title": "Match",
+            "type": "string"
+          },
+          "payment_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Session Id"
+          }
+        },
+        "required": [
+          "manifest_id"
+        ],
+        "title": "SignedSession",
         "type": "object"
       },
       "StatusBody": {

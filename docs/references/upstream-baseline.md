@@ -6,7 +6,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 
 | Component | Repository | Baseline commit | Used by |
 | --- | --- | --- | --- |
-| Python gateway SDK | [eliteprox/livepeer-python-gateway](https://github.com/eliteprox/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (plus SDK #71 on `releases/m2`) | `adapters/sdk.py` |
+| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (plus [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) at `c7f425b`) | `adapters/sdk.py` |
 | Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `f970be644c55e41f77ef3ee8f085f516074f4cc8` (14 October; was `1432123`). It adds Josh's fix for T10 | dev stack; [node-signer.md](node-signer.md) |
 | Clearinghouse Batteries | [eliteprox/clearinghouse-batteries](https://github.com/eliteprox/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659` | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
@@ -14,20 +14,19 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 ## The M2 SDK exception
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
-`dca9cd69c554651f5bdacd9641d27bcec339b1c3`. That is the head of
-**eliteprox/livepeer-python-gateway PR 5** ("Report each signed payment session from call_runner",
-moved from livepeer #71, targeting `releases/m2`).
+`c7f425b2db45060fc7db79cce98732ffa4632df1`. That is the head of
+**[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)**
+("Report each signed payment session from call_runner", against `main`).
 
-PR 5 adds `call_runner(on_payment_session=...)`. It drops the earlier `auth_ids`/`payment_sent`
-fields on results and errors, so the engine derives both from the callback.
+#77 adds `call_runner(on_payment_session=...)`. The callback receives each signed session.
+`LivePaymentSession.manifest_id` is the manifest from the 402 challenge. The SDK does not decode
+signer state.
 
 - PyPI `livepeer-gateway` 1.0.0 has no payment-session reporting, so installing from PyPI would break
   job cost attribution. That defect was found in the prototype on 12 October.
-- `84ec542` reads livepeer/node's lowercase `"state"` key, which resolves T9.
-- `dca9cd69` reports the signed session after the payment is obtained. A callback error, including
-  `SignerRefreshRequired`, belongs to the caller and does not restart the payment challenge. The
-  engine's callback only records `auth_id`s, so this does not change attribution.
-- Exit condition: tech debt T1 (re-pin to the merge commit).
+- A callback error, including `SignerRefreshRequired`, belongs to the caller and does not restart
+  the payment challenge. The engine records each `manifest_id` on its session log.
+- Exit condition: tech debt T1 (re-pin to the merge commit on `main`, then a release).
 
 ## Licenses
 

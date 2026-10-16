@@ -51,7 +51,7 @@ def render_db_schema() -> str:
 _LOGICAL_LINKS = (
     ('lpb_actors ||--o{ lpb_jobs : "owns (application_id, actor_id)"'),
     ('lpb_actors ||--o| lpb_secrets : "secret_ref"'),
-    ('lpb_attempt_auth_ids }o--o{ lpb_usage_rows : "auth_id = payment_session_id"'),
+    ('lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"'),
     ('lpb_actors ||--o{ lpb_usage_rows : "allocation_id"'),
 )
 
@@ -80,6 +80,6 @@ def render_er_diagram() -> list[str]:
         "```",
         "",
         "Solid lines are foreign keys. `lpb_actors` and `lpb_usage_rows` links are logical joins used by",
-        "the cost service (`auth_id` = Batteries `payment_session_id`).",
+        "the cost service (a matched `payment_session_id` joins a session-log entry to usage).",
     ]
     return lines

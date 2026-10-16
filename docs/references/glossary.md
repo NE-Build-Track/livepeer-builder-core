@@ -9,7 +9,7 @@
 | **Allocation key (`lpg_…`)** | The Batteries API key the signer authorizes. Held in a `SecretStore`; records hold a `SecretRef` |
 | **Allowance** | An allocation's granted, spent and available amounts. A cap that can overshoot (no reservation) |
 | **App (runner app)** | The name a Live Runner advertises (for example `blueclaw/chat/qwen3.8-27b`); jobs target an app and a path |
-| **Attempt** | One runner call within a job. Records `auth_ids`, `payment_sent` and outcome |
+| **Attempt** | One runner call within a job. Records `allocation_id`, signed sessions, `payment_sent` and outcome |
 | **`auth_id` / payment session** | The ID Batteries assigns when it authorizes a signing session (`payment_session_id` on usage rows). **The cost join key** |
 | **Batteries (Clearinghouse Batteries)** | The payment core: authorization webhook, management API, accounting ledger |
 | **Cost class** | `delivered`, `failed_after_payment`, `uncertain` or `pending`, plus `unattributed` at reconciliation |
@@ -17,7 +17,7 @@
 | **Expected value (EV)** | Ticket face value × win probability. What Batteries charges at signing: **network cost** |
 | **Grant** | The operator-created Batteries budget that allocations draw from. The engine may `grants.fund` `LPB_GRANT_ID` only, and has no `grants.*` permission |
 | **Live Runner** | An application server registered with an orchestrator. Single-shot or persistent mode |
-| **`manifest_id`** | The orchestrator's session label. Stored as a label; not the billing key (D20). Under review as the key in place of `auth_id` (T11) |
+| **`manifest_id`** | The orchestrator's session label from the 402 challenge. The session log uses it, with `allocation_id`, to find the Batteries `payment_session_id`. It is not itself the billing key (D20, T13) |
 | **Mode A / Mode B** | Self-operated payments, or a hosted payment operator (deferred to M4) |
 | **Node key vs recipient** | An orchestrator's operational signing account vs its registered account that tickets pay. Since `f970be6` the node signer pays the recipient and ignores the node address (T10) |
 | **`operation_ref`** | The caller's retry key; one dispatch per (application, actor, ref) |

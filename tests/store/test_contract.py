@@ -32,13 +32,15 @@ async def sql(database_url: str) -> AsyncIterator[SqlStore]:
     await store.close()
 
 
-async def test_jobs_attempts_and_auth_ids_round_trip(sql: SqlStore, clock: FixedClock) -> None:
+async def test_jobs_attempts_and_sessions_round_trip(sql: SqlStore, clock: FixedClock) -> None:
     job = make_job(clock, state="running")
     await sql.create_job(job, "fp")
     await sql.start_attempt(
         make_attempt(job.id, clock).model_copy(update={"outcome": "in_flight", "ended_at": None})
     )
-    await sql.finish_attempt(make_attempt(job.id, clock, auth_ids=("b-auth", "a-auth", "b-auth")))
+    await sql.finish_attempt(
+        make_attempt(job.id, clock, manifest_ids=("b", "a", "b"), allocation_id="alloc-1")
+    )
     result = ResultRef(storage="inline", content_type="application/json", size_bytes=3, sha256="0" * 64)
     await sql.finish_job(job.id, "succeeded", None, result, clock.now())
     await sql.set_usage(
@@ -47,10 +49,14 @@ async def test_jobs_attempts_and_auth_ids_round_trip(sql: SqlStore, clock: Fixed
     loaded = await sql.get_job(job.id)
     assert loaded is not None
     assert loaded.state == "succeeded" and loaded.result == result
-    assert loaded.attempts[0].auth_ids == ("a-auth", "b-auth")
+    assert [(session.manifest_id, session.match) for session in loaded.attempts[0].sessions] == [
+        ("b", "unmatched"),
+        ("a", "unmatched"),
+        ("b", "unmatched"),
+    ]
+    assert loaded.attempts[0].allocation_id == "alloc-1"
     assert loaded.usage is not None and loaded.usage.quantities == {"tokens": 3}
     assert loaded.created_at.tzinfo is UTC or loaded.created_at.utcoffset() is not None
-    assert await sql.jobs_for_auth_ids(["a-auth"]) == {job.id}
 
 
 async def test_operation_ref_is_unique_per_actor(sql: SqlStore, clock: FixedClock) -> None:
@@ -101,27 +107,42 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
 
 
 async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock: FixedClock) -> None:
-    def row(row_id: str, session: str, fee: str) -> UsageRow:
+    def row(row_id: str, session: str, fee: str, manifest: str | None) -> UsageRow:
         return UsageRow(
-            id=row_id, event_id=None, status="applied", manifest_id=None, allocation_id="a1", payment_session_id=session,
-            request_id=None, pipeline=None, computed_fee_eth=Decimal(fee), computed_fee_usd=None, currency=None,
+            id=row_id,
+            event_id=None,
+            status="applied",
+            manifest_id=manifest,
+            allocation_id="a1",
+            payment_session_id=session,
+            request_id=None,
+            pipeline=None,
+            computed_fee_eth=Decimal(fee),
+            computed_fee_usd=None,
+            currency=None,
             created_at=clock.now(),
-        )  # fmt: skip
+        )
 
     new = await sql.apply_usage(
-        [row("1", "s1", "0.000000000000000001"), row("2", "orphan", "2")], SyncCheckpoint(resume_cursor="c1")
+        [row("1", "s1", "0.000000000000000001", "m1"), row("2", "orphan", "2", "forged")],
+        SyncCheckpoint(resume_cursor="c1"),
     )
     assert [r.id for r in new] == ["1", "2"]
-    assert await sql.apply_usage([row("1", "s1", "1")], SyncCheckpoint(resume_cursor="c2")) == []
+    assert await sql.apply_usage([row("1", "s1", "1", "m1")], SyncCheckpoint(resume_cursor="c2")) == []
     checkpoint = await sql.cost_checkpoint()
     assert checkpoint is not None and checkpoint.resume_cursor == "c2"
-    (exact,) = await sql.usage_for_auth_ids(["s1"])
+    (exact,) = await sql.usage_for_payment_sessions(["s1"])
     assert exact.computed_fee_eth == Decimal("0.000000000000000001")  # exact decimals, never floats
 
     job = make_job(clock)
     await sql.create_job(job, None)
     await sql.start_attempt(make_attempt(job.id, clock))
-    await sql.finish_attempt(make_attempt(job.id, clock, auth_ids=("s1",)))
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1",), allocation_id="a1"))
+    assert await sql.match_sessions(()) == {job.id}  # the row arrived before the attempt finished
+    matched = await sql.get_job(job.id)
+    assert matched is not None
+    assert matched.attempts[0].sessions[0].payment_session_id == "s1"
+    assert matched.attempts[0].sessions[0].match == "matched"
     assert [r.id for r in await sql.unattributed_usage("a1")] == ["2"]
 
     attempt_cost = AttemptCost(

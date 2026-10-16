@@ -10,7 +10,8 @@ from hypothesis import strategies as st
 from livepeer_builder.contracts import Attempt, Job, JobRequest, SignedSession, UsageRow
 from livepeer_builder.services.costs import add_fees, classify, fees_of
 from livepeer_builder.services.jobs import request_fingerprint
-from livepeer_builder.store.sql import _usage_row, _usage_values
+from livepeer_builder.store.rows import usage_row
+from livepeer_builder.store.sql import _usage_values
 
 NOW = datetime(2026, 10, 12, tzinfo=UTC)
 
@@ -101,7 +102,7 @@ def test_money_survives_the_store_exactly(row: UsageRow) -> None:
     assert all(
         isinstance(stored[k], str | None) for k in ("computed_fee_eth", "computed_fee_usd")
     )  # never floats
-    assert _usage_row(stored) == row
+    assert usage_row(stored) == row
 
 
 @settings(max_examples=50)

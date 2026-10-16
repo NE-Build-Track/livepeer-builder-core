@@ -606,6 +606,58 @@
         "title": "FundRequest",
         "type": "object"
       },
+      "GrantBody": {
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount"
+        ],
+        "title": "GrantBody",
+        "type": "object"
+      },
+      "GrantRecord": {
+        "additionalProperties": false,
+        "description": "A Batteries grant the operator can fund actors from.",
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "currency",
+          "total"
+        ],
+        "title": "GrantRecord",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1174,6 +1226,11 @@
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/Money-Input"
+          },
+          "grant_id": {
+            "default": "",
+            "title": "Grant Id",
+            "type": "string"
           },
           "label": {
             "default": "",
@@ -2078,6 +2135,95 @@
         "summary": "Sync Costs"
       }
     },
+    "/v1/admin/grant/fund": {
+      "post": {
+        "operationId": "fund_grant_v1_admin_grant_fund_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fund Grant"
+      }
+    },
+    "/v1/admin/grants": {
+      "get": {
+        "operationId": "list_grants_v1_admin_grants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrantRecord"
+                  },
+                  "title": "Response List Grants V1 Admin Grants Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Grants"
+      },
+      "post": {
+        "operationId": "create_grant_v1_admin_grants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Grant"
+      }
+    },
     "/v1/admin/keys": {
       "get": {
         "operationId": "list_keys_v1_admin_keys_get",
@@ -2296,6 +2442,52 @@
           }
         },
         "summary": "Allowance"
+      }
+    },
+    "/v1/costs/projections": {
+      "get": {
+        "operationId": "cost_projections_v1_costs_projections_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 25,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobCost"
+                  },
+                  "title": "Response Cost Projections V1 Costs Projections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cost Projections"
       }
     },
     "/v1/costs/summary": {

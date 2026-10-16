@@ -20,6 +20,8 @@ from livepeer_builder.contracts import (
     Allowance,
     Currency,
     FundRequest,
+    GrantRecord,
+    Money,
     Operation,
     PaymentCredential,
     ProvisionedActor,
@@ -48,6 +50,7 @@ class PaymentsService:
         clock: Clock,
         engine_id: str,
         manager: AllocationManager | None = None,
+        grants: AllocationManager | None = None,
         grant_id: str | None = None,
         currency: Currency = "USD",
         shared_secret: SecretRef | None = None,
@@ -60,6 +63,7 @@ class PaymentsService:
         self._clock = clock
         self._engine_id = engine_id
         self._manager = manager
+        self._grants = grants
         self._grant_id = grant_id
         self._currency = currency
         self._shared_secret = shared_secret
@@ -107,13 +111,14 @@ class PaymentsService:
         if existing is not None and existing.status != "revoked":
             return existing
         manager = self._require_manager()
-        if self._grant_id is None:
-            raise ProviderUnavailable("no grant_id is configured for provisioning")
+        grant_id = request.grant_id or self._grant_id
+        if not grant_id:
+            raise ProviderUnavailable("choose a grant")
         operation = f"provision:{request.application_id}:{request.actor_id}"
         if existing is not None:  # re-provisioning after a revoke is a new operation
             operation += f":{existing.updated_at.isoformat()}"
         key = await manager.create_key_for_grant(
-            self._grant_id,
+            grant_id,
             request.label or f"{request.application_id}/{request.actor_id}",
             request.amount,
             idempotency_key(self._engine_id, operation, "api-key"),
@@ -125,7 +130,7 @@ class PaymentsService:
         provisioned = ProvisionedActor(
             application_id=request.application_id,
             actor_id=request.actor_id,
-            grant_id=self._grant_id,
+            grant_id=grant_id,
             allocation_id=key.allocation_id,
             api_key_id=key.api_key_id,
             secret_ref=ref,
@@ -150,6 +155,32 @@ class PaymentsService:
             idempotency_key(self._engine_id, f"fund:{actor.allocation_id}:{request.operation_ref}", "fund"),
         )
         return await self._update_status(actor, "active" if actor.status == "exhausted" else actor.status)
+
+    async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        return await self._require_grants().list_grants()
+
+    async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        if not name.strip():
+            raise InvalidRequest("a grant name is required")
+        if amount.currency != self._currency or amount.amount <= 0:
+            raise InvalidRequest(f"a grant needs a positive amount in {self._currency}")
+        return await self._require_grants().create_grant(name.strip(), amount)
+
+    async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
+        """Add funds to the configured grant (``LPB_GRANT_ID``). An actor key cannot call this."""
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        if request.amount.currency != self._currency or request.amount.amount <= 0:
+            raise InvalidRequest(f"funding must be a positive amount in {self._currency}")
+        manager = self._require_manager()
+        if self._grant_id is None:
+            raise ProviderUnavailable("no grant_id is configured for provisioning")
+        await manager.fund_grant(
+            self._grant_id,
+            request.amount,
+            f"fund-grant:{self._grant_id}:{request.operation_ref}",
+        )
 
     async def set_status(
         self, admin: ActorContext, application_id: str, actor_id: str, status: AllocationStatus
@@ -217,6 +248,11 @@ class PaymentsService:
         if self._manager is None:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
+
+    def _require_grants(self) -> AllocationManager:
+        if self._grants is None:
+            raise ProviderUnavailable("LPB_BATTERIES_OPERATOR_TOKEN is not configured")
+        return self._grants
 
     def _now(self) -> datetime:
         return self._clock.now()

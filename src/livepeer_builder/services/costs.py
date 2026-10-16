@@ -109,10 +109,11 @@ class CostService:
             raise ProviderUnavailable("no usage source is configured")
         report, new_rows = await self._worker.sync_once()
         affected = await self._store.match_sessions(new_rows)
-        for job_id in affected:
-            await self.refresh_projection(job_id)
+        jobs = await self._store.jobs_for_projection(list(affected))
+        for job in jobs:
+            await self._refresh_projection(job)
         self.last_synced_at, self.last_error = self._clock.now(), None
-        return report.model_copy(update={"jobs_updated": len(affected)})
+        return report.model_copy(update={"jobs_updated": len(jobs)})
 
     async def sync_now(self, admin: ActorContext) -> SyncReport:
         """Operator-triggered sync (the background loop calls sync_once directly)."""
@@ -136,8 +137,11 @@ class CostService:
         job = await self._store.get_job(job_id)
         if job is None:
             return None
+        return await self._refresh_projection(job)
+
+    async def _refresh_projection(self, job: Job) -> JobCost:
         computed = await self._compute(job)
-        previous = await self._store.get_projection(job_id)
+        previous = await self._store.get_projection(job.id)
         status: CostStatus = computed.status
         if previous is not None and previous.status in ("observed", "corrected") and status == "observed":
             status = (
@@ -162,18 +166,13 @@ class CostService:
             self._policy.check(actor, Operation.COSTS_READ, _resource(job.application_id, job.actor_id))
         except AccessDenied as exc:
             raise NotFound(f"job {job_id} not found") from exc
-        computed = await self._compute(job)
         projection = await self._store.get_projection(job_id)
-        if projection is None:
-            return computed
-        status = projection.status if computed.status == "observed" else computed.status
-        return computed.model_copy(
-            update={
-                "status": status,
-                "first_observed_at": projection.first_observed_at,
-                "updated_at": projection.updated_at,
-            }
-        )
+        return projection if projection is not None else classify(job, ())
+
+    async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
+        target = None if actor.credential_kind == "admin" else actor.actor_id
+        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
+        return await self._store.recent_projections(actor.application_id, target, limit)
 
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
@@ -182,8 +181,7 @@ class CostService:
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
-        for job in await self._store.jobs_between(actor.application_id, target, start, end):
-            cost = await self._compute(job)
+        for cost in await self._store.projections_between(actor.application_id, target, start, end):
             with_cost += cost.status in ("observed", "corrected")
             pending += cost.status == "pending"
             for attempt in cost.attempts:
@@ -207,8 +205,8 @@ class CostService:
         if allocation_id is None:
             raise NotFound("no allocation pays for that actor or application")
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        for job in await self._store.jobs_between(application_id, actor_id, _EPOCH, _FAR_FUTURE):
-            for attempt in (await self._compute(job)).attempts:
+        for cost in await self._store.projections_between(application_id, actor_id, _EPOCH, _FAR_FUTURE):
+            for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
         unattributed = fees_of(await self._store.unattributed_usage(allocation_id))

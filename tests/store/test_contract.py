@@ -8,6 +8,7 @@ import pytest
 
 from livepeer_builder.contracts import (
     AccessKey,
+    AttemptCost,
     Failure,
     Fees,
     JobCost,
@@ -144,11 +145,59 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
     assert matched.attempts[0].sessions[0].match == "matched"
     assert [r.id for r in await sql.unattributed_usage("a1")] == ["2"]
 
+    attempt_cost = AttemptCost(
+        attempt_number=1,
+        cost_class="delivered",
+        fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1),
+    )
     projection = JobCost(
-        job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(),
+        job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(attempt_cost,),
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
     await sql.save_projection(projection)
     await sql.save_projection(projection.model_copy(update={"status": "corrected"}))
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
+    assert loaded.attempts == (attempt_cost,)
+
+
+async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    first = make_job(clock)
+    await sql.create_job(first, None)
+    clock.advance(1)
+    unprojected = make_job(clock)
+    await sql.create_job(unprojected, None)
+    clock.advance(1)
+    latest = make_job(clock)
+    await sql.create_job(latest, None)
+    delivered = Fees(fee_eth=Decimal("2"), fee_usd=None, row_count=1)
+    await sql.save_projection(
+        JobCost(
+            job_id=first.id,
+            status="observed",
+            fees=Fees(fee_eth=Decimal("1"), fee_usd=None, row_count=1),
+            attempts=(),
+            first_observed_at=clock.now(),
+            updated_at=clock.now(),
+        )
+    )
+    await sql.save_projection(
+        JobCost(
+            job_id=latest.id,
+            status="observed",
+            fees=delivered,
+            attempts=(AttemptCost(attempt_number=1, cost_class="delivered", fees=delivered),),
+            first_observed_at=clock.now(),
+            updated_at=clock.now(),
+        )
+    )
+
+    selected = {job.id for job in await sql.jobs_for_projection(())}
+    assert first.id in selected and unprojected.id in selected and latest.id not in selected
+    assert [cost.job_id for cost in await sql.recent_projections("default", None, 1)] == [latest.id]
+    assert [cost.job_id for cost in await sql.recent_projections("default", None, 5)] == [
+        latest.id,
+        first.id,
+    ]

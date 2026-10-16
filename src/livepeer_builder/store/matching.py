@@ -7,13 +7,30 @@ Anything else is ambiguous: the entries keep no payment_session_id, and the rows
 from collections.abc import Iterable, Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.sql.elements import ColumnElement
 
 from livepeer_builder.contracts import UsageRow
 from livepeer_builder.store import schema as t
 
 _CHUNK = 500
+
+
+def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
+    """Jobs whose projection should be recomputed, including observed rows stored with no attempts."""
+    touched = t.jobs.c.id.in_(job_ids) if job_ids else false()
+    missing_attempts = and_(
+        t.cost_projections.c.status.in_(("observed", "corrected")),
+        func.json_array_length(t.cost_projections.c.attempts) == 0,
+    )
+    return or_(
+        touched,
+        t.cost_projections.c.job_id.is_(None),
+        t.cost_projections.c.status == "pending",
+        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
+        missing_attempts,
+    )
 
 
 async def match_payment_sessions(conn: AsyncConnection, rows: Sequence[UsageRow]) -> set[UUID]:

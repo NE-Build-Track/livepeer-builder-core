@@ -21,7 +21,7 @@ dependencies = [
     # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
     # livepeer-python-gateway#77 (on_payment_session reports LivePaymentSession.manifest_id).
     # Re-pin to its merge commit on main once it merges, then to a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4",
+    "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4",
 ]
 
 [project.optional-dependencies]

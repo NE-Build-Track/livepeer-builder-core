@@ -11,6 +11,13 @@ AllocationMode = Literal["per_application", "per_actor"]
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
 
 
+class PaymentCredential(Contract):
+    """The signer bearer for one call, and the allocation that bearer spends."""
+
+    token: str | None
+    allocation_id: str | None
+
+
 class SecretRef(Contract):
     """A handle to a secret held by a SecretStore. Databases, records and logs hold only this."""
 

@@ -38,16 +38,17 @@ async def test_success_records_attempt_payment_and_result_reference(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
     engine = await provisioned(make_engine, admin, "alice")
-    transport.steps = [ScriptedTransport.ok(b'{"echo": 1}', auth_ids=("auth-1",))]
+    transport.steps = [ScriptedTransport.ok(b'{"echo": 1}', manifest_ids=("manifest-1",))]
     result = await engine.jobs.run(alice, JobRequest(app=APP, path="/echo", payload={"x": 1}))
     assert result.content == b'{"echo": 1}'
     assert result.job.state == "succeeded"
     assert result.job.result is not None
     assert result.job.result.sha256 == hashlib.sha256(b'{"echo": 1}').hexdigest()
     stored = await engine.jobs.get(alice, result.job.id)
-    assert [(a.outcome, a.auth_ids, a.payment_sent) for a in stored.attempts] == [
-        ("succeeded", ("auth-1",), True)
-    ]
+    assert [
+        (a.outcome, tuple(s.manifest_id for s in a.sessions), a.payment_sent) for a in stored.attempts
+    ] == [("succeeded", ("manifest-1",), True)]
+    assert stored.attempts[0].allocation_id is not None
     assert transport.calls[0][1] is not None and transport.calls[0][1].startswith("lpg_")  # actor's own key
 
 
@@ -62,7 +63,7 @@ async def test_fails_over_only_before_payment(
     assert [a.outcome for a in result.job.attempts] == ["refused", "succeeded"]
 
     transport.steps = [
-        RunnerCallError("http", "500", payment_sent=True, auth_ids=("auth-9",), status_code=500)
+        RunnerCallError("http", "500", payment_sent=True, manifest_ids=("m-9",), status_code=500)
     ]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
@@ -119,7 +120,7 @@ async def test_paid_then_unreachable_is_uncertain_never_failed(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
     engine = await provisioned(make_engine, admin, "alice")
-    transport.steps = [RunnerCallError("timeout", "timed out", payment_sent=True, auth_ids=("auth-2",))]
+    transport.steps = [RunnerCallError("timeout", "timed out", payment_sent=True, manifest_ids=("m-2",))]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert failed.value.job.state == "uncertain"
@@ -154,7 +155,7 @@ async def test_restart_recovery_marks_maybe_paid_jobs_uncertain(
     await store.create_job(job, None)
     await store.start_attempt(
         Attempt(
-            job_id=job.id, number=1, runner_url="https://r1", orchestrator_url=None, auth_ids=(), manifest_id=None,
+            job_id=job.id, number=1, runner_url="https://r1", orchestrator_url=None, allocation_id=None, sessions=(),
             payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
         )
     )  # fmt: skip

@@ -30,6 +30,7 @@ from livepeer_builder.contracts import (
     ResourceRef,
     ResultRef,
     RunnerReply,
+    SignedSession,
 )
 from livepeer_builder.errors import (
     AccessDenied,
@@ -191,8 +192,8 @@ class JobService:
                 number=number,
                 runner_url=runner.url,
                 orchestrator_url=runner.orchestrator_url,
-                auth_ids=(),
-                manifest_id=None,
+                allocation_id=credential.allocation_id,
+                sessions=(),
                 payment_sent=False,
                 outcome="in_flight",
                 status_code=None,
@@ -202,11 +203,11 @@ class JobService:
             await self._store.start_attempt(attempt)
             attempts.append(attempt)
             try:
-                reply = await self._transport.call(runner, request, credential)
+                reply = await self._transport.call(runner, request, credential.token)
             except RunnerCallError as error:
                 attempts[-1] = attempt.model_copy(
                     update={
-                        "auth_ids": error.auth_ids,
+                        "sessions": _sessions(error.manifest_ids),
                         "payment_sent": error.payment_sent,
                         "outcome": error.kind,
                         "status_code": error.status_code,
@@ -223,8 +224,7 @@ class JobService:
                 continue
             attempts[-1] = attempt.model_copy(
                 update={
-                    "auth_ids": reply.auth_ids,
-                    "manifest_id": reply.manifest_id,
+                    "sessions": _sessions(reply.manifest_ids),
                     "payment_sent": reply.payment_sent,
                     "outcome": "succeeded",
                     "status_code": reply.status_code,
@@ -310,6 +310,10 @@ def request_fingerprint(request: JobRequest) -> str:
     )
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _sessions(manifest_ids: tuple[str, ...]) -> tuple[SignedSession, ...]:
+    return tuple(SignedSession(manifest_id=manifest_id) for manifest_id in manifest_ids if manifest_id)
 
 
 def _job_resource(job: Job) -> ResourceRef:

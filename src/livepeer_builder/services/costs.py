@@ -6,7 +6,9 @@ Classification (accepted 12 October, docs/contracts/payments.md#cost-classificat
   uncertain             the job is uncertain, or the attempt never reported back
   pending               payment went out and no applied usage row has arrived yet (never zero)
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
-Join key: (allocation, payment_session_id ∈ attempt.auth_ids). manifest_id is a label only.
+Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
+manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
+entry, is ambiguous: the attempt is uncertain and those rows stay unattributed.
 """
 
 import asyncio
@@ -106,8 +108,7 @@ class CostService:
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
         report, new_rows = await self._worker.sync_once()
-        session_ids = [row.payment_session_id for row in new_rows if row.payment_session_id]
-        affected = await self._store.jobs_for_auth_ids(session_ids) if session_ids else set()
+        affected = await self._store.match_sessions(new_rows)
         for job_id in affected:
             await self.refresh_projection(job_id)
         self.last_synced_at, self.last_error = self._clock.now(), None
@@ -227,8 +228,15 @@ class CostService:
         )
 
     async def _compute(self, job: Job) -> JobCost:
-        auth_ids = sorted({auth_id for attempt in job.attempts for auth_id in attempt.auth_ids})
-        rows = await self._store.usage_for_auth_ids(auth_ids) if auth_ids else []
+        session_ids = sorted(
+            {
+                session.payment_session_id
+                for attempt in job.attempts
+                for session in attempt.sessions
+                if session.match == "matched" and session.payment_session_id
+            }
+        )
+        rows = await self._store.usage_for_payment_sessions(session_ids) if session_ids else []
         return classify(job, rows)
 
 
@@ -237,11 +245,18 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     applied = [row for row in rows if row.status == "applied"]
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
-        if not attempt.auth_ids and not attempt.payment_sent:
+        if not attempt.sessions and not attempt.payment_sent:
             continue
-        mine = [row for row in applied if row.payment_session_id in attempt.auth_ids]
+        matched = {
+            session.payment_session_id
+            for session in attempt.sessions
+            if session.match == "matched" and session.payment_session_id
+        }
+        mine = [row for row in applied if row.payment_session_id in matched]
         cost_class: CostClass
-        if not mine:
+        if any(session.match == "ambiguous" for session in attempt.sessions):
+            cost_class = "uncertain"
+        elif not mine:
             cost_class = "pending"
         elif attempt.outcome == "succeeded":
             cost_class = "delivered"

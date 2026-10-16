@@ -13,6 +13,7 @@ from livepeer_builder.contracts import (
     JobRequest,
     Money,
     ProvisionRequest,
+    SignedSession,
     SyncCheckpoint,
     UsageRow,
 )
@@ -41,8 +42,14 @@ def job_with(*attempts: tuple[str, tuple[str, ...], bool], state: str = "succeed
         capability=None, model=None, state=state, failure=None, result=None, usage=None,  # type: ignore[arg-type]
         created_at=now, completed_at=now,
         attempts=tuple(
-            Attempt(job_id=job_id, number=n, runner_url="r", orchestrator_url=None, auth_ids=auth, manifest_id=None,
-                    payment_sent=paid, outcome=outcome, status_code=None, started_at=now, ended_at=now)  # type: ignore[arg-type]
+            Attempt(
+                job_id=job_id, number=n, runner_url="r", orchestrator_url=None, allocation_id="alloc_1",
+                sessions=tuple(
+                    SignedSession(manifest_id=f"m-{item}", payment_session_id=item, match="matched")
+                    for item in auth
+                ),
+                payment_sent=paid, outcome=outcome, status_code=None, started_at=now, ended_at=now,  # type: ignore[arg-type]
+            )
             for n, (outcome, auth, paid) in enumerate(attempts, start=1)
         ),
     )  # fmt: skip
@@ -89,17 +96,22 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     usage: FakeUsageSource, clock: FixedClock,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    await engine.payments.provision(
+    actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
             application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
         ),
     )
-    transport.steps = [ScriptedTransport.ok(auth_ids=("sess-1",))]
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-sess",))]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # missing evidence is not zero
+    assert (await engine.costs.sync_once()).jobs_updated == 0  # no Batteries session yet: stay unmatched
 
-    usage.rows = [row("u1", "sess-1", "0.5"), row("u2", "other", "9")]
+    allocation = actor.allocation_id
+    usage.rows = [
+        row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-sess"),
+        row("u2", "other", "9", allocation=allocation, manifest="other"),
+    ]
     report = await engine.costs.sync_once()
     assert (report.rows_new, report.jobs_updated) == (2, 1)
     observed = await engine.costs.for_job(alice, job.id)
@@ -110,7 +122,7 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     assert again.rows_new == 0
 
     clock.advance(60)
-    usage.rows.append(row("u3", "sess-1", "0.25"))  # a metered session signed again later
+    usage.rows.append(row("u3", "sess-1", "0.25", allocation=allocation, manifest="m-sess"))
     await engine.costs.sync_once()
     corrected = await engine.costs.for_job(alice, job.id)
     assert corrected.status == "corrected" and corrected.fees.fee_eth == Decimal("0.75")
@@ -129,15 +141,15 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     )
     allocation = actor.allocation_id
     transport.steps = [
-        ScriptedTransport.ok(auth_ids=("good",)),
-        RunnerCallError("payment", "tickets rejected", payment_sent=True, auth_ids=("rejected",)),
+        ScriptedTransport.ok(manifest_ids=("m-good",)),
+        RunnerCallError("payment", "tickets rejected", payment_sent=True, manifest_ids=("m-rejected",)),
     ]
     await engine.jobs.run(alice, JobRequest(app=APP))
     with pytest.raises(JobFailed):
         await engine.jobs.run(alice, JobRequest(app=APP))
     usage.rows = [
-        row("1", "good", "0.2", allocation=allocation),
-        row("2", "rejected", "0.3", allocation=allocation),  # charged at signing even though rejected
+        row("1", "good", "0.2", allocation=allocation, manifest="m-good"),
+        row("2", "rejected", "0.3", allocation=allocation, manifest="m-rejected"),
         row("3", "forged-session", "0.1", allocation=allocation, manifest="forged-by-client"),
     ]
     await engine.costs.sync_once()
@@ -146,7 +158,7 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     result = await engine.costs.reconcile(admin, "default", "alice")
     assert result.by_class["delivered"].fee_eth == Decimal("0.2")
     assert result.by_class["failed_after_payment"].fee_eth == Decimal("0.3")
-    assert result.unattributed.fee_eth == Decimal("0.1")  # a manifest label never attributes a charge
+    assert result.unattributed.fee_eth == Decimal("0.1")  # no session log entry for that manifest
     assert result.balanced is True
 
     summary = await engine.costs.summary(
@@ -154,6 +166,86 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     )
     assert summary.by_class["failed_after_payment"].fee_eth == Decimal("0.3")
     assert summary.jobs_with_cost == 2
+
+
+async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+        ),
+    )
+    usage.rows = [row("u1", "sess-1", "0.4", allocation=actor.allocation_id, manifest="m-early")]
+    await engine.costs.sync_once()
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-early",))]
+    job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+
+    report = await engine.costs.sync_once()  # no new rows; the unmatched log entry resolves
+    assert report.rows_new == 0
+    observed = await engine.costs.for_job(alice, job.id)
+    assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.4")
+
+
+async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+        ),
+    )
+    allocation = actor.allocation_id
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-shared",))]
+    job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
+    usage.rows = [row("1", "sess-a", "0.2", allocation=allocation, manifest="m-shared")]
+    await engine.costs.sync_once()
+    assert (await engine.costs.for_job(alice, job.id)).attempts[0].cost_class == "delivered"
+
+    usage.rows.append(row("2", "sess-b", "0.3", allocation=allocation, manifest="m-shared"))
+    await engine.costs.sync_once()
+    cost = await engine.costs.for_job(alice, job.id)
+    assert cost.attempts[0].cost_class == "uncertain"
+    assert cost.attempts[0].fees.row_count == 0
+    stored = await engine.jobs.get(alice, job.id)
+    assert stored.attempts[0].sessions[0].match == "ambiguous"
+    assert stored.attempts[0].sessions[0].payment_session_id is None
+
+    manager.allocations[allocation].spent = Decimal("0.5")
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert result.unattributed.fee_eth == Decimal("0.5")
+    assert result.by_class["uncertain"].fee_eth == Decimal(0)
+    assert result.balanced is True
+
+
+async def test_a_forged_manifest_on_another_allocation_stays_unattributed(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+        ),
+    )
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-real",))]
+    job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
+    usage.rows = [
+        row("1", "sess-real", "0.2", allocation=actor.allocation_id, manifest="m-real"),
+        row("2", "sess-forged", "0.9", allocation="someone-else", manifest="m-real"),
+    ]
+    await engine.costs.sync_once()
+    observed = await engine.costs.for_job(alice, job.id)
+    assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.2")
+    assert [item.id for item in await engine.store.unattributed_usage("someone-else")] == ["2"]
 
 
 async def test_cursor_mismatch_restarts_from_the_beginning(

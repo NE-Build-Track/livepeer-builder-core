@@ -12,7 +12,7 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
 - **Tables** are prefixed `lpb_`, so they can share a database with application tables.
   Applications never write them.
 - **Money and fees** are exact decimal strings, summed in Python.
-- **Timestamps** are UTC. Lists that are queried (attempt `auth_ids`) live in child tables.
+- **Timestamps** are UTC. Lists that are queried (payment sessions) live in child tables.
 - **Payment keys** are not stored. `lpb_actors.secret_ref` holds a `SecretRef`. The
   encrypted-database `SecretStore` keeps Fernet ciphertext in `lpb_secrets`, with the key outside the
   database.

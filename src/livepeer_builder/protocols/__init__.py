@@ -24,6 +24,7 @@ from livepeer_builder.contracts import (
     Money,
     NewAllocationKey,
     Operation,
+    PaymentCredential,
     ProvisionedActor,
     ResourceRef,
     ResultRef,
@@ -91,7 +92,7 @@ class SelectionPolicy(Protocol):
 
 
 class RunnerTransport(Protocol):
-    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``auth_ids``."""
+    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``."""
 
     async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply: ...
 
@@ -102,7 +103,7 @@ class RunnerTransport(Protocol):
 class CredentialResolver(Protocol):
     """The signer credential for this actor, resolved at call time. Raises NotProvisioned."""
 
-    async def credential(self, actor: ActorContext) -> str | None: ...
+    async def credential(self, actor: ActorContext) -> PaymentCredential: ...
 
 
 class AllocationManager(Protocol):
@@ -202,9 +203,9 @@ class CostRepo(Protocol):
 
     async def apply_usage(self, rows: Sequence[UsageRow], checkpoint: SyncCheckpoint) -> list[UsageRow]: ...
 
-    async def jobs_for_auth_ids(self, auth_ids: Sequence[str]) -> set[UUID]: ...
+    async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]: ...
 
-    async def usage_for_auth_ids(self, auth_ids: Sequence[str]) -> list[UsageRow]: ...
+    async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
 
     async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]: ...
 

@@ -11,6 +11,7 @@ from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import SignerDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.runtime import engine as engine_module
 from livepeer_builder.runtime.logging import JsonFormatter, configure_logging
 from livepeer_builder.store import SqlStore
@@ -58,12 +59,24 @@ def test_package_version_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine_module.package_version() == "0.0.0+unknown"
 
 
+async def test_batteries_without_an_operator_token_does_not_start() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        batteries_url="https://batteries.example",
+        batteries_token="t",
+        log_json=False,
+    )
+    with pytest.raises(InvalidRequest, match="LPB_BATTERIES_OPERATOR_TOKEN"):
+        await BuilderEngine.from_settings(settings)
+
+
 async def test_default_adapters_follow_settings() -> None:
     settings = EngineSettings(
         database_url=MEMORY,
         signer_url="https://signer.example",
         batteries_url="https://batteries.example",
         batteries_token="t",
+        batteries_operator_token="desk",
         grant_id="g",
         log_json=False,
     )
@@ -74,6 +87,23 @@ async def test_default_adapters_follow_settings() -> None:
         assert isinstance(engine.costs._worker._source, BatteriesUsageSource)  # type: ignore[union-attr]
     finally:
         await engine.stop()  # closes the owned clients and store
+
+
+async def test_operator_token_wires_a_separate_grants_client() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        batteries_url="https://batteries.example",
+        batteries_token="actor",
+        batteries_operator_token="operator",
+        log_json=False,
+    )
+    engine = await BuilderEngine.from_settings(settings)
+    try:
+        assert isinstance(engine.payments._manager, BatteriesClient)
+        assert isinstance(engine.payments._grants, BatteriesClient)
+        assert engine.payments._grants is not engine.payments._manager
+    finally:
+        await engine.stop()
 
 
 async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: FixedClock) -> None:

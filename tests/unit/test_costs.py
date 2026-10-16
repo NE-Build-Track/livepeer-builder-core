@@ -105,7 +105,7 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-sess",))]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # missing evidence is not zero
-    assert (await engine.costs.sync_once()).jobs_updated == 0  # no Batteries session yet: stay unmatched
+    assert (await engine.costs.sync_once()).jobs_updated == 1  # the worker persists the pending projection
 
     allocation = actor.allocation_id
     usage.rows = [
@@ -117,6 +117,13 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     observed = await engine.costs.for_job(alice, job.id)
     assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.5")
     assert observed.attempts[0].cost_class == "delivered"
+
+    await engine.store.save_projection(observed.model_copy(update={"attempts": ()}))
+    assert (await engine.costs.for_job(alice, job.id)).attempts == ()
+    rebuilt_sync = await engine.costs.sync_once()  # no new usage; the empty attempt list is stale
+    assert rebuilt_sync.rows_new == 0
+    rebuilt = await engine.costs.for_job(alice, job.id)
+    assert rebuilt.attempts[0].cost_class == "delivered" and rebuilt.fees.fee_eth == Decimal("0.5")
 
     again = await engine.costs.sync_once()  # re-reads the last page; nothing is applied twice
     assert again.rows_new == 0

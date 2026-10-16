@@ -35,8 +35,9 @@ class EngineSettings(Contract):
     default_currency: Currency = "USD"
     shared_payment_key: SecretStr | None = None  # per_application mode: the one lpg_ key
     batteries_url: str | None = None  # management API and usage feed
-    batteries_token: SecretStr | None = None  # least-privilege management credential, no grants.*
-    grant_id: str | None = None  # the operator-created grant the engine provisions under
+    batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
+    batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
+    grant_id: str | None = None  # optional default when a provision request omits grant_id
     shared_allocation_id: str | None = None  # per_application: the allocation behind shared_payment_key
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)

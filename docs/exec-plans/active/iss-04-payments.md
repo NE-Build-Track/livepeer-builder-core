@@ -31,6 +31,11 @@ decision on the gap.
       with tests.
 - [x] 2026-10-14: Paid jobs on public orchestrators with no shim; reconciliation balanced
       ([evidence](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)).
+- [x] 2026-10-16: Cost sync became the sole projection writer; cost reads now use persisted
+      projections, including attempt-level classifications. The attempt list is migration `0004`.
+      Revision `0003` stays the session-log migration and still drops `lpb_attempt_auth_ids`.
+      Sync rebuilds an observed projection whose attempt list is empty. Recent cost reads are the
+      newest stored projections. Grant list and create require `LPB_BATTERIES_OPERATOR_TOKEN`.
 - [x] 2026-10-14: Session log matches on `(allocation_id, manifest_id)` and keeps `(allocation_id, payment_session_id)` as the cost key (D20).
 - [ ] Finish the attribution re-run: forged-manifest and rejected-ticket cases
       ([m2-attribution-rerun](m2-attribution-rerun.md)).
@@ -39,3 +44,4 @@ decision on the gap.
 
 - 2026-10-12: `per_actor` is the default; no auto-provisioning; USD default; rejected-ticket charges
   documented; Mode B deferred to M4 (D17–D23).
+- 2026-10-16: Do not edit `0003` after #9. Persisted projection attempts ship as `0004`.

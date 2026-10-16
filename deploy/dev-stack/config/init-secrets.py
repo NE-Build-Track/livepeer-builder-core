@@ -14,7 +14,7 @@ target = Path(__file__).resolve().parents[1] / "secrets"
 target.mkdir(mode=0o700, exist_ok=True)
 if any(target.iterdir()):
     raise SystemExit("secrets/ must be empty; refusing to replace credentials")
-operator, engine, webhook, reader, producer = (secrets.token_hex(32) for _ in range(5))
+operator, engine, grant_desk, webhook, reader, producer = (secrets.token_hex(32) for _ in range(6))
 creds = f'''[[credentials]]
 id = "operator"
 secret = "{operator}"
@@ -26,8 +26,15 @@ allow = ["grants.*", "allocations.*", "api_keys.*", "sessions.*",
 id = "builder-engine"
 secret = "{engine}"
 [credentials.management]
-allow = ["allocations.create", "allocations.fund", "allocations.read", "allocations.status",
-         "allocations.revoke", "api_keys.create", "api_keys.read", "api_keys.revoke", "usage.read"]
+allow = ["grants.fund", "allocations.create", "allocations.fund", "allocations.read",
+         "allocations.status", "allocations.revoke", "api_keys.create", "api_keys.read",
+         "api_keys.revoke", "usage.read"]
+
+[[credentials]]
+id = "grant-desk"
+secret = "{grant_desk}"
+[credentials.management]
+allow = ["grants.read", "grants.create"]
 
 [[credentials]]
 id = "signer"
@@ -54,6 +61,7 @@ files = {
     "clearinghouse.toml": creds,
     "operator-token": operator,
     "engine-token": engine,
+    "grant-desk-token": grant_desk,
     "webhook-headers": f"Livepeer-Clearinghouse-Token:{webhook}",
     "webhook-url": "http://127.0.0.1:8080/v1/signer/authorize",
     "kafka-username": "producer",

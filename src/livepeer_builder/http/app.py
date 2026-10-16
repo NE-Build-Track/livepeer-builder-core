@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
     EngineHealth,
     EventPage,
     FundRequest,
+    GrantRecord,
     IssuedKey,
     Job,
     JobCost,
@@ -84,6 +85,12 @@ class IssueKeyBody(BaseModel):
 class ProvisionBody(BaseModel):
     amount: Money
     label: str = ""
+    grant_id: str = ""
+
+
+class GrantBody(BaseModel):
+    name: str
+    amount: Money
 
 
 class StatusBody(BaseModel):
@@ -178,6 +185,10 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     async def job_cost(actor: Actor, job_id: UUID) -> JobCost:
         return await engine.costs.for_job(actor, job_id)
 
+    @app.get("/v1/costs/projections", response_model=list[JobCost])
+    async def cost_projections(actor: Actor, limit: Annotated[int, Query(ge=1, le=25)] = 25) -> list[JobCost]:
+        return await engine.costs.recent(actor, limit)
+
     @app.get("/v1/costs/summary", response_model=CostSummary)
     async def cost_summary(
         actor: Actor,
@@ -231,13 +242,30 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
         actor: Actor, application_id: str, actor_id: str, body: ProvisionBody
     ) -> ProvisionedActor:
         request = ProvisionRequest(
-            application_id=application_id, actor_id=actor_id, amount=body.amount, label=body.label
+            application_id=application_id,
+            actor_id=actor_id,
+            amount=body.amount,
+            label=body.label,
+            grant_id=body.grant_id,
         )
         return await engine.payments.provision(actor, request)
 
     @app.post(base + "/fund", response_model=ProvisionedActor)
     async def fund(actor: Actor, application_id: str, actor_id: str, body: FundRequest) -> ProvisionedActor:
         return await engine.payments.fund(actor, application_id, actor_id, body)
+
+    @app.get("/v1/admin/grants", response_model=list[GrantRecord])
+    async def list_grants(actor: Actor) -> list[GrantRecord]:
+        return await engine.payments.list_grants(actor)
+
+    @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
+    async def create_grant(actor: Actor, body: GrantBody) -> GrantRecord:
+        return await engine.payments.create_grant(actor, body.name, body.amount)
+
+    @app.post("/v1/admin/grant/fund", status_code=204)
+    async def fund_grant(actor: Actor, body: FundRequest) -> Response:
+        await engine.payments.fund_grant(actor, body)
+        return Response(status_code=204)
 
     @app.post(base + "/status", response_model=ProvisionedActor)
     async def set_status(

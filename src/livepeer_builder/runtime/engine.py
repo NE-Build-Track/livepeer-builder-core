@@ -18,6 +18,7 @@ from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSec
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import EngineHealth, SecretRef
+from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
@@ -108,6 +109,10 @@ class BuilderEngine:
     ) -> "BuilderEngine":
         """Build an engine. Every argument after ``settings`` overrides one default adapter."""
         settings = settings or EngineSettings.from_env()
+        if settings.batteries_url and not (
+            settings.batteries_operator_token and settings.batteries_operator_token.get_secret_value()
+        ):
+            raise InvalidRequest("LPB_BATTERIES_OPERATOR_TOKEN is required when LPB_BATTERIES_URL is set")
         clock = clock or SystemClock()
         policy = policy or DefaultPolicy()
         closers: list[object] = []
@@ -131,6 +136,13 @@ class BuilderEngine:
             client = BatteriesClient(settings.batteries_url, token)
             allocation_manager = client
             closers.append(client)
+        grants_client = None
+        operator_token = None
+        if settings.batteries_operator_token:
+            operator_token = settings.batteries_operator_token.get_secret_value()
+        if settings.batteries_url and operator_token:
+            grants_client = BatteriesClient(settings.batteries_url, operator_token)
+            closers.append(grants_client)
         if usage_source is None and settings.batteries_url and token:
             filters = {"grant_id": settings.grant_id} if settings.grant_id else {}
             source = BatteriesUsageSource(settings.batteries_url, token, filters=filters)
@@ -161,6 +173,7 @@ class BuilderEngine:
             clock=clock,
             engine_id=settings.engine_id,
             manager=allocation_manager,
+            grants=grants_client if grants_client is not None else allocation_manager,
             grant_id=settings.grant_id,
             currency=settings.default_currency,
             shared_secret=shared_ref,

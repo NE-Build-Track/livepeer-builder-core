@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import insert, text
+from sqlalchemy import insert, inspect, text
 
 from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -51,6 +51,66 @@ async def test_upgrade_preserves_records_written_at_each_revision(
         )
     assert kept.scalar_one() == "r"
     await upgrade(engine)
+    await engine.dispose()
+
+
+async def test_session_log_drops_auth_ids_and_projections_keep_attempts(
+    database_url: str, clock: FixedClock
+) -> None:
+    engine = create_engine(database_url)
+    await upgrade(engine, "0002")
+    job = make_job(clock)
+    now = clock.now()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_jobs "
+                "(id, application_id, actor_id, mode, app, state, created_at, completed_at) "
+                "VALUES (:id, 'default', 'alice', 'immediate', 'a/b', 'succeeded', :now, :now)"
+            ),
+            {"id": str(job.id), "now": now},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_attempts "
+                "(job_id, number, payment_sent, outcome, started_at, ended_at) "
+                "VALUES (:id, 1, :paid, 'succeeded', :now, :now)"
+            ),
+            {"id": str(job.id), "paid": True, "now": now},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_attempt_auth_ids (auth_id, job_id, attempt_number) VALUES ('auth-1', :id, 1)"
+            ),
+            {"id": str(job.id)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_cost_projections "
+                "(job_id, status, fee_eth, row_count, updated_at) "
+                "VALUES (:id, 'pending', '0', 0, :now)"
+            ),
+            {"id": str(job.id), "now": now},
+        )
+
+    await upgrade(engine, "0003")  # the session-log revision already on releases/m2
+
+    async with engine.connect() as conn:
+        tables = await conn.run_sync(lambda sync: set(inspect(sync).get_table_names()))
+        columns = await conn.run_sync(
+            lambda sync: {column["name"] for column in inspect(sync).get_columns("lpb_cost_projections")}
+        )
+    assert "lpb_attempt_auth_ids" not in tables
+    assert "attempts" not in columns
+
+    await upgrade(engine)
+
+    async with engine.connect() as conn:
+        stored = await conn.execute(
+            text("SELECT attempts FROM lpb_cost_projections WHERE job_id = :id"),
+            {"id": str(job.id)},
+        )
+    assert stored.scalar_one() in ("[]", [])
     await engine.dispose()
 
 

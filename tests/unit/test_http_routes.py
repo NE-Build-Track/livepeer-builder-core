@@ -69,6 +69,28 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert bad.status_code == 404  # revoked: no longer provisioned
 
 
+async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ignore[no-untyped-def]
+    client, _engine, admin, alice = api
+    assert (await client.get("/v1/admin/grants", headers=alice)).status_code == 403
+    assert (await client.get("/v1/admin/grants", headers=admin)).json() == []
+    created = await client.post(
+        "/v1/admin/grants",
+        json={"name": "ops", "amount": {"amount": "5", "currency": "USD"}},
+        headers=admin,
+    )
+    assert created.status_code == 201
+    assert created.json()["name"] == "ops" and created.json()["total"] == "5"
+    assert (await client.get("/v1/admin/grants", headers=admin)).json() == [created.json()]
+
+
+async def test_grant_fund_is_admin_only(api) -> None:  # type: ignore[no-untyped-def]
+    client, _engine, admin, alice = api
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
+    assert (await client.post("/v1/admin/grant/fund", json=body, headers=alice)).status_code == 403
+    funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    assert funded.status_code == 204 and funded.content == b""
+
+
 async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTransport) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
     await client.post(ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}}, headers=admin)
@@ -82,8 +104,14 @@ async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTrans
         await client.post(f"/v1/jobs/{job_id}/usage", json={"quantities": {"tokens": 3}}, headers=alice)
     ).status_code == 200
     assert (await client.get(f"/v1/jobs/{job_id}/result", headers=alice)).status_code == 501
+    before = await client.get("/v1/costs/summary", headers=alice)
+    assert before.status_code == 200 and before.json()["jobs_pending"] == 0
+    assert (await client.get("/v1/costs/projections", headers=alice)).json() == []
+    await client.post("/v1/admin/costs/sync", headers=admin)
     summary = await client.get("/v1/costs/summary", headers=alice)
     assert summary.status_code == 200 and summary.json()["jobs_pending"] == 1
+    projections = (await client.get("/v1/costs/projections", headers=alice)).json()
+    assert len(projections) == 1 and projections[0]["job_id"] == job_id
     actor_key = next(k["key_id"] for k in keys if k["kind"] == "actor")
     assert (await client.post(f"/v1/admin/keys/{actor_key}/revoke", headers=admin)).status_code == 204
     assert (await client.get("/v1/jobs", headers=alice)).status_code == 401  # revoked key

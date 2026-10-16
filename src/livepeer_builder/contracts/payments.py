@@ -31,6 +31,17 @@ class ProvisionRequest(Contract):
     actor_id: str
     amount: Money  # may be zero: identity without money; fund later with an explicit command
     label: str = ""
+    grant_id: str = ""  # empty uses the configured grant; the admin UI always sends one
+
+
+class GrantRecord(Contract):
+    """A Batteries grant the operator can fund actors from."""
+
+    id: str
+    name: str
+    status: str
+    currency: str
+    total: str
 
 
 class ProvisionedActor(Contract):

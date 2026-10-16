@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned, ProviderUnavailable
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FakeAllocationManager
@@ -32,6 +32,17 @@ async def test_provisioning_is_explicit_and_admin_only(
     actor = await engine.payments.provision(admin, provision_request())
     assert actor.status == "active" and actor.currency == "USD"
     assert manager.calls == ["create_key_for_grant"]  # one atomic call: allocation + key + funding
+    assert manager.last_grant_id == "grant_1"
+
+
+async def test_provision_uses_the_grant_on_the_request(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    await engine.payments.provision(
+        admin, provision_request().model_copy(update={"grant_id": "grant_chosen"})
+    )
+    assert manager.last_grant_id == "grant_chosen"
 
 
 async def test_repeat_provisioning_returns_the_original(
@@ -87,6 +98,48 @@ async def test_funding_needs_an_operation_ref_and_applies_once(
             "default",
             "alice",
             FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="x"),
+        )
+
+
+async def test_operator_lists_and_creates_grants(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    assert await engine.payments.list_grants(admin) == []
+    with pytest.raises(AccessDenied):
+        await engine.payments.list_grants(alice)
+    with pytest.raises(InvalidRequest, match="name"):
+        await engine.payments.create_grant(admin, "  ", usd("1"))
+    with pytest.raises(InvalidRequest, match="positive"):
+        await engine.payments.create_grant(admin, "ops", usd("0"))
+    with pytest.raises(InvalidRequest, match="positive"):
+        await engine.payments.create_grant(admin, "ops", Money(amount=Decimal("1"), currency="ETH"))
+    created = await engine.payments.create_grant(admin, " ops ", usd("5"))
+    assert created == manager.grants[0]
+    assert created.name == "ops" and created.total == "5"
+    assert await engine.payments.list_grants(admin) == [created]
+    engine.payments._grants = None
+    with pytest.raises(ProviderUnavailable, match="LPB_BATTERIES_OPERATOR_TOKEN"):
+        await engine.payments.list_grants(admin)
+    with pytest.raises(ProviderUnavailable, match="LPB_BATTERIES_OPERATOR_TOKEN"):
+        await engine.payments.create_grant(admin, "ops", usd("1"))
+
+
+async def test_funding_the_configured_grant_applies_once(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    with pytest.raises(AccessDenied):
+        await engine.payments.fund_grant(alice, request)
+    await engine.payments.fund_grant(admin, request)
+    await engine.payments.fund_grant(admin, request)  # a retry
+    assert manager.funded_grants == [("grant_1", usd("10"), "fund-grant:grant_1:topup-1")]
+    with pytest.raises(InvalidRequest):
+        await engine.payments.fund_grant(admin, FundRequest(amount=usd("0"), operation_ref="zero"))
+    with pytest.raises(InvalidRequest):
+        await engine.payments.fund_grant(
+            admin, FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth")
         )
 
 

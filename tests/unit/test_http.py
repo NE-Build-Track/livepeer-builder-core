@@ -36,6 +36,26 @@ async def test_unauthenticated_requests_get_a_challenge(api: tuple[httpx.AsyncCl
     assert (await client.get("/livez")).status_code == 200
 
 
+async def test_any_origin_may_call_the_api(api: tuple[httpx.AsyncClient, BuilderEngine]) -> None:
+    client, _ = api
+    preflight = await client.options(
+        "/v1/jobs",
+        headers={
+            "Origin": "https://app.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "*"
+    assert "authorization" in preflight.headers["access-control-allow-headers"].lower()
+
+    response = await client.get("/v1/offerings", headers={"Origin": "https://app.example"})
+    assert response.status_code == 401
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "livepeer-job-id" in response.headers["access-control-expose-headers"].lower()
+
+
 async def test_job_round_trip_and_admin_boundary(
     api: tuple[httpx.AsyncClient, BuilderEngine], transport: ScriptedTransport
 ) -> None:

@@ -24,7 +24,7 @@ class UsageRow(Contract):
     status: UsageStatus
     manifest_id: str | None
     allocation_id: str | None
-    payment_session_id: str | None  # the signer auth_id: joins a charge to an attempt
+    payment_session_id: str | None  # Batteries session id: the cost key once the session log matches it
     request_id: str | None
     pipeline: str | None
     computed_fee_eth: Decimal | None

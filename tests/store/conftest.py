@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from livepeer_builder.contracts import Attempt, Job
+from livepeer_builder.contracts import Attempt, Job, SignedSession
 from livepeer_builder.testing import FixedClock
 
 
@@ -43,9 +43,23 @@ def make_job(
     )  # fmt: skip
 
 
-def make_attempt(job_id: UUID, clock: FixedClock, number: int = 1, auth_ids: tuple[str, ...] = ()) -> Attempt:
+def make_attempt(
+    job_id: UUID,
+    clock: FixedClock,
+    number: int = 1,
+    manifest_ids: tuple[str, ...] = (),
+    allocation_id: str | None = None,
+) -> Attempt:
     return Attempt(
-        job_id=job_id, number=number, runner_url="https://r", orchestrator_url="https://o", auth_ids=auth_ids,
-        manifest_id="m", payment_sent=bool(auth_ids), outcome="succeeded", status_code=200,
-        started_at=clock.now(), ended_at=clock.now(),
-    )  # fmt: skip
+        job_id=job_id,
+        number=number,
+        runner_url="https://r",
+        orchestrator_url="https://o",
+        allocation_id=allocation_id,
+        sessions=tuple(SignedSession(manifest_id=manifest_id) for manifest_id in manifest_ids),
+        payment_sent=bool(manifest_ids),
+        outcome="succeeded",
+        status_code=200,
+        started_at=clock.now(),
+        ended_at=clock.now(),
+    )

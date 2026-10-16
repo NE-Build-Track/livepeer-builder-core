@@ -7,7 +7,7 @@ from uuid import uuid4
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from livepeer_builder.contracts import Attempt, Job, JobRequest, UsageRow
+from livepeer_builder.contracts import Attempt, Job, JobRequest, SignedSession, UsageRow
 from livepeer_builder.services.costs import add_fees, classify, fees_of
 from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.store.sql import _usage_row, _usage_values
@@ -44,7 +44,8 @@ def job_with(outcomes: list[str], state: str) -> Job:
     job_id = uuid4()
     attempts = tuple(
         Attempt(
-            job_id=job_id, number=n, runner_url="r", orchestrator_url=None, auth_ids=(f"s{n}",), manifest_id=None,
+            job_id=job_id, number=n, runner_url="r", orchestrator_url=None, allocation_id="alloc",
+            sessions=(SignedSession(manifest_id=f"m{n}", payment_session_id=f"s{n}", match="matched"),),
             payment_sent=True, outcome=outcome, status_code=None, started_at=NOW, ended_at=NOW,  # type: ignore[arg-type]
         )
         for n, outcome in enumerate(outcomes, start=1)
@@ -80,7 +81,12 @@ def test_every_attributed_charge_is_counted_exactly_once(
 ) -> None:
     job = job_with(outcomes, state)
     cost = classify(job, rows)
-    own_sessions = {auth_id for attempt in job.attempts for auth_id in attempt.auth_ids}
+    own_sessions = {
+        session.payment_session_id
+        for attempt in job.attempts
+        for session in attempt.sessions
+        if session.payment_session_id
+    }
     expected = fees_of(row for row in rows if row.payment_session_id in own_sessions)
     assert sum((a.fees.fee_eth for a in cost.attempts), Decimal(0)) == expected.fee_eth == cost.fees.fee_eth
     assert sum(a.fees.row_count for a in cost.attempts) == expected.row_count

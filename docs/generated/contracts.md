@@ -65,8 +65,8 @@ classDiagram
         +int number
         +str? runner_url
         +str? orchestrator_url
-        +str[] auth_ids
-        +str? manifest_id
+        +str? allocation_id
+        +SignedSession[] sessions
         +bool payment_sent
         +enum outcome
         +int? status_code

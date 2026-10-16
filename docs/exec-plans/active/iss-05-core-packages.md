@@ -17,7 +17,7 @@ against a versioned development build.
       by `tests/structure/`
 - [x] Public interfaces documented: [ARCHITECTURE.md](../../../ARCHITECTURE.md#providers), [contracts/](../../contracts/index.md)
 - [x] No silent in-memory store; SQLite file by default
-- [x] SDK dependency pinned so an installed build gets SDK PR 5 (`on_payment_session`); see tech debt T1
+- [x] SDK dependency pinned so an installed build gets #77 (`on_payment_session`, `manifest_id`); see tech debt T1
 - [x] `lpb smoke` import/start/health/stop check
 - [x] The CI clean-install job is green on a versioned dev build (ISS-07)
 - [ ] Josh's code review; Mike's review

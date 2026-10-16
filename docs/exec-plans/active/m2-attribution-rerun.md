@@ -14,7 +14,7 @@ and the SDK with #71, driving it through this engine instead of prototype script
 - [x] Stack from [deploy/dev-stack](../../../deploy/dev-stack/README.md) with pins recorded
 - [x] Per-actor spend equals Batteries `spent_*` (reconciliation `balanced`, 12 October, with the T9 shim)
 - [x] The same, without the shim (14 October: node `f970be6`, SDK PR 5; reconciliation `balanced`)
-- [ ] A forged `manifest_id` is `unattributed`, not attributed
+- [ ] A forged `manifest_id` on another allocation stays `unattributed` (covered in `test_a_forged_manifest_on_another_allocation_stays_unattributed`; the live re-run is still open)
 - [ ] A rejected-ticket charge is classified `failed_after_payment`
 - [x] A public orchestrator the node signer accepts (14 October: speedybird and xode)
 - [x] Results recorded: [2026-10-12-dev-stack-paid-run](../../references/evidence/2026-10-12-dev-stack-paid-run.md), [2026-10-14-dev-stack-public-orchestrators](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)

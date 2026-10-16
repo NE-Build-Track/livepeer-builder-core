@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import insert
+from sqlalchemy import insert, text
 
 from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -44,8 +44,12 @@ async def test_upgrade_preserves_records_written_at_each_revision(
     store = SqlStore(engine)
     loaded = await store.get_job(job.id)
     assert loaded is not None and loaded.operation_ref == "r"
-    await downgrade(engine, "0001")  # downgrades keep execution records
-    assert (await SqlStore(engine).get_job(job.id)) is not None
+    await downgrade(engine, "0001")  # the job row survives; 0001 has no session log
+    async with engine.connect() as conn:
+        kept = await conn.execute(
+            text("SELECT operation_ref FROM lpb_jobs WHERE id = :id"), {"id": str(job.id)}
+        )
+    assert kept.scalar_one() == "r"
     await upgrade(engine)
     await engine.dispose()
 
@@ -121,7 +125,7 @@ async def test_retention_keeps_uncertain_and_recent_jobs(database_url: str, cloc
     for job in (old, unresolved):
         await store.create_job(job, None)
         await store.start_attempt(make_attempt(job.id, clock))
-        await store.finish_attempt(make_attempt(job.id, clock, auth_ids=(f"auth-{job.id}",)))
+        await store.finish_attempt(make_attempt(job.id, clock, manifest_ids=(f"m-{job.id}",)))
     clock.advance(timedelta(days=40).total_seconds())
     await store.create_job(
         recent.model_copy(update={"created_at": clock.now(), "completed_at": clock.now()}), None

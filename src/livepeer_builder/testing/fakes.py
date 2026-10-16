@@ -77,15 +77,14 @@ class ScriptedTransport:
         return step(runner, request, credential)
 
     @staticmethod
-    def ok(body: bytes = b'{"ok": true}', auth_ids: Sequence[str] = ("auth-1",)) -> RunnerReply:
+    def ok(body: bytes = b'{"ok": true}', manifest_ids: Sequence[str] = ("manifest-1",)) -> RunnerReply:
         return RunnerReply(
             status_code=200,
             content=body,
             content_type="application/json",
             data=None,
-            auth_ids=tuple(auth_ids),
-            manifest_id="manifest-1",
-            payment_sent=bool(auth_ids),
+            manifest_ids=tuple(manifest_ids),
+            payment_sent=bool(manifest_ids),
         )
 
 

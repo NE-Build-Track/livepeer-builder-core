@@ -38,7 +38,7 @@ classDiagram
     }
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) str?
+        +async credential(actor) PaymentCredential
     }
     class AllocationManager {
         <<interface>>
@@ -146,5 +146,5 @@ classDiagram
 | `ActorRepo` | `get_actor`, `save_actor`, `list_actors` |
 | `KeyRepo` | `insert_access_key`, `access_key_by_hash`, `revoke_access_key`, `list_access_keys`, `count_active_admin_keys` |
 | `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
-| `CostRepo` | `cost_checkpoint`, `apply_usage`, `jobs_for_auth_ids`, `usage_for_auth_ids`, `unattributed_usage`, `get_projection`, `save_projection` |
+| `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `save_projection` |
 | `SecretRepo` | `put_secret`, `get_secret`, `delete_secret` |

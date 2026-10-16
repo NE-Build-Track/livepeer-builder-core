@@ -1,7 +1,7 @@
 """Configurable retention (docs/contracts/persistence.md#retention).
 
 - Completed jobs (``succeeded``/``failed``) older than ``retention_jobs_days`` are deleted with their
-  attempts, auth ids and cost projections. ``uncertain`` jobs are kept until an operator resolves
+  attempts, payment sessions and cost projections. ``uncertain`` jobs are kept until an operator resolves
   them, because they may hold charges that still need reconciling.
 - Cached usage rows older than ``retention_usage_days`` are deleted. Batteries remains the
   authoritative ledger; the engine copy is a cache for attribution.
@@ -35,7 +35,7 @@ async def purge(
             ids = list((await conn.execute(expired)).scalars())
             for start in range(0, len(ids), 500):
                 chunk = ids[start : start + 500]
-                await conn.execute(delete(t.attempt_auth_ids).where(t.attempt_auth_ids.c.job_id.in_(chunk)))
+                await conn.execute(delete(t.payment_sessions).where(t.payment_sessions.c.job_id.in_(chunk)))
                 await conn.execute(delete(t.attempts).where(t.attempts.c.job_id.in_(chunk)))
                 await conn.execute(delete(t.cost_projections).where(t.cost_projections.c.job_id.in_(chunk)))
                 await conn.execute(delete(t.jobs).where(t.jobs.c.id.in_(chunk)))

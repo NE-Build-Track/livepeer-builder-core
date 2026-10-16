@@ -34,9 +34,11 @@ names the runner `app`; `capability` and `model` are labels only.
 | `failed` | It ended, and nothing went out that might have run the work |
 | `uncertain` | Payment went out (or may have) and the outcome is unknown. Never retried automatically |
 
-An `Attempt` is one runner call. It records `auth_ids` (the signer payment sessions it opened, which
-is the cost key), `payment_sent`, `outcome` (`in_flight`, `succeeded`, `refused`, `unreachable`,
-`payment_refused`, `payment`, `timeout`, `http`), the status code and timestamps. `manifest_id` is stored as a label.
+An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
+`sessions` (one entry per session the signer signed, in order, each with a `manifest_id` and a
+match of `unmatched`, `matched` or `ambiguous`), `payment_sent`, `outcome` (`in_flight`,
+`succeeded`, `refused`, `unreachable`, `payment_refused`, `payment`, `timeout`, `http`), the status
+code and timestamps. The cost key is the matched `payment_session_id`, not the manifest.
 
 ### Behavior the contract fixes
 
@@ -114,7 +116,7 @@ Reserved for M4 (ISS-27). `sessions.open(actor, SessionRequest)` reserves a runn
 the SDK (`reserve_session`), and the SDK funds it with time-based payments until it is closed. **The
 engine proxies all traffic**: HTTP, SSE and WebSocket go through `Session.proxy_path`, with the actor
 authenticated on every request. Clients never receive the runner's `app_url`. Each session is a job
-whose cost grows while it is open (the same `auth_id`, many signings), so its cost reaches
+whose cost grows while it is open (the same payment session, many signings), so its cost reaches
 `corrected`. Limits: `max_duration_s`, `idle_timeout_s`, and concurrent sessions per actor.
 Funding lives in the engine process, so an engine restart lets the session lapse. Persistent
 sessions are distinct from continuous media streaming, which is stretch scope. Today

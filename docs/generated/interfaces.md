@@ -42,10 +42,12 @@ classDiagram
     }
     class AllocationManager {
         <<interface>>
+        +async create_grant(name, amount) GrantRecord
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
         +async fund_allocation(allocation_id, amount, idempotency_key) None
         +async fund_grant(grant_id, amount, idempotency_key) None
+        +async list_grants() GrantRecord[]
         +async read_allocation(allocation_id) Allowance
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None

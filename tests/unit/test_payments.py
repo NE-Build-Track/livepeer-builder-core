@@ -101,6 +101,25 @@ async def test_funding_needs_an_operation_ref_and_applies_once(
         )
 
 
+async def test_operator_lists_and_creates_grants(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    assert await engine.payments.list_grants(admin) == []
+    with pytest.raises(AccessDenied):
+        await engine.payments.list_grants(alice)
+    with pytest.raises(InvalidRequest, match="name"):
+        await engine.payments.create_grant(admin, "  ", usd("1"))
+    with pytest.raises(InvalidRequest, match="positive"):
+        await engine.payments.create_grant(admin, "ops", usd("0"))
+    with pytest.raises(InvalidRequest, match="positive"):
+        await engine.payments.create_grant(admin, "ops", Money(amount=Decimal("1"), currency="ETH"))
+    created = await engine.payments.create_grant(admin, " ops ", usd("5"))
+    assert created == manager.grants[0]
+    assert created.name == "ops" and created.total == "5"
+    assert await engine.payments.list_grants(admin) == [created]
+
+
 async def test_funding_the_configured_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:

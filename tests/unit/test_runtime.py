@@ -76,6 +76,23 @@ async def test_default_adapters_follow_settings() -> None:
         await engine.stop()  # closes the owned clients and store
 
 
+async def test_operator_token_wires_a_separate_grants_client() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        batteries_url="https://batteries.example",
+        batteries_token="actor",
+        batteries_operator_token="operator",
+        log_json=False,
+    )
+    engine = await BuilderEngine.from_settings(settings)
+    try:
+        assert isinstance(engine.payments._manager, BatteriesClient)
+        assert isinstance(engine.payments._grants, BatteriesClient)
+        assert engine.payments._grants is not engine.payments._manager
+    finally:
+        await engine.stop()
+
+
 async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: FixedClock) -> None:
     usage = FakeUsageSource()
     settings = EngineSettings(

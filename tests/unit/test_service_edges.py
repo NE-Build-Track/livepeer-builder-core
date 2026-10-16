@@ -101,7 +101,7 @@ async def test_provisioning_needs_a_provider_and_a_grant(
         EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False),
         store=store, clock=clock, discovery_source=StaticDiscoverySource(), allocation_manager=FakeAllocationManager(),
     )  # fmt: skip
-    with pytest.raises(ProviderUnavailable, match="grant_id"):
+    with pytest.raises(ProviderUnavailable, match="choose a grant"):
         await no_grant.payments.provision(admin, provision())
     with pytest.raises(ProviderUnavailable, match="management API"):
         await no_provider.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))

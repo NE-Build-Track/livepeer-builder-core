@@ -55,6 +55,37 @@ async def test_create_key_for_grant_is_one_idempotent_call() -> None:
     assert seen[0].headers["Idempotency-Key"] == "idem-1"
 
 
+async def test_list_grants_keeps_grant_objects_only() -> None:
+    def listed(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "id": "grant_1",
+                        "name": "ops",
+                        "status": "active",
+                        "currency": "usd",
+                        "total_units": "10",
+                    },
+                    "skip",
+                ]
+            },
+        )
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(listed)))
+    grants = await client.list_grants()
+    assert [(grant.id, grant.name, grant.currency, grant.total) for grant in grants] == [
+        ("grant_1", "ops", "USD", "10")
+    ]
+
+    def empty(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(empty)))
+    assert await client.list_grants() == []
+
+
 async def test_create_grant_returns_the_response_record() -> None:
     def handle(_: httpx.Request) -> httpx.Response:
         return httpx.Response(

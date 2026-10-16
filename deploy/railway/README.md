@@ -43,7 +43,7 @@ either repository can replace the production engine.
 The job copies `engine/railway.toml` to the repository root for the upload, then runs:
 
 ```sh
-railway up . --service engine --ci
+railway up --service engine --ci
 ```
 
 The repository root is the Docker context. Uploading only `engine/` would leave the Python package

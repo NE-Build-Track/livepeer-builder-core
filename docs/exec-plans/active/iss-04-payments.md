@@ -38,6 +38,7 @@ decision on the gap.
       newest stored projections. Grant list and create require `LPB_BATTERIES_OPERATOR_TOKEN`.
 - [x] 2026-10-14: Session log matches on `(allocation_id, manifest_id)` and keeps `(allocation_id, payment_session_id)` as the cost key (D20).
 - [x] 2026-10-16: Removed `LPB_GRANT_ID` (D28, #15). Grant funding and provisioning take the request's grant, or the caller's own allocation's grant. Cost sync reads the unfiltered usage feed. A cursor saved with the old grant filter restarts once and skips rows already stored.
+- [x] 2026-10-16: The Railway Batteries image in this repository writes `grants.fund` on the builder-engine credential. Production pushes deploy that image with the signer and the engine.
 - [ ] Finish the attribution re-run: forged-manifest and rejected-ticket cases
       ([m2-attribution-rerun](m2-attribution-rerun.md)).
 
@@ -47,3 +48,4 @@ decision on the gap.
   documented; Mode B deferred to M4 (D17–D23).
 - 2026-10-16: Do not edit `0003` after #9. Persisted projection attempts ship as `0004`.
 - 2026-10-16: Drop the configured grant (D28). An admin may fund any grant it names, because Batteries `grants.fund` already covers every grant and the engine cannot scope it. The usage feed is unfiltered so actors on grants created in the operator desk still reconcile.
+- 2026-10-16: Production Batteries is deployed from this repository. The builder-engine allow list matches `deploy/dev-stack/config/init-secrets.py`, including `grants.fund`. `tests/structure/test_deploy.py` fails when the two lists drift.

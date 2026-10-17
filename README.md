@@ -55,7 +55,7 @@ Configuration, backup/restore and retention are covered in
 
 See [AGENTS.md](AGENTS.md) for the repository map and commands, and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the layers. To run a real node stack locally, see
-[deploy/dev-stack](deploy/dev-stack/README.md). To deploy the engine on Railway, see
+[deploy/dev-stack](deploy/dev-stack/README.md). To deploy Batteries, the signer, and the engine on Railway, see
 [deploy/railway](deploy/railway/README.md).
 
 ## License

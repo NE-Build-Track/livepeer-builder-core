@@ -68,6 +68,14 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest tests/store -q -m "postgres or not postgres"
 
+  railway-compose:
+    name: railway compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The Railway stack compose file parses
+        run: docker compose -f deploy/railway/compose.yaml config --quiet
+
   container:
     name: engine image + container smoke
     runs-on: ubuntu-latest

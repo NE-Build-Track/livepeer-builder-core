@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned, ProviderUnavailable
+from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FakeAllocationManager
@@ -141,7 +142,9 @@ async def test_funding_a_named_grant_applies_once(
         await engine.payments.fund_grant(alice, request)
     await engine.payments.fund_grant(admin, request)
     await engine.payments.fund_grant(admin, request)  # a retry
-    assert manager.funded_grants == [("grant_chosen", usd("10"), "fund-grant:grant_chosen:topup-1")]
+    key = idempotency_key(engine.payments._engine_id, "fund-grant:grant_chosen:topup-1", "fund")
+    assert manager.funded_grants == [("grant_chosen", usd("10"), key)]
+    assert 1 <= len(key) <= 256 and all(character.isalnum() or character in "_-" for character in key)
     with pytest.raises(InvalidRequest):
         await engine.payments.fund_grant(
             admin, FundRequest(amount=usd("0"), operation_ref="zero", grant_id="g")
@@ -161,7 +164,8 @@ async def test_omitted_grant_uses_the_callers_allocation(
     await engine.payments.provision(admin, provision_request(grant_id=""))
     assert manager.last_grant_id == "grant_ops"
     await engine.payments.fund_grant(admin, FundRequest(amount=usd("3"), operation_ref="top"))
-    assert manager.funded_grants == [("grant_ops", usd("3"), "fund-grant:grant_ops:top")]
+    key = idempotency_key(engine.payments._engine_id, "fund-grant:grant_ops:top", "fund")
+    assert manager.funded_grants == [("grant_ops", usd("3"), key)]
 
 
 async def test_a_grant_is_required_when_the_caller_has_no_allocation(

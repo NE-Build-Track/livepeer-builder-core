@@ -177,7 +177,7 @@ class PaymentsService:
         await self._require_manager().fund_grant(
             grant_id,
             request.amount,
-            f"fund-grant:{grant_id}:{request.operation_ref}",
+            idempotency_key(self._engine_id, f"fund-grant:{grant_id}:{request.operation_ref}", "fund"),
         )
 
     async def set_status(

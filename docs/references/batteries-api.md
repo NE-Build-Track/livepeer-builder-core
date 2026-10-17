@@ -17,7 +17,7 @@ Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
 | `create_key_for_grant` | `POST /v1/api-keys` `{grant_id, name, amount_usd \| amount_eth}` | Atomic: a funded allocation plus a key. Returns `{allocation_id, id, api_key}`. Needs `allocations.create` and `.fund` |
 | `create_key` | `POST /v1/api-keys` `{allocation_id, name}` | Key rotation |
 | `fund_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation |
-| `fund_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | `Idempotency-Key` is `fund-grant:{grant_id}:{operation_ref}` |
+| `fund_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | `Idempotency-Key` is `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `list_grants` | `GET /v1/grants` | Operator token. `{items: [...]}` |
 | `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*}` | Operator token. `grants.create` |
 | `set_allocation_status` | `PATCH /v1/allocations/{id}/status` `{status: active \| paused}` | |

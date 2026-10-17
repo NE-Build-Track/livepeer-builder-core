@@ -38,7 +38,7 @@ key of `base64url(sha256(engine_id:operation:step))`.
 | --- | --- | --- |
 | `provision(application, actor, amount, grant_id)` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | per actor; a repeat returns the original |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | per `operation_ref` (required). `grant_id` on this body is ignored |
-| `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | `fund-grant:{grant_id}:{operation_ref}` |
+| `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `list_grants()` | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
 | `create_grant(name, amount)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | a repeat creates another grant |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |

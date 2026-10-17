@@ -122,19 +122,26 @@ allow = ["write"]
         ),
         encoding="utf-8",
     )
-    print(f"batteries kafka bind {bind}", flush=True)
+    print(f"batteries kafka bind {bind}", flush=True)  # noqa: T201
     # Pre-deploy cannot see the volume, so the schema is applied by the process
     # that mounts /data, before Kafka or HTTP start. `serve` migrates again;
     # that second pass is a no-op once this one has reached head.
+    # The binary path is the image COPY destination, not PATH lookup.
     migrated = subprocess.run(
-        ["clearinghouse", "migrate", "up", "--db-path", "/data/clearinghouse.db"],
+        [
+            "/usr/local/bin/clearinghouse",
+            "migrate",
+            "up",
+            "--db-path",
+            "/data/clearinghouse.db",
+        ],
         check=False,
     )
     if migrated.returncode != 0:
         sys.exit(migrated.returncode)
-    os.execvp(
-        "clearinghouse",
-        ["clearinghouse", "serve", "--config-file", str(config_path)],
+    os.execv(  # noqa: S606
+        "/usr/local/bin/clearinghouse",
+        ["/usr/local/bin/clearinghouse", "serve", "--config-file", str(config_path)],
     )
 
 

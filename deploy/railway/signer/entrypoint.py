@@ -151,7 +151,7 @@ def main() -> None:
         encoding="utf-8",
     )
     os.chmod(config_path, 0o600)
-    print(f"signer account {account} orchestrators {len(sources)}", flush=True)
+    print(f"signer account {account} orchestrators {len(sources)}", flush=True)  # noqa: T201
     # The outbox path is absolute. Migrate that file, not the default
     # events.sqlite under the data dir. Pre-deploy has no volume, so this runs
     # in the start container before livepeer-signer opens the outbox.
@@ -161,16 +161,23 @@ def main() -> None:
         encoding="utf-8",
     )
     os.chmod(migrate_config, 0o600)
-    migrated = subprocess.run(
-        ["livepeer-signer", "migrate", "up", "--config", str(migrate_config)],
+    # The binary path is the image COPY destination. migrate_config is written above.
+    migrated = subprocess.run(  # noqa: S603
+        [
+            "/usr/local/bin/livepeer-signer",
+            "migrate",
+            "up",
+            "--config",
+            str(migrate_config),
+        ],
         check=False,
     )
     if migrated.returncode != 0:
         sys.exit(migrated.returncode)
-    os.execvp(
-        "livepeer-signer",
+    os.execv(  # noqa: S606
+        "/usr/local/bin/livepeer-signer",
         [
-            "livepeer-signer",
+            "/usr/local/bin/livepeer-signer",
             "--data-dir",
             "/data/node",
             "--config",

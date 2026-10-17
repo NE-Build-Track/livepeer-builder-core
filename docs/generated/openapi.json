@@ -592,6 +592,11 @@
           "amount": {
             "$ref": "#/components/schemas/Money-Input"
           },
+          "grant_id": {
+            "default": "",
+            "title": "Grant Id",
+            "type": "string"
+          },
           "operation_ref": {
             "maxLength": 200,
             "minLength": 1,

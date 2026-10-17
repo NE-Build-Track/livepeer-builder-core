@@ -11,7 +11,8 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
 | `LPB_SIGNER_URL`, `LPB_DISCOVERY_URL` | unset | Signer (discovery and payment), optional discovery override. Both unset → empty static discovery |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
-| `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`, `LPB_GRANT_ID` | unset | Management API, least-privilege credential, the operator's grant |
+| `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
+| `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Required when `LPB_BATTERIES_URL` is set |
 | `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`). Required to provision in `per_actor` mode |
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |

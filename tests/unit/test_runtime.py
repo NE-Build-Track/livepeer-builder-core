@@ -77,14 +77,15 @@ async def test_default_adapters_follow_settings() -> None:
         batteries_url="https://batteries.example",
         batteries_token="t",
         batteries_operator_token="desk",
-        grant_id="g",
         log_json=False,
     )
     engine = await BuilderEngine.from_settings(settings)
     try:
         assert isinstance(engine.discovery._source, SignerDiscoverySource)
         assert isinstance(engine.payments._manager, BatteriesClient)
-        assert isinstance(engine.costs._worker._source, BatteriesUsageSource)  # type: ignore[union-attr]
+        source = engine.costs._worker._source  # type: ignore[union-attr]
+        assert isinstance(source, BatteriesUsageSource)
+        assert source._filters == {}
     finally:
         await engine.stop()  # closes the owned clients and store
 

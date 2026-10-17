@@ -85,7 +85,10 @@ def test_usd_total_only_when_every_row_is_priced() -> None:
 async def provisioned(make_engine: EngineFactory, admin: ActorContext):  # type: ignore[no-untyped-def]
     engine = await make_engine()
     request = ProvisionRequest(
-        application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(1), currency="ETH"),
+        grant_id="grant_1",
     )
     await engine.payments.provision(admin, request)
     return engine
@@ -99,7 +102,10 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
-            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-sess",))]
@@ -143,7 +149,10 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
-            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
         ),
     )
     allocation = actor.allocation_id
@@ -183,7 +192,10 @@ async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
-            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
         ),
     )
     usage.rows = [row("u1", "sess-1", "0.4", allocation=actor.allocation_id, manifest="m-early")]
@@ -206,7 +218,10 @@ async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
-            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
         ),
     )
     allocation = actor.allocation_id
@@ -240,7 +255,10 @@ async def test_a_forged_manifest_on_another_allocation_stays_unattributed(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
-            application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="ETH")
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-real",))]

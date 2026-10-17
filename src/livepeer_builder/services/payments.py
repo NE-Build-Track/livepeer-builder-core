@@ -51,7 +51,6 @@ class PaymentsService:
         engine_id: str,
         manager: AllocationManager | None = None,
         grants: AllocationManager | None = None,
-        grant_id: str | None = None,
         currency: Currency = "USD",
         shared_secret: SecretRef | None = None,
         shared_allocation_id: str | None = None,
@@ -64,7 +63,6 @@ class PaymentsService:
         self._engine_id = engine_id
         self._manager = manager
         self._grants = grants
-        self._grant_id = grant_id
         self._currency = currency
         self._shared_secret = shared_secret
         self._shared_allocation_id = shared_allocation_id
@@ -110,10 +108,10 @@ class PaymentsService:
         existing = await self._store.get_actor(request.application_id, request.actor_id)
         if existing is not None and existing.status != "revoked":
             return existing
-        manager = self._require_manager()
-        grant_id = request.grant_id or self._grant_id
+        grant_id = await self._resolved_grant(admin, request.grant_id)
         if not grant_id:
-            raise ProviderUnavailable("choose a grant")
+            raise InvalidRequest("choose a grant")
+        manager = self._require_manager()
         operation = f"provision:{request.application_id}:{request.actor_id}"
         if existing is not None:  # re-provisioning after a revoke is a new operation
             operation += f":{existing.updated_at.isoformat()}"
@@ -169,17 +167,17 @@ class PaymentsService:
         return await self._require_grants().create_grant(name.strip(), amount)
 
     async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
-        """Add funds to the configured grant (``LPB_GRANT_ID``). An actor key cannot call this."""
+        """Add funds to the named grant, or to the grant of the caller's own allocation."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         if request.amount.currency != self._currency or request.amount.amount <= 0:
             raise InvalidRequest(f"funding must be a positive amount in {self._currency}")
-        manager = self._require_manager()
-        if self._grant_id is None:
-            raise ProviderUnavailable("no grant_id is configured for provisioning")
-        await manager.fund_grant(
-            self._grant_id,
+        grant_id = await self._resolved_grant(admin, request.grant_id)
+        if not grant_id:
+            raise InvalidRequest("choose a grant")
+        await self._require_manager().fund_grant(
+            grant_id,
             request.amount,
-            f"fund-grant:{self._grant_id}:{request.operation_ref}",
+            idempotency_key(self._engine_id, f"fund-grant:{grant_id}:{request.operation_ref}", "fund"),
         )
 
     async def set_status(
@@ -243,6 +241,18 @@ class PaymentsService:
         updated = actor.model_copy(update={"status": status, "updated_at": self._now()})
         await self._store.save_actor(updated)
         return updated
+
+    async def _resolved_grant(self, actor: ActorContext, requested: str) -> str:
+        """The grant on the request, or the grant of this caller's own allocation."""
+        chosen = requested.strip()
+        if chosen:
+            return chosen
+        if self.mode != "per_actor":
+            return ""
+        provisioned = await self._store.get_actor(actor.application_id, actor.actor_id)
+        if provisioned is None or provisioned.status == "revoked" or not provisioned.grant_id:
+            return ""
+        return provisioned.grant_id
 
     def _require_manager(self) -> AllocationManager:
         if self._manager is None:

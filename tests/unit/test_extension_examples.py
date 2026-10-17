@@ -175,7 +175,7 @@ async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore
         approved={"https://orch.example"},
     )
     engine = await BuilderEngine.from_settings(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", grant_id="grant_1", log_json=False),
+        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
         store=store,
         clock=clock,
         authenticators=[SignedSsoHeaderAuthenticator(SECRET)],  # tried before the engine's API keys
@@ -217,7 +217,10 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     await engine.payments.provision(
         admin,
         ProvisionRequest(
-            application_id="acme", actor_id="alice", amount=Money(amount=Decimal(5), currency="USD")
+            application_id="acme",
+            actor_id="alice",
+            amount=Money(amount=Decimal(5), currency="USD"),
+            grant_id="grant_1",
         ),
     )
     assert vault.audit[0] == ("put", "lpg/acme/alice")  # the payment key went to the enterprise vault

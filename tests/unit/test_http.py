@@ -52,7 +52,7 @@ async def test_job_round_trip_and_admin_boundary(
     assert forbidden.status_code == 403
     provisioned = await client.post(
         "/v1/admin/applications/default/actors/alice/allocation",
-        json={"amount": {"amount": "5", "currency": "USD"}},
+        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"},
         headers=as_admin,
     )
     assert provisioned.status_code == 201

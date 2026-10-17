@@ -84,7 +84,6 @@ async def make_engine(
         values: dict[str, Any] = {
             "database_url": MEMORY_URL,
             "allocation_mode": "per_actor",
-            "grant_id": "grant_1",
             "secret_key": EncryptedDbSecretStore.generate_key(),
             "log_json": False,
         }

@@ -242,7 +242,7 @@ sequenceDiagram
     W->>DB: cost_checkpoint() → resume cursor
     loop pages
         W->>U: page(cursor)
-        U->>Bat: GET /v1/usage?grant_id=…&cursor=…
+        U->>Bat: GET /v1/usage?cursor=…
         alt cursor rejected (400)
             W->>DB: reset the cursor, resync from the start (known rows skipped)
         else page

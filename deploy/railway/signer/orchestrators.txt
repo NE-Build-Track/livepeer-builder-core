@@ -1,0 +1,33 @@
+# One-time extract of address fields from
+# https://signer.pymthouse.com/discover-orchestrators on 2026-10-12.
+# Not refreshed automatically.
+https://ai.stronk.rocks:9994
+https://ai3.pon-eth.com:9191
+https://server.ai-bitbender.xyz:1112
+https://ai3.ultimaratio.link:18937
+https://ai.eventhorizons.cc:8935
+https://ai.vin-node.com:9898
+https://lpt.gzp.link:8888
+https://2.9.173.59:8936
+https://flowlivepeer.go.ro:8936
+https://rtvai.deficrypto.dev:8936
+https://ai.livepeer-utopia.xyz:8935
+https://ai.tinyhoshi.xyz:18936
+https://dd-us6.fastagents.biz:8936
+https://us.legiocorp.link:40916
+https://us.kiloutcorp.link:8935
+https://ai.lpt-3.moudi.network:18936
+https://ai.organic-node.uk:59165
+https://ai-mdw.eliteencoder.net:8936
+https://ai.ad-astra.live:9966
+https://ai1.eliteencoder.net:8936
+https://lpt.sundara.tv:8935
+https://livepeerservice.world:8934
+https://hky.eliteencoder.net:8936
+# Added 2026-10-13 from the discovery-service dataset and the on-chain
+# service registry. Each of these returned JSON from GET /discovery.
+https://2.9.173.59:8935
+https://ai.eliteencoder.net:8936
+https://router.livepeerservice.world:8934
+https://apps.pon-eth.com:8935
+https://orch-us-central.xodeapp.xyz:18935

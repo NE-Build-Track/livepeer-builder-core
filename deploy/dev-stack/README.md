@@ -87,6 +87,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   engine admin may fund any grant it names. `grant-desk` has `grants.read` and `grants.create` for
   `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
   `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine will start.
+  The Railway Batteries image writes the same `builder-engine` list. `tests/structure/test_deploy.py`
+  fails when the two lists drift.
 - **Pinned certificates** are trust-on-first-use and **temporary** (T12). Orchestrators are to serve
   CA-signed certificates (D27); once the ones listed do, drop the script and the `pinned-certs` mount.
   Until then, re-run `config/pin-orchestrator-certs.py` when an orchestrator rotates its certificate,

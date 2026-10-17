@@ -63,7 +63,7 @@ src/livepeer_builder/
   cli.py       `lpb` operator commands
 tests/unit  tests/store  tests/structure
 deploy/dev-stack/   optional payment stack (Batteries + node signer + engine); orchestrators come from the network
-deploy/railway/     Railway engine deploy; preview on other branches, production on main and releases/*
+deploy/railway/     Railway Batteries, signer, and engine; branch pushes deploy the engine, production and a manual run deploy the selected services
 ```
 
 ## Working agreements

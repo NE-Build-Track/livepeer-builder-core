@@ -1,23 +1,34 @@
 # Railway
 
-This directory deploys the engine from this checkout. Batteries and the signer still deploy from
-[gateway-integration-lab](https://github.com/NE-Build-Track/gateway-integration-lab). The local
-payment stack remains [deploy/dev-stack](../dev-stack/README.md).
+This directory deploys Batteries, the signer, and the engine. The local payment stack remains
+[deploy/dev-stack](../dev-stack/README.md). [compose.yaml](compose.yaml) is the same three services
+for a local Docker run. CI checks that file with `docker compose config` and does not start it.
 
-The image is this checkout (`pip install ".[server,postgres]"`), not a pinned clone of the
-repository.
+The engine image is this checkout (`pip install ".[server,postgres]"`), not a pinned clone of the
+repository. Batteries is [eliteprox/clearinghouse-batteries](https://github.com/eliteprox/clearinghouse-batteries)
+`ca09e47`. The signer is [NE-Build-Track/node](https://github.com/NE-Build-Track/node) `9a89797`.
 
 ## What runs
 
-| Railway service | This directory | Still deployed from the lab |
+| Railway service | This directory | Upload |
 | --- | --- | --- |
-| engine | `engine/` | |
-| batteries | | yes |
-| signer | | yes |
-| Postgres | Railway database; not a deploy target | yes |
+| batteries | `batteries/` | `railway up deploy/railway/batteries --path-as-root --service batteries` |
+| signer | `signer/` | `railway up deploy/railway/signer --path-as-root --service signer` |
+| engine | `engine/` | `railway up --service engine` from the repository root |
+| Postgres | Railway database; not a deploy target | |
 
-Each Railway environment already has Batteries, the signer, and the engine's `LPB_*` variables.
-This workflow does not redeploy those services.
+`batteries/entrypoint.py` writes the credential file when the container starts. The `builder-engine`
+credential (`ENGINE_TOKEN`, wired to `LPB_BATTERIES_TOKEN`) includes `grants.fund` and has no
+`grants.*`. That is the same list as `deploy/dev-stack/config/init-secrets.py`.
+`tests/structure/test_deploy.py` fails when they drift. The operator credential (`OPERATOR_TOKEN`,
+wired to `LPB_BATTERIES_OPERATOR_TOKEN`) keeps `grants.*`, so the desk can list and create grants.
+
+A Batteries deploy rewrites that file and restarts the process. An engine deploy does not. Fund
+grant stays `403 Forbidden` until this Batteries image is what production is running.
+
+Each Railway environment already has these services and their variables. The five Batteries tokens
+stay `OPERATOR_TOKEN`, `ENGINE_TOKEN`, `WEBHOOK_TOKEN`, `KAFKA_READER_TOKEN`, and
+`KAFKA_PRODUCER_TOKEN`.
 
 ## Environments
 
@@ -31,23 +42,21 @@ environment secret is missing.
 | `main`, `releases/*` | `production` | production project token |
 | any other branch | `preview` | preview project token |
 
-A push deploys the engine. **Deploy** can also be run by hand for the selected branch. Limit the
-`production` environment's deployment branches to `main` and `releases/*` so a branch job cannot
-select it. Required reviewers on `production` gate that deploy.
-
-The lab still has its own production engine deploy. Until that workflow stops deploying the engine,
-either repository can replace the production engine.
+A push to `main` or `releases/*` deploys Batteries, the signer, and the engine. A push to any other
+branch deploys the engine only, so a preview branch does not restart the shared Batteries and
+signer. **Deploy** can also be run by hand for one service or all three, on the selected branch.
+Limit the `production` environment's deployment branches to `main` and `releases/*` so a branch job
+cannot select it. Required reviewers on `production` gate that deploy.
 
 ## Upload
 
-The job runs:
+The engine job runs `railway up --service engine --ci` with the repository root as the Docker
+context. Uploading only `engine/` would leave the Python package out of the image.
 
-```sh
-railway up --service engine --ci
-```
-
-The repository root is the Docker context. Uploading only `engine/` would leave the Python package
-out of the image.
+Batteries and the signer upload their own directories with `--path-as-root`, so their Railway
+service settings use Dockerfile path `Dockerfile`. Batteries keeps its healthcheck on `/readyz`
+at port `8081`, and both Batteries and the signer keep the `/data` volume. Those settings are
+already on the services. This workflow does not change them.
 
 ## Engine service settings
 

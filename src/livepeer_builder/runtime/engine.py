@@ -144,8 +144,7 @@ class BuilderEngine:
             grants_client = BatteriesClient(settings.batteries_url, operator_token)
             closers.append(grants_client)
         if usage_source is None and settings.batteries_url and token:
-            filters = {"grant_id": settings.grant_id} if settings.grant_id else {}
-            source = BatteriesUsageSource(settings.batteries_url, token, filters=filters)
+            source = BatteriesUsageSource(settings.batteries_url, token)
             usage_source = source
             closers.append(source)
 
@@ -174,7 +173,6 @@ class BuilderEngine:
             engine_id=settings.engine_id,
             manager=allocation_manager,
             grants=grants_client if grants_client is not None else allocation_manager,
-            grant_id=settings.grant_id,
             currency=settings.default_currency,
             shared_secret=shared_ref,
             shared_allocation_id=settings.shared_allocation_id,

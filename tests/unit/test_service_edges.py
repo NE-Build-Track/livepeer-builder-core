@@ -43,8 +43,13 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def provision(actor_id: str = "alice", amount: str = "5") -> ProvisionRequest:
-    return ProvisionRequest(application_id="default", actor_id=actor_id, amount=usd(amount))
+def provision(actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1") -> ProvisionRequest:
+    return ProvisionRequest(
+        application_id="default",
+        actor_id=actor_id,
+        amount=usd(amount),
+        grant_id=grant_id,
+    )
 
 
 # -- payments ------------------------------------------------------------------------------------------
@@ -101,11 +106,13 @@ async def test_provisioning_needs_a_provider_and_a_grant(
         EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False),
         store=store, clock=clock, discovery_source=StaticDiscoverySource(), allocation_manager=FakeAllocationManager(),
     )  # fmt: skip
-    with pytest.raises(ProviderUnavailable, match="choose a grant"):
-        await no_grant.payments.provision(admin, provision())
+    with pytest.raises(InvalidRequest, match="choose a grant"):
+        await no_grant.payments.provision(admin, provision(grant_id=""))
     with pytest.raises(ProviderUnavailable, match="management API"):
-        await no_provider.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
-    with pytest.raises(ProviderUnavailable, match="grant_id"):
+        await no_provider.payments.fund_grant(
+            admin, FundRequest(amount=usd("1"), operation_ref="g", grant_id="grant_1")
+        )
+    with pytest.raises(InvalidRequest, match="choose a grant"):
         await no_grant.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
 
 

@@ -63,7 +63,7 @@ async def test_list_grants_keeps_grant_objects_only() -> None:
                         "name": "ops",
                         "status": "active",
                         "currency": "usd",
-                        "total_units": "10",
+                        "total_usd": "10",
                     },
                     "skip",
                 ]
@@ -87,7 +87,7 @@ async def test_create_grant_returns_the_response_record() -> None:
     def handle(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             201,
-            json={"id": "grant_9", "name": "ops", "status": "active", "currency": "usd", "total_units": "10"},
+            json={"id": "grant_9", "name": "ops", "status": "active", "currency": "usd", "total_usd": "10"},
         )
 
     client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
@@ -301,3 +301,5 @@ def test_settings_from_environment() -> None:
     assert settings.allocation_mode == "per_application" and settings.max_concurrent_jobs == 3
     assert settings.shared_payment_key is not None and "lpg_x" not in repr(settings)
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
+    ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
+    assert "grant_id" not in ignored.model_dump()

@@ -31,7 +31,7 @@ docker compose exec clearinghouse clearinghouse --db-path /data/clearinghouse.db
   grant create --name Dev --sponsor Dev --amount-usd 5 --status active      # note the grant id
 cp .env.example .env && chmod 600 .env     # fill LPB_BATTERIES_TOKEN (secrets/engine-token),
                                            # LPB_BATTERIES_OPERATOR_TOKEN (secrets/grant-desk-token),
-                                           # LPB_GRANT_ID, LPB_SECRET_KEY
+                                           # LPB_SECRET_KEY
 docker compose up -d --build engine
 ```
 
@@ -83,8 +83,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   image needs its ownership fixed once:
   `docker compose run --rm --user 0 engine chown -R 10001:10001 /data`.
 - **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) may
-  `grants.fund` and has no `grants.*`. The engine only funds `LPB_GRANT_ID`. Batteries does not
-  scope that permission to one grant. `grant-desk` has `grants.read` and `grants.create` for
+  `grants.fund` and has no `grants.*`. Batteries does not scope that permission to one grant, and an
+  engine admin may fund any grant it names. `grant-desk` has `grants.read` and `grants.create` for
   `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
   `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine will start.
 - **Pinned certificates** are trust-on-first-use and **temporary** (T12). Orchestrators are to serve

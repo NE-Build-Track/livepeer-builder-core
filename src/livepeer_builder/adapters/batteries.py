@@ -2,8 +2,8 @@
 
 The only module that knows the Batteries wire format. Baseline: eliteprox/clearinghouse-batteries
 ``ca09e47`` (docs/references/upstream-baseline.md). Every route needs the least-privilege management
-credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` the configured grant
-(``LPB_GRANT_ID``). It has no ``grants.*``.
+credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant the engine names.
+It has no ``grants.*``.
 """
 
 import json
@@ -186,12 +186,14 @@ def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
 
 
 def grant_from_item(item: dict[str, Any]) -> GrantRecord:
+    currency = str(item.get("currency", "")).lower()
+    total_key = "total_usd" if currency == "usd" else "total_eth"
     return GrantRecord(
         id=str(item.get("id", "")),
         name=str(item.get("name", "")),
         status=str(item.get("status", "")),
-        currency=str(item.get("currency", "")).upper() or "USD",
-        total=str(item.get("total_units", "")),
+        currency=currency.upper() or "USD",
+        total=str(item.get(total_key, "")),
     )
 
 

@@ -17,8 +17,15 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def provision_request(actor_id: str = "alice", amount: str = "5") -> ProvisionRequest:
-    return ProvisionRequest(application_id="default", actor_id=actor_id, amount=usd(amount))
+def provision_request(
+    actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1"
+) -> ProvisionRequest:
+    return ProvisionRequest(
+        application_id="default",
+        actor_id=actor_id,
+        amount=usd(amount),
+        grant_id=grant_id,
+    )
 
 
 async def test_provisioning_is_explicit_and_admin_only(
@@ -125,22 +132,47 @@ async def test_operator_lists_and_creates_grants(
         await engine.payments.create_grant(admin, "ops", usd("1"))
 
 
-async def test_funding_the_configured_grant_applies_once(
+async def test_funding_a_named_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    request = FundRequest(amount=usd("10"), operation_ref="topup-1", grant_id="grant_chosen")
     with pytest.raises(AccessDenied):
         await engine.payments.fund_grant(alice, request)
     await engine.payments.fund_grant(admin, request)
     await engine.payments.fund_grant(admin, request)  # a retry
-    assert manager.funded_grants == [("grant_1", usd("10"), "fund-grant:grant_1:topup-1")]
-    with pytest.raises(InvalidRequest):
-        await engine.payments.fund_grant(admin, FundRequest(amount=usd("0"), operation_ref="zero"))
+    assert manager.funded_grants == [("grant_chosen", usd("10"), "fund-grant:grant_chosen:topup-1")]
     with pytest.raises(InvalidRequest):
         await engine.payments.fund_grant(
-            admin, FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth")
+            admin, FundRequest(amount=usd("0"), operation_ref="zero", grant_id="g")
         )
+    with pytest.raises(InvalidRequest):
+        await engine.payments.fund_grant(
+            admin,
+            FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth", grant_id="g"),
+        )
+
+
+async def test_omitted_grant_uses_the_callers_allocation(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    await engine.payments.provision(admin, provision_request(actor_id="operator", grant_id="grant_ops"))
+    await engine.payments.provision(admin, provision_request(grant_id=""))
+    assert manager.last_grant_id == "grant_ops"
+    await engine.payments.fund_grant(admin, FundRequest(amount=usd("3"), operation_ref="top"))
+    assert manager.funded_grants == [("grant_ops", usd("3"), "fund-grant:grant_ops:top")]
+
+
+async def test_a_grant_is_required_when_the_caller_has_no_allocation(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await make_engine()
+    missing = provision_request(grant_id="")
+    with pytest.raises(InvalidRequest, match="choose a grant"):
+        await engine.payments.provision(admin, missing)
+    with pytest.raises(InvalidRequest, match="choose a grant"):
+        await engine.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
 
 
 async def test_revoke_forgets_the_key(

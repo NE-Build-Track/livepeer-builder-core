@@ -40,7 +40,11 @@ ALLOCATION = "/v1/admin/applications/default/actors/alice/allocation"
 async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
     assert (
-        await client.post(ALLOCATION, json={"amount": {"amount": "0", "currency": "USD"}}, headers=admin)
+        await client.post(
+            ALLOCATION,
+            json={"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1"},
+            headers=admin,
+        )
     ).status_code == 201
     funded = await client.post(
         ALLOCATION + "/fund",
@@ -84,16 +88,21 @@ async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ig
 
 
 async def test_grant_fund_is_admin_only(api) -> None:  # type: ignore[no-untyped-def]
-    client, _engine, admin, alice = api
-    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
+    client, engine, admin, alice = api
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
     assert (await client.post("/v1/admin/grant/fund", json=body, headers=alice)).status_code == 403
+    missing = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g2"}
+    assert (await client.post("/v1/admin/grant/fund", json=missing, headers=admin)).status_code == 400
     funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
     assert funded.status_code == 204 and funded.content == b""
+    assert engine.payments._manager.funded_grants[0][0] == "grant_chosen"  # type: ignore[union-attr]
 
 
 async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTransport) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
-    await client.post(ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}}, headers=admin)
+    await client.post(
+        ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"}, headers=admin
+    )
     keys = (await client.get("/v1/admin/keys", headers=admin)).json()
     assert {k["kind"] for k in keys} == {"admin", "actor"}
     transport.steps = [ScriptedTransport.ok()]
@@ -119,7 +128,9 @@ async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTrans
 
 async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     client, engine, admin, alice = api
-    await client.post(ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}}, headers=admin)
+    await client.post(
+        ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"}, headers=admin
+    )
 
     transport.steps = [
         RunnerCallError("http", "bad input", payment_sent=True, status_code=422, body="field x")

@@ -31,7 +31,7 @@ class ProvisionRequest(Contract):
     actor_id: str
     amount: Money  # may be zero: identity without money; fund later with an explicit command
     label: str = ""
-    grant_id: str = ""  # empty uses the configured grant; the admin UI always sends one
+    grant_id: str = ""  # empty uses the grant of the caller's own allocation
 
 
 class GrantRecord(Contract):
@@ -60,6 +60,7 @@ class ProvisionedActor(Contract):
 class FundRequest(Contract):
     amount: Money
     operation_ref: str = Field(min_length=1, max_length=200)  # required: makes a retried fund safe
+    grant_id: str = ""  # grant funding only; allocation funding ignores it
 
 
 class Allowance(Contract):

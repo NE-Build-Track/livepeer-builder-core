@@ -2,8 +2,9 @@
 
 ## Status
 
-Owners: John, Mike. GitHub: #8. **Contracts drafted in this scaffold; waiting on John's idempotency
-PR and Mike's review.**
+Owners: John, Mike. GitHub: #8. **Closed by Mike on 19 October.** The contracts are on
+`releases/final`. The final idempotency rules (D11, T2) carry forward to M3 (ISS-14, ISS-23); until
+then the interim 409 behavior stands.
 
 ## Goal
 
@@ -22,15 +23,16 @@ explicitly.
 - [x] Events feed (defined; M3): [contracts/events.md](../../contracts/events.md)
 - [x] Deployment, performance and recovery assumptions: [engine.md](../../contracts/engine.md#deployment-performance-and-recovery-assumptions)
 - [x] Examples: tests in `tests/unit/` and the generated OpenAPI schema
-- [ ] Idempotency semantics finalized by John's PR (D11)
-- [ ] Mike's review
+- [ ] Idempotency semantics finalized by John's PR (D11): carried forward to M3 (ISS-14, ISS-23; T2)
+- [x] Mike's review (closed 19 October)
 
 ## Progress
 
 - [x] 2026-10-12: Scaffolded contracts, protocols and docs. The attempt is written before the call;
       restart recovery and admission limits are implemented.
 - [x] 2026-10-12: Failover on an orchestrator-specific signer refusal before payment (D26).
-- [ ] Merge John's idempotency PR; update [engine.md#idempotency](../../contracts/engine.md#idempotency).
+- [x] 2026-10-19: Closed by Mike. John's idempotency PR and the [engine.md#idempotency](../../contracts/engine.md#idempotency)
+      update move to M3 (T2).
 
 ## Decision log
 

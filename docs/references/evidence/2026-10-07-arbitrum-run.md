@@ -1,6 +1,6 @@
 # Runtime evidence: real-node attribution run, 7 October 2026
 
-> **Provenance:** copied from `eliteprox/livepeer-core` `docs/evidence/2026-10-07-arbitrum-run.md` at `bbe1253` (John). It predates the 12 October baseline: go-livepeer v0.9.3 and Batteries `9312212`, not livepeer/node and `ca09e47`. The re-run is tracked in [m2-attribution-rerun](../../exec-plans/active/m2-attribution-rerun.md).
+> **Provenance:** copied from `eliteprox/livepeer-core` `docs/evidence/2026-10-07-arbitrum-run.md` at `bbe1253` (John). It predates the 12 October baseline: go-livepeer v0.9.3 and Batteries `9312212`, not livepeer/node and `ca09e47`. The re-run is tracked in [m2-attribution-rerun](../../exec-plans/completed/m2-attribution-rerun.md).
 
 
 Arbitrum One. The signer and orchestrator are `livepeer/go-livepeer:v0.9.3`. Batteries is a local build of `livepeer/clearinghouse-batteries` at `9312212`. The proof scripts import `livepeer-gateway` at `3250c08` (`eliteprox/feat/call-runner-manifest-id`). The account `0x0074780FefF1FD0277FAD6ccdb5a29908df6051F` had a broadcaster deposit of 0.014424 ETH and a reserve of 0.0496 ETH. It is not an active orchestrator in round 4363, so the orchestrator rejected tickets after the signer had already published them. Batteries still applied those charges. The public RPC refused archive `eth_getLogs` calls; signing did not depend on that.

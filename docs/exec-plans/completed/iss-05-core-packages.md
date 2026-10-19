@@ -2,8 +2,8 @@
 
 ## Status
 
-Owners: John, Mike. GitHub: #11. **Meets the acceptance on `releases/m2`, with CI green; waiting on
-Josh's code review and the SDK re-pin (T1).**
+Owners: John, Mike. GitHub: #11. **Closed by Mike on 19 October.** The acceptance is met on
+`releases/final`. Josh's code review and the SDK re-pin (T1) carry forward to M3 (ISS-12).
 
 ## Goal
 
@@ -20,7 +20,8 @@ against a versioned development build.
 - [x] SDK dependency pinned so an installed build gets #77 (`on_payment_session`, `manifest_id`); see tech debt T1
 - [x] `lpb smoke` import/start/health/stop check
 - [x] The CI clean-install job is green on a versioned dev build (ISS-07)
-- [ ] Josh's code review; Mike's review
+- [x] Mike's review (closed 19 October)
+- [ ] Josh's code review: carried forward to M3
 
 ## Progress
 

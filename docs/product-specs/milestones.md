@@ -9,8 +9,8 @@ issues and gate evidence are accepted. Nothing closes without Mike's review.
 | Milestone | Gate | Target |
 | --- | --- | --- |
 | M1: Define and approve the architecture | September planning evidence; architecture and executive summary approved | Done (30 Sep) |
-| **M2: Foundation and integration contracts** | **Source baseline, shared/access/payment contracts, importable core, SQLite evidence, and development build checks are reviewable** | **16 Oct 2026** |
-| M3: Complete builder journey | One minimum-app journey demonstrates all seven outcomes, with funded execution and correlated network-cost evidence | — |
+| M2: Foundation and integration contracts | Source baseline, shared/access/payment contracts, importable core, SQLite evidence, and development build checks are reviewable | Done (19 Oct; target 16 Oct). Carried-forward items: [m2-traceability](m2-traceability.md#carried-forward-to-m3) |
+| **M3: Complete builder journey** | **One minimum-app journey demonstrates all seven outcomes, with funded execution and correlated network-cost evidence** | **20 Nov 2026** |
 | M4: Reuse and reliability | Remaining execution modes, REST/MCP and embedded/service coverage, enterprise auth replacement, both payment configurations, failure/recovery evidence | — |
 | M5: Independent installation and release | Final artifacts, documentation, clean-environment reproduction, acceptance evidence | — |
 

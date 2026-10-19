@@ -1,0 +1,62 @@
+# Production-shaped stack: Batteries, the signer, and the engine.
+# CI checks this file with `docker compose config`. It does not start the stack.
+# Tokens are the same five the Railway Batteries service already has.
+# KAFKA_BIND defaults to all interfaces so compose does not need a unique-local address.
+# Railway leaves KAFKA_BIND unset and the entrypoint binds the container's ULA.
+name: livepeer-builder-railway
+
+services:
+  batteries:
+    build:
+      context: ./batteries
+    environment:
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
+      ENGINE_TOKEN: ${ENGINE_TOKEN:-}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-}
+      KAFKA_READER_TOKEN: ${KAFKA_READER_TOKEN:-}
+      KAFKA_PRODUCER_TOKEN: ${KAFKA_PRODUCER_TOKEN:-}
+      KAFKA_BIND: ${KAFKA_BIND:-0.0.0.0:9092}
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - batteries-data:/data
+
+  signer:
+    build:
+      context: ./signer
+    environment:
+      BATTERIES_PRIVATE_HOST: batteries
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-}
+      KAFKA_PRODUCER_TOKEN: ${KAFKA_PRODUCER_TOKEN:-}
+      SIGNER_ACCOUNT: ${SIGNER_ACCOUNT:-}
+      SIGNER_RPC_URL: ${SIGNER_RPC_URL:-}
+      SIGNER_KEYSTORE_JSON: ${SIGNER_KEYSTORE_JSON:-}
+      SIGNER_KEYSTORE_PASSWORD: ${SIGNER_KEYSTORE_PASSWORD:-}
+    depends_on:
+      - batteries
+    volumes:
+      - signer-data:/data
+
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/railway/engine/Dockerfile
+    environment:
+      LPB_DATABASE_URL: ${LPB_DATABASE_URL:-sqlite+aiosqlite:////data/livepeer-builder.db}
+      LPB_BATTERIES_URL: http://batteries:8081
+      LPB_BATTERIES_TOKEN: ${ENGINE_TOKEN:-}
+      LPB_BATTERIES_OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
+      LPB_SIGNER_URL: http://signer:8937
+      LPB_SECRET_KEY: ${LPB_SECRET_KEY:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - engine-data:/data
+    depends_on:
+      - batteries
+      - signer
+
+volumes:
+  batteries-data:
+  signer-data:
+  engine-data:

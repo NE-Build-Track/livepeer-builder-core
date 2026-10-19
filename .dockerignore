@@ -1,0 +1,22 @@
+# Keep the engine image to what `pip install .` needs. .git stays: hatch-vcs derives the version from it.
+# Never send local secrets, environments or caches into a build context.
+deploy/dev-stack/secrets/
+deploy/dev-stack/.env
+deploy/dev-stack/config/pinned-certs/
+**/.env
+.venv/
+dist/
+build/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
+*.db
+*.db-wal
+*.db-shm
+*.db.bak

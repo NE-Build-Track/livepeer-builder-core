@@ -59,11 +59,11 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 ## Upstream interfaces (H1–H6)
 
-| Ref | Interface | Status (14 October) |
+| Ref | Interface | Status (19 October) |
 | --- | --- | --- |
-| H1 | Python gateway SDK | Pinned to [livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) `e6d243b` (`on_payment_session` reports `manifest_id`; no signer-state decoding). **Open:** merge into `main`, then re-pin (T1). #70 and multipart deferred |
+| H1 | Python gateway SDK | Pinned to [livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) `e6d243b`, fetched from NE-Build-Track (`on_payment_session` reports `manifest_id`; no signer-state decoding). **Open:** merge into `main`, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
-| H3 | Remote signer and orchestrator/Live Runner | livepeer/node `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
+| H3 | Remote signer and orchestrator/Live Runner | NE-Build-Track/node `406b248` (v1.0.2) in the dev stack and on Railway. It includes `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | H5 | Source access and permitted reuse | Done (ISS-01): simple-infra reviewed; nothing private reused |
 | H6 | Scope and final acceptance | Mike's review per ticket; procedure open for M5 |

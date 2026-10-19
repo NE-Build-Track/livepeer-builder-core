@@ -31,6 +31,8 @@ decision on the gap.
       with tests.
 - [x] 2026-10-14: Paid jobs on public orchestrators with no shim; reconciliation balanced
       ([evidence](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)).
+- [x] 2026-10-19: Session-log attribution shown live on the NE-Build-Track pins: entries `matched`,
+      reconciliation `balanced`, grant funding through the engine (D28) ([evidence](../../references/evidence/2026-10-19-dev-stack-session-log.md)).
 - [x] 2026-10-16: Cost sync became the sole projection writer; cost reads now use persisted
       projections, including attempt-level classifications. The attempt list is migration `0004`.
       Revision `0003` stays the session-log migration and still drops `lpb_attempt_auth_ids`.

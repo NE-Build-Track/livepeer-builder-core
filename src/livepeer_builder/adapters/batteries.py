@@ -1,6 +1,6 @@
 """Clearinghouse Batteries: management API (AllocationManager) and usage feed (UsageSource).
 
-The only module that knows the Batteries wire format. Baseline: eliteprox/clearinghouse-batteries
+The only module that knows the Batteries wire format. Baseline: NE-Build-Track/clearinghouse-batteries
 ``ca09e47`` (docs/references/upstream-baseline.md). Every route needs the least-privilege management
 credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant the engine names.
 It has no ``grants.*``.

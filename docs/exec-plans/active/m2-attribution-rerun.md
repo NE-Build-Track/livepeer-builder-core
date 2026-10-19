@@ -17,12 +17,13 @@ and the SDK with #71, driving it through this engine instead of prototype script
 - [ ] A forged `manifest_id` on another allocation stays `unattributed` (covered in `test_a_forged_manifest_on_another_allocation_stays_unattributed`; the live re-run is still open)
 - [ ] A rejected-ticket charge is classified `failed_after_payment`
 - [x] A public orchestrator the node signer accepts (14 October: speedybird and xode)
-- [x] Results recorded: [2026-10-12-dev-stack-paid-run](../../references/evidence/2026-10-12-dev-stack-paid-run.md), [2026-10-14-dev-stack-public-orchestrators](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)
+- [x] Results recorded: [2026-10-12-dev-stack-paid-run](../../references/evidence/2026-10-12-dev-stack-paid-run.md), [2026-10-14-dev-stack-public-orchestrators](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md), [2026-10-19-dev-stack-session-log](../../references/evidence/2026-10-19-dev-stack-session-log.md)
 
 ## Progress
 
 - [x] 2026-10-12: Paid run with livepeer/node, Batteries `ca09e47`, `xode` (guarded) and the mock Live Runner. Found T9.
 - [x] 2026-10-14: Paid run on node `f970be6` against public orchestrators: three jobs `delivered`, reconciliation `balanced`, no shims.
+- [x] 2026-10-19: Paid run with session-log attribution (#9) on node v1.0.2 and the NE-Build-Track pins: three jobs `delivered`, every session-log entry `matched`, reconciliation `balanced`.
 
 ## Decision log
 

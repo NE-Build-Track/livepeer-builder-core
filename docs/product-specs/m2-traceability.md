@@ -1,6 +1,6 @@
 # M2 traceability: tickets → code → tests → docs
 
-Status as of 14 October 2026 (`releases/m2`, CI green). Update this file in the same
+Status as of 19 October 2026 (`releases/m2`, CI green). Update this file in the same
 change that moves a ticket.
 
 ## ISS-01: Integration baseline (accepted 12 October)
@@ -8,7 +8,7 @@ change that moves a ticket.
 | Need | Where |
 | --- | --- |
 | Pinned revisions | [references/upstream-baseline.md](../references/upstream-baseline.md); `pyproject.toml` (SDK pin) |
-| Behavior rechecked; runtime evidence | [evidence/2026-10-07-arbitrum-run.md](../references/evidence/2026-10-07-arbitrum-run.md), [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md), [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md) |
+| Behavior rechecked; runtime evidence | [evidence/2026-10-07-arbitrum-run.md](../references/evidence/2026-10-07-arbitrum-run.md), [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md), [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md), [evidence/2026-10-19-dev-stack-session-log.md](../references/evidence/2026-10-19-dev-stack-session-log.md) |
 | Upstream wire formats relied on | [batteries-api.md](../references/batteries-api.md), [node-signer.md](../references/node-signer.md), [sdk-gateway.md](../references/sdk-gateway.md) |
 | **Open follow-ups** | Re-run attribution without workarounds ([m2-attribution-rerun](../exec-plans/active/m2-attribution-rerun.md)); T10 and T11 resolved; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)). Forged-manifest and rejected-ticket cases remain. A caller-owned reference is T13 |
 
@@ -50,7 +50,7 @@ change that moves a ticket.
 | Least-privilege management credential | `deploy/dev-stack/config/init-secrets.py` | dev-stack run | [batteries-api.md](../references/batteries-api.md) |
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |
 | Stable references (session log → `payment_session_id`) | `services/costs.py::classify`, `store/matching.py`, `lpb_payment_sessions` | `test_failed_after_payment_and_forged_manifest_reconcile`, `test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed` | [payments.md#correlation](../contracts/payments.md#correlation) |
-| Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) and [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md): balanced reconciliation |
+| Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) and [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md), [evidence/2026-10-19-dev-stack-session-log.md](../references/evidence/2026-10-19-dev-stack-session-log.md): balanced reconciliation |
 | **Open** | SDK #77 merge into `main` (T1); a caller-owned reference so `manifest_id` is a label only (T13); Mode B (M4) | | |
 
 ## ISS-05: Core packages

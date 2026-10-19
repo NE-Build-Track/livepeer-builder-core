@@ -9,7 +9,7 @@ services:
   clearinghouse:
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/clearinghouse:ca09e47
     build:
-      context: https://github.com/eliteprox/clearinghouse-batteries.git#ca09e47c067682fb48c3f15425546fb6aa5b6659
+      context: https://github.com/NE-Build-Track/clearinghouse-batteries.git#ca09e47c067682fb48c3f15425546fb6aa5b6659
       dockerfile: examples/compose/Dockerfile
     command: [serve, --config-file, /etc/clearinghouse.toml]
     volumes:
@@ -22,9 +22,9 @@ services:
       retries: 12
 
   signer:
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:f970be6
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:406b248
     build:
-      context: https://github.com/livepeer/node.git#f970be644c55e41f77ef3ee8f085f516074f4cc8
+      context: https://github.com/NE-Build-Track/node.git#406b248f6cb8728e6e7eba1809901f589060bc6b
       dockerfile: docker/Dockerfile
     user: "0:0"  # dev only: lets the container read bind-mounted secrets regardless of host uid
     network_mode: service:clearinghouse  # Kafka and the webhook listen on this namespace's loopback

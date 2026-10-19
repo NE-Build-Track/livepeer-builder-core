@@ -1,9 +1,9 @@
-# NE-Build-Track/node releases/m2 (VERSION 1.0.1). Includes f970be6 (TicketParams.Recipient).
-# The dev stack still builds livepeer/node f970be6 from docker/Dockerfile.
+# NE-Build-Track/node releases/final (VERSION 1.0.2). Includes f970be6 (TicketParams.Recipient).
+# The dev stack builds the same commit from docker/Dockerfile.
 # This image adds the Railway entrypoint. The dev stack bind-mounts signer.toml.
 FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS build
 ARG NODE_REPO=https://github.com/NE-Build-Track/node.git
-ARG NODE_REF=9a89797336450c1f1d21a9b55ef8a4cef18e1273
+ARG NODE_REF=406b248f6cb8728e6e7eba1809901f589060bc6b
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOENV=off GOWORK=off \
     GOFLAGS=-mod=readonly GOAMD64=v1 GOARM64=v8.0
 WORKDIR /src

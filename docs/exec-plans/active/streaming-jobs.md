@@ -2,9 +2,9 @@
 
 ## Status
 
-Owner: Mike. Ticket: to be filed (new M3 ticket; touches ISS-14 immediate execution, ISS-20 REST,
-ISS-28 failure classification). Branch `tasks/m3/mz/stream-support` off `releases/m3`. **Draft for
-review by Mike, John and Josh; nothing implemented yet.** Requested by the first enterprise reference
+Owner: Mike. Ticket: Mike is filing it (new M3 ticket; touches ISS-14 immediate execution, ISS-20 REST,
+ISS-28 failure classification). Branch `tasks/m3/mz/stream-support` off `releases/m3`. **Implemented and
+shown live on 19 October; awaiting Mike's review and Josh's review of the engine code. Not merged.** Requested by the first enterprise reference
 app (ChatLPT, `NE-Build-Track/chatlpt-sample-enterprise-app`), whose design note is the origin of
 this plan: `docs/design-docs/streaming-through-the-engine.md` in that repository.
 
@@ -34,13 +34,15 @@ LLM's server-sent events, synthesized audio and ndjson progress all ride the sam
 - [x] REST: `POST /v1/jobs` with `Accept: text/event-stream` or `"stream": true` streams the body
       unbuffered with `Livepeer-Job-Id` in the headers; errors before the first byte use the existing
       failure mapping; errors after the first byte end the response and the job record carries the outcome.
-- [ ] Cost sync attributes a streamed job's rounds exactly as today (many signings, one manifest);
-      reconciliation balances in a live run; evidence page written.
+- [x] Cost sync attributes a streamed job's rounds exactly as today (many signings, one manifest);
+      reconciliation balances in a live run; evidence page written
+      ([2026-10-19-streaming-live](../../references/evidence/2026-10-19-streaming-live.md)).
 - [x] `Runner` gains `version`, `gpu` and `metadata` from the discovery entry (pass-through; the
       engine never interprets `metadata`). ChatLPT showed on 19 October that the chat runner publishes
       `{"model_id": "Qwen3.8-27B", "max_context": 131072}` there.
-- [ ] `docs/contracts/engine.md` gains a "Streaming" section and the outcome table; `lpb gen-docs`
-      regenerated; `docs/design-docs/m2-decisions.md` untouched, the decision recorded in an M3 log.
+- [x] `docs/contracts/engine.md` gains a "Streaming" section and the outcome table; `lpb gen-docs`
+      regenerated; `docs/design-docs/m2-decisions.md` untouched, the decisions recorded in
+      [m3-decisions.md](../../design-docs/m3-decisions.md) (D29–D33).
 - [x] Unit tests with a scripted streaming transport that yields chunks and fails at chosen points;
       structure tests unchanged; coverage floors hold.
 - [ ] Mike's review; Josh's review of the engine code.
@@ -157,6 +159,10 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
 - [x] 2026-10-19: contracts, protocols (`RunnerStream`, optional `StreamingRunnerTransport`), `JobService.stream`
       and `JobStream`, the SDK transport's `open`, the REST streaming branch, runner `version`/`metadata`/`gpu`,
       scripted stream fakes and the outcome-table tests. No migration: `lpb_attempts.outcome` is a string column.
+      472 tests, coverage 97.7%, floors held. Commit `ebedff1`.
+- [x] 2026-10-19: live on the network: a stream read to the end (`succeeded`, 12 chunks in 1.3 s) and one
+      abandoned (`uncertain`/`abandoned`), both costs attributed and matched, reconciliation balanced
+      ([evidence](../../references/evidence/2026-10-19-streaming-live.md)). Spend about $0.00022.
 
 ## Decision log
 

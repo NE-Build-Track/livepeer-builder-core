@@ -3,10 +3,11 @@
 ## Status
 
 Owners: John, Mike. GitHub: #10. **Decided on 12 October; contract and implementation are in this
-scaffold.** Paid jobs on public orchestrators reconciled on 14 October. The correlation key is
-resolved (D20, T11): the SDK reports `manifest_id` ([#77](https://github.com/livepeer/livepeer-python-gateway/pull/77))
-and the session log resolves it to `payment_session_id`. Still waiting on the SDK merge (T1) and a
-caller-owned reference (T13).
+scaffold.** **Closed by Mike on 19 October.** The session log resolves each
+`manifest_id` reported by the SDK ([#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)) to a
+`payment_session_id` (D20, T11), shown live on 19 October. Carried forward to M3: the SDK merge and
+re-pin (T1, ISS-12), the ManifestID question (T13, ISS-16) and the forged-manifest and rejected-ticket
+live cases (ISS-16).
 
 ## Goal
 
@@ -23,7 +24,7 @@ decision on the gap.
 - [x] Repeat-command semantics (idempotency keys; replays)
 - [x] Batteries gaps delivered upstream (#5, #6, #7)
 - [x] SDK [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) (formerly #71 and eliteprox#5): reports `manifest_id`, no signer-state decoding. Merge into `main` is T1
-- [ ] Mike's review
+- [x] Mike's review (closed 19 October)
 
 ## Progress
 
@@ -42,7 +43,7 @@ decision on the gap.
 - [x] 2026-10-16: Removed `LPB_GRANT_ID` (D28, #15). Grant funding and provisioning take the request's grant, or the caller's own allocation's grant. Cost sync reads the unfiltered usage feed. A cursor saved with the old grant filter restarts once and skips rows already stored.
 - [x] 2026-10-16: The Railway Batteries image in this repository writes `grants.fund` on the builder-engine credential. Production pushes deploy that image with the signer and the engine.
 - [ ] Finish the attribution re-run: forged-manifest and rejected-ticket cases
-      ([m2-attribution-rerun](m2-attribution-rerun.md)).
+      ([m2-attribution-rerun](m2-attribution-rerun.md)). Carried forward to M3 (ISS-16).
 
 ## Decision log
 

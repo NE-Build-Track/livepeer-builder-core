@@ -22,7 +22,7 @@ reuse permissions and gaps.
 ## Progress
 
 - [x] 2026-10-12: decisions recorded; summary posted on #7 for Mike to close.
-- [ ] Re-run the attribution evidence on the new baseline: [active/m2-attribution-rerun.md](../active/m2-attribution-rerun.md)
+- [ ] Re-run the attribution evidence on the new baseline: [completed/m2-attribution-rerun.md](m2-attribution-rerun.md)
 
 ## Decision log
 

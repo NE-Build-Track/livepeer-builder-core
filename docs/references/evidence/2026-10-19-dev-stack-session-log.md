@@ -48,6 +48,6 @@ ledger, signer state and engine database. The engine applied migrations `0001`â€
 ## Not covered
 
 - A forged `manifest_id` and a rejected-ticket charge (open items in
-  [m2-attribution-rerun](../../exec-plans/active/m2-attribution-rerun.md)).
+  [m2-attribution-rerun](../../exec-plans/completed/m2-attribution-rerun.md)).
 - An ambiguous manifest (T13): no manifest mapped to more than one session in this run.
 - xode, open-pool and hky: no job was routed to them.

@@ -49,6 +49,11 @@ dev = [
 source = "vcs"
 fallback-version = "0.0.0"
 
+# Only `v*` tags set the version, so descriptive label tags (such as a milestone name) can sit
+# on the same commit without breaking builds.
+[tool.hatch.version.raw-options.scm.git]
+describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"]
+
 [tool.hatch.metadata]
 allow-direct-references = true
 

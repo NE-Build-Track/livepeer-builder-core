@@ -2,7 +2,7 @@
 
 ## Status
 
-Owner: John. Follow-up to ISS-01 (decision 6 on #7). **Clean funded pass on public orchestrators done on 14 October (T9 and T10 resolved). The forged-manifest and rejected-ticket cases remain.**
+Owner: John. Follow-up to ISS-01 (decision 6 on #7). **Closed with M2 on 19 October.** Clean funded passes on public orchestrators on 14 October (`auth_id`) and 19 October (session log). The forged-manifest and rejected-ticket live cases carry forward to M3 (ISS-16); both are covered by unit tests.
 
 ## Goal
 
@@ -14,8 +14,8 @@ and the SDK with #71, driving it through this engine instead of prototype script
 - [x] Stack from [deploy/dev-stack](../../../deploy/dev-stack/README.md) with pins recorded
 - [x] Per-actor spend equals Batteries `spent_*` (reconciliation `balanced`, 12 October, with the T9 shim)
 - [x] The same, without the shim (14 October: node `f970be6`, SDK PR 5; reconciliation `balanced`)
-- [ ] A forged `manifest_id` on another allocation stays `unattributed` (covered in `test_a_forged_manifest_on_another_allocation_stays_unattributed`; the live re-run is still open)
-- [ ] A rejected-ticket charge is classified `failed_after_payment`
+- [ ] A forged `manifest_id` on another allocation stays `unattributed` (covered in `test_a_forged_manifest_on_another_allocation_stays_unattributed`; the live re-run carries forward to M3, ISS-16)
+- [ ] A rejected-ticket charge is classified `failed_after_payment` (unit-tested; live case carried forward to M3, ISS-16)
 - [x] A public orchestrator the node signer accepts (14 October: speedybird and xode)
 - [x] Results recorded: [2026-10-12-dev-stack-paid-run](../../references/evidence/2026-10-12-dev-stack-paid-run.md), [2026-10-14-dev-stack-public-orchestrators](../../references/evidence/2026-10-14-dev-stack-public-orchestrators.md), [2026-10-19-dev-stack-session-log](../../references/evidence/2026-10-19-dev-stack-session-log.md)
 

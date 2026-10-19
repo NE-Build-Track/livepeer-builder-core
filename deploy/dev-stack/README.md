@@ -7,7 +7,7 @@ the payment side and the engine:
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | livepeer/node `f970be6` remote signer. It discovers and pays the orchestrators listed in `config/signer.toml` |
+| `signer` | NE-Build-Track/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It discovers and pays the orchestrators listed in `config/signer.toml` |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080` |
 
 Upstream sources are built from the M2 baseline commits
@@ -57,8 +57,15 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
 
 Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliation?actor_id=alice`.
 
-## Status (14 October)
+## Status (19 October)
 
+- **Session-log attribution works live** on node v1.0.2 and the NE-Build-Track pins: entries
+  `matched`, reconciliation `balanced` ([evidence](../../docs/references/evidence/2026-10-19-dev-stack-session-log.md)).
+- **Stacks created before 16 October** lack the `grant-desk` credential, and their `builder-engine`
+  credential lacks `grants.fund`. Add both to `secrets/clearinghouse.toml` (as `config/init-secrets.py`
+  writes them), save the grant-desk secret as `secrets/grant-desk-token`, set
+  `LPB_BATTERIES_OPERATOR_TOKEN` in `.env`, and recreate `clearinghouse` and `engine`. The engine
+  refuses to start without the operator token.
 - **T10 resolved:** the signer at `f970be6` pays orchestrators whose ticket recipient differs from
   their node address. Paid jobs on public orchestrators succeed and reconcile.
 - **T9 resolved:** SDK PR 5 reads node's lower-case `"state"` key, so attempts record their `auth_id`

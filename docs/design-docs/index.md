@@ -3,6 +3,7 @@
 | Document | Status | Verified against code |
 | --- | --- | --- |
 | [core-beliefs.md](core-beliefs.md) | Accepted | Partly enforced by `tests/structure/` |
+| [m3-decisions.md](m3-decisions.md) | Decisions after the M2 close-out: streaming, abandoned streams, runner metadata | yes |
 | [m2-decisions.md](m2-decisions.md) | Accepted 12 October 2026 | Yes. Each decision names where it lives |
 | [m2-review-2026-10-12.md](m2-review-2026-10-12.md) | Record of the 12 October review: findings, prototype defects and their guards | Yes |
 | [extending-the-engine.md](extending-the-engine.md) | How enterprises replace the defaults through the interfaces: class diagrams, wiring, rules, runnable examples | Yes. Examples run in `tests/unit/test_extension_examples.py` |

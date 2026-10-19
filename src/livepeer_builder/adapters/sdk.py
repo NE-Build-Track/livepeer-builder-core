@@ -8,6 +8,7 @@ signs, just before the paid request goes out. The adapter derives ``manifest_ids
 """
 
 import json
+from collections.abc import AsyncIterator
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -20,10 +21,22 @@ from livepeer_gateway.errors import (
     SignerRefreshRequired,
     SkipPaymentCycle,
 )
-from livepeer_gateway.live_runner import LiveRunnerInstance, LiveRunnerPriceInfo, call_runner
+from livepeer_gateway.live_runner import (
+    LiveRunnerCallStream,
+    LiveRunnerInstance,
+    LiveRunnerPriceInfo,
+    call_runner,
+)
 from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
 
-from livepeer_builder.contracts import AttemptOutcome, JobRequest, NetworkRate, Runner, RunnerReply
+from livepeer_builder.contracts import (
+    AttemptOutcome,
+    JobRequest,
+    NetworkRate,
+    Runner,
+    RunnerGPU,
+    RunnerReply,
+)
 from livepeer_builder.errors import RunnerCallError
 
 _BODY_LIMIT = 4096
@@ -83,7 +96,9 @@ class SdkRunnerTransport:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
 
-    async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply:
+    def _call_kwargs(
+        self, runner: Runner, request: JobRequest, credential: str | None, sessions: "_SignedSessions"
+    ) -> tuple[str, dict[str, Any]]:
         paid = credential is not None and self._signer_url is not None
         instance = LiveRunnerInstance(
             url=runner.url,
@@ -95,19 +110,23 @@ class SdkRunnerTransport:
             price_info=_price_info(runner.rate),
         )
         url = runner.url.rstrip("/") + request.path
+        kwargs: dict[str, Any] = {
+            "runner": instance,
+            "payload": request.payload,
+            "method": request.method,
+            "signer_url": self._signer_url if paid else None,
+            "signer_headers": {"Authorization": f"Bearer {credential}"} if paid else None,
+            "timeout": request.timeout_s,
+            "max_payment_challenge_retries": self._retries,
+            "on_payment_session": sessions if paid else None,
+        }
+        return url, kwargs
+
+    async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply:
         sessions = _SignedSessions()
+        url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
-            result = await call_runner(
-                url,
-                runner=instance,
-                payload=request.payload,
-                method=request.method,
-                signer_url=self._signer_url if paid else None,
-                signer_headers={"Authorization": f"Bearer {credential}"} if paid else None,
-                timeout=request.timeout_s,
-                max_payment_challenge_retries=self._retries,
-                on_payment_session=sessions if paid else None,
-            )
+            result = await call_runner(url, **kwargs)
         except LivepeerGatewayError as error:
             raise call_error(
                 error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
@@ -128,6 +147,68 @@ class SdkRunnerTransport:
             manifest_ids=tuple(sessions.manifest_ids),
             payment_sent=sessions.signed or bool(result.session_id),
         )
+
+    async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> "SdkRunnerStream":
+        """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here."""
+        sessions = _SignedSessions()
+        url, kwargs = self._call_kwargs(runner, request, credential, sessions)
+        try:
+            stream = await call_runner(url, stream=True, **kwargs)
+        except LivepeerGatewayError as error:
+            raise call_error(
+                error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
+            ) from error
+        except (aiohttp.ClientError, OSError) as error:
+            raise RunnerCallError(
+                network_kind(error),
+                str(error),
+                payment_sent=sessions.signed,
+                manifest_ids=tuple(sessions.manifest_ids),
+            ) from error
+        return SdkRunnerStream(stream, sessions)
+
+
+class SdkRunnerStream:
+    """The SDK's live response as a ``RunnerStream``. Mid-stream transport failures become RunnerCallError."""
+
+    def __init__(self, stream: LiveRunnerCallStream, sessions: "_SignedSessions") -> None:
+        self._stream = stream
+        self._sessions = sessions
+
+    @property
+    def status_code(self) -> int:
+        return int(self._stream.status)
+
+    @property
+    def content_type(self) -> str:
+        return str(self._stream.content_type or "application/octet-stream")
+
+    @property
+    def manifest_ids(self) -> tuple[str, ...]:
+        return tuple(self._sessions.manifest_ids)
+
+    @property
+    def payment_sent(self) -> bool:
+        return self._sessions.signed or self._stream.payment_session is not None
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream.aiter_bytes():
+                if chunk:
+                    yield chunk
+        except (aiohttp.ClientError, OSError, TimeoutError) as error:
+            raise RunnerCallError(
+                network_kind(error),
+                f"stream failed: {error}",
+                payment_sent=self.payment_sent,
+                manifest_ids=self.manifest_ids,
+            ) from error
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
 
 
 def call_error(
@@ -195,6 +276,9 @@ def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None
     capacity = raw.get("capacity") if isinstance(raw.get("capacity"), int) else None
     sessions = raw.get("session_ids")
     available = capacity - len(sessions) if capacity is not None and isinstance(sessions, list) else None
+    reported = raw.get("capacity_available")
+    if isinstance(reported, int) and not isinstance(reported, bool):
+        available = reported  # the node reports it directly; session_ids is the older form
     return Runner(
         url=url,
         app=app,
@@ -204,7 +288,22 @@ def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None
         capacity=capacity,
         capacity_available=available,
         rate=_rate(raw.get("price_info")),
+        version=_text(raw.get("version")),
+        metadata=_text(raw.get("metadata")),
+        gpu=_gpu(raw.get("gpu")),
     )
+
+
+def _gpu(value: object) -> RunnerGPU | None:
+    if not isinstance(value, dict):
+        return None
+    vram = value.get("vram_mb")
+    gpu = RunnerGPU(
+        id=_text(value.get("id")),
+        name=_text(value.get("name")),
+        vram_mb=vram if isinstance(vram, int) and vram > 0 else None,
+    )
+    return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
 
 
 def _rate(value: object) -> NetworkRate | None:

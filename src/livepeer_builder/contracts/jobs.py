@@ -24,13 +24,24 @@ class JobRequest(Contract):
     model: str | None = None
     mode: ExecutionMode = "immediate"
     max_attempts: int = Field(default=3, ge=1, le=10)
-    timeout_s: float = Field(default=300.0, gt=0, le=3600)
+    timeout_s: float = Field(default=300.0, gt=0, le=3600)  # the whole call, streamed or not
+    idle_timeout_s: float | None = Field(default=None, gt=0, le=3600)  # streams: max gap between chunks
 
 
 # "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment
 # params, price above the session ceiling). Safe to fail over. "payment": any other payment failure.
+# "abandoned": the caller stopped reading a stream before the runner finished
+# (docs/contracts/engine.md#streaming).
 AttemptOutcome = Literal[
-    "in_flight", "succeeded", "refused", "unreachable", "payment_refused", "payment", "timeout", "http"
+    "in_flight",
+    "succeeded",
+    "refused",
+    "unreachable",
+    "payment_refused",
+    "payment",
+    "timeout",
+    "http",
+    "abandoned",
 ]
 
 
@@ -75,6 +86,7 @@ FailureKind = Literal[
     "runner_rejected",
     "runner_error",
     "interrupted",
+    "abandoned",
 ]
 
 

@@ -25,7 +25,7 @@ from livepeer_builder.contracts.costs import (
     UsagePage,
     UsageRow,
 )
-from livepeer_builder.contracts.discovery import DiscoverySnapshot, NetworkRate, Offering, Runner
+from livepeer_builder.contracts.discovery import DiscoverySnapshot, NetworkRate, Offering, Runner, RunnerGPU
 from livepeer_builder.contracts.health import EngineHealth
 from livepeer_builder.contracts.jobs import (
     Attempt,
@@ -104,6 +104,7 @@ __all__ = [
     "ResourceRef",
     "ResultRef",
     "Runner",
+    "RunnerGPU",
     "RunnerReply",
     "SecretRef",
     "Session",

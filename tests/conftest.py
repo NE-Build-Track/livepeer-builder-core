@@ -14,7 +14,7 @@ from livepeer_builder.testing import (
     FakeAllocationManager,
     FakeUsageSource,
     FixedClock,
-    ScriptedTransport,
+    ScriptedStreamTransport,
     runner,
 )
 
@@ -34,8 +34,8 @@ async def store() -> AsyncIterator[SqlStore]:
 
 
 @pytest.fixture
-def transport() -> ScriptedTransport:
-    return ScriptedTransport()
+def transport() -> ScriptedStreamTransport:
+    return ScriptedStreamTransport()
 
 
 @pytest.fixture
@@ -74,7 +74,7 @@ EngineFactory = Callable[..., Awaitable[BuilderEngine]]
 async def make_engine(
     store: SqlStore,
     clock: FixedClock,
-    transport: ScriptedTransport,
+    transport: ScriptedStreamTransport,
     manager: FakeAllocationManager,
     usage: FakeUsageSource,
 ) -> AsyncIterator[EngineFactory]:

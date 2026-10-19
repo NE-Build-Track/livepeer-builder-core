@@ -31,4 +31,10 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | ISS-07 Builds and CI | [completed/iss-07-ci.md](exec-plans/completed/iss-07-ci.md) | John, Mike |
 | Evidence re-run | [completed/m2-attribution-rerun.md](exec-plans/completed/m2-attribution-rerun.md) | John |
 
+## M3 (open)
+
+| Ticket | Plan | Owners |
+| --- | --- | --- |
+| Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
+
 Nothing closes without Mike's review. Josh reviews engine code.

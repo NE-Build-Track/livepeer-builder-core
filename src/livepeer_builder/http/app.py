@@ -12,7 +12,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from livepeer_builder.contracts import (
@@ -154,8 +154,38 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
         # App names contain "/" (livepeer-example/hello), so they travel as a query parameter.
         return engine.discovery.runners(actor, app_name)
 
-    @app.post("/v1/jobs", responses={200: {"description": "The runner's own status, content type and body"}})
-    async def run_job(actor: Actor, body: JobRequest) -> Response:
+    @app.post(
+        "/v1/jobs",
+        responses={
+            200: {
+                "description": "The runner's own status, content type and body. With "
+                "`Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives "
+                "(docs/contracts/engine.md#streaming)."
+            }
+        },
+    )
+    async def run_job(
+        actor: Actor,
+        body: JobRequest,
+        request: Request,
+        stream: Annotated[bool, Query(description="stream the runner's response as it arrives")] = False,
+    ) -> Response:
+        if stream or "text/event-stream" in request.headers.get("accept", ""):
+            opened = await engine.jobs.stream(actor, body)
+
+            async def passthrough() -> AsyncIterator[bytes]:
+                try:
+                    async for chunk in opened:
+                        yield chunk
+                except JobFailed:
+                    return  # after the first byte the response just ends; the job record has the outcome
+
+            return StreamingResponse(
+                passthrough(),
+                status_code=opened.status_code,
+                media_type=opened.content_type,
+                headers={JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"},
+            )
         result = await engine.jobs.run(actor, body)
         return Response(
             content=result.content,

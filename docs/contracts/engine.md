@@ -1,7 +1,8 @@
 # Engine contract: discovery, jobs, results, usage
 
-**Ticket:** ISS-02 · **Code:** `contracts/discovery.py`, `contracts/jobs.py`, `services/discovery.py`,
-`services/jobs.py` · **Status:** immediate execution implemented; async and persistent reserved.
+**Ticket:** ISS-02 (streaming: M3, [plan](../exec-plans/active/streaming-jobs.md)) · **Code:** `contracts/discovery.py`,
+`contracts/jobs.py`, `services/discovery.py`, `services/jobs.py` · **Status:** immediate execution and streaming
+implemented; async and persistent reserved.
 
 Every model is a frozen pydantic v2 class. The same class is used in-process and as the REST
 schema ([generated/openapi.json](../generated/openapi.json)), so the two integration modes cannot
@@ -14,7 +15,7 @@ refreshed every `discovery_interval_s` and counts as stale after three missed in
 
 | Model | Meaning |
 | --- | --- |
-| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate` |
+| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
 | `NetworkRate` | Wholesale network rate as advertised (`amount`, `currency`, `unit`). Not a retail price |
 | `Offering` | One runner app: its modes, the cheapest and dearest comparable rate, runner and ready counts, `observed_at` |
 
@@ -24,7 +25,8 @@ names the runner `app`; `capability` and `model` are labels only.
 ## Jobs and attempts
 
 `JobRequest`: `app`, `path`, `method`, `payload`, `operation_ref`, `mode`, `max_attempts`,
-`timeout_s`, plus the labels `capability` and `model`.
+`timeout_s` (the whole call), `idle_timeout_s` (streams: the longest gap between chunks; default none),
+plus the labels `capability` and `model`.
 
 | State | Meaning |
 | --- | --- |
@@ -37,7 +39,7 @@ names the runner `app`; `capability` and `model` are labels only.
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
 `sessions` (one entry per session the signer signed, in order, each with a `manifest_id` and a
 match of `unmatched`, `matched` or `ambiguous`), `payment_sent`, `outcome` (`in_flight`,
-`succeeded`, `refused`, `unreachable`, `payment_refused`, `payment`, `timeout`, `http`), the status
+`succeeded`, `refused`, `unreachable`, `payment_refused`, `payment`, `timeout`, `http`, `abandoned`), the status
 code and timestamps. The cost key is the matched `payment_session_id`, not the manifest.
 
 ### Behavior the contract fixes
@@ -87,6 +89,42 @@ unique index, so concurrent duplicates are also refused.
 | `runner_rejected` (4xx) | yes | the runner's own 4xx |
 | `runner_error` (5xx) | yes | 502 |
 | `interrupted` (restart) | maybe | 502 |
+| `abandoned` (the caller stopped reading a stream) | yes → job `uncertain` | n/a: the response had already started |
+
+## Streaming
+
+`jobs.stream(actor, request)` dispatches the same immediate job as `jobs.run` and hands the runner's
+response back **as it arrives**: a `JobStream` with the `Job` (state `running` until the stream
+ends), the runner's `status_code` and `content_type`, an async iterator of `bytes`, and `aclose()`.
+The engine moves bytes; it never interprets them, so server-sent events, ndjson and audio all ride
+the same path. Streaming is a delivery choice, not an execution mode: `mode` stays `immediate`.
+
+Everything up to the first byte is `run`: admission, idempotency, provisioning, failover. The
+transport's `open` pays the 402 challenge before any byte flows, so `payment_sent` and the signed
+`manifest_ids` are known when the stream opens and are **written on the attempt before the first
+byte** (outcome `in_flight`). A restart mid-stream therefore resolves the job as `uncertain`. The
+admission slot is held until the stream ends.
+
+| Event | Attempt outcome | Job state |
+| --- | --- | --- |
+| The runner closes the stream normally | `succeeded` (a `ResultRef` for the bytes that passed) | `succeeded` |
+| The runner fails mid-stream (reset, 5xx trailer) | `http` or `unreachable`, `payment_sent` as known | `uncertain` when paid, else `failed` |
+| No chunk within `idle_timeout_s` | `timeout` | `uncertain` when paid, else `failed` |
+| Total `timeout_s` exceeded | `timeout` | `uncertain` when paid, else `failed` |
+| The caller calls `aclose()` or stops iterating | `abandoned` | `uncertain` when paid, else `failed` |
+| The engine dies mid-stream | `recover_interrupted()` as today | `uncertain` |
+
+A streamed job logs one manifest: the SDK funds a long stream by re-signing under the same payment
+session, so cost sync attributes every usage row of the stream to that job exactly as for `run`
+(14 and 19 October evidence: many rows under one `payment_session_id`).
+
+**REST:** `POST /v1/jobs` with `Accept: text/event-stream` or `?stream=true` answers with the
+runner's status and content type, `Livepeer-Job-Id` in the headers, and the body streamed
+unbuffered. Errors before the first byte use the failure mapping above. After the first byte the
+response simply ends; `GET /v1/jobs/{id}` carries the outcome.
+
+**Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
+transport implements it; an enterprise transport without `open` makes `jobs.stream` answer 400.
 
 ## Results
 
@@ -134,4 +172,5 @@ These are the explicit decisions for ISS-02.
   [payments.md](payments.md#cost-classification)). The enterprise decides what to bill.
 - **Performance:** admission limits bound concurrent dispatch. Discovery and cost sync run in the
   background (default 15 s and 30 s). There are no latency guarantees in M2.
-- **No continuous streaming.** Incremental text and live media are stretch scope.
+- **Streaming is per job, not continuous media.** `jobs.stream` delivers one runner response as it
+  arrives (above); live media and persistent sessions remain M4 (ISS-27).

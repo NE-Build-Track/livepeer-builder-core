@@ -42,6 +42,7 @@ classDiagram
         +enum mode
         +int max_attempts
         +float timeout_s
+        +float? idle_timeout_s
     }
     class Job {
         +UUID id
@@ -108,6 +109,14 @@ classDiagram
         +int? capacity
         +int? capacity_available
         +NetworkRate? rate
+        +str? version
+        +str? metadata
+        +RunnerGPU? gpu
+    }
+    class RunnerGPU {
+        +str? id
+        +str? name
+        +int? vram_mb
     }
     class NetworkRate {
         +Decimal amount
@@ -183,4 +192,5 @@ classDiagram
     Offering *-- NetworkRate : rate_low
     ProvisionedActor *-- SecretRef : secret_ref
     Runner *-- NetworkRate : rate
+    Runner *-- RunnerGPU : gpu
 ```

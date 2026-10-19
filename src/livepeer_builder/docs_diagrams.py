@@ -15,7 +15,7 @@ from livepeer_builder import protocols
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
+from livepeer_builder.adapters.sdk import SdkRunnerStream, SdkRunnerTransport, SignerDiscoverySource
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
@@ -39,6 +39,7 @@ from livepeer_builder.contracts import (
     ResourceRef,
     ResultRef,
     Runner,
+    RunnerGPU,
     SecretRef,
 )
 from livepeer_builder.services.discovery import MostCapacityFirst
@@ -55,6 +56,8 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "DiscoverySource": (SignerDiscoverySource, StaticDiscoverySource),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
+    "StreamingRunnerTransport": (SdkRunnerTransport,),
+    "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient,),
     "UsageSource": (BatteriesUsageSource,),
@@ -70,7 +73,7 @@ REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "CostRepo", "SecretRepo")
 CONTRACTS: tuple[type[BaseModel], ...] = (
     AuthRequest, ActorContext, AuthProvenance, ResourceRef,
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
-    Runner, NetworkRate, Offering,
+    Runner, RunnerGPU, NetworkRate, Offering,
     JobCost, AttemptCost, Fees,
     ProvisionedActor, SecretRef, Allowance, Money,
 )  # fmt: skip

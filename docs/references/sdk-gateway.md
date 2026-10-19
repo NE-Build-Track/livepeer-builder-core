@@ -1,6 +1,6 @@
 # Python gateway SDK (as relied on by the engine)
 
-Baseline `44df061` plus **[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)**, which replaced livepeer #71. Pinned temporarily to its head `e6d243b`; see [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
+Baseline `44df061` plus **[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)**, which replaced livepeer #71. Pinned temporarily to its head `e6d243b`, fetched from NE-Build-Track/livepeer-python-gateway; see [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
 
 | SDK surface | Engine use |
 | --- | --- |

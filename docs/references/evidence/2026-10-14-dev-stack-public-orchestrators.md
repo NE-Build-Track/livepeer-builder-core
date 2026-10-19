@@ -46,6 +46,6 @@ no shims.
 ## Not covered
 
 - A forged `manifest_id` and a rejected-ticket charge (open items in
-  [m2-attribution-rerun](../../exec-plans/active/m2-attribution-rerun.md)).
+  [m2-attribution-rerun](../../exec-plans/completed/m2-attribution-rerun.md)).
 - The hky and open-pool orchestrators: the engine chose xode for chat, and no job used open-pool's
   audio apps.

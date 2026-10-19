@@ -6,17 +6,17 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 
 | Component | Repository | Baseline commit | Used by |
 | --- | --- | --- | --- |
-| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (plus [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) at `e6d243b`) | `adapters/sdk.py` |
-| Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `f970be644c55e41f77ef3ee8f085f516074f4cc8` (14 October; was `1432123`). It adds Josh's fix for T10 | dev stack; [node-signer.md](node-signer.md) |
-| Clearinghouse Batteries | [eliteprox/clearinghouse-batteries](https://github.com/eliteprox/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659` | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
+| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (plus [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) at `e6d243b`, fetched from [NE-Build-Track/livepeer-python-gateway](https://github.com/NE-Build-Track/livepeer-python-gateway)) | `adapters/sdk.py` |
+| Signer and orchestrator | [NE-Build-Track/node](https://github.com/NE-Build-Track/node) | `406b248f6cb8728e6e7eba1809901f589060bc6b` (v1.0.2, 19 October; was `f970be6`, and `1432123` before that). It includes Josh's fix for T10 | dev stack and Railway; [node-signer.md](node-signer.md) |
+| Clearinghouse Batteries | [NE-Build-Track/clearinghouse-batteries](https://github.com/NE-Build-Track/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659` | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
 
 ## The M2 SDK exception
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
 `e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4` on
-[livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway).
-That is the head of
+[NE-Build-Track/livepeer-python-gateway](https://github.com/NE-Build-Track/livepeer-python-gateway), where `releases/m2` and `releases/final`
+contain it. That is the head of
 **[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)**
 ("Report each signed payment session from call_runner", against `main`).
 

@@ -9,8 +9,8 @@ issues and gate evidence are accepted. Nothing closes without Mike's review.
 | Milestone | Gate | Target |
 | --- | --- | --- |
 | M1: Define and approve the architecture | September planning evidence; architecture and executive summary approved | Done (30 Sep) |
-| **M2: Foundation and integration contracts** | **Source baseline, shared/access/payment contracts, importable core, SQLite evidence, and development build checks are reviewable** | **16 Oct 2026** |
-| M3: Complete builder journey | One minimum-app journey demonstrates all seven outcomes, with funded execution and correlated network-cost evidence | — |
+| M2: Foundation and integration contracts | Source baseline, shared/access/payment contracts, importable core, SQLite evidence, and development build checks are reviewable | Done (19 Oct; target 16 Oct). Carried-forward items: [m2-traceability](m2-traceability.md#carried-forward-to-m3) |
+| **M3: Complete builder journey** | **One minimum-app journey demonstrates all seven outcomes, with funded execution and correlated network-cost evidence** | **20 Nov 2026** |
 | M4: Reuse and reliability | Remaining execution modes, REST/MCP and embedded/service coverage, enterprise auth replacement, both payment configurations, failure/recovery evidence | — |
 | M5: Independent installation and release | Final artifacts, documentation, clean-environment reproduction, acceptance evidence | — |
 
@@ -59,11 +59,11 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 ## Upstream interfaces (H1–H6)
 
-| Ref | Interface | Status (14 October) |
+| Ref | Interface | Status (19 October) |
 | --- | --- | --- |
-| H1 | Python gateway SDK | Pinned to [livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) `e6d243b` (`on_payment_session` reports `manifest_id`; no signer-state decoding). **Open:** merge into `main`, then re-pin (T1). #70 and multipart deferred |
+| H1 | Python gateway SDK | Pinned to [livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) `e6d243b`, fetched from NE-Build-Track (`on_payment_session` reports `manifest_id`; no signer-state decoding). **Open:** merge into `main`, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
-| H3 | Remote signer and orchestrator/Live Runner | livepeer/node `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
+| H3 | Remote signer and orchestrator/Live Runner | NE-Build-Track/node `406b248` (v1.0.2) in the dev stack and on Railway. It includes `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | H5 | Source access and permitted reuse | Done (ISS-01): simple-infra reviewed; nothing private reused |
 | H6 | Scope and final acceptance | Mike's review per ticket; procedure open for M5 |

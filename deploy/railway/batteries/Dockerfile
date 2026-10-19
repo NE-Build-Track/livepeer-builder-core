@@ -1,8 +1,8 @@
 # Clearinghouse Batteries at the livepeer-builder M2 pin.
-# https://github.com/eliteprox/clearinghouse-batteries/commit/ca09e47c067682fb48c3f15425546fb6aa5b6659
+# https://github.com/NE-Build-Track/clearinghouse-batteries/commit/ca09e47c067682fb48c3f15425546fb6aa5b6659
 # Fetch by SHA. Cloning main would build a later commit than the pin.
 FROM golang:1.27.2-bookworm AS build
-ARG BATTERIES_REPO=https://github.com/eliteprox/clearinghouse-batteries.git
+ARG BATTERIES_REPO=https://github.com/NE-Build-Track/clearinghouse-batteries.git
 ARG BATTERIES_REF=ca09e47c067682fb48c3f15425546fb6aa5b6659
 WORKDIR /src
 RUN git init \

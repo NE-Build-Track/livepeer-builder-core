@@ -12,7 +12,7 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 | D1 | The baseline is the `eliteprox` forks at `main` (12 Oct). Each repository has a `releases/m2` branch for M2 work | [references/upstream-baseline.md](../references/upstream-baseline.md) |
 | D2 | **livepeer/node** is the signer and orchestrator. go-livepeer is no longer used | node's durable outbox removes the dropped-event gap (go-livepeer #4100) |
 | D3 | Console is out of scope (at most a later reference-app update) | No Console code or parity work |
-| D4 | This repository (`mikezupper/livepeer-builder-core`) replaces the `eliteprox/livepeer-core` prototype | Prototype code is a starting point and was refactored into these layers |
+| D4 | This repository (`NE-Build-Track/livepeer-builder-core`, formerly `mikezupper/livepeer-builder-core`) replaces the `eliteprox/livepeer-core` prototype | Prototype code is a starting point and was refactored into these layers |
 | D5 | Keep the accepted M2 plan: the core skeleton, SQLite through a vendor-neutral ORM (Postgres too), and minimal CI | `store/` uses SQLAlchemy Core and Alembic; CI runs SQLite and Postgres |
 | D6 | No deadline changes. Nothing closes without Mike's review. Josh reviews engine code | Process; see [PLANS.md](../PLANS.md) |
 
@@ -63,4 +63,4 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 - **A1 (accepted).** `lpb_usage_rows` keeps a cache of Batteries usage rows for attribution and reconciliation.
   Batteries remains the authority. Retention is configurable.
 - **A2 (accepted).** Retention never deletes `uncertain` jobs automatically.
-- **A3 (accepted; updated 16 October).** The SDK is pinned to `e6d243b` ([livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)): `on_payment_session` reports `LivePaymentSession.manifest_id` and does not decode signer state. Re-pin when that PR merges, then to a release (T1).
+- **A3 (accepted; updated 19 October).** The SDK is pinned to `e6d243b`, fetched from NE-Build-Track/livepeer-python-gateway ([livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)): `on_payment_session` reports `LivePaymentSession.manifest_id` and does not decode signer state. Re-pin when that PR merges, then to a release (T1).

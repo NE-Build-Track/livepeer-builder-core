@@ -21,7 +21,7 @@ dependencies = [
     # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
     # livepeer-python-gateway#77 (on_payment_session reports LivePaymentSession.manifest_id).
     # Re-pin to its merge commit on main once it merges, then to a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4",
+    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +48,11 @@ dev = [
 [tool.hatch.version]
 source = "vcs"
 fallback-version = "0.0.0"
+
+# Only `v*` tags set the version, so descriptive label tags (such as a milestone name) can sit
+# on the same commit without breaking builds.
+[tool.hatch.version.raw-options.scm.git]
+describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

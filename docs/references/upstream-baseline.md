@@ -6,7 +6,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 
 | Component | Repository | Baseline commit | Used by |
 | --- | --- | --- | --- |
-| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `60aed2eb5842f4617e9e42e3314ea939486c924e` (`releases/final`, including [#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), plus [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81) / [NE#3](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/3) at `30fa1ef`, fetched from [NE-Build-Track/livepeer-python-gateway](https://github.com/NE-Build-Track/livepeer-python-gateway)) | `adapters/sdk.py` |
+| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `60aed2eb5842f4617e9e42e3314ea939486c924e` (`releases/final`, including [#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), plus [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81) / [NE#3](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/3) at `9c084b6`, fetched from [NE-Build-Track/livepeer-python-gateway](https://github.com/NE-Build-Track/livepeer-python-gateway)) | `adapters/sdk.py` |
 | Signer and orchestrator | [NE-Build-Track/node](https://github.com/NE-Build-Track/node) | `406b248f6cb8728e6e7eba1809901f589060bc6b` (v1.0.2, 19 October; was `f970be6`, and `1432123` before that). It includes Josh's fix for T10 | dev stack and Railway; [node-signer.md](node-signer.md) |
 | Clearinghouse Batteries | [NE-Build-Track/clearinghouse-batteries](https://github.com/NE-Build-Track/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659` | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
@@ -14,15 +14,16 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 ## The M2 SDK exception
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
-`30fa1ef34d57d8e92e1aaccbcd5aaedbc5d976df` on
+`9c084b6f8a02a3106bab7d45bf14d69936c04c19` on
 [NE-Build-Track/livepeer-python-gateway](https://github.com/NE-Build-Track/livepeer-python-gateway). That is the head of
 **[NE-Build-Track/livepeer-python-gateway#3](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/3)**
 (upstream **[livepeer-python-gateway#81](https://github.com/livepeer/livepeer-python-gateway/pull/81)**,
 "Add payment session callback for runner calls", which replaced #77).
 
 #81 / NE#3 adds `call_runner(on_payment_session=...)` and `LivePaymentSessionCallback`. The callback
-receives each obtained payment session. `LivePaymentSession.manifest_id` is the manifest from the 402
-challenge. The SDK does not decode signer state.
+receives each session once the signer returns a payment string, including when a later response
+field is unusable. `LivePaymentSession.manifest_id` is the manifest from the 402 challenge. The SDK
+does not decode signer state.
 
 - PyPI `livepeer-gateway` 1.0.0 has no payment-session reporting, so installing from PyPI would break
   job cost attribution. That defect was found in the prototype on 12 October.

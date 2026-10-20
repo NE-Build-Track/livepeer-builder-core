@@ -22,7 +22,7 @@ dependencies = [
     # NE-Build-Track/livepeer-python-gateway#3 (livepeer-python-gateway#81: on_payment_session
     # reports LivePaymentSession.manifest_id). Re-pin to the merge commit once it merges, then
     # to a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@30fa1ef34d57d8e92e1aaccbcd5aaedbc5d976df",
+    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@9c084b6f8a02a3106bab7d45bf14d69936c04c19",
 ]
 
 [project.optional-dependencies]

@@ -42,6 +42,7 @@ classDiagram
         +enum mode
         +int max_attempts
         +float timeout_s
+        +float first_byte_timeout_s
         +float? idle_timeout_s
     }
     class Job {

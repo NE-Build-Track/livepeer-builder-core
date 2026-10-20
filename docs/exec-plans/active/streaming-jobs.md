@@ -4,7 +4,9 @@
 
 Owner: Mike. Ticket: Mike is filing it (new M3 ticket; touches ISS-14 immediate execution, ISS-20 REST,
 ISS-28 failure classification). Branch `tasks/m3/mz/stream-support` off `releases/m3`. **Implemented and
-shown live on 19 October; awaiting Mike's review and Josh's review of the engine code. Not merged.** Requested by the first enterprise reference
+shown live on 19 October; a review on 20 October found two blocking lifecycle bugs, fixed on 20 October
+(D34–D39). Awaiting Mike's review, a live rerun, and Josh's review of the engine code. Not merged.**
+Requested by the first enterprise reference
 app (ChatLPT, `NE-Build-Track/chatlpt-sample-enterprise-app`), whose design note is the origin of
 this plan: `docs/design-docs/streaming-through-the-engine.md` in that repository.
 
@@ -30,10 +32,12 @@ LLM's server-sent events, synthesized audio and ndjson progress all ride the sam
 - [x] New outcomes and states behave per the table below, including the new attempt outcome
       `abandoned`; no migration is needed (`lpb_attempts.outcome` is a string column); `recover_interrupted()`
       treats a job left `running` with a stream as `uncertain`.
-- [x] `JobRequest.idle_timeout_s` (gap between chunks, default none) beside `timeout_s` (total).
-- [x] REST: `POST /v1/jobs` with `Accept: text/event-stream` or `"stream": true` streams the body
-      unbuffered with `Livepeer-Job-Id` in the headers; errors before the first byte use the existing
-      failure mapping; errors after the first byte end the response and the job record carries the outcome.
+- [x] `JobRequest.idle_timeout_s` (gap between chunks) beside `timeout_s` (total). Default changed from
+      none to 60 s on 20 October (D35).
+- [x] REST: `POST /v1/jobs` with `Accept: text/event-stream` or `?stream=true` (a query parameter, not a
+      body field: `JobRequest` rejects unknown fields) streams the body unbuffered with `Livepeer-Job-Id`
+      in the headers. Superseded on 20 October by D37: headers wait for the first chunk, and a failure
+      after it aborts the connection.
 - [x] Cost sync attributes a streamed job's rounds exactly as today (many signings, one manifest);
       reconciliation balances in a live run; evidence page written
       ([2026-10-19-streaming-live](../../references/evidence/2026-10-19-streaming-live.md)).
@@ -47,6 +51,29 @@ LLM's server-sent events, synthesized audio and ndjson progress all ride the sam
       structure tests unchanged; coverage floors hold.
 - [ ] Mike's review; Josh's review of the engine code.
 
+### Review fixes (20 October, D34–D39)
+
+- [x] **D34** Finishing a stream runs in its own task, so a client disconnect under Starlette/anyio, or any
+      repeated cancellation, still writes the job and releases the slot. `LPB_STREAM_FINALIZE_TIMEOUT_S`
+      (10 s) bounds the writes; a store failure releases the slot and leaves the job to `recover_interrupted`.
+- [x] **D35** `timeout_s` counts from the job's start and covers opening; new `first_byte_timeout_s`
+      (60 s, capped at `timeout_s`); `idle_timeout_s` defaults to 60 s. The SDK transport enforces the
+      first-byte limit and keeps signed sessions; the engine's backstop treats a transport that ignores it
+      as paid. A timeout never fails over. SDK issue drafted for the unbounded first read.
+- [x] **D36** `JobStream` is an async context manager; `engine.stop()` drains open streams for
+      `LPB_STREAM_DRAIN_TIMEOUT_S` (30 s), then abandons the rest; a stream nobody reads still ends at
+      `timeout_s`; a failed write right after `open` closes the stream and keeps its manifests.
+- [x] **D37** REST: headers wait for the first chunk (earlier failures are 504/502 with the job); a
+      failure after it aborts the connection.
+- [x] **D38** `JobStream.complete()` records success when the caller has what it needs; a cancelled
+      reader or disconnected client gets `LPB_STREAM_SETTLE_S` (1 s) for the runner to end the stream;
+      `aclose()` stops at once.
+- [x] **D39** Session rows are append-only, so the end-of-stream write never resets a match.
+- [x] `JobStream` exported from `livepeer_builder`; docs and generated files updated; 502 tests pass,
+      including an ASGI disconnect test on both the cancel-scope (2.3) and send-raises (2.4) paths, which
+      fail when finishing runs in the caller's task.
+- [ ] Live rerun: several funding rounds in one stream, a stream past one cost-sync cycle (D39), a client
+      disconnect (D34), and `complete()` (D38).
 ## Design
 
 ### Contract
@@ -119,7 +146,7 @@ and never calls `aclose()`.
 
 ### REST
 
-`POST /v1/jobs` with `Accept: text/event-stream` or `"stream": true` in the body answers with the
+`POST /v1/jobs` with `Accept: text/event-stream` or `?stream=true` answers with the
 runner's status and content type, `Livepeer-Job-Id` in the headers, and the body streamed unbuffered.
 `GET /v1/jobs/{id}` shows the running job and, afterwards, the outcome.
 
@@ -163,6 +190,9 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
 - [x] 2026-10-19: live on the network: a stream read to the end (`succeeded`, 12 chunks in 1.3 s) and one
       abandoned (`uncertain`/`abandoned`), both costs attributed and matched, reconciliation balanced
       ([evidence](../../references/evidence/2026-10-19-streaming-live.md)). Spend about $0.00022.
+- [x] 2026-10-20: review of `ebedff1`/`973ac57` (two blocking bugs: a disconnect left the job `running`
+      and the slot held; nothing bounded the wait for the first byte). Mike locked seven changes one by
+      one; implemented as D34–D39 with tests, docs and regenerated files.
 
 ## Decision log
 
@@ -170,3 +200,8 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
   Source: the enterprise app owner's requirement that other applications need streaming too.
 - 2026-10-19: `mode` stays `immediate`; streaming is a delivery choice. Source: keeps M4's async
   contract untouched and the idempotency and admission rules identical.
+- 2026-10-20: The fixes stay generic (D29): the engine never learns a stream's format, so "the caller
+  is done" comes from the caller (`complete()`) or from the runner closing within the settle window,
+  never from parsing `[DONE]`. Source: Mike, review walkthrough.
+- 2026-10-20: Defaults over required choices: every new deadline and setting has a default, so a builder
+  only touches them when they need to. Source: Mike, review walkthrough.

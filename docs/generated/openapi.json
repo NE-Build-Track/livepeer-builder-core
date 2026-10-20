@@ -973,6 +973,13 @@
             ],
             "title": "Capability"
           },
+          "first_byte_timeout_s": {
+            "default": 60.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 3600.0,
+            "title": "First Byte Timeout S",
+            "type": "number"
+          },
           "idle_timeout_s": {
             "anyOf": [
               {
@@ -984,6 +991,7 @@
                 "type": "null"
               }
             ],
+            "default": 60.0,
             "title": "Idle Timeout S"
           },
           "max_attempts": {

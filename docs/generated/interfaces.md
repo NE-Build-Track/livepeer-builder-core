@@ -43,6 +43,11 @@ classDiagram
     }
     class RunnerStream {
         <<interface>>
+        +content_type str
+        +manifest_ids str[]
+        +payment_sent bool
+        +status_code int
+        +__aiter__() AsyncIterator
         +async aclose() None
     }
     class CredentialResolver {

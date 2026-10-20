@@ -47,8 +47,10 @@ both jobs matched a logged session.
 
 ## Observations
 
-- Streaming adds no payment round trips: the 402 is paid once at `open`, the stream funds itself
-  under the same session, and cost sync attributes it exactly like a buffered job.
+- Streaming adds no payment round trip before the first byte: the 402 is paid once at `open`, and
+  cost sync attributes the stream exactly like a buffered job. Each stream here lasted about 1.3 s,
+  under the SDK's 3 s funding interval, so each produced **one** usage row. This run does not show a
+  stream funded in several rounds; the rerun after the 20 October fixes is meant to.
 - `max_context` differs per orchestrator for the same app. An application deriving a context window
   from `Runner.metadata` should take the smallest value across the runners the engine may choose.
 - Spend for this evidence: about $0.00022.
@@ -58,3 +60,6 @@ both jobs matched a logged session.
 - A mid-stream orchestrator failure or an idle timeout on the real network (both covered by unit
   tests with the scripted transport).
 - A restart with a stream open (unit-tested through `recover_interrupted`).
+- A stream long enough for several funding rounds, or longer than one cost-sync cycle.
+- A client disconnect over HTTP. The 20 October review found that this path left the job `running`
+  and its slot held (fixed by D34).

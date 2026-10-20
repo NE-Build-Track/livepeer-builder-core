@@ -2,6 +2,7 @@
 ownership and shutdown (D36), and a caller that stops because it has everything (D38)."""
 
 import asyncio
+import hashlib
 import logging
 
 import pytest
@@ -210,6 +211,25 @@ async def test_complete_records_success_with_the_bytes_received(
     await stream.complete()  # no-op once ended
 
 
+async def test_complete_leaves_out_a_chunk_the_caller_never_read(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin)
+    # no pause before "trailing": the engine has already read it ahead when the caller says done
+    transport.opens = [StreamScript(events=[b"data: x\n\n", b"data: [DONE]\n\n", b"trailing"])]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    async with stream:
+        async for chunk in stream:
+            if chunk == b"data: [DONE]\n\n":
+                await asyncio.sleep(0.02)  # the read-ahead lands in the queue
+                await stream.complete()
+                break
+    delivered = b"data: x\n\ndata: [DONE]\n\n"
+    assert stream.job.result is not None
+    assert stream.job.result.size_bytes == len(delivered)
+    assert stream.job.result.sha256 == hashlib.sha256(delivered).hexdigest()
+
+
 async def test_a_cancelled_reader_succeeds_when_the_runner_ends_within_the_settle_window(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
@@ -230,6 +250,7 @@ async def test_a_cancelled_reader_succeeds_when_the_runner_ends_within_the_settl
         await task
     await ended(engine)
     assert stream.job.state == "succeeded" and stream.job.attempts[0].outcome == "succeeded"
+    assert stream.job.result is not None and stream.job.result.size_bytes == len(b"a[DONE]")
 
 
 async def test_a_cancelled_reader_is_abandoned_when_the_runner_keeps_going(

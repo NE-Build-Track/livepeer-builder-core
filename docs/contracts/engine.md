@@ -119,7 +119,7 @@ The admission slot is held until the stream ends.
 
 | Field | Default | What it bounds |
 | --- | --- | --- |
-| `timeout_s` | 300 s | The whole job, from the call to `jobs.stream` to the last byte. It also ends a stream that nobody reads. |
+| `timeout_s` | 300 s | The whole job, from the call to `jobs.stream` to the runner's last byte. It also ends a stream that nobody reads. Once the runner has ended the stream it no longer applies: a caller still handling the last chunks reads them and the end, and the job succeeds. |
 | `first_byte_timeout_s` | 60 s | From each runner request to its first body chunk: payment, headers and the first chunk. Capped at `timeout_s`; setting it higher is rejected (422). |
 | `idle_timeout_s` | 60 s | The longest gap between chunks once data flows. `null` turns it off. |
 
@@ -134,11 +134,11 @@ treats the payment as sent, because it cannot know.
 | Event | Attempt outcome | Job state |
 | --- | --- | --- |
 | The runner closes the stream normally | `succeeded` (a `ResultRef` for the bytes received) | `succeeded` |
-| The caller calls `complete()` (D38) | `succeeded` (a `ResultRef` for the bytes received so far) | `succeeded` |
+| The caller calls `complete()` (D38) | `succeeded` (a `ResultRef` for the bytes the caller read, not the engine's read-ahead) | `succeeded` |
 | The runner fails mid-stream (reset, 5xx trailer) | `http` or `unreachable`, `payment_sent` as known | `uncertain` when paid, else `failed` |
 | A deadline above runs out | `timeout` | `uncertain` when paid, else `failed` |
 | The caller calls `aclose()`, or leaves `async with` before the end | `abandoned`, at once | `uncertain` when paid, else `failed` (D30) |
-| The caller is cancelled or the HTTP client disconnects | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S`, else `abandoned` | as above (D38) |
+| The caller is cancelled or the HTTP client disconnects | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S` (the `ResultRef` then includes what it sent in that window), else `abandoned` | as above (D38) |
 | `engine.stop()` while the stream is open | `abandoned` after `LPB_STREAM_DRAIN_TIMEOUT_S` (D36) | `uncertain` when paid, else `failed` |
 | The engine dies mid-stream | `recover_interrupted()` as today | `uncertain` |
 

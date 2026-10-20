@@ -131,6 +131,7 @@ class JobStream:
         self._final: asyncio.Task[None] | None = None
         self._ended = asyncio.Event()
         self._runner_closed = False
+        self._runner_finished = False  # the runner ended the stream; deadlines no longer apply
         self._loop = asyncio.get_running_loop()
         self._queue: asyncio.Queue[bytes | Exception] = asyncio.Queue(maxsize=1)
         self._pump = self._loop.create_task(self._pump_chunks(), name=f"lpb-stream-{job.id}")
@@ -171,9 +172,9 @@ class JobStream:
     async def complete(self) -> None:
         """The caller has everything it needs: stop the runner and record the job ``succeeded``.
 
-        The result describes the bytes received from the runner so far. Use this when the stream's
-        own format says it is done (for example ``data: [DONE]``) and you stop reading before the
-        runner closes the connection. Does nothing once the stream has ended.
+        The result describes the bytes the caller has read, not any the engine read ahead. Use this
+        when the stream's own format says it is done (for example ``data: [DONE]``) and you stop
+        reading before the runner closes the connection. Does nothing once the stream has ended.
         """
         await run_shielded(self._wait(self._begin(_SUCCEEDED)))
 
@@ -204,6 +205,7 @@ class JobStream:
                     raise item
                 if item == _END:
                     break
+                self._count(item)
                 yield item
         except _Timeout as timeout:
             await run_shielded(self._wait(self._begin(_Ending("timeout", str(timeout)))))
@@ -236,6 +238,8 @@ class JobStream:
         """The next chunk, end marker or runner error, within whichever deadline applies now."""
         if not self._queue.empty():
             return self._took(self._queue.get_nowait())
+        if self._runner_finished:  # the end marker is on its way; a deadline would only lose it
+            return self._took(await self._queue.get())
         total_left = self._deadline - self._loop.time()
         clock: _Deadline = "total"
         wait = total_left
@@ -250,7 +254,9 @@ class JobStream:
         try:
             return self._took(await asyncio.wait_for(self._queue.get(), wait))
         except TimeoutError:
-            raise _Timeout(clock) from None
+            if not self._runner_finished:
+                raise _Timeout(clock) from None
+            return self._took(await self._queue.get())
         finally:
             self._waiting = False
             if not self._got_first:
@@ -260,22 +266,26 @@ class JobStream:
         self._got_first = True
         return item
 
+    def _count(self, chunk: bytes) -> None:
+        """Add a chunk to the result. Only chunks handed over count, never the pump's read-ahead."""
+        self._hash.update(chunk)
+        self._size += len(chunk)
+
     async def _pump_chunks(self) -> None:
         try:
             async for chunk in self._stream:
-                if not chunk:
-                    continue
-                self._hash.update(chunk)
-                self._size += len(chunk)
-                await self._queue.put(chunk)
+                if chunk:
+                    await self._queue.put(chunk)
         except Exception as error:
             await self._queue.put(error)
             return
+        self._runner_finished = True
         await self._queue.put(_END)
 
     def _deadline_passed(self) -> None:
-        """``timeout_s`` ran out. A waiting reader times out by itself; anything else ends here."""
-        if self._final is None and not self._waiting:
+        """``timeout_s`` ran out. A waiting reader times out by itself; anything else ends here, unless
+        the runner already finished: then the caller is only handling chunks it has, and ends it."""
+        if self._final is None and not self._waiting and not self._runner_finished:
             self._begin(_Ending("timeout", _TIMEOUT_MESSAGES["total"]))
 
     # -- finishing --------------------------------------------------------------------------------------
@@ -318,7 +328,8 @@ class JobStream:
             self._on_done(self)
 
     async def _settle(self, stopped: _Ending) -> _Ending:
-        """The caller went away. If the runner ends the stream within settle_s, the job succeeded."""
+        """The caller went away. If the runner ends the stream within settle_s, the job succeeded, and
+        its result includes what the runner sent in that window."""
         if self._limits.settle_s <= 0:
             return stopped
         try:
@@ -331,6 +342,7 @@ class JobStream:
                         return _Ending("http", f"engine error: {type(item).__name__}")
                     if item == _END:
                         return _SUCCEEDED
+                    self._count(item)
         except TimeoutError:
             return stopped
 

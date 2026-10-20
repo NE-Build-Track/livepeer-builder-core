@@ -2,6 +2,8 @@
 before the first chunk, idle_timeout_s between chunks, and the engine's backstop for a transport that
 ignores its deadline."""
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -82,6 +84,21 @@ async def test_time_spent_opening_counts_against_timeout_s(
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.failure is not None and "timeout_s" in stream.job.failure.message
+
+
+async def test_timeout_s_does_not_apply_once_the_runner_has_finished(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin)
+    transport.opens = [StreamScript(events=[b"a", b"b"])]  # the runner is done straight away
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP, timeout_s=0.05))
+    received: list[bytes] = []
+    async for chunk in stream:
+        received.append(chunk)
+        await asyncio.sleep(0.08)  # the caller is still handling a chunk when timeout_s runs out
+    assert received == [b"a", b"b"]
+    assert stream.job.state == "succeeded" and stream.job.attempts[0].outcome == "succeeded"
+    assert engine.admission.running == 0
 
 
 async def test_idle_applies_between_chunks_only(

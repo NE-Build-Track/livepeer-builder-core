@@ -12,7 +12,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from livepeer_builder.contracts import (
@@ -56,6 +56,7 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
+from livepeer_builder.http.streaming import stream_response
 from livepeer_builder.runtime import BuilderEngine
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
@@ -172,19 +173,8 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     ) -> Response:
         if stream or "text/event-stream" in request.headers.get("accept", ""):
             opened = await engine.jobs.stream(actor, body)
-
-            async def passthrough() -> AsyncIterator[bytes]:
-                try:
-                    async for chunk in opened:
-                        yield chunk
-                except JobFailed:
-                    return  # after the first byte the response just ends; the job record has the outcome
-
-            return StreamingResponse(
-                passthrough(),
-                status_code=opened.status_code,
-                media_type=opened.content_type,
-                headers={JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"},
+            return await stream_response(
+                opened, {JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"}
             )
         result = await engine.jobs.run(actor, body)
         return Response(

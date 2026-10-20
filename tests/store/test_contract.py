@@ -201,3 +201,25 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
         latest.id,
         first.id,
     ]
+
+
+async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:
+    """A stream writes its sessions at open and at end; a match made in between survives (D39)."""
+    usage = UsageRow(
+        id="u1", event_id=None, status="applied", manifest_id="m1", allocation_id="a1", payment_session_id="s1",
+        request_id=None, pipeline=None, computed_fee_eth=Decimal("1"), computed_fee_usd=None, currency=None,
+        created_at=clock.now(),
+    )  # fmt: skip
+    await sql.apply_usage([usage], SyncCheckpoint(resume_cursor="c1"))
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    await sql.start_attempt(make_attempt(job.id, clock))
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1",), allocation_id="a1"))
+    assert await sql.match_sessions(()) == {job.id}  # cost sync matched it while the stream ran
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1", "m2"), allocation_id="a1"))
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert [(s.manifest_id, s.payment_session_id, s.match) for s in loaded.attempts[0].sessions] == [
+        ("m1", "s1", "matched"),
+        ("m2", None, "unmatched"),
+    ]

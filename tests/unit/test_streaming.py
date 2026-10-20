@@ -167,7 +167,7 @@ async def test_aclose_records_an_abandoned_attempt(
 async def test_cancelling_the_consumer_abandons_the_stream(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await provisioned(make_engine, admin, stream_settle_s=0)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"])]
     stream = await engine.jobs.stream(alice, JobRequest(app=APP))
 
@@ -235,19 +235,8 @@ async def test_rest_streams_the_body_with_the_job_id_header(
         job = (await client.get(f"/v1/jobs/{job_id}", headers=headers)).json()
         assert job["state"] == "succeeded" and job["result"]["size_bytes"] == len(body)
 
-        # a failure after the first byte ends the response; the record says why
-        transport.opens = [
-            StreamScript(events=[b"half", RunnerCallError("http", "500", payment_sent=True, status_code=500)])
-        ]
-        async with client.stream(
-            "POST", "/v1/jobs?stream=true", json={"app": APP}, headers=headers
-        ) as response:
-            job_id = response.headers["livepeer-job-id"]
-            assert await response.aread() == b"half"
-        job = (await client.get(f"/v1/jobs/{job_id}", headers=headers)).json()
-        assert job["state"] == "uncertain" and job["failure"]["kind"] == "runner_error"
-
-        # a failure before the first byte is an ordinary error response
+        # a failure after the first byte aborts the response (tests/unit/test_stream_http.py);
+        # a failure before the stream opens is an ordinary error response
         transport.opens = [
             RunnerCallError("payment", "402 allowance exhausted", payment_sent=False, status_code=402)
         ]

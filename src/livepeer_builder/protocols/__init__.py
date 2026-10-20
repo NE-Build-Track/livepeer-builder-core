@@ -125,7 +125,12 @@ class RunnerStream(Protocol):
 
 @runtime_checkable
 class StreamingRunnerTransport(RunnerTransport, Protocol):
-    """A transport that can also hand the response back unbuffered. Optional: ``jobs.stream`` needs it."""
+    """A transport that can also hand the response back unbuffered. Optional: ``jobs.stream`` needs it.
+
+    ``open`` returns once the runner answered with its status and headers. It must give up after
+    ``request.first_byte_timeout_s`` and raise ``RunnerCallError("timeout", ...)`` with the payment
+    evidence so far; the engine stops an ``open`` that runs well past that and treats it as paid (D35).
+    """
 
     async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerStream: ...
 
@@ -221,7 +226,12 @@ class JobRepo(Protocol):
 
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
-    async def finish_attempt(self, attempt: Attempt) -> None: ...  # updated after the call
+    async def finish_attempt(self, attempt: Attempt) -> None:
+        """Update the attempt after the call. May run more than once (a stream writes at open and end).
+
+        Signed sessions are append-only: add the manifests not stored yet and leave stored rows as they
+        are, because cost sync owns their match columns (D39).
+        """
 
     async def finish_job(
         self,

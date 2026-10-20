@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from livepeer_builder.contracts.common import Contract
 
@@ -24,8 +24,17 @@ class JobRequest(Contract):
     model: str | None = None
     mode: ExecutionMode = "immediate"
     max_attempts: int = Field(default=3, ge=1, le=10)
-    timeout_s: float = Field(default=300.0, gt=0, le=3600)  # the whole call, streamed or not
-    idle_timeout_s: float | None = Field(default=None, gt=0, le=3600)  # streams: max gap between chunks
+    timeout_s: float = Field(default=300.0, gt=0, le=3600)  # the whole job, from its start to the last byte
+    # streams only (D35): request → first body chunk (capped at timeout_s), and the longest gap between
+    # chunks once data flows. None turns the idle limit off.
+    first_byte_timeout_s: float = Field(default=60.0, gt=0, le=3600)
+    idle_timeout_s: float | None = Field(default=60.0, gt=0, le=3600)
+
+    @model_validator(mode="after")
+    def _first_byte_within_total(self) -> "JobRequest":
+        if "first_byte_timeout_s" in self.model_fields_set and self.first_byte_timeout_s > self.timeout_s:
+            raise ValueError("first_byte_timeout_s cannot be longer than timeout_s")
+        return self
 
 
 # "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment

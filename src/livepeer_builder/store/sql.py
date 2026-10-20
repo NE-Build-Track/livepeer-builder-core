@@ -204,8 +204,11 @@ class SqlStore:
         )
         async with self.engine.begin() as conn:
             await conn.execute(update(t.attempts).where(key).values(_attempt_values(attempt)))
-            await conn.execute(delete(t.payment_sessions).where(session_key))
-            for seq, session in enumerate(attempt.sessions):
+            # Append-only (D39): cost sync owns the match columns, so a row it matched is never rewritten.
+            stored = await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
+            known = [row[0] for row in stored]
+            new = [s for s in attempt.sessions if s.manifest_id not in known]
+            for seq, session in enumerate(new, start=len(known)):
                 await conn.execute(
                     insert(t.payment_sessions).values(
                         job_id=str(attempt.job_id),

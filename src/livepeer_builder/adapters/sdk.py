@@ -7,6 +7,7 @@ signs, just before the paid request goes out. The adapter derives ``manifest_ids
 ``payment_sent`` from those sessions, so the engine keeps owning failover and cost attribution.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from decimal import Decimal, InvalidOperation
@@ -149,11 +150,23 @@ class SdkRunnerTransport:
         )
 
     async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> "SdkRunnerStream":
-        """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here."""
+        """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here.
+
+        The SDK does not bound the wait for the runner's response headers, so this does
+        (``first_byte_timeout_s``, D35). A timeout keeps the sessions signed so far for cost sync.
+        """
         sessions = _SignedSessions()
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
-            stream = await call_runner(url, stream=True, **kwargs)
+            async with asyncio.timeout(request.first_byte_timeout_s):
+                stream = await call_runner(url, stream=True, **kwargs)
+        except TimeoutError as error:
+            raise RunnerCallError(
+                "timeout",
+                f"no response from {url} within {request.first_byte_timeout_s:g}s",
+                payment_sent=sessions.signed,
+                manifest_ids=tuple(sessions.manifest_ids),
+            ) from error
         except LivepeerGatewayError as error:
             raise call_error(
                 error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)

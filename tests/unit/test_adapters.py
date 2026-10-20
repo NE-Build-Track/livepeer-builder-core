@@ -1,5 +1,6 @@
 """Adapters: the Batteries wire format, SDK error mapping, secret stores, and settings."""
 
+import asyncio
 import json
 from decimal import Decimal
 from types import SimpleNamespace
@@ -409,3 +410,19 @@ def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
     assert first.gpu is not None and (first.gpu.name, first.gpu.vram_mb) == ("H100", 81920)
     assert first.capacity_available == 5  # the node's own figure wins over counting session_ids
     assert (second.version, second.metadata, second.gpu, second.capacity_available) == (None, None, None, 0)
+
+
+async def test_open_gives_up_after_first_byte_timeout_and_keeps_the_signed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def signs_then_hangs(url: str, **kwargs: object) -> _FakeLiveStream:
+        kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
+        await asyncio.sleep(5)  # the runner took the payment and never sent its headers
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(sdk, "call_runner", signs_then_hangs)
+    transport = SdkRunnerTransport("https://signer.example")
+    with pytest.raises(RunnerCallError) as timed_out:
+        await transport.open(_runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), "lpg_k")
+    assert timed_out.value.kind == "timeout" and "0.05s" in str(timed_out.value)
+    assert timed_out.value.payment_sent and timed_out.value.manifest_ids == ("m-3",)

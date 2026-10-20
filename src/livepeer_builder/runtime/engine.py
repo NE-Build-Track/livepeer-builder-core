@@ -41,6 +41,7 @@ from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
+from livepeer_builder.services.streams import StreamLimits
 from livepeer_builder.store import PurgeReport, SqlStore, current_revision, purge
 
 _LOG = logging.getLogger(__name__)
@@ -187,6 +188,11 @@ class BuilderEngine:
             policy,
             admission,
             clock,
+            StreamLimits(
+                finalize_timeout_s=settings.stream_finalize_timeout_s,
+                drain_timeout_s=settings.stream_drain_timeout_s,
+                settle_s=settings.stream_settle_s,
+            ),
         )
         worker = CostSyncWorker(usage_source, store) if usage_source is not None else None
         costs = CostService(store, policy, clock, worker, payments, settings.cost_sync_interval_s)
@@ -220,6 +226,7 @@ class BuilderEngine:
         _LOG.info("engine started", extra={"event": "engine.started", "version": package_version()})
 
     async def stop(self) -> None:
+        await self.jobs.close_streams()  # before the store closes: open streams drain, then end abandoned
         self._stop.set()
         for task in self._tasks:
             task.cancel()

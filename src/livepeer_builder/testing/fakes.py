@@ -98,7 +98,9 @@ class StreamScript:
     """What ScriptedStreamTransport hands back for one ``open``.
 
     ``events`` play in order: ``bytes`` is a chunk, a number sleeps that many seconds before the next
-    event (for idle and total timeouts), and a RunnerCallError is raised mid-stream.
+    event (for idle and total timeouts), and a RunnerCallError is raised mid-stream. ``open_delay_s``
+    delays the answer to ``open``; a transport that ``honors_deadline`` gives up after
+    ``first_byte_timeout_s`` the way SdkRunnerTransport does, one that does not just keeps waiting.
     """
 
     events: list[StreamEvent] = field(default_factory=list)
@@ -106,6 +108,8 @@ class StreamScript:
     content_type: str = "text/event-stream"
     manifest_ids: tuple[str, ...] = ("manifest-1",)
     payment_sent: bool = True
+    open_delay_s: float = 0.0
+    honors_deadline: bool = True
 
 
 class ScriptedStream:
@@ -161,6 +165,12 @@ class ScriptedStreamTransport(ScriptedTransport):
         step = self.opens.pop(0)
         if isinstance(step, RunnerCallError):
             raise step
+        if step.honors_deadline and step.open_delay_s > request.first_byte_timeout_s:
+            await asyncio.sleep(request.first_byte_timeout_s)
+            raise RunnerCallError(
+                "timeout", "no response", payment_sent=step.payment_sent, manifest_ids=step.manifest_ids
+            )
+        await asyncio.sleep(step.open_delay_s)
         stream = ScriptedStream(step)
         self.streams.append(stream)
         return stream

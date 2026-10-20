@@ -109,10 +109,14 @@ def type_name(annotation: Any) -> str:
 
 
 def _methods(cls: type, own_only: bool = False) -> list[str]:
-    """Public methods, inherited included unless ``own_only`` (EngineStore lists its repos separately)."""
+    """Public properties and methods, inherited included unless ``own_only`` (EngineStore lists its repos
+    separately). ``__aiter__`` counts as public: it is how a stream is read."""
     lines = []
+    for name, prop in inspect.getmembers(cls, predicate=lambda m: isinstance(m, property)):
+        if not name.startswith("_") and prop.fget is not None:
+            lines.append(f"        +{name} {type_name(typing.get_type_hints(prop.fget).get('return'))}")
     for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
-        if name.startswith("_") or (own_only and name not in vars(cls)):
+        if (name.startswith("_") and name != "__aiter__") or (own_only and name not in vars(cls)):
             continue
         hints = typing.get_type_hints(member)
         params = [p for p in inspect.signature(member).parameters if p != "self"]

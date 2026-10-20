@@ -149,9 +149,9 @@ disconnect under Starlette or anyio still writes the job and releases the slot. 
 when it succeeded or the caller stopped it, and raises `JobFailed` otherwise.
 
 Session rows are append-only (D39): the end-of-stream write adds manifests signed after the first
-byte and never resets a match cost sync made while the stream ran. A buffered job funded in several
-rounds logs every round under one `payment_session_id` (14 October evidence: 3 and 4 rows); a
-stream is expected to do the same, and the 19 October streams were too short to show it.
+byte and never resets a match cost sync made while the stream ran. A stream funded in several rounds
+logs every round under one `payment_session_id`, as a buffered job does (20 October evidence: 16
+rows for one 55 s stream, matched mid-stream and still matched after the end).
 
 ### REST (D37)
 

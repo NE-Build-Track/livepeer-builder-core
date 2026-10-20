@@ -50,7 +50,7 @@ both jobs matched a logged session.
 - Streaming adds no payment round trip before the first byte: the 402 is paid once at `open`, and
   cost sync attributes the stream exactly like a buffered job. Each stream here lasted about 1.3 s,
   under the SDK's 3 s funding interval, so each produced **one** usage row. This run does not show a
-  stream funded in several rounds; the rerun after the 20 October fixes is meant to.
+  stream funded in several rounds; the [20 October rerun](2026-10-20-streaming-fixes-live.md) does.
 - `max_context` differs per orchestrator for the same app. An application deriving a context window
   from `Runner.metadata` should take the smallest value across the runners the engine may choose.
 - Spend for this evidence: about $0.00022.

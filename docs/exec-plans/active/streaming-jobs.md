@@ -72,8 +72,10 @@ LLM's server-sent events, synthesized audio and ndjson progress all ride the sam
 - [x] `JobStream` exported from `livepeer_builder`; docs and generated files updated; 502 tests pass,
       including an ASGI disconnect test on both the cancel-scope (2.3) and send-raises (2.4) paths, which
       fail when finishing runs in the caller's task.
-- [ ] Live rerun: several funding rounds in one stream, a stream past one cost-sync cycle (D39), a client
-      disconnect (D34), and `complete()` (D38).
+- [x] Live rerun on ChatLPT's payment stack: 16 funding rows under one session in a 55 s stream, a match
+      made mid-stream kept by the end write (D39), a client disconnect through uvicorn releasing the slot
+      after one funding row (D34), and `complete()` recorded as `delivered` (D38)
+      ([evidence](../../references/evidence/2026-10-20-streaming-fixes-live.md)). Spend about $0.0021.
 ## Design
 
 ### Contract
@@ -193,6 +195,8 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
 - [x] 2026-10-20: review of `ebedff1`/`973ac57` (two blocking bugs: a disconnect left the job `running`
       and the slot held; nothing bounded the wait for the first byte). Mike locked seven changes one by
       one; implemented as D34–D39 with tests, docs and regenerated files.
+- [x] 2026-10-20: live rerun of the fixes on ChatLPT's payment stack
+      ([evidence](../../references/evidence/2026-10-20-streaming-fixes-live.md)).
 
 ## Decision log
 

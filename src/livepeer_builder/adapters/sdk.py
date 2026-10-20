@@ -1,10 +1,11 @@
 """Python gateway SDK adapters: signer discovery and the paid runner call.
 
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
-comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#77, pinned in
-pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it for every session the signer
-signs, just before the paid request goes out. The adapter derives ``manifest_ids`` and
-``payment_sent`` from those sessions, so the engine keeps owning failover and cost attribution.
+comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81 /
+NE-Build-Track/livepeer-python-gateway#3, pinned in pyproject.toml; docs/references/sdk-gateway.md).
+The SDK calls it for every new payment session obtained from the signer, just before the paid
+request goes out. The adapter derives ``manifest_ids`` and ``payment_sent`` from those sessions,
+so the engine keeps owning failover and cost attribution.
 """
 
 import json
@@ -61,9 +62,9 @@ class SignerDiscoverySource:
 class _SignedSessions:
     """Collects what the signer signed during one call (``on_payment_session``).
 
-    A reported session means the signer charged the allocation. It counts as payment sent even if
-    the SDK then finds the payment unusable and does not send it: that is conservative, so the
-    engine never fails over (or retries) work that may already be paid for.
+    A reported session means ``get_payment()`` obtained a valid payment from the signer and the
+    allocation was charged. It counts as payment sent before the paid request goes out: that is
+    conservative, so the engine never fails over (or retries) work that is already paid for.
     """
 
     def __init__(self) -> None:

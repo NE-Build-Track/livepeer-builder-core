@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import aiohttp
 import httpx
 import pytest
-from livepeer_gateway.errors import LivepeerHTTPError
+from livepeer_gateway.errors import LivepeerHTTPError, PaymentError
 
 from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource, allowance_from_body
@@ -426,3 +426,54 @@ async def test_open_gives_up_after_first_byte_timeout_and_keeps_the_signed_sessi
         await transport.open(_runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), "lpg_k")
     assert timed_out.value.kind == "timeout" and "0.05s" in str(timed_out.value)
     assert timed_out.value.payment_sent and timed_out.value.manifest_ids == ("m-3",)
+
+
+@pytest.mark.parametrize(("signer_url", "credential"), [("https://signer.example", "lpg_k"), (None, None)])
+async def test_open_timeout_or_signing_failure_before_callback_leaves_payment_sent_false(
+    monkeypatch: pytest.MonkeyPatch, signer_url: str | None, credential: str | None
+) -> None:
+    async def hangs_while_signing(url: str, **kwargs: object) -> _FakeLiveStream:
+        await asyncio.sleep(5)  # cancelled inside signing: no on_payment_session, no payment sent
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(sdk, "call_runner", hangs_while_signing)
+    with pytest.raises(RunnerCallError) as timed_out:
+        await SdkRunnerTransport(signer_url).open(
+            _runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), credential
+        )
+    assert (timed_out.value.kind, timed_out.value.payment_sent, timed_out.value.manifest_ids) == (
+        "timeout",
+        False,
+        (),
+    )
+
+    async def invalid_signer_reply(url: str, **kwargs: object) -> _FakeLiveStream:
+        raise PaymentError("GetPayment error: invalid 'segCreds' in response")
+
+    monkeypatch.setattr(sdk, "call_runner", invalid_signer_reply)
+    with pytest.raises(RunnerCallError) as payment_failed:
+        await SdkRunnerTransport(signer_url).open(_runner(), JobRequest(app="a/b"), credential)
+    assert (
+        payment_failed.value.kind,
+        payment_failed.value.payment_sent,
+        payment_failed.value.manifest_ids,
+    ) == ("payment", False, ())
+
+
+@pytest.mark.parametrize(("payload", "sent"), [(None, {}), ({"prompt": "hi"}, {"prompt": "hi"})])
+async def test_a_missing_payload_is_sent_as_an_empty_json_object(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, str] | None, sent: dict[str, str]
+) -> None:
+    seen: list[object] = []
+
+    async def records(url: str, **kwargs: object) -> object:
+        seen.append(kwargs["payload"])
+        if kwargs.get("stream"):
+            return _FakeLiveStream([])
+        return SimpleNamespace(content=b"{}", data={}, content_type="application/json", session_id="")
+
+    monkeypatch.setattr(sdk, "call_runner", records)
+    transport = SdkRunnerTransport("https://signer.example")
+    await transport.call(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
+    await transport.open(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
+    assert seen == [sent, sent]

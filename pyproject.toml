@@ -18,10 +18,11 @@ dependencies = [
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "cryptography>=42",
-    # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
-    # livepeer-python-gateway#77 (on_payment_session reports LivePaymentSession.manifest_id).
-    # Re-pin to its merge commit on main once it merges, then to a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4",
+    # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of NE
+    # dev/bytestreaming (NE livepeer-python-gateway#5): upstream main plus on_payment_session
+    # (livepeer-python-gateway#81; reports LivePaymentSession.manifest_id) and streamable runner bodies.
+    # Re-pin to its merge commit once it merges, then to a release (tech debt T1).
+    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@3238731d319638ec7b5303fdbb0697c90ff7400b",
 ]
 
 [project.optional-dependencies]

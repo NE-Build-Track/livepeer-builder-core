@@ -207,6 +207,11 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
 - [x] 2026-10-21: automated review of `9e61cde`: leaving the loop went through the settle window (true
       only without `async with`: inside it, `__aexit__` abandons first), and shutdown could close the
       store under a final write. Fixed with D40 and a shutdown wait.
+- [x] 2026-10-21: SDK re-pinned to NE `dev/bytestreaming` `3238731` (payment session callback from
+      [livepeer-python-gateway#81](https://github.com/livepeer/livepeer-python-gateway/pull/81) and
+      streamable runner bodies on upstream `main`). The engine does not use streamable bodies yet.
+      Adapter aligned with #81 (D41): `on_payment_session` is the sole source of `payment_sent` (no
+      callback = `payment_sent=False` and job `failed`), and a missing payload is sent as `{}`.
 
 ## Decision log
 
@@ -219,3 +224,7 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
   never from parsing `[DONE]`. Source: Mike, review walkthrough.
 - 2026-10-20: Defaults over required choices: every new deadline and setting has a default, so a builder
   only touches them when they need to. Source: Mike, review walkthrough.
+- 2026-10-21: With the `3238731` SDK ([livepeer-python-gateway#81](https://github.com/livepeer/livepeer-python-gateway/pull/81)),
+  signing runs before the paid runner request and `on_payment_session` fires only once a valid payment
+  session is obtained, so no callback means `payment_sent=False` and the job ends `failed`; a missing
+  payload keeps the `{}` body (D41). Source: PR #31.

@@ -1,10 +1,12 @@
 """Python gateway SDK adapters: signer discovery and the paid runner call.
 
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
-comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#77, pinned in
-pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it for every session the signer
-signs, just before the paid request goes out. The adapter derives ``manifest_ids`` and
-``payment_sent`` from those sessions, so the engine keeps owning failover and cost attribution.
+comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81, pinned in
+pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it once for each new payment session
+after the signer returns a valid payment and before the paid request goes out. The adapter derives
+``manifest_ids`` and ``payment_sent`` from those sessions: if signing fails or is cancelled before
+the callback runs, ``payment_sent`` stays ``False`` and the engine keeps owning failover and cost
+attribution.
 """
 
 import asyncio
@@ -75,9 +77,11 @@ class SignerDiscoverySource:
 class _SignedSessions:
     """Collects what the signer signed during one call (``on_payment_session``).
 
-    A reported session means the signer charged the allocation. It counts as payment sent even if
-    the SDK then finds the payment unusable and does not send it: that is conservative, so the
-    engine never fails over (or retries) work that may already be paid for.
+    ``on_payment_session`` runs only after ``LivePaymentSession.get_payment()`` validates a signed
+    payment and before the paid request is sent to the runner. A reported session means the signer
+    charged the allocation and counts as ``payment_sent``, so the engine never fails over (or
+    retries) work that was paid for. If signing fails or is cancelled before the callback runs,
+    ``signed`` stays ``False`` (no payment sent).
     """
 
     def __init__(self) -> None:
@@ -113,7 +117,8 @@ class SdkRunnerTransport:
         url = runner.url.rstrip("/") + request.path
         kwargs: dict[str, Any] = {
             "runner": instance,
-            "payload": request.payload,
+            # The SDK sends an empty body for None; runners expect the JSON object earlier pins sent.
+            "payload": {} if request.payload is None else request.payload,
             "method": request.method,
             "signer_url": self._signer_url if paid else None,
             "signer_headers": {"Authorization": f"Bearer {credential}"} if paid else None,
@@ -146,14 +151,15 @@ class SdkRunnerTransport:
             content_type=result.content_type or "application/json",
             data=result.data if result.content is None else None,
             manifest_ids=tuple(sessions.manifest_ids),
-            payment_sent=sessions.signed or bool(result.session_id),
+            payment_sent=sessions.signed,
         )
 
     async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> "SdkRunnerStream":
         """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here.
 
         The SDK does not bound the wait for the runner's response headers, so this does
-        (``first_byte_timeout_s``, D35). A timeout keeps the sessions signed so far for cost sync.
+        (``first_byte_timeout_s``, D35). A timeout keeps the sessions signed so far for cost sync;
+        if it hits before ``on_payment_session`` runs, ``payment_sent`` is ``False``.
         """
         sessions = _SignedSessions()
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
@@ -202,7 +208,7 @@ class SdkRunnerStream:
 
     @property
     def payment_sent(self) -> bool:
-        return self._sessions.signed or self._stream.payment_session is not None
+        return self._sessions.signed
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self._iterate()

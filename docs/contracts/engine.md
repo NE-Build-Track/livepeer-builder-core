@@ -26,7 +26,8 @@ names the runner `app`; `capability` and `model` are labels only.
 
 `JobRequest`: `app`, `path`, `method`, `payload`, `operation_ref`, `mode`, `max_attempts`,
 `timeout_s` (the whole job), `first_byte_timeout_s` and `idle_timeout_s` (streams only, 60 s each; see
-[Streaming](#deadlines-d35)), plus the labels `capability` and `model`.
+[Streaming](#deadlines-d35)), plus the labels `capability` and `model`. The SDK transport sends a
+missing `payload` as the JSON object `{}` (D41).
 
 | State | Meaning |
 | --- | --- |
@@ -126,8 +127,10 @@ The admission slot is held until the stream ends.
 `first_byte_timeout_s` and `idle_timeout_s` measure the runner's silence, so they count only while
 the caller waits for data; a slow reader is not the runner's fault. A timeout never fails over to
 another runner, paid or not, exactly as for `run`. The SDK transport enforces the first-byte limit
-itself and keeps the sessions signed so far; the engine stops a transport that runs 5 s past it and
-treats the payment as sent, because it cannot know.
+itself and keeps the sessions signed so far: a timeout after `on_payment_session` has
+`payment_sent=True` (job `uncertain`), while a timeout or failure during signing before
+`on_payment_session` has `payment_sent=False` (job `failed`, D41). The engine stops a transport that
+runs 5 s past the limit and treats the payment as sent, because it cannot know.
 
 ### How a stream ends
 

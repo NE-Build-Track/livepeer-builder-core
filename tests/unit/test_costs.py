@@ -1,5 +1,7 @@
 """ISS-02 / ISS-04: cost sync, classification, projections (corrected), summary and reconciliation."""
 
+import asyncio
+import contextlib
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -19,7 +21,13 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.services.costs import classify
-from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
+from livepeer_builder.testing import (
+    FakeAllocationManager,
+    FakeUsageSource,
+    FixedClock,
+    ScriptedTransport,
+    runner,
+)
 from tests.conftest import EngineFactory
 
 APP = "example/echo"
@@ -72,6 +80,16 @@ def test_classification_covers_every_class() -> None:
 
     unpaid = classify(job_with(("refused", (), False)), [])
     assert unpaid.status == "none" and unpaid.attempts == ()
+
+
+def test_a_running_job_is_pending_until_it_ends() -> None:
+    attempts = (("unreachable", (), False), ("in_flight", (), False))  # the second has not paid yet
+    running = classify(job_with(*attempts, state="running"), [])
+    assert running.status == "pending" and running.attempts == ()  # it may still pay: not a known zero
+    assert classify(job_with(*attempts[:1], state="failed"), []).status == "none"
+    # Restart recovery leaves the in-flight attempt unpaid on an uncertain job. Payment may have gone out.
+    interrupted = classify(job_with(("in_flight", (), False), state="uncertain"), [])
+    assert interrupted.status == "pending" and interrupted.attempts == ()
 
 
 def test_usd_total_only_when_every_row_is_priced() -> None:
@@ -208,6 +226,116 @@ async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
     assert report.rows_new == 0
     observed = await engine.costs.for_job(alice, job.id)
     assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.4")
+
+
+async def test_a_job_synced_while_running_never_reads_none(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, usage: FakeUsageSource
+) -> None:
+    engine = await make_engine(
+        default_currency="ETH", runners=(runner(url="https://r1"), runner(url="https://r2"))
+    )
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    release, entered = asyncio.Event(), asyncio.Event()
+
+    class PaysLate(ScriptedTransport):
+        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+            if not self.calls:  # the first runner fails before payment and the job fails over
+                self.calls.append((r.url, credential))
+                raise RunnerCallError("unreachable", "self-signed certificate", payment_sent=False)
+            entered.set()  # the second attempt is in flight and has not paid yet
+            await release.wait()  # the test sets release in a finally, so a failed assertion unblocks this
+            return ScriptedTransport.ok(manifest_ids=("m-late",))
+
+    engine.jobs._transport = PaysLate()
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
+    try:
+        await entered.wait()
+        job = (await engine.jobs.list_jobs(alice))[0]
+        assert job.state == "running"
+        assert job.attempts[0].outcome == "unreachable"
+        assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # no projection yet
+        assert (await engine.costs.sync_once()).jobs_updated == 1
+        assert await engine.store.get_projection(job.id) is None  # nothing classified: do not freeze pending
+        assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+
+        release.set()
+        assert (await task).job.state == "succeeded"
+        assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+        await engine.costs.sync_once()  # paid, no usage row yet
+        waiting = await engine.costs.for_job(alice, job.id)
+        assert waiting.status == "pending"
+        assert [attempt.cost_class for attempt in waiting.attempts] == ["pending"]
+
+        usage.rows = [row("u1", "sess-late", "0.3", allocation=actor.allocation_id, manifest="m-late")]
+        await engine.costs.sync_once()
+        observed = await engine.costs.for_job(alice, job.id)
+        assert observed.status == "observed"
+        assert observed.fees.fee_eth == Decimal("0.3")
+        assert [(attempt.attempt_number, attempt.cost_class) for attempt in observed.attempts] == [
+            (2, "delivered")
+        ]
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, JobFailed):
+                await task
+
+
+async def test_a_job_that_fails_unpaid_after_a_running_sync_reads_none(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+) -> None:
+    engine = await make_engine(
+        default_currency="ETH", runners=(runner(url="https://r1"), runner(url="https://r2"))
+    )
+    await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    release, entered = asyncio.Event(), asyncio.Event()
+
+    class FailsUnpaid(ScriptedTransport):
+        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+            self.calls.append((r.url, credential))
+            if len(self.calls) == 1:  # fail over before payment; the next attempt is the one still in flight
+                raise RunnerCallError("unreachable", "self-signed certificate", payment_sent=False)
+            entered.set()
+            await release.wait()
+            raise RunnerCallError("unreachable", "connection dropped", payment_sent=False)
+
+    engine.jobs._transport = FailsUnpaid()
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
+    try:
+        await entered.wait()
+        job = (await engine.jobs.list_jobs(alice))[0]
+        assert job.state == "running"
+        await engine.costs.sync_once()  # would previously store pending and keep serving it after the failure
+        assert await engine.store.get_projection(job.id) is None
+        assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+
+        release.set()
+        with pytest.raises(JobFailed):
+            await task
+        assert (await engine.costs.for_job(alice, job.id)).status == "none"  # no second sync required
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, JobFailed):
+                await task
 
 
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(

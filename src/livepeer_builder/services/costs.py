@@ -5,6 +5,8 @@ Classification (accepted 12 October, docs/contracts/payments.md#cost-classificat
   failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors)
   uncertain             the job is uncertain, or the attempt never reported back
   pending               payment went out and no applied usage row has arrived yet (never zero)
+A job with no classified attempt is ``none`` once it has ended as ``succeeded`` or ``failed``; a
+``running`` or ``uncertain`` job is ``pending``.
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
@@ -21,6 +23,7 @@ from uuid import UUID
 
 from livepeer_builder.contracts import (
     ActorContext,
+    Attempt,
     AttemptCost,
     CostClass,
     CostStatus,
@@ -141,6 +144,10 @@ class CostService:
 
     async def _refresh_projection(self, job: Job) -> JobCost:
         computed = await self._compute(job)
+        # Nothing has been classified yet. A stored pending row would keep reading pending after the
+        # job ends unpaid; for_job classifies a missing projection from the job, so the ending is immediate.
+        if computed.status == "pending" and not computed.attempts:
+            return computed
         previous = await self._store.get_projection(job.id)
         status: CostStatus = computed.status
         if previous is not None and previous.status in ("observed", "corrected") and status == "observed":
@@ -243,41 +250,57 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     applied = [row for row in rows if row.status == "applied"]
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
-        if not attempt.sessions and not attempt.payment_sent:
-            continue
-        matched = {
-            session.payment_session_id
-            for session in attempt.sessions
-            if session.match == "matched" and session.payment_session_id
-        }
-        mine = [row for row in applied if row.payment_session_id in matched]
-        cost_class: CostClass
-        if any(session.match == "ambiguous" for session in attempt.sessions):
-            cost_class = "uncertain"
-        elif not mine:
-            cost_class = "pending"
-        elif attempt.outcome == "succeeded":
-            cost_class = "delivered"
-        elif job.state == "uncertain" or attempt.outcome == "in_flight":
-            cost_class = "uncertain"
-        else:
-            cost_class = "failed_after_payment"
-        attempts.append(AttemptCost(attempt_number=attempt.number, cost_class=cost_class, fees=fees_of(mine)))
-    status: CostStatus
-    if not attempts:
-        status = "none"
-    elif any(attempt.cost_class == "pending" for attempt in attempts):
-        status = "pending"
-    else:
-        status = "observed"
+        cost = _classify_attempt(job, attempt, applied)
+        if cost is not None:
+            attempts.append(cost)
     return JobCost(
         job_id=job.id,
-        status=status,
+        status=_cost_status(job, attempts),
         fees=add_fees(attempt.fees for attempt in attempts),
         attempts=tuple(attempts),
         first_observed_at=None,
         updated_at=None,
     )
+
+
+def _classify_attempt(job: Job, attempt: Attempt, applied: Sequence[UsageRow]) -> AttemptCost | None:
+    """One attempt's charge. An attempt that never opened payment is omitted."""
+    if not attempt.sessions and not attempt.payment_sent:
+        return None
+    matched = {
+        session.payment_session_id
+        for session in attempt.sessions
+        if session.match == "matched" and session.payment_session_id
+    }
+    mine = [row for row in applied if row.payment_session_id in matched]
+    return AttemptCost(
+        attempt_number=attempt.number,
+        cost_class=_attempt_class(job, attempt, mine),
+        fees=fees_of(mine),
+    )
+
+
+def _attempt_class(job: Job, attempt: Attempt, mine: Sequence[UsageRow]) -> CostClass:
+    if any(session.match == "ambiguous" for session in attempt.sessions):
+        return "uncertain"
+    if not mine:
+        return "pending"
+    if attempt.outcome == "succeeded":
+        return "delivered"
+    if job.state == "uncertain" or attempt.outcome == "in_flight":
+        return "uncertain"
+    return "failed_after_payment"
+
+
+def _cost_status(job: Job, attempts: Sequence[AttemptCost]) -> CostStatus:
+    if not attempts:
+        # A running attempt may still pay. An uncertain one may already have paid before the engine stopped.
+        if job.state in ("running", "uncertain"):
+            return "pending"
+        return "none"
+    if any(attempt.cost_class == "pending" for attempt in attempts):
+        return "pending"
+    return "observed"
 
 
 def fees_of(rows: Iterable[UsageRow]) -> Fees:

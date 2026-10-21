@@ -113,9 +113,12 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 
 ### Job cost status
 
-`none` (no payment), `pending` (some paid attempt lacks rows), `observed`, `corrected` (the total
-changed after it was first observed, for example a metered session that signed again). Projections
-are persisted in `lpb_cost_projections` and updated by each cost sync.
+`none` (the job ended as `succeeded` or `failed` with no payment), `pending` (the job is `running`
+or `uncertain`, or some paid attempt lacks rows), `observed`, `corrected` (the total changed after
+it was first observed, for example a metered session that signed again). Projections are persisted
+in `lpb_cost_projections` and updated by each cost sync. A job that is `pending` only because it is
+still `running` or `uncertain`, with no classified attempt, is not written there: the read is
+classified from the job, so ending without payment becomes `none` without waiting for the next sync.
 
 ## Allowance
 

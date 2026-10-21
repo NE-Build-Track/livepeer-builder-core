@@ -26,12 +26,18 @@ M2 pins the SDK to the NE-Build-Track fork at the head of livepeer-python-gatewa
 
 ## Embed it
 
+Your backend authenticates users and calls the engine in-process. Full walkthrough:
+[docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
+
 ```python
 from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, JobRequest
 
 engine = await BuilderEngine.from_settings(EngineSettings.from_env())
 await engine.start()
-actor = ActorContext(actor_id="customer-42", permissions=frozenset({"discover", "jobs.run", "jobs.read"}))
+actor = ActorContext(
+    actor_id="customer-42",
+    permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
+)
 result = await engine.jobs.run(actor, JobRequest(app="livepeer-example/echo", path="/echo", payload={"x": 1}))
 cost = await engine.costs.for_job(actor, result.job.id)  # "pending" until Batteries reports it
 ```

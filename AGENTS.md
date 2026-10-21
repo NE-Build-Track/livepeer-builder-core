@@ -16,6 +16,7 @@ application. Delivery track: Cloud SPE Build Track, milestone **M2** (target 16 
 | The layers, and what may import what | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Component, sequence, state and ER diagrams | [docs/design-docs/architecture-diagrams.md](docs/design-docs/architecture-diagrams.md) |
 | How an enterprise replaces the defaults (interfaces, class diagrams) | [docs/design-docs/extending-the-engine.md](docs/design-docs/extending-the-engine.md) |
+| How to embed the engine in a Python backend | [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md) |
 | What we are building and why (scope, boundary) | [docs/product-specs/build-track-baseline.md](docs/product-specs/build-track-baseline.md) |
 | Milestones, tickets, and status for each M2 ticket | [docs/product-specs/milestones.md](docs/product-specs/milestones.md), [m2-traceability.md](docs/product-specs/m2-traceability.md) |
 | The rules every change follows | [docs/design-docs/core-beliefs.md](docs/design-docs/core-beliefs.md) |

@@ -105,7 +105,8 @@ Each third-party package is confined to one module so a dependency change has on
 ## Integration modes
 
 - **Imported:** `engine = await BuilderEngine.from_settings(...)`; the application authenticates its
-  own users and passes an `ActorContext`. The `AccessPolicy` still applies.
+  own users and passes an `ActorContext`. The `AccessPolicy` still applies. Walkthrough:
+  [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
 - **Service:** `lpb serve` (or `create_app(engine)`) runs the same engine behind REST. Requests are
   authenticated by the authenticator chain. Admin routes need an admin credential.
 

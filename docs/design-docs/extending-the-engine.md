@@ -143,7 +143,8 @@ await engine.start()
 ```
 
 The same engine serves both integration modes: call it in-process with your own `ActorContext`
-(imported), or pass it to `livepeer_builder.http.create_app(engine)` (service).
+(imported; [embedded-mode.md](../guides/embedded-mode.md)), or pass it to
+`livepeer_builder.http.create_app(engine)` (service).
 
 ## Rules every implementation must keep
 

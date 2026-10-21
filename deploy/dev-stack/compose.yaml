@@ -1,7 +1,8 @@
 # livepeer-builder dev stack. Optional; not part of CI. See README.md.
 #
 # Batteries (embedded Kafka) + livepeer/node remote signer + the engine. Orchestrators are assumed to
-# exist on the network: the signer discovers and pays the ones listed in config/signer.toml.
+# exist on the network: the engine discovers the ones listed in config/orchestrators.json, and the signer
+# pays them (D42). TLS is verified with the system trust store; nothing here installs extra certificates.
 # Upstream sources are pinned to the M2 baseline commits (docs/references/upstream-baseline.md).
 name: livepeer-builder-dev
 
@@ -30,12 +31,9 @@ services:
     network_mode: service:clearinghouse  # Kafka and the webhook listen on this namespace's loopback
     entrypoint: ["/usr/local/bin/livepeer-signer"]
     command: [--data-dir, /data/node, --config, /etc/signer.toml]
-    environment:
-      SSL_CERT_DIR: /etc/ssl/certs:/etc/ssl/pinned  # system CAs + orchestrator certs pinned by config/pin-orchestrator-certs.py
     volumes:
       - paid-state:/data
       - ./config/signer.toml:/etc/signer.toml:ro
-      - ./config/pinned-certs:/etc/ssl/pinned:ro
       - ./secrets:/run/secrets:ro
     depends_on:
       clearinghouse:
@@ -47,8 +45,12 @@ services:
       dockerfile: deploy/dev-stack/engine/Dockerfile
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/engine:local
     env_file: [.env]
+    environment:
+      LPB_ORCHESTRATOR_LIST: /etc/livepeer-builder/orchestrators.json
     ports: ["127.0.0.1:8080:8080"]
-    volumes: [engine-data:/data]
+    volumes:
+      - engine-data:/data
+      - ./config/orchestrators.json:/etc/livepeer-builder/orchestrators.json:ro
     depends_on: [signer]
 
 volumes:

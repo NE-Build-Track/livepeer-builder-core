@@ -13,7 +13,11 @@ from importlib.metadata import PackageNotFoundError, version
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
+from livepeer_builder.adapters.sdk import (
+    OrchestratorListDiscoverySource,
+    SdkRunnerTransport,
+    SignerDiscoverySource,
+)
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.config import EngineSettings
@@ -110,6 +114,10 @@ class BuilderEngine:
     ) -> "BuilderEngine":
         """Build an engine. Every argument after ``settings`` overrides one default adapter."""
         settings = settings or EngineSettings.from_env()
+        if settings.orchestrator_list and settings.discovery_url:
+            raise InvalidRequest(
+                "LPB_ORCHESTRATOR_LIST and LPB_DISCOVERY_URL are both set; configure one discovery source"
+            )
         if settings.batteries_url and not (
             settings.batteries_operator_token and settings.batteries_operator_token.get_secret_value()
         ):
@@ -149,7 +157,10 @@ class BuilderEngine:
             usage_source = source
             closers.append(source)
 
-        if discovery_source is None:
+        if discovery_source is None and settings.orchestrator_list:
+            # The engine owns the list; the signer only pays (D42).
+            discovery_source = OrchestratorListDiscoverySource(settings.orchestrator_list)
+        elif discovery_source is None:
             discovery_source = (
                 SignerDiscoverySource(
                     signer_url=settings.signer_url,

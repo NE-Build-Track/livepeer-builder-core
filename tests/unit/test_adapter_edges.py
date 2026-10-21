@@ -1,12 +1,18 @@
 """Adapter edge cases: Batteries routes and errors, SDK error classification and parsing, secret stores."""
 
+import asyncio
+import json
+import logging
+import ssl
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import aiohttp
 import httpx
 import pytest
-from livepeer_gateway.errors import PaymentError
+from livepeer_gateway.errors import LivepeerGatewayError, PaymentError
+from livepeer_gateway.remote_signer import RemoteSignerError
 
 from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import (
@@ -17,6 +23,7 @@ from livepeer_builder.adapters.batteries import (
     usage_row_from_item,
 )
 from livepeer_builder.adapters.sdk import (
+    OrchestratorListDiscoverySource,
     SdkRunnerTransport,
     SignerDiscoverySource,
     call_error,
@@ -142,6 +149,279 @@ async def test_signer_discovery_parses_entries(monkeypatch: pytest.MonkeyPatch) 
     source = SignerDiscoverySource(signer_url="https://s", signer_headers={"Authorization": "Bearer k"})
     (runner,) = await source.fetch()
     assert runner.rate is None and runner.orchestrator_url == "https://o"
+
+
+def _write_list(tmp_path: Path, payload: object) -> str:
+    path = tmp_path / "orchestrators.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+def _entries(orchestrator: str, *runner_urls: str) -> list[dict[str, object]]:
+    return [{"address": orchestrator, "runners": [{"url": url, "app": "a/b"} for url in runner_urls]}]
+
+
+def _untrusted(url: str) -> RemoteSignerError:
+    """What ``discover_runners`` raises for a certificate the process does not trust."""
+    key = SimpleNamespace(host="orch.example", port=8935, is_ssl=True, ssl=True)
+    cause = aiohttp.ClientConnectorCertificateError(
+        key,  # type: ignore[arg-type]
+        ssl.SSLCertVerificationError(1, "certificate verify failed: self-signed certificate"),
+    )
+    return RemoteSignerError(url, "failed to reach endpoint", cause=cause)
+
+
+def _events(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str, str | None]]:
+    return [
+        (record.event, record.orchestrator, getattr(record, "reason", None))  # type: ignore[attr-defined]
+        for record in caplog.records
+        if getattr(record, "event", "").startswith("discovery.orchestrator_")
+    ]
+
+
+async def test_orchestrator_list_reads_a_file_and_merges_partial_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(
+        tmp_path,
+        [
+            {"address": "https://ok.example:8935", "score": 1},
+            {"address": "  "},
+            {"address": ""},
+            {"score": 2},
+            "skip-me",
+            {"address": "https://down.example:8935"},
+            {"address": "https://also.example:8935"},
+        ],
+    )
+    seen: list[dict[str, object]] = []
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        seen.append(kwargs)
+        url = str(kwargs["discovery_url"])
+        if "down.example" in url:
+            raise RuntimeError("down")
+        return _entries(url.removesuffix("/discovery"), url.replace("/discovery", "/runner"))
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    runners = await OrchestratorListDiscoverySource(source).fetch()
+    assert [runner.url for runner in runners] == [
+        "https://ok.example:8935/runner",
+        "https://also.example:8935/runner",
+    ]
+    assert [runner.orchestrator_url for runner in runners] == [
+        "https://ok.example:8935",
+        "https://also.example:8935",
+    ]
+    # Only the discovery URL goes to an orchestrator: no signer bearer, no other headers.
+    assert seen == [
+        {"discovery_url": "https://ok.example:8935/discovery"},
+        {"discovery_url": "https://down.example:8935/discovery"},
+        {"discovery_url": "https://also.example:8935/discovery"},
+    ]
+
+
+async def test_orchestrator_list_reads_a_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_get_json(url: str, **kwargs: object) -> list[dict[str, str]]:
+        assert url == "https://list.example/orchestrators"
+        assert kwargs == {}  # no bearer goes to the list
+        return [{"address": "https://ok.example:8935"}]
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        assert kwargs == {"discovery_url": "https://ok.example:8935/discovery"}
+        return _entries("https://ok.example:8935", "https://runner.example")
+
+    monkeypatch.setattr(sdk, "get_json", fake_get_json)
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    (runner,) = await OrchestratorListDiscoverySource(" https://list.example/orchestrators ").fetch()
+    assert runner.url == "https://runner.example"
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("{}", "must be a JSON list"),
+        ("[]", "names no orchestrators"),
+        ('[{"address": ""}, {"address": 7}]', "names no orchestrators"),
+        ('[{"address": "ftp://orch.example"}]', "Invalid orchestrator URL"),
+        ("not json", "orchestrator list"),
+    ],
+)
+async def test_orchestrator_list_rejects_an_unusable_list(tmp_path: Path, payload: str, message: str) -> None:
+    path = tmp_path / "orchestrators.json"
+    path.write_text(payload, encoding="utf-8")
+    with pytest.raises(LivepeerGatewayError, match=message):
+        await OrchestratorListDiscoverySource(str(path)).fetch()
+
+
+async def test_orchestrator_list_rejects_a_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(LivepeerGatewayError, match="orchestrator list"):
+        await OrchestratorListDiscoverySource(str(tmp_path / "missing.json")).fetch()
+
+
+async def test_orchestrator_list_raises_the_first_error_when_every_orchestrator_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(
+        tmp_path, [{"address": "https://a.example:8935"}, {"address": "https://b.example:8935"}]
+    )
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        if "a.example" in str(kwargs["discovery_url"]):
+            await asyncio.sleep(0.01)  # the first error is the first in list order, not the first to finish
+        raise RuntimeError(f"down {kwargs['discovery_url']}")
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    with pytest.raises(RuntimeError, match=r"https://a\.example:8935/discovery"):
+        await OrchestratorListDiscoverySource(source).fetch()
+
+
+async def test_orchestrator_list_keeps_an_orchestrator_with_no_runners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(tmp_path, [{"address": "https://idle.example:8935"}])
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    assert await OrchestratorListDiscoverySource(source).fetch() == ()
+
+
+async def test_orchestrator_list_excludes_an_untrusted_certificate_and_logs_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = _write_list(
+        tmp_path, [{"address": "https://trusted.example"}, {"address": "https://self.example"}]
+    )
+    state = {"self": "untrusted"}
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        url = str(kwargs["discovery_url"])
+        if "self.example" in url and state["self"] == "untrusted":
+            raise _untrusted(url)
+        if "self.example" in url and state["self"] == "down":
+            raise RemoteSignerError(url, "timeout", cause=TimeoutError())
+        return _entries(url.removesuffix("/discovery"), url.replace("/discovery", "/runner"))
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    discovery = OrchestratorListDiscoverySource(source)
+    caplog.set_level(logging.INFO, logger=sdk.__name__)
+
+    (runner,) = await discovery.fetch()
+    assert runner.url == "https://trusted.example/runner"
+    await discovery.fetch()  # still untrusted: not logged again
+    assert _events(caplog) == [
+        ("discovery.orchestrator_excluded", "https://self.example/discovery", "untrusted_certificate")
+    ]
+
+    caplog.clear()
+    state["self"] = "down"
+    await discovery.fetch()  # a different reason is logged
+    state["self"] = "ok"
+    runners = await discovery.fetch()
+    assert [runner.url for runner in runners] == [
+        "https://trusted.example/runner",
+        "https://self.example/runner",
+    ]
+    assert _events(caplog) == [
+        ("discovery.orchestrator_excluded", "https://self.example/discovery", "failed"),
+        ("discovery.orchestrator_included", "https://self.example/discovery", None),
+    ]
+
+
+async def test_orchestrator_list_forgets_orchestrators_that_leave_the_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "orchestrators.json"
+    path.write_text(json.dumps([{"address": "https://a.example"}, {"address": "https://gone.example"}]))
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        if "gone.example" in str(kwargs["discovery_url"]):
+            raise RuntimeError("down")
+        return []
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    discovery = OrchestratorListDiscoverySource(str(path))
+    caplog.set_level(logging.INFO, logger=sdk.__name__)
+    await discovery.fetch()
+    path.write_text(json.dumps([{"address": "https://a.example"}]))  # re-read on every fetch
+    await discovery.fetch()
+    path.write_text(json.dumps([{"address": "https://a.example"}, {"address": "https://gone.example"}]))
+    await discovery.fetch()
+    excluded = [event for event in _events(caplog) if event[0] == "discovery.orchestrator_excluded"]
+    assert len(excluded) == 2  # logged again after it left and came back
+
+
+async def test_orchestrator_list_probes_each_address_once_and_each_runner_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(
+        tmp_path,
+        [
+            {"address": "https://a.example"},
+            {"address": "https://a.example/"},
+            {"address": "https://b.example"},
+        ],
+    )
+    probed: list[str] = []
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        url = str(kwargs["discovery_url"])
+        probed.append(url)
+        return _entries(url.removesuffix("/discovery"), "https://shared.example/runner")
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    (runner,) = await OrchestratorListDiscoverySource(source).fetch()
+    assert probed == ["https://a.example/discovery", "https://b.example/discovery"]
+    assert runner.orchestrator_url == "https://a.example"  # the first in list order
+
+
+async def test_orchestrator_list_bounds_concurrent_probes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(tmp_path, [{"address": f"https://o{index}.example"} for index in range(20)])
+    running = 0
+    peak = 0
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return []
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    await OrchestratorListDiscoverySource(source).fetch()
+    assert peak == sdk._PROBE_CONCURRENCY
+
+
+async def test_orchestrator_list_propagates_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(tmp_path, [{"address": "https://a.example"}])
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    with pytest.raises(asyncio.CancelledError):
+        await OrchestratorListDiscoverySource(source).fetch()
+
+
+def test_untrusted_certificate_follows_the_cause_chain() -> None:
+    assert sdk._untrusted_certificate(_untrusted("https://o/discovery"))
+    wrapped = LivepeerGatewayError("failed to reach endpoint")
+    wrapped.__cause__ = ssl.SSLCertVerificationError(1, "hostname mismatch")
+    assert sdk._untrusted_certificate(wrapped)
+    loop = RuntimeError("a")
+    loop.__context__ = RuntimeError("b")
+    loop.__context__.__context__ = loop  # a cycle ends the walk
+    assert not sdk._untrusted_certificate(loop)
+    assert not sdk._untrusted_certificate(
+        RemoteSignerError("https://o", "refused", cause=ConnectionRefusedError())
+    )
 
 
 def test_rates_reject_bad_prices() -> None:

@@ -9,7 +9,9 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | --- | --- | --- |
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
-| `LPB_SIGNER_URL`, `LPB_DISCOVERY_URL` | unset | Signer (discovery and payment), optional discovery override. Both unset → empty static discovery |
+| `LPB_SIGNER_URL` | unset | Payment signer. Also the discovery source when neither of the next two is set; all three unset → empty static discovery |
+| `LPB_ORCHESTRATOR_LIST` | unset | File path or `http(s)://` URL of go-livepeer `-orchWebhookUrl` JSON (`[{"address": "https://…"}]`). The engine re-reads it every interval and calls `GET /discovery` on each orchestrator itself; the signer only pays (D42). Not with `LPB_DISCOVERY_URL` (the engine refuses to start) |
+| `LPB_DISCOVERY_URL` | unset | One endpoint that already returns runner entries, instead of the signer's |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Required when `LPB_BATTERIES_URL` is set |
@@ -58,6 +60,7 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
+| One listed orchestrator fails or presents a certificate the trust store rejects | Left out of that snapshot and never called; `discovery.orchestrator_excluded` is logged once (reason `untrusted_certificate` or `failed`), and `discovery.orchestrator_included` when it answers again. Only when every orchestrator fails is it a discovery failure (D42) |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |

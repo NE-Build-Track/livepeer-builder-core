@@ -1,4 +1,4 @@
-"""Python gateway SDK adapters: signer discovery and the paid runner call.
+"""Python gateway SDK adapters: discovery (signer or engine-owned list) and the paid runner call.
 
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
 comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81, pinned in
@@ -11,12 +11,15 @@ attribution.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+import logging
+import ssl
+from collections.abc import AsyncIterator, Iterable
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 import aiohttp
-from livepeer_gateway.discovery import discover_runners
+from livepeer_gateway.discovery import discover_runners, orchestrator_discovery_urls
 from livepeer_gateway.errors import (
     LivepeerGatewayError,
     LivepeerHTTPError,
@@ -24,6 +27,7 @@ from livepeer_gateway.errors import (
     SignerRefreshRequired,
     SkipPaymentCycle,
 )
+from livepeer_gateway.http import get_json
 from livepeer_gateway.live_runner import (
     LiveRunnerCallStream,
     LiveRunnerInstance,
@@ -42,7 +46,11 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import RunnerCallError
 
+_LOG = logging.getLogger(__name__)
 _BODY_LIMIT = 4096
+# Orchestrators probed at once. Each probe is bounded by the SDK's 5 s timeout, so a 28-entry list
+# finishes within two rounds, inside the default 15 s discovery interval.
+_PROBE_CONCURRENCY = 16
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
 # may succeed. 400 = incomplete/expired params; 481 = price ceiling.
@@ -72,6 +80,119 @@ class SignerDiscoverySource:
             discovery_url=self._discovery_url,
         )
         return tuple(runners_from_entries(entries))
+
+
+class OrchestratorListDiscoverySource:
+    """Discovers runners from an engine-owned orchestrator list (D42).
+
+    The list is go-livepeer ``-orchWebhookUrl`` JSON (``[{"address": "https://...", "score": n}]``),
+    read from a file path or an http(s) URL. Each fetch re-reads it and calls ``GET /discovery`` on
+    every address, with TLS verified against the process trust store. An orchestrator that fails,
+    including one whose certificate the process does not trust, is left out of that snapshot and is
+    never called. The fetch raises when the list cannot be read or names no orchestrator, or when every
+    orchestrator fails, so ``DiscoveryService`` keeps the last good snapshot. No credential is sent to
+    the list or to the orchestrators.
+    """
+
+    def __init__(self, source: str) -> None:
+        self._source = source.strip()
+        self._excluded: dict[str, str] = {}  # discovery URL -> reason; logged only when it changes
+
+    async def fetch(self) -> tuple[Runner, ...]:
+        addresses = _orchestrator_addresses(await self._load())
+        urls = list(dict.fromkeys(orchestrator_discovery_urls(addresses)))
+        if not urls:
+            raise LivepeerGatewayError(f"orchestrator list {self._source} names no orchestrators")
+        limit = asyncio.Semaphore(_PROBE_CONCURRENCY)
+
+        async def probe(url: str) -> list[dict[str, Any]]:
+            async with limit:
+                found: list[dict[str, Any]] = await discover_runners(discovery_url=url)
+                return found
+
+        results = await asyncio.gather(*(probe(url) for url in urls), return_exceptions=True)
+        listed = set(urls)
+        self._excluded = {url: reason for url, reason in self._excluded.items() if url in listed}
+        entries: list[dict[str, Any]] = []
+        first_error: Exception | None = None
+        answered = False
+        for url, result in zip(urls, results, strict=True):
+            if isinstance(result, Exception):
+                if first_error is None:
+                    first_error = result
+                self._exclude(url, result)
+            elif isinstance(result, BaseException):
+                raise result
+            else:
+                answered = True
+                self._include(url)
+                entries.extend(result)
+        if not answered and first_error is not None:
+            raise first_error
+        return tuple(_unique_by_url(runners_from_entries(entries)))
+
+    async def _load(self) -> object:
+        if self._source.startswith(("http://", "https://")):
+            return await get_json(self._source)
+        try:
+            text = await asyncio.to_thread(Path(self._source).read_text, encoding="utf-8")
+            return json.loads(text)
+        except (OSError, ValueError) as error:
+            raise LivepeerGatewayError(f"orchestrator list {self._source}: {error}") from error
+
+    def _exclude(self, url: str, error: Exception) -> None:
+        reason = "untrusted_certificate" if _untrusted_certificate(error) else "failed"
+        if self._excluded.get(url) == reason:
+            return
+        self._excluded[url] = reason
+        _LOG.warning(
+            "orchestrator excluded from discovery",
+            extra={
+                "event": "discovery.orchestrator_excluded",
+                "orchestrator": url,
+                "reason": reason,
+                "error": str(error),
+            },
+        )
+
+    def _include(self, url: str) -> None:
+        if self._excluded.pop(url, None) is not None:
+            _LOG.info(
+                "orchestrator back in discovery",
+                extra={"event": "discovery.orchestrator_included", "orchestrator": url},
+            )
+
+
+def _orchestrator_addresses(payload: object) -> list[str]:
+    """go-livepeer ``deserializeWebhookJSON``: a JSON list; entries without an ``address`` are skipped."""
+    if not isinstance(payload, list):
+        raise LivepeerGatewayError(f"orchestrator list must be a JSON list, got {type(payload).__name__}")
+    addresses: list[str] = []
+    for item in payload:
+        address = item.get("address") if isinstance(item, dict) else None
+        if isinstance(address, str) and address.strip():
+            addresses.append(address.strip())
+    return addresses
+
+
+def _untrusted_certificate(error: BaseException) -> bool:
+    """True when a TLS certificate check caused ``error`` (the SDK wraps it, keeping ``cause``)."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (aiohttp.ClientConnectorCertificateError, ssl.SSLCertVerificationError)):
+            return True
+        seen.add(id(current))
+        current = getattr(current, "cause", None) or current.__cause__ or current.__context__
+    return False
+
+
+def _unique_by_url(runners: Iterable[Runner]) -> list[Runner]:
+    """One runner per URL, the first in list order: two orchestrators may advertise the same runner."""
+    unique: dict[str, Runner] = {}
+    for runner in runners:
+        unique.setdefault(runner.url, runner)
+    return list(unique.values())
 
 
 class _SignedSessions:

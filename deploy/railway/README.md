@@ -87,3 +87,26 @@ Health is `GET /livez` on the engine's public domain. Swagger is at `/docs`. Aut
 
 Kafka and the authorization webhook stay on the project private network. Do not attach a public
 proxy to Batteries or the signer.
+
+## Orchestrator list
+
+The engine discovers runners itself (D42). The image carries
+[engine/orchestrators.json](engine/orchestrators.json), go-livepeer `-orchWebhookUrl` JSON
+(`[{"address": "https://..."}]`), at `/etc/livepeer-builder/orchestrators.json`, and the Dockerfile
+sets `LPB_ORCHESTRATOR_LIST` to that path. Every discovery interval the engine re-reads the list and
+calls `GET /discovery` on each address.
+
+To use another list without a rebuild, set the engine service variable `LPB_ORCHESTRATOR_LIST` to an
+`http://` or `https://` URL that returns the same JSON (for example a discovery-service webhook). Do
+not also set `LPB_DISCOVERY_URL`: the engine refuses to start with both.
+
+Discovery and the paid call verify TLS with the image's system trust store. Nothing installs extra
+certificates. An orchestrator whose certificate that store does not accept, such as a self-signed one,
+is left out of discovery and never called. The engine logs `discovery.orchestrator_excluded` once
+when an orchestrator drops out and `discovery.orchestrator_included` when it comes back. `/readyz`
+reports `discovery_error` only when every orchestrator fails.
+
+The signer is not on the discovery path. It keeps its own `orchestrators.txt`, which only its
+`/discover-orchestrators` endpoint reads, and it pays whatever runner the engine selects, within its
+price ceilings and the authorization webhook. Edit `engine/orchestrators.json` to change which
+orchestrators the engine uses.

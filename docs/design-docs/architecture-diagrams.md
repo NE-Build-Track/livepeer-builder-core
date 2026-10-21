@@ -85,7 +85,7 @@ flowchart TB
         direction LR
         AAuth["ApiKeyAuthenticator<br/>AuthenticatorChain"]
         ASec["RoutingSecretStore<br/>(settings + Fernet DB)"]
-        ASdk["SignerDiscoverySource<br/>SdkRunnerTransport"]
+        ASdk["OrchestratorListDiscoverySource<br/>SignerDiscoverySource<br/>SdkRunnerTransport"]
         ABat["BatteriesClient<br/>BatteriesUsageSource"]
         SQL["SqlStore + Alembic<br/>backup · retention"]
     end

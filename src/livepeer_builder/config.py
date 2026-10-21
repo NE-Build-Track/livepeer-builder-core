@@ -21,8 +21,11 @@ class EngineSettings(Contract):
     retention_usage_days: int | None = Field(default=None, ge=1)  # None keeps cached usage rows forever
 
     # network
-    signer_url: str | None = None
-    discovery_url: str | None = None  # overrides the signer's discovery endpoint
+    signer_url: str | None = None  # pays; discovers only when no list or discovery URL is set
+    discovery_url: str | None = None  # one endpoint that already returns runner entries
+    # File path or http(s) URL of go-livepeer orchWebhook JSON ([{"address": "https://..."}]); the engine
+    # probes each orchestrator's /discovery itself (D42).
+    orchestrator_list: str | None = None
     discovery_interval_s: float = Field(default=15.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)
 

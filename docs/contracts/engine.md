@@ -10,8 +10,14 @@ drift. Times are UTC. Money is `Decimal`. Engine IDs are UUIDs.
 
 ## Discovery
 
-`DiscoveryService` keeps a snapshot of the runners the signer advertises (`DiscoverySource`). It is
-refreshed every `discovery_interval_s` and counts as stale after three missed intervals.
+`DiscoveryService` keeps a snapshot of the runners its `DiscoverySource` advertises. It is refreshed
+every `discovery_interval_s` and counts as stale after three missed intervals. The default source
+is the engine's own orchestrator list when `LPB_ORCHESTRATOR_LIST` is set: the engine calls
+`GET /discovery` on every listed orchestrator and merges the ones that answer, and the signer only
+pays (D42). Otherwise it is `LPB_DISCOVERY_URL` or the signer. Discovery and paid calls verify TLS
+with the process trust store. An orchestrator whose certificate that store does not accept is left
+out of the snapshot and is never called; a refresh fails, keeping the last good snapshot, only when
+the list cannot be read or every orchestrator fails.
 
 | Model | Meaning |
 | --- | --- |

@@ -149,8 +149,9 @@ Failures are Python exceptions, not HTTP statuses:
 
 Your process is the process that holds the engine. There is no separate `lpb serve`. You still:
 
-- Set `LPB_DATABASE_URL`, `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`,
-  `LPB_BATTERIES_OPERATOR_TOKEN`, and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)).
+- Set `LPB_DATABASE_URL`, `LPB_SIGNER_URL`, `LPB_ORCHESTRATOR_LIST`, `LPB_BATTERIES_URL`,
+  `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_OPERATOR_TOKEN`, and `LPB_SECRET_KEY`
+  ([RELIABILITY.md](../RELIABILITY.md#configuration)).
 - Run `lpb migrate`, or leave `LPB_AUTO_MIGRATE=true`.
 - Run `lpb bootstrap-admin` only if you will use engine-issued admin keys. Embed can pass an
   in-process admin `ActorContext` instead, as above.

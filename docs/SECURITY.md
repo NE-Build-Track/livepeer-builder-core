@@ -22,6 +22,11 @@ See [contracts/access.md](contracts/access.md#boundaries).
   bootstrap and no static admin token.
 - **Payment calls:** the caller's credential stops at the engine. Only the actor's allocation key
   goes to the signer.
+- **Discovery:** no credential goes to the orchestrator list (`LPB_ORCHESTRATOR_LIST`) or to the
+  orchestrators. Discovery and paid calls verify TLS with the process trust store; verification is
+  never disabled and no CA is installed. An orchestrator with an untrusted certificate is left out of
+  discovery and never called (D42). The list is operator configuration: it decides which runners
+  may be selected, so serve a URL list only from a host you control.
 - **Management API:** the engine uses a least-privilege Batteries credential. It may `grants.fund` and has no `grants.*`. Batteries applies `grants.fund` to every grant on the instance. An engine admin may fund any grant it names (`POST /v1/admin/grant/fund`); an actor key cannot. Listing and creating grants uses `LPB_BATTERIES_OPERATOR_TOKEN` (`grants.read` and `grants.create`).
   Batteries keeps replayed API-key secrets in its idempotency table, so protect Batteries backups like
   a vault.

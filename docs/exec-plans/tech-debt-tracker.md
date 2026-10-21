@@ -4,7 +4,7 @@ Known shortcuts and gaps. Each entry names its exit condition.
 
 | # | Debt | Why it exists | Exit condition |
 | --- | --- | --- | --- |
-| T1 | The SDK is pinned by direct reference to **[livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)** (`e6d243b`, fetched from NE-Build-Track/livepeer-python-gateway: `on_payment_session` reports `manifest_id`); it can't be published to PyPI. NE `releases/final` also has upstream's "Enforce TLS" (#76), which the pin does not take yet | #77 isn't merged into `main` yet | Re-pin to the merge commit on `main`; later, a released version |
+| T1 | The SDK is pinned by direct reference to `3238731`, the head of NE-Build-Track/livepeer-python-gateway `dev/bytestreaming` (**[NE livepeer-python-gateway#5](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/5)**, draft into `releases/final`): upstream `main` `fc47903` (including "Enforce TLS", #76) plus `on_payment_session` reporting `manifest_id` and streamable runner bodies; it can't be published to PyPI. Upstream [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) closed unmerged | Neither change is merged upstream | Re-pin to NE #5's merge commit; later, a released version |
 | T2 | Idempotency: interim 409 semantics | John owns the final design (D11) | John's PR merged; engine.md updated |
 | T3 | Capability → app resolution is not implemented (callers name `app`) | Not in M2 scope | Descriptor/config resolver contract (later milestone) |
 | T4 | No metrics endpoint (Prometheus) | The harness asks for observability; M2 has structured logs only | Add `/metrics` with job, discovery and cost-sync counters |

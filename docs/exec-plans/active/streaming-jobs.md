@@ -207,6 +207,9 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
 - [x] 2026-10-21: automated review of `9e61cde`: leaving the loop went through the settle window (true
       only without `async with`: inside it, `__aexit__` abandons first), and shutdown could close the
       store under a final write. Fixed with D40 and a shutdown wait.
+- [x] 2026-10-21: SDK re-pinned to NE `dev/bytestreaming` `3238731` (payment session callback and
+      streamable runner bodies on upstream `main`). No engine change was needed; the engine does not use
+      streamable bodies yet.
 
 ## Decision log
 

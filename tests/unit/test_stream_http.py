@@ -131,3 +131,16 @@ async def test_a_client_disconnect_ends_the_job_and_frees_the_slot(
         job = await engine.jobs.get(alice, UUID(job_id_of(sent)))
         assert job.state == "uncertain" and job.attempts[0].outcome == "abandoned", spec
         assert engine.admission.running == 0 and transport.streams[-1].closed, spec
+
+
+async def test_a_client_that_disconnects_as_the_runner_finishes_still_succeeds(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    token = await bearer(engine, admin)
+    for spec in ("2.3", "2.4"):  # both ways a disconnect arrives get the settle window, not an abandon
+        transport.opens = [StreamScript(events=[b"a", b"b", 0.05])]  # the runner closes 50 ms later
+        sent = await raw_stream(engine, token, disconnect_after=1, spec=spec)
+        await ended(engine)
+        job = await engine.jobs.get(alice, UUID(job_id_of(sent)))
+        assert job.state == "succeeded" and job.attempts[0].outcome == "succeeded", spec

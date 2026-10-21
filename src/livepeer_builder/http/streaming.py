@@ -5,9 +5,12 @@ response (504 for a timeout, 502 for a runner error) with the job record, exactl
 After the first chunk, a failure aborts the connection: the body has no clean end, so a client or
 proxy sees a cut-off transfer rather than a short but apparently complete body. The engine never
 writes anything of its own into the stream, because it does not know the stream's format (D29).
+A client that disconnects gives the runner the settle window (``JobStream.disconnected()``, D40).
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
@@ -24,11 +27,19 @@ class _Aborted(Exception):
 class _AbortableStreamingResponse(StreamingResponse):
     body_iterator: AsyncGenerator[bytes, None]
 
+    def __init__(self, stream: JobStream, body: AsyncGenerator[bytes, None], **kwargs: Any) -> None:
+        super().__init__(body, **kwargs)
+        self._job_stream = stream
+
     async def stream_response(self, send: Send) -> None:
         await send({"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers})
         try:
             async for chunk in self.body_iterator:
-                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                try:
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                except (Exception, asyncio.CancelledError):  # a 2.4 send raises; 2.3 is cancelled
+                    await self._job_stream.disconnected()  # settle, not the abandon of a closed iterator
+                    raise
         except _Aborted:
             return  # the server closes the connection; the job record says what happened
         finally:
@@ -55,5 +66,5 @@ async def stream_response(stream: JobStream, headers: dict[str, str]) -> Respons
             await chunks.aclose()
 
     return _AbortableStreamingResponse(
-        body(), status_code=stream.status_code, media_type=stream.content_type, headers=headers
+        stream, body(), status_code=stream.status_code, media_type=stream.content_type, headers=headers
     )

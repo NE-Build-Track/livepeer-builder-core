@@ -76,6 +76,11 @@ LLM's server-sent events, synthesized audio and ndjson progress all ride the sam
       made mid-stream kept by the end write (D39), a client disconnect through uvicorn releasing the slot
       after one funding row (D34), and `complete()` recorded as `delivered` (D38)
       ([evidence](../../references/evidence/2026-10-20-streaming-fixes-live.md)). Spend about $0.0021.
+- [x] PR #28 review fixes: the result counts only bytes handed to the caller, never the read-ahead
+      (`9e61cde`); `timeout_s` stops once the runner has ended the stream (`9e61cde`); closing or
+      dropping the iterator abandons at once and a disconnect is said with `JobStream.disconnected()`
+      (**D40**); `engine.stop()` waits for ends already being written. 508 tests pass.
+
 ## Design
 
 ### Contract
@@ -197,6 +202,11 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
       one; implemented as D34–D39 with tests, docs and regenerated files.
 - [x] 2026-10-20: live rerun of the fixes on ChatLPT's payment stack
       ([evidence](../../references/evidence/2026-10-20-streaming-fixes-live.md)).
+- [x] 2026-10-20: automated review of `a89216d` (PR #28): `complete()` counted the read-ahead, and
+      `timeout_s` could fail a runner that had finished. Fixed in `9e61cde`.
+- [x] 2026-10-21: automated review of `9e61cde`: leaving the loop went through the settle window (true
+      only without `async with`: inside it, `__aexit__` abandons first), and shutdown could close the
+      store under a final write. Fixed with D40 and a shutdown wait.
 
 ## Decision log
 

@@ -162,6 +162,34 @@ async def test_engine_stop_drains_open_streams_then_abandons_the_rest(
         await read_all(slow)
 
 
+async def test_engine_stop_waits_for_a_stream_that_is_still_recording_its_end(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedStreamTransport,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = await provisioned(make_engine, admin, stream_drain_timeout_s=0.05)
+    transport.opens = [StreamScript(events=[b"a"])]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    finish_job = store.finish_job
+    writing = asyncio.Event()
+
+    async def slow_finish_job(*args, **kwargs):  # type: ignore[no-untyped-def]
+        writing.set()
+        await asyncio.sleep(0.2)  # longer than the drain window, within the finalize timeout
+        return await finish_job(*args, **kwargs)
+
+    monkeypatch.setattr(store, "finish_job", slow_finish_job)
+    reading = asyncio.create_task(read_all(stream))
+    await writing.wait()
+    await engine.jobs.close_streams()
+    stored = await store.get_job(stream.job.id)
+    assert stored is not None and stored.state == "succeeded"  # written before the store can close
+    assert await reading == b"a"
+
+
 async def test_a_failed_write_after_open_closes_the_stream(
     make_engine: EngineFactory,
     admin: ActorContext,
@@ -266,6 +294,36 @@ async def test_a_cancelled_reader_is_abandoned_when_the_runner_keeps_going(
         await task
     await ended(engine)
     assert stream.job.state == "uncertain" and stream.job.attempts[0].outcome == "abandoned"
+
+
+async def test_dropping_the_iterator_abandons_at_once(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    # the runner would close 50 ms later, inside the settle window
+    transport.opens = [StreamScript(events=[b"data: x\n\n", b"data: [DONE]\n\n", b"trailing", 0.05])]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    async for chunk in stream:  # no async with, no complete(): the app just stops
+        if chunk == b"data: [DONE]\n\n":
+            await asyncio.sleep(0.01)  # the read-ahead lands in the queue
+            break
+    await ended(engine)
+    assert stream.job.state == "uncertain" and stream.job.attempts[0].outcome == "abandoned"
+    assert stream.job.result is None
+
+
+async def test_disconnected_gives_the_runner_the_settle_window(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    transport.opens = [StreamScript(events=[b"a", b"b", 0.05])]  # the runner closes 50 ms later
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    async with stream:
+        async for _chunk in stream:
+            await stream.disconnected()  # an app's own HTTP layer: its client went away
+            break
+    assert stream.job.state == "succeeded" and stream.job.attempts[0].outcome == "succeeded"
+    assert stream.job.result is not None and stream.job.result.size_bytes == len(b"ab")
 
 
 @pytest.mark.parametrize("settle", [1.0, 0.0])

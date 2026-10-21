@@ -8,8 +8,9 @@ the stream is finished exactly once by a finishing task the caller cannot cancel
   (``complete()``, D38);
 - otherwise ``uncertain`` (paid) or ``failed`` (unpaid), with the outcome that ended it: a runner
   error, a ``timeout`` (D35), or ``abandoned`` when the caller stopped reading (D30). A caller that is
-  cancelled or disconnects first gets a short settle window in which the runner may still end the
-  stream by itself (D38).
+  cancelled, or whose client disconnects (``disconnected()``), first gets a short settle window in
+  which the runner may still end the stream by itself (D38). Closing or dropping the iterator is the
+  caller stopping, so it abandons at once, like ``aclose()`` (D40).
 
 The admission slot is always released, even when the store cannot be written; the job row is then
 left ``running`` and the next start resolves it (``recover_interrupted``).
@@ -72,6 +73,7 @@ class _Ending:
 
 _SUCCEEDED = _Ending("succeeded")
 _STOPPED = "the caller stopped reading the stream"
+_DISCONNECTED = "the client disconnected"
 
 
 class _Timeout(Exception):
@@ -91,8 +93,9 @@ class JobStream:
 
     Reading to the end makes the job ``succeeded``. ``complete()`` does the same when the caller has
     everything it needs before the runner closes (an end-of-stream marker in its format). ``aclose()``
-    stops now: the attempt is ``abandoned`` and spending stops. A runner failure or a timeout raises
-    ``JobFailed`` from the iterator.
+    stops now: the attempt is ``abandoned`` and spending stops; so does leaving the loop without
+    either. ``disconnected()`` is for an HTTP layer whose client went away. A runner failure or a
+    timeout raises ``JobFailed`` from the iterator.
     """
 
     def __init__(
@@ -184,6 +187,11 @@ class JobStream:
             self._caller_stopped = True
         await run_shielded(self._wait(self._begin(_Ending("abandoned", _STOPPED))))
 
+    async def disconnected(self) -> None:
+        """The client this stream was serving went away. The runner gets ``settle_s`` to end the
+        stream by itself (then ``succeeded``), else the attempt is ``abandoned`` (D38, D40)."""
+        await run_shielded(self._wait(self._begin(_Ending("abandoned", _DISCONNECTED, settle=True))))
+
     async def wait_ended(self) -> None:
         """Wait until the stream has ended and its job record is written (or given up on)."""
         await self._ended.wait()
@@ -214,9 +222,14 @@ class JobStream:
             ending = _Ending(error.kind, str(error), status_code=error.status_code, body=error.body)
             await run_shielded(self._wait(self._begin(ending)))
             raise JobFailed(self._job) from error
-        except (asyncio.CancelledError, GeneratorExit):
+        except asyncio.CancelledError:
             final = self._begin(_Ending("abandoned", _STOPPED, settle=True))  # before any await
             await run_shielded(self._wait(final))
+            raise
+        except GeneratorExit:  # the iterator was closed or dropped: the caller stopped (D40)
+            if self._final is None:
+                self._caller_stopped = True
+            await run_shielded(self._wait(self._begin(_Ending("abandoned", _STOPPED))))
             raise
         except JobFailed:
             raise

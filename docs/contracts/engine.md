@@ -137,9 +137,9 @@ treats the payment as sent, because it cannot know.
 | The caller calls `complete()` (D38) | `succeeded` (a `ResultRef` for the bytes the caller read, not the engine's read-ahead) | `succeeded` |
 | The runner fails mid-stream (reset, 5xx trailer) | `http` or `unreachable`, `payment_sent` as known | `uncertain` when paid, else `failed` |
 | A deadline above runs out | `timeout` | `uncertain` when paid, else `failed` |
-| The caller calls `aclose()`, or leaves `async with` before the end | `abandoned`, at once | `uncertain` when paid, else `failed` (D30) |
-| The caller is cancelled or the HTTP client disconnects | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S` (the `ResultRef` then includes what it sent in that window), else `abandoned` | as above (D38) |
-| `engine.stop()` while the stream is open | `abandoned` after `LPB_STREAM_DRAIN_TIMEOUT_S` (D36) | `uncertain` when paid, else `failed` |
+| The caller calls `aclose()`, leaves `async with` before the end, or stops iterating (`break`, `return`, an error in the loop) | `abandoned`, at once | `uncertain` when paid, else `failed` (D30, D40) |
+| The caller is cancelled, or calls `disconnected()` because its HTTP client went away | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S` (the `ResultRef` then includes what it sent in that window), else `abandoned` | as above (D38) |
+| `engine.stop()` while the stream is open | `abandoned` after `LPB_STREAM_DRAIN_TIMEOUT_S`; ends already being written finish first (D36) | `uncertain` when paid, else `failed` |
 | The engine dies mid-stream | `recover_interrupted()` as today | `uncertain` |
 
 The end is recorded **exactly once, by a task the caller's cancellation cannot stop** (D34), so a
@@ -165,7 +165,9 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   chunk, so clients see a cut-off transfer (`fetch` rejects, curl reports a partial transfer, HTTP/2
   resets the stream). `GET /v1/jobs/{id}` carries the outcome. The engine writes nothing into the
   stream itself, because it does not know the format. uvicorn logs one line for the abort.
-- A client disconnect is a cancellation: the settle window applies.
+- A client disconnect gets the settle window: the REST layer calls `JobStream.disconnected()` when a
+  send fails or is cancelled, however the server reports it (D40). An app serving a stream over its
+  own HTTP layer should do the same; without it, a closed iterator is the caller stopping.
 
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
 transport implements it; an enterprise transport without `open` makes `jobs.stream` answer 400.

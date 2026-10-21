@@ -162,7 +162,10 @@ class JobService:
         return stream
 
     async def close_streams(self) -> None:
-        """Engine shutdown: let open streams finish for up to ``drain_timeout_s``, then abandon the rest."""
+        """Engine shutdown: let open streams finish for up to ``drain_timeout_s``, then abandon the rest.
+
+        Returns once every stream's end is written, including ones already finishing, so the store
+        is never closed under a final write (each is bounded by ``finalize_timeout_s``)."""
         open_now = list(self._open_streams)
         if open_now:
             waits = [asyncio.ensure_future(stream.wait_ended()) for stream in open_now]
@@ -171,7 +174,9 @@ class JobService:
                 waiting.cancel()
             left = [stream for stream in open_now if not stream.finished]
             _LOG.info("closed open streams", extra={"event": "jobs.streams_closed", "abandoned": len(left)})
-            await asyncio.gather(*(s.abandon("the engine stopped while the stream was open") for s in left))
+            message = "the engine stopped while the stream was open"
+            finishing = [stream.wait_ended() for stream in open_now if stream not in left]
+            await asyncio.gather(*(stream.abandon(message) for stream in left), *finishing)
 
     async def submit(self, actor: ActorContext, request: JobRequest) -> Job:
         del actor, request

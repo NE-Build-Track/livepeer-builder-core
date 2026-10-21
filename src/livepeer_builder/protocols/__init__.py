@@ -3,7 +3,7 @@
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
@@ -98,6 +98,43 @@ class RunnerTransport(Protocol):
     async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply: ...
 
 
+class RunnerStream(Protocol):
+    """A runner's response as it arrives (docs/contracts/engine.md#streaming).
+
+    ``payment_sent`` and ``manifest_ids`` are known once ``open`` returned, because the signer pays the
+    402 challenge before any byte flows. Iteration raises RunnerCallError when the runner fails
+    mid-stream. ``aclose`` releases the connection and stops any ongoing funding.
+    """
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def content_type(self) -> str: ...
+
+    @property
+    def manifest_ids(self) -> tuple[str, ...]: ...
+
+    @property
+    def payment_sent(self) -> bool: ...
+
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class StreamingRunnerTransport(RunnerTransport, Protocol):
+    """A transport that can also hand the response back unbuffered. Optional: ``jobs.stream`` needs it.
+
+    ``open`` returns once the runner answered with its status and headers. It must give up after
+    ``request.first_byte_timeout_s`` and raise ``RunnerCallError("timeout", ...)`` with the payment
+    evidence so far; the engine stops an ``open`` that runs well past that and treats it as paid (D35).
+    """
+
+    async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerStream: ...
+
+
 # -- payments (docs/contracts/payments.md) ----------------------------------------------------------
 
 
@@ -189,7 +226,12 @@ class JobRepo(Protocol):
 
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
-    async def finish_attempt(self, attempt: Attempt) -> None: ...  # updated after the call
+    async def finish_attempt(self, attempt: Attempt) -> None:
+        """Update the attempt after the call. May run more than once (a stream writes at open and end).
+
+        Signed sessions are append-only: add the manifests not stored yet and leave stored rows as they
+        are, because cost sync owns their match columns (D39).
+        """
 
     async def finish_job(
         self,

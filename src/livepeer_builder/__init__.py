@@ -33,7 +33,7 @@ from livepeer_builder.errors import (
     OperationExists,
     ProviderUnavailable,
 )
-from livepeer_builder.runtime import BuilderEngine
+from livepeer_builder.runtime import BuilderEngine, JobStream
 
 __all__ = [
     "AccessDenied",
@@ -50,6 +50,7 @@ __all__ = [
     "JobFailed",
     "JobRequest",
     "JobResult",
+    "JobStream",
     "Money",
     "NoCapacity",
     "NotAuthenticated",

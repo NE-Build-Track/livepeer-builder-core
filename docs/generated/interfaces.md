@@ -36,6 +36,20 @@ classDiagram
         <<interface>>
         +async call(runner, request, credential) RunnerReply
     }
+    class StreamingRunnerTransport {
+        <<interface>>
+        +async call(runner, request, credential) RunnerReply
+        +async open(runner, request, credential) RunnerStream
+    }
+    class RunnerStream {
+        <<interface>>
+        +content_type str
+        +manifest_ids str[]
+        +payment_sent bool
+        +status_code int
+        +__aiter__() AsyncIterator
+        +async aclose() None
+    }
     class CredentialResolver {
         <<interface>>
         +async credential(actor) PaymentCredential
@@ -91,6 +105,7 @@ classDiagram
     class ReservedEventFeed
     class ReservedSessions
     class RoutingSecretStore
+    class SdkRunnerStream
     class SdkRunnerTransport
     class SettingsSecretStore
     class SignerDiscoverySource
@@ -107,6 +122,8 @@ classDiagram
     DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
+    StreamingRunnerTransport <|.. SdkRunnerTransport
+    RunnerStream <|.. SdkRunnerStream
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
@@ -131,6 +148,8 @@ classDiagram
 | `DiscoverySource` | `StaticDiscoverySource` | `livepeer_builder.adapters.static` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.sdk` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

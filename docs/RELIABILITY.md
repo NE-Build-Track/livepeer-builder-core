@@ -17,6 +17,9 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
 | `LPB_DISCOVERY_INTERVAL_S`, `LPB_COST_SYNC_INTERVAL_S` | `15`, `30` | Background loops |
+| `LPB_STREAM_FINALIZE_TIMEOUT_S` | `10` | The most a stream's closing writes may take; the slot is released regardless (D34) |
+| `LPB_STREAM_DRAIN_TIMEOUT_S` | `30` | On stop, how long open streams may finish before they are abandoned (D36) |
+| `LPB_STREAM_SETTLE_S` | `1` | After a disconnect or cancel, how long the runner may take to end the stream and count as succeeded; `0` turns it off (D38) |
 | `LPB_RETENTION_JOBS_DAYS`, `LPB_RETENTION_USAGE_DAYS` | unset | See [contracts/persistence.md](contracts/persistence.md#retention) |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging |
 
@@ -56,6 +59,9 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
 | Admission limit reached | 503 + `Retry-After` before any payment |
+| A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
+| The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |
+| The engine stops with open streams | They get `LPB_STREAM_DRAIN_TIMEOUT_S` to finish, then end `abandoned`; `stop()` returns only after every end is written |
 
 There is no HA, exactly-once or SLA. See
 [contracts/engine.md](contracts/engine.md#deployment-performance-and-recovery-assumptions).

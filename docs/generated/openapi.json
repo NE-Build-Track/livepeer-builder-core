@@ -177,7 +177,8 @@
               "payment_refused",
               "payment",
               "timeout",
-              "http"
+              "http",
+              "abandoned"
             ],
             "title": "Outcome",
             "type": "string"
@@ -524,7 +525,8 @@
               "timeout",
               "runner_rejected",
               "runner_error",
-              "interrupted"
+              "interrupted",
+              "abandoned"
             ],
             "title": "Kind",
             "type": "string"
@@ -970,6 +972,27 @@
               }
             ],
             "title": "Capability"
+          },
+          "first_byte_timeout_s": {
+            "default": 60.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 3600.0,
+            "title": "First Byte Timeout S",
+            "type": "number"
+          },
+          "idle_timeout_s": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 3600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 60.0,
+            "title": "Idle Timeout S"
           },
           "max_attempts": {
             "default": 3,
@@ -1483,6 +1506,27 @@
             ],
             "title": "Capacity Available"
           },
+          "gpu": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunnerGPU"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
           "mode": {
             "anyOf": [
               {
@@ -1529,6 +1573,17 @@
           "url": {
             "title": "Url",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [
@@ -1542,6 +1597,47 @@
           "rate"
         ],
         "title": "Runner",
+        "type": "object"
+      },
+      "RunnerGPU": {
+        "additionalProperties": false,
+        "description": "The GPU a runner reports in its registration, as the node echoes it.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "vram_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vram Mb"
+          }
+        },
+        "title": "RunnerGPU",
         "type": "object"
       },
       "SecretRef": {
@@ -2674,6 +2770,20 @@
       },
       "post": {
         "operationId": "run_job_v1_jobs_post",
+        "parameters": [
+          {
+            "description": "stream the runner's response as it arrives",
+            "in": "query",
+            "name": "stream",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "stream the runner's response as it arrives",
+              "title": "Stream",
+              "type": "boolean"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2691,7 +2801,7 @@
                 "schema": {}
               }
             },
-            "description": "The runner's own status, content type and body"
+            "description": "The runner's own status, content type and body. With `Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives (docs/contracts/engine.md#streaming)."
           },
           "422": {
             "content": {

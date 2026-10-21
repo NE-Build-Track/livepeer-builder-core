@@ -22,6 +22,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | `selection=` |
 | `DiscoverySource` | `SignerDiscoverySource` / `StaticDiscoverySource` | `ApprovedOrchestratorsOnly`: an allow-list wrapper. Or a registry, URL list, cached catalog | `discovery_source=` |
 | `RunnerTransport` | `SdkRunnerTransport` (Live Runner via the SDK) | Another network transport, or a recording proxy for audit | `transport=` |
+| `StreamingRunnerTransport` (optional `open` beside `call`) | `SdkRunnerTransport` | The same transport, streaming. Without `open`, `jobs.stream` answers 400 (D33) | `transport=` |
 | `AllocationManager` / `UsageSource` | `BatteriesClient` / `BatteriesUsageSource` | Another payment provider, or a hosted operator's API (Mode B) | `allocation_manager=` / `usage_source=` |
 | `EngineStore` | `SqlStore` (SQLite or PostgreSQL) | The enterprise's managed PostgreSQL (same `SqlStore`, different URL), or a custom store passing `tests/store/` | `store=` or `LPB_DATABASE_URL` |
 | `Clock` | `SystemClock` | A controlled clock for tests | `clock=` |
@@ -160,14 +161,16 @@ named here show each one.
 | `DiscoverySource` | Return contract `Runner`s. Raising keeps the last good snapshot (`discovery_error` in health) |
 | `CredentialResolver` | Return a `PaymentCredential` with the signer bearer and the allocation that bearer spends. `token` is `None` for an unpaid call |
 | `RunnerTransport` | Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them. Use `payment_refused` only for orchestrator-specific refusals before payment |
+| `StreamingRunnerTransport` | `open` returns once the runner answered (status, content type), with `payment_sent` and `manifest_ids` already known. It must give up after `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the payment evidence so far; the engine stops an `open` that runs 5 s longer and treats it as paid (D35). Iteration raises `RunnerCallError` mid-stream; `aclose` closes the connection and stops any ongoing funding, and may be called more than once (`tests/unit/test_stream_deadlines.py`) |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result |
 | `UsageSource` | Opaque cursor. Raise `CursorMismatch` on a rejected cursor so the worker resyncs. Rows are immutable per `id` |
-| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write |
+| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` may run twice for one attempt and must only add signed sessions, never rewrite them (D39) |
 
 ## Testing your implementation
 
 - **Unit test** it against the protocol with the shipped fakes: `livepeer_builder.testing` provides
-  `FixedClock`, `ScriptedTransport`, `FakeAllocationManager`, `FakeUsageSource` and
+  `FixedClock`, `ScriptedTransport`, `ScriptedStreamTransport` (with `StreamScript` for chunks,
+  pauses, mid-stream errors and slow opens), `FakeAllocationManager`, `FakeUsageSource` and
   `MemorySecretStore`.
 - **Wire it** into `BuilderEngine.from_settings(...)` with an in-memory SQLite store, as
   `tests/unit/test_extension_examples.py` does.

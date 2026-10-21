@@ -56,6 +56,7 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
+from livepeer_builder.http.streaming import stream_response
 from livepeer_builder.runtime import BuilderEngine
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
@@ -154,8 +155,27 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
         # App names contain "/" (livepeer-example/hello), so they travel as a query parameter.
         return engine.discovery.runners(actor, app_name)
 
-    @app.post("/v1/jobs", responses={200: {"description": "The runner's own status, content type and body"}})
-    async def run_job(actor: Actor, body: JobRequest) -> Response:
+    @app.post(
+        "/v1/jobs",
+        responses={
+            200: {
+                "description": "The runner's own status, content type and body. With "
+                "`Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives "
+                "(docs/contracts/engine.md#streaming)."
+            }
+        },
+    )
+    async def run_job(
+        actor: Actor,
+        body: JobRequest,
+        request: Request,
+        stream: Annotated[bool, Query(description="stream the runner's response as it arrives")] = False,
+    ) -> Response:
+        if stream or "text/event-stream" in request.headers.get("accept", ""):
+            opened = await engine.jobs.stream(actor, body)
+            return await stream_response(
+                opened, {JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"}
+            )
         result = await engine.jobs.run(actor, body)
         return Response(
             content=result.content,

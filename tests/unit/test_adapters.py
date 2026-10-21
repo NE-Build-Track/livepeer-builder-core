@@ -1,12 +1,14 @@
 """Adapters: the Batteries wire format, SDK error mapping, secret stores, and settings."""
 
+import asyncio
 import json
 from decimal import Decimal
 from types import SimpleNamespace
 
+import aiohttp
 import httpx
 import pytest
-from livepeer_gateway.errors import LivepeerHTTPError
+from livepeer_gateway.errors import LivepeerHTTPError, PaymentError
 
 from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource, allowance_from_body
@@ -303,3 +305,175 @@ def test_settings_from_environment() -> None:
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
     ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
     assert "grant_id" not in ignored.model_dump()
+
+
+# -- streaming (docs/contracts/engine.md#streaming) --------------------------------------------------
+
+
+class _FakeLiveStream:
+    def __init__(
+        self, chunks: list[bytes | BaseException], status: int = 200, content_type: str = "text/event-stream"
+    ) -> None:
+        self.status = status
+        self.content_type = content_type
+        self.payment_session = object()
+        self.closed = False
+        self._chunks = chunks
+
+    async def aiter_bytes(self):  # type: ignore[no-untyped-def]
+        for chunk in self._chunks:
+            if isinstance(chunk, BaseException):
+                raise chunk
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def test_open_streams_chunks_and_reports_the_signed_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeLiveStream([b"data: a\n\n", b"", b"data: b\n\n"])
+
+    async def paid_stream(url: str, **kwargs: object) -> _FakeLiveStream:
+        assert kwargs["stream"] is True and url.endswith("/v1/chat/completions")
+        kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
+        return fake
+
+    monkeypatch.setattr(sdk, "call_runner", paid_stream)
+    transport = SdkRunnerTransport("https://signer.example")
+    stream = await transport.open(_runner(), JobRequest(app="a/b", path="/v1/chat/completions"), "lpg_k")
+    assert (stream.status_code, stream.content_type) == (200, "text/event-stream")
+    assert (stream.manifest_ids, stream.payment_sent) == (("m-1",), True)
+    assert [c async for c in stream] == [b"data: a\n\n", b"data: b\n\n"]  # empty chunks are skipped
+    await stream.aclose()
+    assert fake.closed
+
+
+async def test_open_maps_errors_before_and_during_the_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def refused(url: str, **kwargs: object) -> _FakeLiveStream:
+        raise LivepeerHTTPError(402, "https://signer.example/pay", body="allowance")
+
+    monkeypatch.setattr(sdk, "call_runner", refused)
+    transport = SdkRunnerTransport("https://signer.example")
+    with pytest.raises(RunnerCallError) as before:
+        await transport.open(_runner(), JobRequest(app="a/b"), "lpg_k")
+    assert before.value.kind == "payment" and not before.value.payment_sent
+
+    broken = _FakeLiveStream([b"x", aiohttp.ClientPayloadError("cut")])
+
+    async def opens_then_breaks(url: str, **kwargs: object) -> _FakeLiveStream:
+        kwargs["on_payment_session"](_Session("m-2"))  # type: ignore[operator]
+        return broken
+
+    monkeypatch.setattr(sdk, "call_runner", opens_then_breaks)
+    stream = await transport.open(_runner(), JobRequest(app="a/b"), "lpg_k")
+    received: list[bytes] = []
+
+    async def drain() -> None:
+        async for chunk in stream:
+            received.append(chunk)
+
+    with pytest.raises(RunnerCallError) as during:
+        await drain()
+    assert received == [b"x"]
+    assert during.value.payment_sent and during.value.manifest_ids == ("m-2",)
+    assert during.value.kind == "http"
+
+
+def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
+    entries = [
+        {
+            "address": "https://orch.example:8935",
+            "runners": [
+                {
+                    "url": "https://orch.example:8935/apps/r/app",
+                    "app": "blueclaw/chat/qwen3.8-27b",
+                    "version": "1.2.0",
+                    "metadata": '{"model_id":"Qwen3.8-27B","max_context":131072}',
+                    "gpu": {"id": "0", "name": "H100", "vram_mb": 81920},
+                    "mode": "single-shot",
+                    "capacity": 8,
+                    "capacity_used": 3,
+                    "capacity_available": 5,
+                    "price_info": {"price": 4634466808, "currency": "wei", "unit": "seconds"},
+                },
+                {
+                    "url": "https://orch.example:8935/apps/q/app",
+                    "app": "x/y",
+                    "capacity": 1,
+                    "session_ids": ["s"],
+                },
+            ],
+        }
+    ]
+    first, second = sdk.runners_from_entries(entries)
+    assert first.version == "1.2.0" and first.metadata is not None and "max_context" in first.metadata
+    assert first.gpu is not None and (first.gpu.name, first.gpu.vram_mb) == ("H100", 81920)
+    assert first.capacity_available == 5  # the node's own figure wins over counting session_ids
+    assert (second.version, second.metadata, second.gpu, second.capacity_available) == (None, None, None, 0)
+
+
+async def test_open_gives_up_after_first_byte_timeout_and_keeps_the_signed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def signs_then_hangs(url: str, **kwargs: object) -> _FakeLiveStream:
+        kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
+        await asyncio.sleep(5)  # the runner took the payment and never sent its headers
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(sdk, "call_runner", signs_then_hangs)
+    transport = SdkRunnerTransport("https://signer.example")
+    with pytest.raises(RunnerCallError) as timed_out:
+        await transport.open(_runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), "lpg_k")
+    assert timed_out.value.kind == "timeout" and "0.05s" in str(timed_out.value)
+    assert timed_out.value.payment_sent and timed_out.value.manifest_ids == ("m-3",)
+
+
+@pytest.mark.parametrize(("signer_url", "credential"), [("https://signer.example", "lpg_k"), (None, None)])
+async def test_open_timeout_or_signing_failure_before_callback_leaves_payment_sent_false(
+    monkeypatch: pytest.MonkeyPatch, signer_url: str | None, credential: str | None
+) -> None:
+    async def hangs_while_signing(url: str, **kwargs: object) -> _FakeLiveStream:
+        await asyncio.sleep(5)  # cancelled inside signing: no on_payment_session, no payment sent
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(sdk, "call_runner", hangs_while_signing)
+    with pytest.raises(RunnerCallError) as timed_out:
+        await SdkRunnerTransport(signer_url).open(
+            _runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), credential
+        )
+    assert (timed_out.value.kind, timed_out.value.payment_sent, timed_out.value.manifest_ids) == (
+        "timeout",
+        False,
+        (),
+    )
+
+    async def invalid_signer_reply(url: str, **kwargs: object) -> _FakeLiveStream:
+        raise PaymentError("GetPayment error: invalid 'segCreds' in response")
+
+    monkeypatch.setattr(sdk, "call_runner", invalid_signer_reply)
+    with pytest.raises(RunnerCallError) as payment_failed:
+        await SdkRunnerTransport(signer_url).open(_runner(), JobRequest(app="a/b"), credential)
+    assert (
+        payment_failed.value.kind,
+        payment_failed.value.payment_sent,
+        payment_failed.value.manifest_ids,
+    ) == ("payment", False, ())
+
+
+@pytest.mark.parametrize(("payload", "sent"), [(None, {}), ({"prompt": "hi"}, {"prompt": "hi"})])
+async def test_a_missing_payload_is_sent_as_an_empty_json_object(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, str] | None, sent: dict[str, str]
+) -> None:
+    seen: list[object] = []
+
+    async def records(url: str, **kwargs: object) -> object:
+        seen.append(kwargs["payload"])
+        if kwargs.get("stream"):
+            return _FakeLiveStream([])
+        return SimpleNamespace(content=b"{}", data={}, content_type="application/json", session_id="")
+
+    monkeypatch.setattr(sdk, "call_runner", records)
+    transport = SdkRunnerTransport("https://signer.example")
+    await transport.call(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
+    await transport.open(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
+    assert seen == [sent, sent]

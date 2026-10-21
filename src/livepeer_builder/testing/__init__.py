@@ -9,7 +9,10 @@ from livepeer_builder.testing.fakes import (
     FakeUsageSource,
     FixedClock,
     MemorySecretStore,
+    ScriptedStream,
+    ScriptedStreamTransport,
     ScriptedTransport,
+    StreamScript,
     runner,
 )
 
@@ -18,6 +21,9 @@ __all__ = [
     "FakeUsageSource",
     "FixedClock",
     "MemorySecretStore",
+    "ScriptedStream",
+    "ScriptedStreamTransport",
     "ScriptedTransport",
+    "StreamScript",
     "runner",
 ]

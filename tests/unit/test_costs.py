@@ -2,12 +2,18 @@
 
 import asyncio
 import contextlib
+import json
 from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from livepeer_gateway import http as gateway_http
+from livepeer_gateway import live_runner
+from livepeer_gateway.errors import LivepeerHTTPError
 
+from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
@@ -16,6 +22,7 @@ from livepeer_builder.contracts import (
     JobCost,
     JobRequest,
     Money,
+    NetworkRate,
     ProvisionRequest,
     SignedSession,
     SyncCheckpoint,
@@ -208,6 +215,120 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     )
     assert summary.by_class["failed_after_payment"].fee_eth == Decimal("0.3")
     assert summary.jobs_with_cost == 2
+
+
+async def test_a_signed_call_that_fails_on_the_orchestrator_is_failed_after_payment(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, usage: FakeUsageSource,
+    manager: FakeAllocationManager, clock: FixedClock, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    """The real SDK signs, then the runner fails: the charge is never none, and lands as failed_after_payment.
+
+    Only the signer and runner HTTP calls are faked, so ``call_runner``, ``on_payment_session`` and the
+    adapter's collector run as in production (livepeer-python-gateway#81, issue #33).
+    """
+    fixed = NetworkRate(amount=Decimal("0.10"), currency="usd", unit="fixed")  # a unit the SDK can pay
+    engine = await make_engine(
+        default_currency="ETH",
+        runners=tuple(runner(url=f"https://r{n}").model_copy(update={"rate": fixed}) for n in (1, 2, 3)),
+    )
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    signer_calls: list[dict[str, object]] = []
+    runner_calls: list[tuple[str, bool]] = []
+    in_flight, release = asyncio.Event(), asyncio.Event()
+
+    async def signer_info(url: str, headers: object) -> SimpleNamespace:
+        return SimpleNamespace(address="0xpayer")
+
+    async def sign(url: str, payload: dict[str, object], **kwargs: object) -> dict[str, object]:
+        signer_calls.append(payload)
+        return {"payment": "ticket", "segCreds": "creds", "state": {}}
+
+    async def runner_http(url: str, *, headers: dict[str, str] | None = None, **kwargs: object) -> object:
+        paid = "Livepeer-Payment" in (headers or {})
+        runner_calls.append((url, paid))
+        if url.startswith("https://r1"):
+            raise LivepeerHTTPError(503, url, body="busy")  # refused before payment: fail over
+        if not paid:
+            challenge = {
+                "payment_params": "params",
+                "manifest_id": "m-500",
+                "payment_url": "https://orch.example/apps/r2/session/m-500/payment",
+            }
+            raise LivepeerHTTPError(402, url, json.dumps(challenge))
+        in_flight.set()  # the signer has charged; the paid request has not answered
+        await release.wait()
+        raise LivepeerHTTPError(500, url, body="runner crashed")
+
+    monkeypatch.setattr(live_runner, "get_signer_info", signer_info)
+    monkeypatch.setattr(gateway_http, "post_json", sign)
+    monkeypatch.setattr(live_runner, "_request_body", runner_http)
+    engine.jobs._transport = SdkRunnerTransport("https://signer.example")
+
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
+    paid = asyncio.create_task(in_flight.wait())
+    try:
+        await asyncio.wait({task, paid}, return_when=asyncio.FIRST_COMPLETED)
+        assert paid.done(), task.exception()  # the job ended before the paid request started
+        running = (await engine.jobs.list_jobs(alice))[0]
+        assert running.state == "running"
+        await engine.costs.sync_once()  # issue #33: this sync used to store none for the paid attempt
+        assert (await engine.costs.for_job(alice, running.id)).status == "pending"
+
+        release.set()
+        with pytest.raises(JobFailed) as failed:
+            await task
+    finally:
+        release.set()
+        paid.cancel()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, JobFailed):
+                await task
+
+    job = failed.value.job
+    assert job.state == "failed"
+    assert job.failure is not None and job.failure.kind == "runner_error"
+    assert [signed["ManifestID"] for signed in signer_calls] == ["m-500"]
+    assert [url.split("/")[2] for url, _ in runner_calls] == ["r1", "r2", "r2"]  # never r3 once paid
+    assert [
+        (a.number, a.outcome, a.status_code, a.payment_sent, tuple(s.manifest_id for s in a.sessions))
+        for a in job.attempts
+    ] == [(1, "refused", 503, False, ()), (2, "http", 500, True, ("m-500",))]
+
+    # Paid and ended, but Batteries has not reported the charge: pending, never none.
+    await engine.costs.sync_once()
+    waiting = await engine.costs.for_job(alice, job.id)
+    assert waiting.status == "pending"
+    assert [(a.attempt_number, a.cost_class) for a in waiting.attempts] == [(2, "pending")]
+
+    usage.rows = [row("u1", "sess-500", "0.3", allocation=actor.allocation_id, manifest="m-500")]
+    await engine.costs.sync_once()
+    cost = await engine.costs.for_job(alice, job.id)
+    assert (cost.status, cost.fees.fee_eth) == ("observed", Decimal("0.3"))
+    assert [(a.attempt_number, a.cost_class, a.fees.fee_eth) for a in cost.attempts] == [
+        (2, "failed_after_payment", Decimal("0.3"))
+    ]
+
+    manager.allocations[actor.allocation_id].spent = Decimal("0.3")
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert result.by_class["failed_after_payment"].fee_eth == Decimal("0.3")
+    assert result.by_class["delivered"].fee_eth == Decimal(0)
+    assert result.unattributed.fee_eth == Decimal(0)
+    assert result.balanced is True
+
+    summary = await engine.costs.summary(
+        alice, clock.now() - timedelta(days=1), clock.now() + timedelta(days=1)
+    )
+    assert summary.by_class["failed_after_payment"].fee_eth == Decimal("0.3")
+    assert (summary.jobs_with_cost, summary.jobs_pending) == (1, 0)
 
 
 async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(

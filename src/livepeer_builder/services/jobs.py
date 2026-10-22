@@ -117,7 +117,8 @@ class JobService:
             except JobFailed:
                 raise
             except BaseException as exc:
-                await self._close_after_error(job, attempts, exc)
+                # Shielded as in stream (D34): a host that cancels every await must not cut off the evidence.
+                await run_shielded(self._close_after_error(job, attempts, exc))
                 raise
 
     async def stream(self, actor: ActorContext, request: JobRequest) -> JobStream:

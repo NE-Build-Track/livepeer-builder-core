@@ -12,9 +12,10 @@ from collections.abc import AsyncIterator
 from decimal import Decimal
 from uuid import uuid4
 
+import anyio
 import pytest
 
-from livepeer_builder import BuilderEngine
+from livepeer_builder import BuilderEngine, utils
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
@@ -156,6 +157,36 @@ async def test_a_cancelled_paid_call_keeps_its_evidence_and_its_cost(
     manager.allocations[allocation].spent = Decimal("0.3")
     reconciled = await engine.costs.reconcile(admin, "default", "alice")
     assert (reconciled.unattributed.fee_eth, reconciled.balanced) == (0, True)  # attributed to the job
+
+
+async def test_a_paid_call_cancelled_during_the_evidence_write_keeps_it(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    engine, _ = await provisioned(make_engine, admin)
+    engine.jobs._transport = SignsThenWaits()
+    writing = asyncio.Event()
+
+    async def never_commits(attempt: Attempt) -> None:
+        writing.set()
+        await asyncio.Event().wait()  # the caller goes away while this write is in progress
+
+    monkeypatch.setattr(store, "record_payment_evidence", never_commits)
+    scope = anyio.CancelScope()
+
+    async def request() -> None:
+        with scope:  # an anyio host (a Starlette response) cancels every await in it, again and again
+            await engine.jobs.run(alice, JobRequest(app=APP))
+
+    task = asyncio.create_task(request())
+    await writing.wait()
+    scope.cancel()
+    await task
+    await asyncio.gather(*utils._SHIELDED)  # closing runs in its own task; let it finish
+    (job,) = await engine.jobs.list_jobs(alice)
+    assert job.failure is not None
+    assert (job.state, job.failure.payment_sent) == ("uncertain", True)
+    assert evidence(job.attempts[0]) == (True, ["m-1"])  # cost sync can still attribute the charge
 
 
 async def test_a_restart_during_the_paid_request_finds_the_evidence(

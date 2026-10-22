@@ -34,10 +34,10 @@ from livepeer_builder.contracts import (
     JobRequest,
     JobState,
     ResultRef,
-    SignedSession,
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
+from livepeer_builder.services.evidence import with_evidence
 from livepeer_builder.utils import run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -403,21 +403,15 @@ class JobStream:
         )
 
     async def _store_attempt(self, outcome: AttemptOutcome, status_code: int | None = None) -> None:
-        current = self._attempts[-1]
+        current = with_evidence(self._attempts[-1], self._stream.manifest_ids, self._stream.payment_sent)
         self._attempts[-1] = current.model_copy(
             update={
-                "sessions": sessions_from(self._stream.manifest_ids) or current.sessions,
-                "payment_sent": self._stream.payment_sent or current.payment_sent,
                 "outcome": outcome,
                 "status_code": status_code if status_code is not None else self._stream.status_code,
                 "ended_at": self._clock.now(),
             }
         )
         await self._store.finish_attempt(self._attempts[-1])
-
-
-def sessions_from(manifest_ids: tuple[str, ...]) -> tuple[SignedSession, ...]:
-    return tuple(SignedSession(manifest_id=manifest_id) for manifest_id in manifest_ids if manifest_id)
 
 
 def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKind:

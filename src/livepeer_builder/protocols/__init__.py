@@ -3,7 +3,9 @@
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
@@ -93,7 +95,11 @@ class SelectionPolicy(Protocol):
 
 
 class RunnerTransport(Protocol):
-    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``."""
+    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``.
+
+    A transport that pays should also call ``report_signed_session`` as each session is signed, before
+    the paid request goes out (D42). It is optional: without it, evidence arrives only with the result.
+    """
 
     async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply: ...
 
@@ -133,6 +139,33 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
     """
 
     async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerStream: ...
+
+
+SignedSessionHook = Callable[[str], Awaitable[None]]
+_signed_session_hook: ContextVar[SignedSessionHook | None] = ContextVar("signed_session_hook", default=None)
+
+
+@contextmanager
+def reporting_signed_sessions(hook: SignedSessionHook) -> Iterator[None]:
+    """Send ``report_signed_session`` calls made inside this block (in this task) to ``hook`` (D42)."""
+    token = _signed_session_hook.set(hook)
+    try:
+        yield
+    finally:
+        _signed_session_hook.reset(token)
+
+
+async def report_signed_session(manifest_id: str) -> None:
+    """Tell the engine the signer signed a session, before the paid request goes out (D42).
+
+    A transport calls this once per signed session from inside ``call`` or ``open``, with the
+    challenge's ``manifest_id`` ("" when it has none). The engine writes the payment evidence on the
+    ``in_flight`` attempt before this returns, so a cancellation or a crash during the paid request keeps
+    it. Outside an engine call it does nothing.
+    """
+    hook = _signed_session_hook.get()
+    if hook is not None:
+        await hook(manifest_id)
 
 
 # -- payments (docs/contracts/payments.md) ----------------------------------------------------------

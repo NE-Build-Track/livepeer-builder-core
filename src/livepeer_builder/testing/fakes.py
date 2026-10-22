@@ -23,6 +23,7 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import CursorMismatch, NotFound, RunnerCallError
+from livepeer_builder.protocols import report_signed_session
 
 
 class FixedClock:
@@ -60,9 +61,19 @@ def runner(
 Step = RunnerReply | RunnerCallError | Callable[[Runner, JobRequest, str | None], RunnerReply]
 
 
+async def _report_signed(manifest_ids: Sequence[str], payment_sent: bool) -> None:
+    """Report a paid step's sessions before answering, as SdkRunnerTransport does (D42)."""
+    if payment_sent:
+        for manifest_id in manifest_ids or ("",):
+            await report_signed_session(manifest_id)
+
+
 @dataclass
 class ScriptedTransport:
-    """Returns or raises the scripted steps in order and records every call."""
+    """Returns or raises the scripted steps in order and records every call.
+
+    A paid step reports its sessions (``report_signed_session``) before it answers, like the SDK.
+    """
 
     steps: list[Step] = field(default_factory=list)
     calls: list[tuple[str, str | None]] = field(default_factory=list)
@@ -72,11 +83,13 @@ class ScriptedTransport:
         if not self.steps:
             raise AssertionError("ScriptedTransport ran out of steps")
         step = self.steps.pop(0)
-        if isinstance(step, RunnerCallError):
-            raise step
-        if isinstance(step, RunnerReply):
-            return step
-        return step(runner, request, credential)
+        result = (
+            step if isinstance(step, RunnerReply | RunnerCallError) else step(runner, request, credential)
+        )
+        await _report_signed(result.manifest_ids, result.payment_sent)
+        if isinstance(result, RunnerCallError):
+            raise result
+        return result
 
     @staticmethod
     def ok(body: bytes = b'{"ok": true}', manifest_ids: Sequence[str] = ("manifest-1",)) -> RunnerReply:
@@ -163,6 +176,7 @@ class ScriptedStreamTransport(ScriptedTransport):
         if not self.opens:
             raise AssertionError("ScriptedStreamTransport ran out of opens")
         step = self.opens.pop(0)
+        await _report_signed(step.manifest_ids, step.payment_sent)  # paid before the runner answers
         if isinstance(step, RunnerCallError):
             raise step
         if step.honors_deadline and step.open_delay_s > request.first_byte_timeout_s:

@@ -3,10 +3,11 @@
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
 comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81, pinned in
 pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it once for each new payment session
-after the signer returns a valid payment and before the paid request goes out. The adapter derives
-``manifest_ids`` and ``payment_sent`` from those sessions: if signing fails or is cancelled before
-the callback runs, ``payment_sent`` stays ``False`` and the engine keeps owning failover and cost
-attribution.
+after the signer returns a valid payment and before the paid request goes out. The adapter reports
+each session to the engine there (``report_signed_session``, D42), so the evidence is stored before
+the runner is paid, and derives ``manifest_ids`` and ``payment_sent`` from the same sessions: if
+signing fails or is cancelled before the callback runs, ``payment_sent`` stays ``False`` and the
+engine keeps owning failover and cost attribution.
 """
 
 import asyncio
@@ -41,6 +42,7 @@ from livepeer_builder.contracts import (
     RunnerReply,
 )
 from livepeer_builder.errors import RunnerCallError
+from livepeer_builder.protocols import report_signed_session
 
 _BODY_LIMIT = 4096
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
@@ -81,17 +83,20 @@ class _SignedSessions:
     payment and before the paid request is sent to the runner. A reported session means the signer
     charged the allocation and counts as ``payment_sent``, so the engine never fails over (or
     retries) work that was paid for. If signing fails or is cancelled before the callback runs,
-    ``signed`` stays ``False`` (no payment sent).
+    ``signed`` stays ``False`` (no payment sent). Each session is also reported to the engine, which
+    stores it before the paid request goes out (D42); the collector still feeds the result and
+    ``RunnerCallError``.
     """
 
     def __init__(self) -> None:
         self.signed = False
         self.manifest_ids: list[str] = []
 
-    def __call__(self, session: LivePaymentSession) -> None:
+    async def __call__(self, session: LivePaymentSession) -> None:
         self.signed = True
         if session.manifest_id:
             self.manifest_ids.append(session.manifest_id)
+        await report_signed_session(session.manifest_id or "")
 
 
 class SdkRunnerTransport:

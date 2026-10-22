@@ -216,6 +216,8 @@ sequenceDiagram
             Bat-->>Sg: status 200 + auth_id (or 402 if exhausted → no failover)
             Sg->>Sg: persist create_signed_ticket event (outbox) before replying
             Sg-->>T: payment
+            T->>J: on_payment_session → report_signed_session(manifest_id)
+            J->>DB: finish_attempt(in_flight, payment_sent, sessions) before the paid request (D42)
             T->>O: request + Livepeer-Payment
             alt runner answers 2xx
                 O-->>T: result

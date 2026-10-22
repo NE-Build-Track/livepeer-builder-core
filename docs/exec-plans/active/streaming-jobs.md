@@ -219,6 +219,9 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
       whose rows already matched no longer reads `observed`. `JobState`, `CostStatus` and `CostClass`
       became `StrEnum`s (same wire strings, named schemas in OpenAPI), with `JobState.ended` and
       `CostStatus.has_cost`, replacing those strings in the engine.
+- [x] 2026-10-22: payment evidence is stored when the signer signs, before the paid request (D42), for
+      buffered and streamed calls, so a cancellation or a restart mid-request keeps the manifests and
+      cost sync can attribute the charge.
 
 ## Decision log
 
@@ -243,3 +246,7 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
   an `uncertain` job with no payment evidence is stored as `pending`, not `none`. Source:
   [#33](https://github.com/NE-Build-Track/livepeer-builder-core/issues/33) and the automated review of
   PR #35 (a stored `none` won while the job ran; an `uncertain` job was never stored).
+- 2026-10-22: Record payment evidence from `on_payment_session` through a context-variable hook rather
+  than adding SDK return fields or changing `RunnerTransport` (D42). Source: the
+  [livepeer-python-gateway#81 review](https://github.com/livepeer/livepeer-python-gateway/pull/81#discussion_r4342943966)
+  (a caller-side collector already sees every signed session) and D33's rule for transport protocols.

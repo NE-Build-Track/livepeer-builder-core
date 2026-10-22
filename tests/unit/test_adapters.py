@@ -23,6 +23,7 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
     RunnerCallError,
 )
+from livepeer_builder.protocols import reporting_signed_sessions
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
 
@@ -206,9 +207,9 @@ def _runner() -> Runner:
 async def test_transport_collects_signed_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
     async def paid_twice(url: str, **kwargs: object) -> SimpleNamespace:
         callback = kwargs["on_payment_session"]
-        callback(_Session("m-1"))  # type: ignore[operator]
-        callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
-        callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
+        await callback(_Session("m-1"))  # type: ignore[operator]
+        await callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
+        await callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
         return SimpleNamespace(
             content=b'{"ok": 1}', data={}, content_type="application/json", session_id="m-1"
         )
@@ -218,11 +219,36 @@ async def test_transport_collects_signed_sessions(monkeypatch: pytest.MonkeyPatc
     assert (reply.manifest_ids, reply.payment_sent) == (("m-1", "m-2", "m-2"), True)
 
 
+async def test_transport_reports_each_session_to_the_engine_before_the_paid_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reported: list[str] = []
+    order: list[str] = []
+
+    async def record(manifest_id: str) -> None:
+        reported.append(manifest_id)
+
+    async def paid(url: str, **kwargs: object) -> SimpleNamespace:
+        await kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session(""))  # type: ignore[operator]  # no manifest: still paid
+        order.append(f"paid request after {len(reported)} reports")
+        return SimpleNamespace(content=b"{}", data={}, content_type="application/json", session_id="")
+
+    monkeypatch.setattr(sdk, "call_runner", paid)
+    with reporting_signed_sessions(record):
+        reply = await SdkRunnerTransport("https://signer.example").call(
+            _runner(), JobRequest(app="a/b"), "lpg_k"
+        )
+    assert reported == ["m-1", ""]
+    assert order == ["paid request after 2 reports"]
+    assert (reply.manifest_ids, reply.payment_sent) == (("m-1",), True)
+
+
 async def test_transport_failures_carry_the_sessions_signed_before_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def signed_then_500(url: str, **kwargs: object) -> SimpleNamespace:
-        kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
         raise LivepeerHTTPError(500, url, body="boom")
 
     monkeypatch.setattr(sdk, "call_runner", signed_then_500)
@@ -335,7 +361,7 @@ async def test_open_streams_chunks_and_reports_the_signed_session(monkeypatch: p
 
     async def paid_stream(url: str, **kwargs: object) -> _FakeLiveStream:
         assert kwargs["stream"] is True and url.endswith("/v1/chat/completions")
-        kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
         return fake
 
     monkeypatch.setattr(sdk, "call_runner", paid_stream)
@@ -361,7 +387,7 @@ async def test_open_maps_errors_before_and_during_the_stream(monkeypatch: pytest
     broken = _FakeLiveStream([b"x", aiohttp.ClientPayloadError("cut")])
 
     async def opens_then_breaks(url: str, **kwargs: object) -> _FakeLiveStream:
-        kwargs["on_payment_session"](_Session("m-2"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-2"))  # type: ignore[operator]
         return broken
 
     monkeypatch.setattr(sdk, "call_runner", opens_then_breaks)
@@ -416,7 +442,7 @@ async def test_open_gives_up_after_first_byte_timeout_and_keeps_the_signed_sessi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def signs_then_hangs(url: str, **kwargs: object) -> _FakeLiveStream:
-        kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
         await asyncio.sleep(5)  # the runner took the payment and never sent its headers
         raise AssertionError("unreachable")
 

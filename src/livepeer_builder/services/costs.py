@@ -147,6 +147,15 @@ class CostService:
         return await self._refresh_projection(job)
 
     async def _refresh_projection(self, job: Job) -> JobCost:
+        """Recompute and store an ended job's projection. Only cost sync writes projections, so a read
+        never puts an older total back over a newer one."""
+        projection = await self._project(job)
+        if job.state.ended:
+            await self._store.save_projection(projection)
+        return projection
+
+    async def _project(self, job: Job) -> JobCost:
+        """The projection sync would store for this job now, without storing it."""
         computed = await self._compute(job)
         # An unfinished job may still pay. for_job computes it live, so its ending reads at once.
         if not job.state.ended:
@@ -159,11 +168,9 @@ class CostService:
         first = previous.first_observed_at if previous and previous.first_observed_at else None
         if first is None and status.has_cost:
             first = self._clock.now()
-        projection = computed.model_copy(
+        return computed.model_copy(
             update={"status": status, "first_observed_at": first, "updated_at": self._clock.now()}
         )
-        await self._store.save_projection(projection)
-        return projection
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
         job = await self._store.get_job(job_id)
@@ -177,7 +184,7 @@ class CostService:
             return await self._compute(job)  # never stored; ignores a row an earlier version wrote
         projection = await self._store.get_projection(job_id)
         if projection is None or _stale(projection, job):
-            return await self._refresh_projection(job)  # ended since the last sync: serve it fresh
+            return await self._project(job)  # ended since the last sync: serve it fresh; sync stores it
         return projection
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
@@ -192,9 +199,9 @@ class CostService:
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
-        live = await self._live_costs(actor.application_id, target, start, end)
+        running, due = await self._live_costs(actor.application_id, target, start, end)
         stored = await self._store.projections_between(actor.application_id, target, start, end)
-        for cost in _without(stored, live):
+        for cost in _one_per_job(running, stored, due):
             with_cost += cost.status.has_cost
             pending += cost.status == CostStatus.PENDING
             for attempt in cost.attempts:
@@ -218,9 +225,9 @@ class CostService:
         if allocation_id is None:
             raise NotFound("no allocation pays for that actor or application")
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        live = await self._live_costs(application_id, actor_id, _EPOCH, _FAR_FUTURE)
+        running, due = await self._live_costs(application_id, actor_id, _EPOCH, _FAR_FUTURE)
         stored = await self._store.projections_between(application_id, actor_id, _EPOCH, _FAR_FUTURE)
-        for cost in _without(stored, live):
+        for cost in _one_per_job(running, stored, due):
             for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
@@ -254,10 +261,10 @@ class CostService:
 
     async def _live_costs(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[JobCost]:
-        """Costs no stored projection holds yet: running jobs (computed) and ended jobs not projected
-        since they ended (computed and stored, as ``for_job`` does), so a fee matched while a job ran
-        never drops out of a rollup between its end and the next sync."""
+    ) -> tuple[list[JobCost], list[JobCost]]:
+        """Costs no stored projection holds yet, computed and never stored: running jobs, and ended jobs
+        not projected since they ended (as ``for_job`` serves them), so a fee matched while a job ran
+        never drops out of a rollup between its end and the next sync. Returns (running, due)."""
 
         def mine(job: Job) -> bool:
             return (
@@ -270,11 +277,11 @@ class CostService:
             await self._compute(job) for job in await self._store.jobs_in_state(JobState.RUNNING) if mine(job)
         ]
         due = [
-            await self._refresh_projection(job)
-            for job in await self._store.jobs_for_projection([])
+            await self._project(job)
+            for job in await self._store.jobs_for_projection([], application_id)
             if mine(job)
         ]
-        return [*running, *due]
+        return running, due
 
 
 def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
@@ -365,11 +372,12 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
     return None if total.fee_usd is None else total.fee_usd == spent.amount
 
 
-def _without(stored: Sequence[JobCost], live: Sequence[JobCost]) -> list[JobCost]:
-    """Live costs plus stored ones for other jobs, one per job. Live is read first, so a job that ends
-    in between (or has a row an earlier release stored while it ran) is counted once."""
-    by_job = {cost.job_id: cost for cost in live}  # a job read running, then due, keeps the later read
-    return [*by_job.values(), *(cost for cost in stored if cost.job_id not in by_job)]
+def _one_per_job(*reads: Sequence[JobCost]) -> list[JobCost]:
+    """One cost per job; a later read wins. Pass (running, stored, due): a job that ended between the
+    reads keeps its stored ended projection over the running snapshot, and a due recompute (newer
+    than what was stored) replaces both."""
+    by_job = {cost.job_id: cost for read in reads for cost in read}
+    return list(by_job.values())
 
 
 def _stale(projection: JobCost, job: Job) -> bool:

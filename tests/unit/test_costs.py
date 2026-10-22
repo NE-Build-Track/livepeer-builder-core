@@ -31,6 +31,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.services.costs import classify
+from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import (
     FakeAllocationManager,
     FakeUsageSource,
@@ -641,6 +642,47 @@ async def test_a_stream_that_just_ended_stays_in_reconciliation_before_the_next_
     window = (FixedClock().now() - timedelta(days=1), FixedClock().now() + timedelta(days=1))
     summary = await engine.costs.summary(alice, *window)
     assert (summary.jobs_with_cost, summary.by_class["delivered"].fee_eth) == (1, Decimal("0.2"))
+
+
+async def test_a_job_stored_while_a_rollup_reads_wins_over_its_running_snapshot(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager, store: SqlStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    allocation = actor.allocation_id
+    transport.opens = [StreamScript(events=[b"a"], manifest_ids=("m-live",))]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    usage.rows = [row("u1", "sess-live", "0.2", allocation=allocation, manifest="m-live")]
+    await engine.costs.sync_once()
+    manager.allocations[allocation].spent = Decimal("0.3")
+    due_jobs = store.jobs_for_projection
+    overlapped = False
+
+    async def end_and_sync_in_between(job_ids, application_id=None):  # type: ignore[no-untyped-def]
+        # After reconcile read the running snapshot (0.2 pending): the stream ends, one more row
+        # arrives, and cost sync stores the ended projection (0.3 delivered).
+        nonlocal overlapped
+        if not overlapped:
+            overlapped = True
+            assert b"".join([chunk async for chunk in stream]) == b"a"
+            usage.rows.append(row("u2", "sess-live", "0.1", allocation=allocation, manifest="m-live"))
+            await engine.costs.sync_once()
+        return await due_jobs(job_ids, application_id)
+
+    monkeypatch.setattr(store, "jobs_for_projection", end_and_sync_in_between)
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert overlapped
+    assert (result.by_class["delivered"].fee_eth, result.by_class["pending"].fee_eth) == (Decimal("0.3"), 0)
+    assert result.balanced is True
 
 
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(

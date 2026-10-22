@@ -6,6 +6,8 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, delete, event, exists, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -271,13 +273,17 @@ class SqlStore:
         async with self.engine.begin() as conn:
             return await match_payment_sessions(conn, rows)
 
-    async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]:
+    async def jobs_for_projection(
+        self, job_ids: Sequence[UUID], application_id: str | None = None
+    ) -> list[Job]:
         selected = (
             select(t.jobs.c.id)
             .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)
             .where(jobs_needing_projection([str(job_id) for job_id in job_ids]))
             .distinct()
         )
+        if application_id is not None:
+            selected = selected.where(t.jobs.c.application_id == application_id)
         query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
         async with self.engine.connect() as conn:
             return await _load_jobs(conn, list((await conn.execute(query)).mappings()))
@@ -351,10 +357,10 @@ class SqlStore:
             "first_observed_at": cost.first_observed_at,
             "updated_at": cost.updated_at,
         }
-        key = t.cost_projections.c.job_id == str(cost.job_id)
+        dialect = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
+        upsert = dialect(t.cost_projections).values(job_id=str(cost.job_id), **values)
         async with self.engine.begin() as conn:
-            if (await conn.execute(update(t.cost_projections).where(key).values(values))).rowcount == 0:
-                await conn.execute(insert(t.cost_projections).values(job_id=str(cost.job_id), **values))
+            await conn.execute(upsert.on_conflict_do_update(index_elements=["job_id"], set_=values))
 
     # -- secrets --------------------------------------------------------------------------------------
 

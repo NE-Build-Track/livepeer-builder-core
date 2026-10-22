@@ -113,12 +113,10 @@ async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTrans
         await client.post(f"/v1/jobs/{job_id}/usage", json={"quantities": {"tokens": 3}}, headers=alice)
     ).status_code == 200
     assert (await client.get(f"/v1/jobs/{job_id}/result", headers=alice)).status_code == 501
-    # Ended and paid with no usage row: pending at once, and the summary stored its projection.
+    # Ended and paid with no usage row: pending at once. Reads never store; cost sync does.
     before = await client.get("/v1/costs/summary", headers=alice)
     assert before.status_code == 200 and before.json()["jobs_pending"] == 1
-    assert [p["job_id"] for p in (await client.get("/v1/costs/projections", headers=alice)).json()] == [
-        job_id
-    ]
+    assert (await client.get("/v1/costs/projections", headers=alice)).json() == []
     await client.post("/v1/admin/costs/sync", headers=admin)
     summary = await client.get("/v1/costs/summary", headers=alice)
     assert summary.status_code == 200 and summary.json()["jobs_pending"] == 1

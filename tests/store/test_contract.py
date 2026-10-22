@@ -1,5 +1,6 @@
 """The EngineStore contract, identical on SQLite and PostgreSQL (ISS-06)."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC
 from decimal import Decimal
@@ -156,7 +157,8 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
         job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(attempt_cost,),
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_projection(projection)
+    # Two writers storing the first row at once: one upsert, no duplicate-key error.
+    await asyncio.gather(sql.save_projection(projection), sql.save_projection(projection))
     await sql.save_projection(projection.model_copy(update={"status": CostStatus.CORRECTED}))
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
@@ -198,6 +200,8 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
     assert first.id in selected and unprojected.id in selected and latest.id not in selected
+    assert {job.id for job in await sql.jobs_for_projection((), "default")} == selected
+    assert await sql.jobs_for_projection((), "another-app") == []
     assert [cost.job_id for cost in await sql.recent_projections("default", None, 1)] == [latest.id]
     assert [cost.job_id for cost in await sql.recent_projections("default", None, 5)] == [
         latest.id,

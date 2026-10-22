@@ -117,11 +117,13 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 it ended `uncertain` with no payment evidence, or some paid attempt lacks rows), `observed`,
 `corrected` (the total changed after it was first observed, for example a metered session that
 signed again). Projections are persisted in `lpb_cost_projections` and updated by each cost sync,
-for ended jobs only. A job that has not ended is computed on each read, with the fees matched so far
-and status `pending`, so ending without payment becomes `none` without waiting for the next sync.
-An ended job whose projection is missing, `pending`, or older than its `completed_at` is recomputed
-(and stored) on read, so a fee matched while it ran shows as soon as it ends. Summaries and
-reconciliation do the same for ended jobs in their window, and include running jobs as `pending`.
+for ended jobs only; cost sync is the only writer. A job that has not ended is computed on each read,
+with the fees matched so far and status `pending`, so ending without payment becomes `none` without
+waiting for the next sync. An ended job whose projection is missing, `pending`, or older than its
+`completed_at` is recomputed on read (not stored), so a fee matched while it ran shows as soon as it
+ends. Summaries and reconciliation do the same for ended jobs in their window, include running jobs
+as `pending`, and count each job once: a recompute wins over a stored projection, which wins over a
+running snapshot.
 
 In code, statuses and classes are the `CostStatus` and `CostClass` `StrEnum`s, whose values are the
 strings above. `CostStatus.has_cost` is true for `observed` and `corrected`.

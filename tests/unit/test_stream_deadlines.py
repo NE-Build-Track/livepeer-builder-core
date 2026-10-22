@@ -85,7 +85,7 @@ async def test_sdk_open_timeout_follows_whether_on_payment_session_ran(
     async def hangs_during_open(url: str, **kwargs: object) -> object:
         called.append(url)
         if manifest_id is not None:
-            kwargs["on_payment_session"](SimpleNamespace(manifest_id=manifest_id))  # type: ignore[operator]
+            await kwargs["on_payment_session"](SimpleNamespace(manifest_id=manifest_id))  # type: ignore[operator]
         await asyncio.sleep(5)
         raise AssertionError("unreachable")
 

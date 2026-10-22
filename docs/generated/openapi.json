@@ -246,14 +246,7 @@
             "type": "integer"
           },
           "cost_class": {
-            "enum": [
-              "delivered",
-              "failed_after_payment",
-              "uncertain",
-              "pending"
-            ],
-            "title": "Cost Class",
-            "type": "string"
+            "$ref": "#/components/schemas/CostClass"
           },
           "fees": {
             "$ref": "#/components/schemas/Fees"
@@ -267,6 +260,28 @@
         "title": "AttemptCost",
         "type": "object"
       },
+      "CostClass": {
+        "description": "What one attempt's charge was for (docs/contracts/payments.md#cost-classification).",
+        "enum": [
+          "delivered",
+          "failed_after_payment",
+          "uncertain",
+          "pending"
+        ],
+        "title": "CostClass",
+        "type": "string"
+      },
+      "CostStatus": {
+        "description": "A job's cost as a whole (docs/contracts/payments.md#job-cost-status).",
+        "enum": [
+          "none",
+          "pending",
+          "observed",
+          "corrected"
+        ],
+        "title": "CostStatus",
+        "type": "string"
+      },
       "CostSummary": {
         "additionalProperties": false,
         "properties": {
@@ -275,12 +290,7 @@
               "$ref": "#/components/schemas/Fees"
             },
             "propertyNames": {
-              "enum": [
-                "delivered",
-                "failed_after_payment",
-                "uncertain",
-                "pending"
-              ]
+              "$ref": "#/components/schemas/CostClass"
             },
             "title": "By Class",
             "type": "object"
@@ -849,15 +859,7 @@
             ]
           },
           "state": {
-            "enum": [
-              "queued",
-              "running",
-              "succeeded",
-              "failed",
-              "uncertain"
-            ],
-            "title": "State",
-            "type": "string"
+            "$ref": "#/components/schemas/JobState"
           },
           "usage": {
             "anyOf": [
@@ -921,14 +923,7 @@
             "type": "string"
           },
           "status": {
-            "enum": [
-              "none",
-              "pending",
-              "observed",
-              "corrected"
-            ],
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/CostStatus"
           },
           "updated_at": {
             "anyOf": [
@@ -1075,6 +1070,18 @@
         ],
         "title": "JobRequest",
         "type": "object"
+      },
+      "JobState": {
+        "description": "Where a job is in its life (docs/contracts/engine.md). The values are the wire strings.",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "uncertain"
+        ],
+        "title": "JobState",
+        "type": "string"
       },
       "MeasuredUsage": {
         "additionalProperties": false,
@@ -1381,12 +1388,7 @@
               "$ref": "#/components/schemas/Fees"
             },
             "propertyNames": {
-              "enum": [
-                "delivered",
-                "failed_after_payment",
-                "uncertain",
-                "pending"
-              ]
+              "$ref": "#/components/schemas/CostClass"
             },
             "title": "By Class",
             "type": "object"

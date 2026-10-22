@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from livepeer_builder.contracts import Contract
+from livepeer_builder.contracts import Contract, JobState
 from livepeer_builder.store import schema as t
 
 
@@ -30,7 +30,7 @@ async def purge(
         if jobs_days is not None:
             cutoff = now - timedelta(days=jobs_days)
             expired = select(t.jobs.c.id).where(
-                t.jobs.c.state.in_(("succeeded", "failed")), t.jobs.c.completed_at < cutoff
+                t.jobs.c.state.in_((JobState.SUCCEEDED, JobState.FAILED)), t.jobs.c.completed_at < cutoff
             )
             ids = list((await conn.execute(expired)).scalars())
             for start in range(0, len(ids), 500):

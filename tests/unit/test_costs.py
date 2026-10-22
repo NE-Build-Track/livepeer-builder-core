@@ -11,7 +11,9 @@ import pytest
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
+    Fees,
     Job,
+    JobCost,
     JobRequest,
     Money,
     ProvisionRequest,
@@ -25,7 +27,9 @@ from livepeer_builder.testing import (
     FakeAllocationManager,
     FakeUsageSource,
     FixedClock,
+    ScriptedStreamTransport,
     ScriptedTransport,
+    StreamScript,
     runner,
 )
 from tests.conftest import EngineFactory
@@ -85,11 +89,15 @@ def test_classification_covers_every_class() -> None:
 def test_a_running_job_is_pending_until_it_ends() -> None:
     attempts = (("unreachable", (), False), ("in_flight", (), False))  # the second has not paid yet
     running = classify(job_with(*attempts, state="running"), [])
-    assert running.status == "pending" and running.attempts == ()  # it may still pay: not a known zero
+    assert (running.status, running.attempts) == ("pending", ())  # it may still pay: not a known zero
     assert classify(job_with(*attempts[:1], state="failed"), []).status == "none"
     # Restart recovery leaves the in-flight attempt unpaid on an uncertain job. Payment may have gone out.
     interrupted = classify(job_with(("in_flight", (), False), state="uncertain"), [])
-    assert interrupted.status == "pending" and interrupted.attempts == ()
+    assert (interrupted.status, interrupted.attempts) == ("pending", ())
+    assert classify(job_with(state="queued"), []).status == "pending"  # reserved for async; not ended
+    # Rows can match while a stream still runs (and a metered one keeps paying): no total is final yet.
+    streaming = classify(job_with(("in_flight", ("s",), True), state="running"), [row("1", "s", "1")])
+    assert (streaming.status, streaming.fees.fee_eth) == ("pending", Decimal(1))
 
 
 def test_usd_total_only_when_every_row_is_priced() -> None:
@@ -262,8 +270,8 @@ async def test_a_job_synced_while_running_never_reads_none(
         assert job.state == "running"
         assert job.attempts[0].outcome == "unreachable"
         assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # no projection yet
-        assert (await engine.costs.sync_once()).jobs_updated == 1
-        assert await engine.store.get_projection(job.id) is None  # nothing classified: do not freeze pending
+        assert (await engine.costs.sync_once()).jobs_updated == 0  # a running job is not projected
+        assert await engine.store.get_projection(job.id) is None
         assert (await engine.costs.for_job(alice, job.id)).status == "pending"
 
         release.set()
@@ -336,6 +344,89 @@ async def test_a_job_that_fails_unpaid_after_a_running_sync_reads_none(
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, JobFailed):
                 await task
+
+
+async def test_a_stored_none_is_ignored_while_the_job_runs(
+    make_engine: EngineFactory, alice: ActorContext, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    job = job_with(state="running").model_copy(update={"completed_at": None})
+    await engine.store.create_job(job, None)
+    # Before the #33 fix, a sync could store none for a running job whose paid attempt had not reported back.
+    stale = JobCost(
+        job_id=job.id, status="none", fees=Fees(), attempts=(), first_observed_at=None, updated_at=clock.now()
+    )
+    await engine.store.save_projection(stale)
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="https://r1", orchestrator_url=None, allocation_id="alloc_1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await engine.store.start_attempt(attempt)
+    paid = attempt.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m-x"),), "payment_sent": True, "outcome": "succeeded"}
+    )
+    await engine.store.finish_attempt(paid)
+    clock.advance(1)
+    await engine.store.finish_job(job.id, "succeeded", None, None, clock.now())
+    assert (await engine.costs.sync_once()).jobs_updated == 1  # completed after the stale row: recomputed
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # paid, no usage row yet
+
+
+async def test_an_uncertain_job_without_evidence_is_stored_pending(
+    make_engine: EngineFactory, alice: ActorContext, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    job = job_with(state="running").model_copy(update={"completed_at": None})
+    await engine.store.create_job(job, None)
+    await engine.store.start_attempt(
+        Attempt(
+            job_id=job.id, number=1, runner_url="https://r1", orchestrator_url=None, allocation_id="alloc_1",
+            sessions=(), payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(),
+            ended_at=None,
+        )
+    )  # fmt: skip
+    # The engine stopped mid-call, so payment may have gone out without the evidence being written.
+    assert await engine.jobs.recover_interrupted() == 1
+    assert (await engine.costs.sync_once()).jobs_updated == 1
+    stored = await engine.store.get_projection(job.id)
+    assert stored is not None
+    assert (stored.status, stored.attempts) == ("pending", ())
+    assert [cost.job_id for cost in await engine.costs.recent(alice)] == [job.id]
+    window = (clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1))
+    summary = await engine.costs.summary(alice, *window)
+    assert (summary.jobs_pending, summary.jobs_with_cost) == (1, 0)
+
+
+async def test_a_stream_with_matched_rows_stays_pending_until_it_ends(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    usage: FakeUsageSource,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    transport.opens = [StreamScript(events=[b"a", b"b"], manifest_ids=("m-live",))]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    job_id = stream.job.id
+    usage.rows = [row("u1", "sess-live", "0.2", allocation=actor.allocation_id, manifest="m-live")]
+    assert (await engine.costs.sync_once()).jobs_updated == 0  # the session matches; the job is still running
+    live = await engine.costs.for_job(alice, job_id)
+    assert (live.status, live.fees.fee_eth) == ("pending", Decimal("0.2"))  # so far, not final
+    assert await engine.store.get_projection(job_id) is None
+
+    assert b"".join([chunk async for chunk in stream]) == b"ab"
+    await engine.costs.sync_once()
+    ended = await engine.costs.for_job(alice, job_id)
+    assert (ended.status, ended.fees.fee_eth) == ("observed", Decimal("0.2"))
+    assert [attempt.cost_class for attempt in ended.attempts] == ["delivered"]
 
 
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(

@@ -5,8 +5,9 @@ Classification (accepted 12 October, docs/contracts/payments.md#cost-classificat
   failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors)
   uncertain             the job is uncertain, or the attempt never reported back
   pending               payment went out and no applied usage row has arrived yet (never zero)
-A job with no classified attempt is ``none`` once it has ended as ``succeeded`` or ``failed``; a
-``running`` or ``uncertain`` job is ``pending``.
+A job's cost is ``pending`` until the job ends, and is not stored until then. An ended job with no
+classified attempt is ``none`` when it ended ``succeeded`` or ``failed``, and ``pending`` when it ended
+``uncertain`` (it may have paid before the engine stopped).
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
@@ -31,6 +32,7 @@ from livepeer_builder.contracts import (
     Fees,
     Job,
     JobCost,
+    JobState,
     Money,
     Operation,
     Reconciliation,
@@ -45,7 +47,7 @@ from livepeer_builder.protocols import AccessPolicy, AllowanceReader, Clock, Cos
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _FAR_FUTURE = datetime(9999, 1, 1, tzinfo=UTC)
-COST_CLASSES: tuple[CostClass, ...] = ("delivered", "failed_after_payment", "uncertain", "pending")
+COST_CLASSES: tuple[CostClass, ...] = tuple(CostClass)
 
 
 class CostStore(JobRepo, CostRepo, Protocol):
@@ -144,20 +146,16 @@ class CostService:
 
     async def _refresh_projection(self, job: Job) -> JobCost:
         computed = await self._compute(job)
-        # Nothing has been classified yet. A stored pending row would keep reading pending after the
-        # job ends unpaid; for_job classifies a missing projection from the job, so the ending is immediate.
-        if computed.status == "pending" and not computed.attempts:
+        # An unfinished job may still pay. for_job computes it live, so its ending reads at once.
+        if not job.state.ended:
             return computed
         previous = await self._store.get_projection(job.id)
-        status: CostStatus = computed.status
-        if previous is not None and previous.status in ("observed", "corrected") and status == "observed":
-            status = (
-                "corrected"
-                if previous.fees != computed.fees or previous.status == "corrected"
-                else "observed"
-            )
+        status = computed.status
+        if previous is not None and previous.status.has_cost and status == CostStatus.OBSERVED:
+            changed = previous.fees != computed.fees or previous.status == CostStatus.CORRECTED
+            status = CostStatus.CORRECTED if changed else CostStatus.OBSERVED
         first = previous.first_observed_at if previous and previous.first_observed_at else None
-        if first is None and status in ("observed", "corrected"):
+        if first is None and status.has_cost:
             first = self._clock.now()
         projection = computed.model_copy(
             update={"status": status, "first_observed_at": first, "updated_at": self._clock.now()}
@@ -173,6 +171,8 @@ class CostService:
             self._policy.check(actor, Operation.COSTS_READ, _resource(job.application_id, job.actor_id))
         except AccessDenied as exc:
             raise NotFound(f"job {job_id} not found") from exc
+        if not job.state.ended:
+            return await self._compute(job)  # never stored; ignores a row an earlier version wrote
         projection = await self._store.get_projection(job_id)
         return projection if projection is not None else classify(job, ())
 
@@ -189,8 +189,8 @@ class CostService:
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
         for cost in await self._store.projections_between(actor.application_id, target, start, end):
-            with_cost += cost.status in ("observed", "corrected")
-            pending += cost.status == "pending"
+            with_cost += cost.status.has_cost
+            pending += cost.status == CostStatus.PENDING
             for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         return CostSummary(
@@ -282,25 +282,24 @@ def _classify_attempt(job: Job, attempt: Attempt, applied: Sequence[UsageRow]) -
 
 def _attempt_class(job: Job, attempt: Attempt, mine: Sequence[UsageRow]) -> CostClass:
     if any(session.match == "ambiguous" for session in attempt.sessions):
-        return "uncertain"
+        return CostClass.UNCERTAIN
     if not mine:
-        return "pending"
+        return CostClass.PENDING
     if attempt.outcome == "succeeded":
-        return "delivered"
-    if job.state == "uncertain" or attempt.outcome == "in_flight":
-        return "uncertain"
-    return "failed_after_payment"
+        return CostClass.DELIVERED
+    if job.state == JobState.UNCERTAIN or attempt.outcome == "in_flight":
+        return CostClass.UNCERTAIN
+    return CostClass.FAILED_AFTER_PAYMENT
 
 
 def _cost_status(job: Job, attempts: Sequence[AttemptCost]) -> CostStatus:
+    # An unfinished job may still pay, and a metered one keeps paying: no total is final before the end.
+    if not job.state.ended or any(attempt.cost_class == CostClass.PENDING for attempt in attempts):
+        return CostStatus.PENDING
     if not attempts:
-        # A running attempt may still pay. An uncertain one may already have paid before the engine stopped.
-        if job.state in ("running", "uncertain"):
-            return "pending"
-        return "none"
-    if any(attempt.cost_class == "pending" for attempt in attempts):
-        return "pending"
-    return "observed"
+        # An uncertain job may have paid before the engine stopped, without the evidence being written.
+        return CostStatus.PENDING if job.state == JobState.UNCERTAIN else CostStatus.NONE
+    return CostStatus.OBSERVED
 
 
 def fees_of(rows: Iterable[UsageRow]) -> Fees:

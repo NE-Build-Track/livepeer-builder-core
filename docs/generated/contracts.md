@@ -54,7 +54,7 @@ classDiagram
         +str app
         +str? capability
         +str? model
-        +enum state
+        +JobState state
         +Attempt[] attempts
         +Failure? failure
         +ResultRef? result
@@ -135,7 +135,7 @@ classDiagram
     }
     class JobCost {
         +UUID job_id
-        +enum status
+        +CostStatus status
         +Fees fees
         +AttemptCost[] attempts
         +datetime? first_observed_at
@@ -143,7 +143,7 @@ classDiagram
     }
     class AttemptCost {
         +int attempt_number
-        +enum cost_class
+        +CostClass cost_class
         +Fees fees
     }
     class Fees {

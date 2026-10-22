@@ -11,25 +11,31 @@ from sqlalchemy import and_, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql.elements import ColumnElement
 
-from livepeer_builder.contracts import UsageRow
+from livepeer_builder.contracts import CostStatus, JobState, UsageRow
 from livepeer_builder.store import schema as t
 
 _CHUNK = 500
 
 
 def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
-    """Jobs whose projection should be recomputed, including observed rows stored with no attempts."""
+    """Ended jobs whose projection should be recomputed, including observed rows stored with no attempts.
+
+    A job that has not ended is never projected: it may still pay, so reads compute it live.
+    """
     touched = t.jobs.c.id.in_(job_ids) if job_ids else false()
     missing_attempts = and_(
-        t.cost_projections.c.status.in_(("observed", "corrected")),
+        t.cost_projections.c.status.in_([status for status in CostStatus if status.has_cost]),
         func.json_array_length(t.cost_projections.c.attempts) == 0,
     )
-    return or_(
-        touched,
-        t.cost_projections.c.job_id.is_(None),
-        t.cost_projections.c.status == "pending",
-        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
-        missing_attempts,
+    return and_(
+        t.jobs.c.state.in_([state for state in JobState if state.ended]),
+        or_(
+            touched,
+            t.cost_projections.c.job_id.is_(None),
+            t.cost_projections.c.status == CostStatus.PENDING,
+            t.jobs.c.completed_at > t.cost_projections.c.updated_at,
+            missing_attempts,
+        ),
     )
 
 

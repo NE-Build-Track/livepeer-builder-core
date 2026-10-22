@@ -244,7 +244,7 @@ class JobStream:
         """Iterating a stream that already ended: nothing more, or the failure that ended it."""
         assert self._final is not None
         await run_shielded(self._wait(self._final))
-        if self._job.state != "succeeded" and not self._caller_stopped:
+        if self._job.state != JobState.SUCCEEDED and not self._caller_stopped:
             raise JobFailed(self._job)
 
     async def _next(self) -> bytes | Exception:
@@ -378,7 +378,7 @@ class JobStream:
                 size_bytes=self._size,
                 sha256=self._hash.hexdigest(),
             )
-            state: JobState = "succeeded"
+            state = JobState.SUCCEEDED
             self._job = await self._finish(self._job, state, None, result, self._attempts)
         else:
             paid = self._attempts[-1].payment_sent
@@ -389,7 +389,7 @@ class JobStream:
                 body=ending.body[:_BODY_LIMIT] if ending.body else None,
                 payment_sent=paid,
             )
-            state = "uncertain" if paid else "failed"
+            state = JobState.UNCERTAIN if paid else JobState.FAILED
             self._job = await self._finish(self._job, state, failure, None, self._attempts)
         _LOG.info(
             "stream ended",

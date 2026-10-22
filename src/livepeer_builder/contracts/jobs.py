@@ -1,6 +1,7 @@
 """Job contracts: requests, attempts, failures, results and measured usage (docs/contracts/engine.md)."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
@@ -107,7 +108,19 @@ class Failure(Contract):
     payment_sent: bool = False
 
 
-JobState = Literal["queued", "running", "succeeded", "failed", "uncertain"]  # "queued" is reserved (async)
+class JobState(StrEnum):
+    """Where a job is in its life (docs/contracts/engine.md). The values are the wire strings."""
+
+    QUEUED = "queued"  # reserved for async jobs (M4, ISS-26)
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNCERTAIN = "uncertain"  # paid, outcome unknown; an operator reconciles it
+
+    @property
+    def ended(self) -> bool:
+        """The job finished: ``completed_at`` is set and the state never changes again."""
+        return self in (JobState.SUCCEEDED, JobState.FAILED, JobState.UNCERTAIN)
 
 
 class ResultRef(Contract):

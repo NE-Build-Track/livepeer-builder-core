@@ -208,7 +208,7 @@ class JobService:
         self._policy.check(actor, Operation.JOBS_RUN, _job_resource(job))
         if job.usage is not None:
             raise InvalidRequest("usage was already reported for this job")
-        if job.state != "succeeded":
+        if job.state != JobState.SUCCEEDED:
             raise InvalidRequest("usage can only be reported for a succeeded job")
         if not quantities or any(value < 0 for value in quantities.values()):
             raise InvalidRequest("usage needs at least one non-negative quantity")
@@ -221,16 +221,15 @@ class JobService:
     async def recover_interrupted(self) -> int:
         """Resolve jobs a restart left ``running``. Anything that may have paid becomes ``uncertain``."""
         recovered = 0
-        for job in await self._store.jobs_in_state("running"):
+        for job in await self._store.jobs_in_state(JobState.RUNNING):
             maybe_paid = any(a.payment_sent or a.outcome == "in_flight" for a in job.attempts)
             failure = Failure(
                 kind="interrupted",
                 message="the engine stopped while this job was running",
                 payment_sent=any(a.payment_sent for a in job.attempts),
             )
-            await self._store.finish_job(
-                job.id, "uncertain" if maybe_paid else "failed", failure, None, self._clock.now()
-            )
+            state = JobState.UNCERTAIN if maybe_paid else JobState.FAILED
+            await self._store.finish_job(job.id, state, failure, None, self._clock.now())
             recovered += 1
         if recovered:
             _LOG.warning("recovered interrupted jobs", extra={"event": "jobs.recovered", "count": recovered})
@@ -312,7 +311,7 @@ class JobService:
         if error.payment_sent or error.kind not in _FAILOVER_OUTCOMES:
             paid_unknown = error.payment_sent and error.kind in _UNCERTAIN_OUTCOMES
             finished = await self._finish(
-                job, "uncertain" if paid_unknown else "failed", _failure(error), None, attempts
+                job, JobState.UNCERTAIN if paid_unknown else JobState.FAILED, _failure(error), None, attempts
             )
             return JobFailed(finished)
         return None
@@ -348,7 +347,7 @@ class JobService:
                 }
             )
             await self._store.finish_attempt(attempts[-1])
-            finished = await self._finish(job, "succeeded", None, _result_ref(reply), attempts)
+            finished = await self._finish(job, JobState.SUCCEEDED, None, _result_ref(reply), attempts)
             return JobResult(
                 job=finished,
                 status_code=reply.status_code,
@@ -412,7 +411,7 @@ class JobService:
 
     async def _fail(self, job: Job, attempts: list[Attempt], kind: FailureKind, message: str) -> JobFailed:
         failure = Failure(kind=kind, message=message)
-        return JobFailed(await self._finish(job, "failed", failure, None, attempts))
+        return JobFailed(await self._finish(job, JobState.FAILED, failure, None, attempts))
 
     async def _close_after_error(self, job: Job, attempts: list[Attempt], exc: BaseException) -> None:
         maybe_paid = any(a.payment_sent or a.outcome == "in_flight" for a in attempts)
@@ -422,7 +421,8 @@ class JobService:
             payment_sent=any(a.payment_sent for a in attempts),
         )
         try:
-            await self._finish(job, "uncertain" if maybe_paid else "failed", failure, None, attempts)
+            state = JobState.UNCERTAIN if maybe_paid else JobState.FAILED
+            await self._finish(job, state, failure, None, attempts)
         except Exception:
             _LOG.exception("could not close job", extra={"event": "jobs.close_failed", "job_id": str(job.id)})
 
@@ -456,7 +456,7 @@ class JobService:
             app=request.app,
             capability=request.capability,
             model=request.model,
-            state="running",
+            state=JobState.RUNNING,
             attempts=(),
             failure=None,
             result=None,

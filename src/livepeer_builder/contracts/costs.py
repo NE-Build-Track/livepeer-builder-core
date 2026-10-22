@@ -6,6 +6,7 @@ settlement and not a retail price. Missing evidence is ``pending``, never zero.
 
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -50,8 +51,27 @@ class SyncReport(Contract):
     jobs_updated: int = 0
 
 
-CostClass = Literal["delivered", "failed_after_payment", "uncertain", "pending"]
-CostStatus = Literal["none", "pending", "observed", "corrected"]
+class CostClass(StrEnum):
+    """What one attempt's charge was for (docs/contracts/payments.md#cost-classification)."""
+
+    DELIVERED = "delivered"  # the attempt succeeded
+    FAILED_AFTER_PAYMENT = "failed_after_payment"  # payment went out and the attempt failed
+    UNCERTAIN = "uncertain"  # the job is uncertain, or the attempt never reported back
+    PENDING = "pending"  # payment went out and no applied usage row has arrived yet (never zero)
+
+
+class CostStatus(StrEnum):
+    """A job's cost as a whole (docs/contracts/payments.md#job-cost-status)."""
+
+    NONE = "none"  # the job ended succeeded or failed, and nothing was paid
+    PENDING = "pending"  # not ended, ended uncertain without evidence, or a paid attempt lacks rows
+    OBSERVED = "observed"
+    CORRECTED = "corrected"  # the total changed after it was first observed
+
+    @property
+    def has_cost(self) -> bool:
+        """Every paid attempt has rows, so the total is known."""
+        return self in (CostStatus.OBSERVED, CostStatus.CORRECTED)
 
 
 class Fees(Contract):

@@ -345,9 +345,10 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> none: no attempt opened a payment session
-    [*] --> pending: paid, no applied usage row yet
-    pending --> observed: every paid attempt has rows
+    [*] --> pending: job queued or running (computed on read, not stored)
+    pending --> none: ended succeeded or failed, no attempt opened a payment session
+    pending --> pending: ended uncertain with no payment evidence, or paid with no applied usage row yet
+    pending --> observed: ended, and every paid attempt has rows
     observed --> corrected: the total changed after first observed
     corrected --> corrected: changes again
 ```

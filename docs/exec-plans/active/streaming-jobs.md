@@ -214,6 +214,11 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
       callback = `payment_sent=False` and job `failed`), and a missing payload is sent as `{}`.
 - [x] 2026-10-22: SDK re-pinned from NE `dev/bytestreaming` `3238731` to livepeer/livepeer-python-gateway
       `main` `76a1a1c`. #80 and #81 are on `main`. D41 is unchanged.
+- [x] 2026-10-22: a job's cost is `pending` until it ends and is projected only after it ends
+      ([#33](https://github.com/NE-Build-Track/livepeer-builder-core/issues/33), PR #35). A running stream
+      whose rows already matched no longer reads `observed`. `JobState`, `CostStatus` and `CostClass`
+      became `StrEnum`s (same wire strings, named schemas in OpenAPI), with `JobState.ended` and
+      `CostStatus.has_cost`, replacing those strings in the engine.
 
 ## Decision log
 
@@ -234,3 +239,7 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
   [#80](https://github.com/livepeer/livepeer-python-gateway/pull/80) and
   [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), so the engine pins that commit.
   Source: the fork and upstream `main` now carry the same callback and streamable-body behavior.
+- 2026-10-22: Cost sync projects only ended jobs; reads compute an unfinished job live as `pending`, and
+  an `uncertain` job with no payment evidence is stored as `pending`, not `none`. Source:
+  [#33](https://github.com/NE-Build-Track/livepeer-builder-core/issues/33) and the automated review of
+  PR #35 (a stored `none` won while the job ran; an `uncertain` job was never stored).

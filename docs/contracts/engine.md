@@ -37,6 +37,10 @@ missing `payload` as the JSON object `{}` (D41).
 | `failed` | It ended, and nothing went out that might have run the work |
 | `uncertain` | Payment went out (or may have) and the outcome is unknown. Never retried automatically |
 
+In code these are `JobState` members (`JobState.SUCCEEDED`, ...), a `StrEnum` whose values are the strings
+above. `JobState.ended` is true for `succeeded`, `failed` and `uncertain`: `completed_at` is set and the
+state never changes again.
+
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
 `sessions` (one entry per session the signer signed, in order, each with a `manifest_id` and a
 match of `unmatched`, `matched` or `ambiguous`), `payment_sent`, `outcome` (`in_flight`,
@@ -61,10 +65,11 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 4. **Admission and provisioning are checked before any payment.** The admission limits
    (`max_concurrent_jobs`, `max_concurrent_jobs_per_app`) refuse with 503 and `Retry-After`. An
    unprovisioned actor fails with `not_provisioned`.
-5. **A cost that hasn't arrived is `pending`.** Only a job that ended as `succeeded` or `failed` without
-   reaching payment has cost status `none`. A `running` or `uncertain` job is `pending`, because its
-   current attempt may still pay. That answer is classified from the job until an attempt is classified,
-   so a no-payment ending reads `none` on the next read.
+5. **A cost that hasn't arrived is `pending`.** A job's cost is `pending` until the job ends, because its
+   current attempt may still pay. It is computed on each read and not stored until then, so a
+   no-payment ending reads `none` on the next read. Only a job that ended as `succeeded` or `failed`
+   without reaching payment has cost status `none`; one that ended `uncertain` with no payment evidence
+   stays `pending`.
 
 ### Idempotency
 

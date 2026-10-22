@@ -15,7 +15,16 @@ from uuid import uuid4
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Attempt, JobRequest, Money, ProvisionRequest, UsageRow
+from livepeer_builder.contracts import (
+    ActorContext,
+    Attempt,
+    AttemptOutcome,
+    Job,
+    JobRequest,
+    Money,
+    ProvisionRequest,
+    UsageRow,
+)
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import report_signed_session
 from livepeer_builder.services.evidence import SignedSessionRecorder
@@ -167,17 +176,11 @@ async def test_a_failed_evidence_write_does_not_stop_the_paid_call(
 ) -> None:  # fmt: skip
     engine, _ = await provisioned(make_engine, admin)
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]  # reports m-1 before it answers
-    finish_attempt = store.finish_attempt
-    calls = 0
 
-    async def fails_first(attempt):  # type: ignore[no-untyped-def]
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("database unavailable")
-        await finish_attempt(attempt)
+    async def fails(attempt):  # type: ignore[no-untyped-def]
+        raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(store, "finish_attempt", fails_first)
+    monkeypatch.setattr(store, "record_payment_evidence", fails)
     with caplog.at_level(logging.WARNING):
         result = await engine.jobs.run(alice, JobRequest(app=APP))
     assert any(getattr(r, "event", "") == "jobs.evidence_write_failed" for r in caplog.records)
@@ -251,7 +254,7 @@ async def test_a_late_report_lands_on_its_own_attempt() -> None:
     written: list[Attempt] = []
 
     class Store:
-        async def finish_attempt(self, attempt: Attempt) -> None:
+        async def record_payment_evidence(self, attempt: Attempt) -> None:
             written.append(attempt)
 
     def attempt(number: int) -> Attempt:
@@ -268,3 +271,28 @@ async def test_a_late_report_lands_on_its_own_attempt() -> None:
     assert evidence(attempts[0]) == (True, ["m-late"])
     assert attempts[1] == second  # the next attempt is untouched
     assert [a.number for a in written] == [1]
+
+
+async def test_a_late_report_never_moves_a_finished_attempt_back(
+    make_engine: EngineFactory, alice: ActorContext, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    job = Job(
+        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app="a",
+        capability=None, model=None, state="running", failure=None, result=None, usage=None,
+        created_at=clock.now(), completed_at=None, attempts=(),
+    )  # fmt: skip
+    await engine.store.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url=None, orchestrator_url=None, allocation_id=None, sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await engine.store.start_attempt(attempt)
+    attempts = [attempt]
+    recorder = SignedSessionRecorder(engine.store, attempts)
+    finished = attempt.model_copy(update={"outcome": AttemptOutcome.SUCCEEDED, "ended_at": clock.now()})
+    await engine.store.finish_attempt(finished)  # the engine stored the outcome first
+    await recorder("m-late")
+    (stored,) = (await engine.store.get_job(job.id)).attempts  # type: ignore[union-attr]
+    assert (stored.outcome, stored.payment_sent) == ("succeeded", True)
+    assert [s.manifest_id for s in stored.sessions] == ["m-late"]

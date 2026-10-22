@@ -7,11 +7,11 @@ Anything else is ambiguous: the entries keep no payment_session_id, and the rows
 from collections.abc import Iterable, Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, false, func, or_, select, update
+from sqlalchemy import and_, false, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql.elements import ColumnElement
 
-from livepeer_builder.contracts import CostStatus, JobState, UsageRow
+from livepeer_builder.contracts import Attempt, CostStatus, JobState, UsageRow
 from livepeer_builder.store import schema as t
 
 _CHUNK = 500
@@ -37,6 +37,28 @@ def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
             missing_attempts,
         ),
     )
+
+
+async def append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
+    """Append-only (D39): cost sync owns the match columns, so a row it matched is never rewritten."""
+    session_key = and_(
+        t.payment_sessions.c.job_id == str(attempt.job_id),
+        t.payment_sessions.c.attempt_number == attempt.number,
+    )
+    stored = await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
+    known = [row[0] for row in stored]
+    new = [s for s in attempt.sessions if s.manifest_id not in known]
+    for seq, session in enumerate(new, start=len(known)):
+        await conn.execute(
+            insert(t.payment_sessions).values(
+                job_id=str(attempt.job_id),
+                attempt_number=attempt.number,
+                seq=seq,
+                manifest_id=session.manifest_id,
+                payment_session_id=session.payment_session_id,
+                match_status=session.match,
+            )
+        )
 
 
 async def match_payment_sessions(conn: AsyncConnection, rows: Sequence[UsageRow]) -> set[UUID]:

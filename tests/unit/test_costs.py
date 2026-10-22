@@ -576,6 +576,9 @@ async def test_a_running_stream_counts_in_reconciliation_and_summary(
     await engine.costs.sync_once()  # matched, so not unattributed; no projection while it runs
     manager.allocations[actor.allocation_id].spent = Decimal("0.2")
 
+    # An earlier release stored projections for running jobs: that row must not count a second time.
+    live = await engine.costs.for_job(alice, stream.job.id)
+    await engine.store.save_projection(live.model_copy(update={"updated_at": FixedClock().now()}))
     result = await engine.costs.reconcile(admin, "default", "alice")
     assert result.by_class["pending"].fee_eth == Decimal("0.2")
     assert result.unattributed.fee_eth == 0 and result.balanced is True
@@ -585,9 +588,9 @@ async def test_a_running_stream_counts_in_reconciliation_and_summary(
     await stream.aclose()
 
 
-async def test_a_paid_attempt_with_no_row_settles_after_the_horizon(
+async def test_a_paid_attempt_with_no_row_stays_pending(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
-    usage: FakeUsageSource, clock: FixedClock,
+    clock: FixedClock,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
     await engine.payments.provision(
@@ -605,26 +608,11 @@ async def test_a_paid_attempt_with_no_row_settles_after_the_horizon(
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     job_id = failed.value.job.id
+    clock.advance(86400)
     await engine.costs.sync_once()
-    assert (await engine.costs.for_job(alice, job_id)).status == "pending"  # the row may still arrive
-
-    clock.advance(engine.settings.cost_settle_after_s)
-    await engine.costs.sync_once()  # pending projections are re-selected on every sync
-    settled = await engine.costs.for_job(alice, job_id)
-    assert settled.status == "observed" and settled.fees.row_count == 0  # no row: zero known fees
-    assert [a.cost_class for a in settled.attempts] == ["failed_after_payment"]
-    assert (await engine.costs.summary(alice, clock.now() - timedelta(days=1), clock.now())).jobs_pending == 0
-
-
-def test_settled_classification_follows_the_outcome() -> None:
-    assert (
-        classify(job_with(("succeeded", ("s",), True)), [], settled=True).attempts[0].cost_class
-        == "delivered"
-    )
-    uncertain = classify(job_with(("timeout", ("s",), True), state="uncertain"), [], settled=True)
-    assert uncertain.attempts[0].cost_class == "uncertain"
-    running = classify(job_with(("in_flight", ("s",), True), state="running"), [], settled=True)
-    assert running.attempts[0].cost_class == "pending"  # never settled while it runs
+    stored = await engine.store.get_projection(job_id)  # what sync wrote, before any read recomputes it
+    assert stored is not None and stored.status == "pending"  # missing evidence is never zero
+    assert [a.cost_class for a in stored.attempts] == ["pending"]
 
 
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(

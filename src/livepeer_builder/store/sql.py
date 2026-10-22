@@ -28,7 +28,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import schema as t
-from livepeer_builder.store.matching import jobs_needing_projection, match_payment_sessions
+from livepeer_builder.store.matching import append_sessions, jobs_needing_projection, match_payment_sessions
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.rows import chunks, projection, usage_row
 
@@ -51,6 +51,9 @@ def create_engine(url: str) -> AsyncEngine:
         cursor.close()
 
     return engine
+
+
+_ENDED = [state for state in JobState if state.ended]
 
 
 class SqlStore:
@@ -198,27 +201,15 @@ class SqlStore:
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
-        session_key = and_(
-            t.payment_sessions.c.job_id == str(attempt.job_id),
-            t.payment_sessions.c.attempt_number == attempt.number,
-        )
         async with self.engine.begin() as conn:
             await conn.execute(update(t.attempts).where(key).values(_attempt_values(attempt)))
-            # Append-only (D39): cost sync owns the match columns, so a row it matched is never rewritten.
-            stored = await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
-            known = [row[0] for row in stored]
-            new = [s for s in attempt.sessions if s.manifest_id not in known]
-            for seq, session in enumerate(new, start=len(known)):
-                await conn.execute(
-                    insert(t.payment_sessions).values(
-                        job_id=str(attempt.job_id),
-                        attempt_number=attempt.number,
-                        seq=seq,
-                        manifest_id=session.manifest_id,
-                        payment_session_id=session.payment_session_id,
-                        match_status=session.match,
-                    )
-                )
+            await append_sessions(conn, attempt)
+
+    async def record_payment_evidence(self, attempt: Attempt) -> None:
+        key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
+        async with self.engine.begin() as conn:
+            await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
+            await append_sessions(conn, attempt)
 
     async def finish_job(
         self,
@@ -326,6 +317,7 @@ class SqlStore:
             .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
             .where(
                 t.jobs.c.application_id == application_id,
+                t.jobs.c.state.in_(_ENDED),  # running jobs are computed live; an older release stored some
                 t.jobs.c.created_at >= start,
                 t.jobs.c.created_at < end,
             )
@@ -341,7 +333,7 @@ class SqlStore:
         query = (
             select(t.cost_projections)
             .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
-            .where(t.jobs.c.application_id == application_id)
+            .where(t.jobs.c.application_id == application_id, t.jobs.c.state.in_(_ENDED))
         )
         if actor_id is not None:
             query = query.where(t.jobs.c.actor_id == actor_id)

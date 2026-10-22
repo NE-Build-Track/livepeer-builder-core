@@ -202,7 +202,6 @@ class BuilderEngine:
             worker,
             payments,
             settings.cost_sync_interval_s,
-            settings.cost_settle_after_s,
         )
         return cls(
             settings=settings,

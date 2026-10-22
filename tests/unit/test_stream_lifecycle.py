@@ -206,7 +206,7 @@ async def test_a_failed_write_after_open_closes_the_stream(
     async def fails_once(attempt):  # type: ignore[no-untyped-def]
         nonlocal calls
         calls += 1
-        if calls == 2:  # the write after open; the first stored the evidence at signing (D42)
+        if calls == 1:  # the write after open; the evidence was stored at signing (D42)
             raise RuntimeError("write failed")
         await finish_attempt(attempt)
 

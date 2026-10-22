@@ -102,10 +102,6 @@ Each attempt that opened a payment session is classified:
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
 
-**Settling a missing row.** A paid attempt of an ended job that still has no row
-`cost_settle_after_s` (default 3600) after the job ended is classified by its outcome with zero known
-fees (`row_count` 0), so no job stays `pending` forever. A row that arrives later corrects it.
-
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` + `pending` +
 `unattributed`, where `pending` holds the fees matched so far on running jobs. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
 mode it balances exactly per user.

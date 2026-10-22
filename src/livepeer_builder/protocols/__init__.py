@@ -266,6 +266,9 @@ class JobRepo(Protocol):
         are, because cost sync owns their match columns (D39).
         """
 
+    async def record_payment_evidence(self, attempt: Attempt) -> None:
+        """Set ``payment_sent`` and append the attempt's sessions, leaving outcome and timing alone (D42)."""
+
     async def finish_job(
         self,
         job_id: UUID,

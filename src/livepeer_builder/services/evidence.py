@@ -2,7 +2,7 @@
 
 A transport reports each signed session through ``protocols.report_signed_session`` before the paid
 request goes out. ``SignedSessionRecorder`` puts it on the in-memory attempt first, so a cancellation
-during the write still leaves it for the engine's error path, then writes it with ``finish_attempt``
+during the write still leaves it for the engine's error path, then writes it with ``record_payment_evidence``
 (append-only, D39). A failed write is logged, not raised: the signer has already charged, so the call
 goes on, and the write after the call stores the same rows.
 """
@@ -32,7 +32,7 @@ class SignedSessionRecorder:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
         self._attempts[self._index] = attempt
         try:
-            await self._store.finish_attempt(attempt)
+            await self._store.record_payment_evidence(attempt)  # never rewrites a stored outcome
         except Exception as exc:
             _LOG.warning(
                 "could not write payment evidence before the paid request",

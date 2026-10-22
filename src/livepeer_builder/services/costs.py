@@ -192,7 +192,7 @@ class CostService:
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
-        live = await self._running_costs(actor.application_id, target, start, end)
+        live = await self._live_costs(actor.application_id, target, start, end)
         stored = await self._store.projections_between(actor.application_id, target, start, end)
         for cost in _without(stored, live):
             with_cost += cost.status.has_cost
@@ -218,7 +218,7 @@ class CostService:
         if allocation_id is None:
             raise NotFound("no allocation pays for that actor or application")
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        live = await self._running_costs(application_id, actor_id, _EPOCH, _FAR_FUTURE)
+        live = await self._live_costs(application_id, actor_id, _EPOCH, _FAR_FUTURE)
         stored = await self._store.projections_between(application_id, actor_id, _EPOCH, _FAR_FUTURE)
         for cost in _without(stored, live):
             for attempt in cost.attempts:
@@ -252,17 +252,29 @@ class CostService:
         rows = await self._store.usage_for_payment_sessions(session_ids) if session_ids else []
         return classify(job, rows)
 
-    async def _running_costs(
+    async def _live_costs(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> list[JobCost]:
-        """Live costs of running jobs: their matched rows are in no projection and not unattributed."""
-        return [
-            await self._compute(job)
-            for job in await self._store.jobs_in_state(JobState.RUNNING)
-            if job.application_id == application_id
-            and (actor_id is None or job.actor_id == actor_id)
-            and start <= job.created_at < end
+        """Costs no stored projection holds yet: running jobs (computed) and ended jobs not projected
+        since they ended (computed and stored, as ``for_job`` does), so a fee matched while a job ran
+        never drops out of a rollup between its end and the next sync."""
+
+        def mine(job: Job) -> bool:
+            return (
+                job.application_id == application_id
+                and (actor_id is None or job.actor_id == actor_id)
+                and start <= job.created_at < end
+            )
+
+        running = [
+            await self._compute(job) for job in await self._store.jobs_in_state(JobState.RUNNING) if mine(job)
         ]
+        due = [
+            await self._refresh_projection(job)
+            for job in await self._store.jobs_for_projection([])
+            if mine(job)
+        ]
+        return [*running, *due]
 
 
 def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
@@ -354,10 +366,10 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
 
 
 def _without(stored: Sequence[JobCost], live: Sequence[JobCost]) -> list[JobCost]:
-    """Live costs plus stored ones for other jobs. Live is read first, so a job that ends in between
-    (or has a row an earlier release stored while it ran) is counted once."""
-    running = {cost.job_id for cost in live}
-    return [*live, *(cost for cost in stored if cost.job_id not in running)]
+    """Live costs plus stored ones for other jobs, one per job. Live is read first, so a job that ends
+    in between (or has a row an earlier release stored while it ran) is counted once."""
+    by_job = {cost.job_id: cost for cost in live}  # a job read running, then due, keeps the later read
+    return [*by_job.values(), *(cost for cost in stored if cost.job_id not in by_job)]
 
 
 def _stale(projection: JobCost, job: Job) -> bool:

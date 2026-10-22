@@ -615,6 +615,34 @@ async def test_a_paid_attempt_with_no_row_stays_pending(
     assert [a.cost_class for a in stored.attempts] == ["pending"]
 
 
+async def test_a_stream_that_just_ended_stays_in_reconciliation_before_the_next_sync(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    transport.opens = [StreamScript(events=[b"a"], manifest_ids=("m-live",))]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    usage.rows = [row("u1", "sess-live", "0.2", allocation=actor.allocation_id, manifest="m-live")]
+    await engine.costs.sync_once()  # matched while it runs
+    manager.allocations[actor.allocation_id].spent = Decimal("0.2")
+    assert b"".join([chunk async for chunk in stream]) == b"a"  # ended; no sync since
+
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert result.by_class["delivered"].fee_eth == Decimal("0.2") and result.balanced is True
+    window = (FixedClock().now() - timedelta(days=1), FixedClock().now() + timedelta(days=1))
+    summary = await engine.costs.summary(alice, *window)
+    assert (summary.jobs_with_cost, summary.by_class["delivered"].fee_eth) == (1, Decimal("0.2"))
+
+
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
     usage: FakeUsageSource, manager: FakeAllocationManager,

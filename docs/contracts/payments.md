@@ -121,7 +121,7 @@ for ended jobs only. A job that has not ended is computed on each read, with the
 and status `pending`, so ending without payment becomes `none` without waiting for the next sync.
 An ended job whose projection is missing, `pending`, or older than its `completed_at` is recomputed
 (and stored) on read, so a fee matched while it ran shows as soon as it ends. Summaries and
-reconciliation include running jobs as `pending`.
+reconciliation do the same for ended jobs in their window, and include running jobs as `pending`.
 
 In code, statuses and classes are the `CostStatus` and `CostClass` `StrEnum`s, whose values are the
 strings above. `CostStatus.has_cost` is true for `observed` and `corrected`.

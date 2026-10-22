@@ -290,9 +290,7 @@ class CostRepo(Protocol):
 
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]: ...
 
-    async def jobs_for_projection(
-        self, job_ids: Sequence[UUID], application_id: str | None = None
-    ) -> list[Job]: ...
+    async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]: ...
 
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
 
@@ -304,9 +302,16 @@ class CostRepo(Protocol):
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> list[JobCost]: ...
 
-    async def recent_projections(
+    async def unprojected_jobs(
+        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    ) -> list[Job]:
+        """Jobs created in the window that no stored projection covers: running, or ended and not
+        projected since they ended (``store.matching.unprojected``). Reads compute these."""
+
+    async def recent_costs(
         self, application_id: str, actor_id: str | None, limit: int
-    ) -> list[JobCost]: ...
+    ) -> list[tuple[Job, JobCost | None]]:
+        """The newest ended jobs, each with its stored projection or None."""
 
     async def save_projection(self, cost: JobCost) -> None: ...
 

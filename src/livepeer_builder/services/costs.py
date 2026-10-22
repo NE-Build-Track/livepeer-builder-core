@@ -7,8 +7,9 @@ Classification (accepted 12 October, docs/contracts/payments.md#cost-classificat
   pending               payment went out and no applied usage row has arrived yet (never zero)
 A job's cost is ``pending`` until the job ends, and is not stored until then. An ended job with no
 classified attempt is ``none`` when it ended ``succeeded`` or ``failed``, and ``pending`` when it ended
-``uncertain`` (it may have paid before the engine stopped). Running jobs are computed on each read and
-count in summaries and reconciliation as ``pending``.
+``uncertain`` (it may have paid before the engine stopped). Only cost sync stores projections. Reads
+compute the jobs no stored projection covers (running, or ended and not projected since), so the job
+read, the recent list, summaries and reconciliation agree; running jobs count as ``pending``.
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
@@ -149,13 +150,6 @@ class CostService:
     async def _refresh_projection(self, job: Job) -> JobCost:
         """Recompute and store an ended job's projection. Only cost sync writes projections, so a read
         never puts an older total back over a newer one."""
-        projection = await self._project(job)
-        if job.state.ended:
-            await self._store.save_projection(projection)
-        return projection
-
-    async def _project(self, job: Job) -> JobCost:
-        """The projection sync would store for this job now, without storing it."""
         computed = await self._compute(job)
         # An unfinished job may still pay. for_job computes it live, so its ending reads at once.
         if not job.state.ended:
@@ -168,9 +162,11 @@ class CostService:
         first = previous.first_observed_at if previous and previous.first_observed_at else None
         if first is None and status.has_cost:
             first = self._clock.now()
-        return computed.model_copy(
+        projection = computed.model_copy(
             update={"status": status, "first_observed_at": first, "updated_at": self._clock.now()}
         )
+        await self._store.save_projection(projection)
+        return projection
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
         job = await self._store.get_job(job_id)
@@ -183,14 +179,19 @@ class CostService:
         if not job.state.ended:
             return await self._compute(job)  # never stored; ignores a row an earlier version wrote
         projection = await self._store.get_projection(job_id)
-        if projection is None or _stale(projection, job):
-            return await self._project(job)  # ended since the last sync: serve it fresh; sync stores it
+        if projection is None or _unprojected(projection, job):
+            return await self._compute(job)  # ended since the last sync: computed here, stored by sync
         return projection
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
         target = None if actor.credential_kind == "admin" else actor.actor_id
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
-        return await self._store.recent_projections(actor.application_id, target, limit)
+        recent = await self._store.recent_costs(actor.application_id, target, limit)
+        # As for_job and summary serve them: a job that ended since the last sync is computed here.
+        costs = {job.id: cost for job, cost in recent if cost is not None and not _unprojected(cost, job)}
+        computed = await self._compute_all([job for job, _ in recent if job.id not in costs])
+        costs.update((cost.job_id, cost) for cost in computed)
+        return [costs[job.id] for job, _ in recent]
 
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
@@ -244,49 +245,36 @@ class CostService:
         )
 
     async def _compute(self, job: Job) -> JobCost:
-        session_ids = sorted(
-            {
-                session.payment_session_id
-                for attempt in job.attempts
-                for session in attempt.sessions
-                if session.match == "matched" and session.payment_session_id
-            }
-        )
-        rows = await self._store.usage_for_payment_sessions(session_ids) if session_ids else []
-        return classify(job, rows)
+        return (await self._compute_all([job]))[0]
+
+    async def _compute_all(self, jobs: Sequence[Job]) -> list[JobCost]:
+        """Classify jobs from their matched usage rows, read once for all of them. Never stored."""
+        keys = sorted({key for job in jobs for key in _matched(job)})
+        rows = await self._store.usage_for_payment_sessions(keys) if keys else []
+        by_session: dict[str | None, list[UsageRow]] = {}
+        for row in rows:
+            by_session.setdefault(row.payment_session_id, []).append(row)
+        return [
+            classify(job, [row for key in _matched(job) for row in by_session.get(key, ())]) for job in jobs
+        ]
 
     async def _rollup(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> list[JobCost]:
-        """One cost per job in the window, without storing any: stored projections, plus running jobs
-        and ended jobs not projected since they ended (as ``for_job`` serves them), so a fee matched
-        while a job ran never drops out between its end and the next sync.
+        """One cost per job in the window, without storing any (only cost sync writes projections).
 
-        Each read is at least as fresh as the one before, and the later read wins: running snapshots,
-        then stored projections, then due jobs. Due jobs are listed before the stored read and reloaded
-        and recomputed after it, so a projection cost sync commits in between is never replaced by an
-        older compute, and a job it projects in between is still counted.
+        Stored projections, plus a compute of the jobs none covers yet: running jobs, and ended jobs
+        not projected since they ended, so a fee matched while a job ran never drops out between its
+        end and the next sync. Those jobs are read before the stored projections and computed after:
+        one a sync projects in between is taken as stored, never replaced by an older compute, and one
+        projected after the stored read is still computed.
         """
-
-        def mine(job: Job) -> bool:
-            return (
-                job.application_id == application_id
-                and (actor_id is None or job.actor_id == actor_id)
-                and start <= job.created_at < end
-            )
-
-        running = [
-            await self._compute(job) for job in await self._store.jobs_in_state(JobState.RUNNING) if mine(job)
-        ]
-        listed = [job.id for job in await self._store.jobs_for_projection([], application_id) if mine(job)]
+        uncovered = await self._store.unprojected_jobs(application_id, actor_id, start, end)
         stored = await self._store.projections_between(application_id, actor_id, start, end)
-        # Passing the listed ids reloads them even if a sync projected them since (as when it touches them).
-        due = [
-            await self._project(job)
-            for job in await self._store.jobs_for_projection(listed, application_id)
-            if mine(job)
-        ]
-        return _one_per_job(running, stored, due)
+        costs = {cost.job_id: cost for cost in stored}
+        due = [job for job in uncovered if job.id not in costs or _unprojected(costs[job.id], job)]
+        costs.update((cost.job_id, cost) for cost in await self._compute_all(due))
+        return list(costs.values())
 
 
 def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
@@ -377,20 +365,25 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
     return None if total.fee_usd is None else total.fee_usd == spent.amount
 
 
-def _one_per_job(*reads: Sequence[JobCost]) -> list[JobCost]:
-    """One cost per job; pass the reads oldest first, and a later read wins."""
-    by_job = {cost.job_id: cost for read in reads for cost in read}
-    return list(by_job.values())
+def _matched(job: Job) -> set[str]:
+    return {
+        session.payment_session_id
+        for attempt in job.attempts
+        for session in attempt.sessions
+        if session.match == "matched" and session.payment_session_id
+    }
 
 
-def _stale(projection: JobCost, job: Job) -> bool:
-    """Stored before the job ended (an earlier release), or still waiting on rows."""
-    if projection.status == CostStatus.PENDING:
+def _unprojected(projection: JobCost, job: Job) -> bool:
+    """The stored row does not cover the job: it has a cost and no attempts, or it was stored before
+    the job ended. The same rule as ``store.matching.unprojected``. A ``pending`` row is as fresh as
+    the last sync, which rewrites it whenever a usage row arrives for the job."""
+    if projection.status.has_cost and not projection.attempts:
         return True
     return (
         projection.updated_at is not None
         and job.completed_at is not None
-        and (projection.updated_at < job.completed_at)
+        and projection.updated_at < job.completed_at
     )
 
 

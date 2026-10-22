@@ -160,7 +160,8 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     assert observed.attempts[0].cost_class == "delivered"
 
     await engine.store.save_projection(observed.model_copy(update={"attempts": ()}))
-    assert (await engine.costs.for_job(alice, job.id)).attempts == ()
+    served = await engine.costs.for_job(alice, job.id)  # the empty breakdown is not served as stored
+    assert [a.cost_class for a in served.attempts] == ["delivered"]
     rebuilt_sync = await engine.costs.sync_once()  # no new usage; the empty attempt list is stale
     assert rebuilt_sync.rows_new == 0
     rebuilt = await engine.costs.for_job(alice, job.id)
@@ -642,6 +643,44 @@ async def test_a_stream_that_just_ended_stays_in_reconciliation_before_the_next_
     window = (FixedClock().now() - timedelta(days=1), FixedClock().now() + timedelta(days=1))
     summary = await engine.costs.summary(alice, *window)
     assert (summary.jobs_with_cost, summary.by_class["delivered"].fee_eth) == (1, Decimal("0.2"))
+    # The list agrees with the summary: the job is in it, computed, before any sync stores it.
+    (listed,) = await engine.costs.recent(alice)
+    assert (listed.status, listed.fees.fee_eth, listed.updated_at) == ("observed", Decimal("0.2"), None)
+
+
+async def test_a_job_projected_after_the_stored_read_is_still_counted(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager, store: SqlStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    allocation = actor.allocation_id
+    transport.opens = [StreamScript(events=[b"a"], manifest_ids=("m-live",))]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    usage.rows = [row("u1", "sess-live", "0.2", allocation=allocation, manifest="m-live")]
+    await engine.costs.sync_once()
+    assert b"".join([chunk async for chunk in stream]) == b"a"  # ended, not projected
+    manager.allocations[allocation].spent = Decimal("0.3")
+    stored_between = store.projections_between
+
+    async def read_then_sync(*args):  # type: ignore[no-untyped-def]
+        # The stored read misses the job; then a sync stores it (0.3) before the compute.
+        stored = await stored_between(*args)
+        usage.rows.append(row("u2", "sess-live", "0.1", allocation=allocation, manifest="m-live"))
+        await engine.costs.sync_once()
+        return stored
+
+    monkeypatch.setattr(store, "projections_between", read_then_sync)
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert result.by_class["delivered"].fee_eth == Decimal("0.3") and result.balanced is True
 
 
 async def test_a_job_stored_while_a_rollup_reads_wins_over_its_running_snapshot(
@@ -664,21 +703,22 @@ async def test_a_job_stored_while_a_rollup_reads_wins_over_its_running_snapshot(
     usage.rows = [row("u1", "sess-live", "0.2", allocation=allocation, manifest="m-live")]
     await engine.costs.sync_once()
     manager.allocations[allocation].spent = Decimal("0.3")
-    due_jobs = store.jobs_for_projection
+    uncovered = store.unprojected_jobs
     overlapped = False
 
-    async def end_and_sync_in_between(job_ids, application_id=None):  # type: ignore[no-untyped-def]
-        # After reconcile read the running snapshot (0.2 pending): the stream ends, one more row
-        # arrives, and cost sync stores the ended projection (0.3 delivered).
+    async def end_and_sync_after(*args):  # type: ignore[no-untyped-def]
+        # Reconcile read the job as running (0.2 so far). Then the stream ends, one more row arrives,
+        # and cost sync stores the ended projection (0.3 delivered) before the stored read.
         nonlocal overlapped
+        jobs = await uncovered(*args)
         if not overlapped:
             overlapped = True
             assert b"".join([chunk async for chunk in stream]) == b"a"
             usage.rows.append(row("u2", "sess-live", "0.1", allocation=allocation, manifest="m-live"))
             await engine.costs.sync_once()
-        return await due_jobs(job_ids, application_id)
+        return jobs
 
-    monkeypatch.setattr(store, "jobs_for_projection", end_and_sync_in_between)
+    monkeypatch.setattr(store, "unprojected_jobs", end_and_sync_after)
     result = await engine.costs.reconcile(admin, "default", "alice")
     assert overlapped
     assert (result.by_class["delivered"].fee_eth, result.by_class["pending"].fee_eth) == (Decimal("0.3"), 0)

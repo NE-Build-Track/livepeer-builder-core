@@ -117,14 +117,16 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 it ended `uncertain` with no payment evidence, or some paid attempt lacks rows), `observed`,
 `corrected` (the total changed after it was first observed, for example a metered session that
 signed again). Projections are persisted in `lpb_cost_projections` and updated by each cost sync,
-for ended jobs only; cost sync is the only writer. A job that has not ended is computed on each read,
-with the fees matched so far and status `pending`, so ending without payment becomes `none` without
-waiting for the next sync. An ended job whose projection is missing, `pending`, or older than its
-`completed_at` is recomputed on read (not stored), so a fee matched while it ran shows as soon as it
-ends. Summaries and reconciliation do the same for ended jobs in their window, include running jobs
-as `pending`, and count each job once. They read running jobs, then stored projections, then recompute
-due jobs, and the later read wins, so a projection cost sync commits during the read is never
-replaced by an older value.
+for ended jobs only; cost sync is the only writer. Reads never store. They compute, from the usage
+rows matched so far, every job no stored projection covers: a job that has not ended (status
+`pending`, so ending without payment becomes `none` without waiting for the next sync), and an ended
+job whose projection is missing, older than its `completed_at`, or has a cost and no attempts. A
+fee matched while a job ran therefore shows as soon as it ends. A stored `pending` projection is
+served as stored: each sync rewrites it when a usage row arrives. The job read, the recent list,
+summaries and reconciliation all apply this rule, so they agree. Summaries and reconciliation read
+the uncovered jobs for their application, actor and window first, then the stored projections, and
+compute only uncovered jobs that the stored read did not cover, so a projection a sync commits in
+between is used as stored.
 
 In code, statuses and classes are the `CostStatus` and `CostClass` `StrEnum`s, whose values are the
 strings above. `CostStatus.has_cost` is true for `observed` and `corrected`.

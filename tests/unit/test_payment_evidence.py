@@ -278,7 +278,12 @@ async def test_cost_matches_while_the_paid_request_runs_and_reads_pending_until_
     observed = await engine.costs.for_job(alice, job.id)
     assert await engine.store.get_projection(job.id) is None
     await engine.costs.sync_once()
-    assert await engine.store.get_projection(job.id) == observed
+    stored = await engine.store.get_projection(job.id)
+    assert stored is not None and (stored.status, stored.fees, stored.attempts) == (
+        observed.status,
+        observed.fees,
+        observed.attempts,
+    )
     assert (observed.status, observed.fees.fee_eth) == ("observed", Decimal("0.3"))
     assert [(a.attempt_number, a.cost_class) for a in observed.attempts] == [(2, "delivered")]
 

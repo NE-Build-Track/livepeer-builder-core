@@ -2,8 +2,9 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC
+from datetime import UTC, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
 
@@ -15,6 +16,7 @@ from livepeer_builder.contracts import (
     Failure,
     Fees,
     JobCost,
+    JobState,
     MeasuredUsage,
     ProvisionedActor,
     ResultRef,
@@ -200,13 +202,49 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
     assert first.id in selected and unprojected.id in selected and latest.id not in selected
-    assert {job.id for job in await sql.jobs_for_projection((), "default")} == selected
-    assert await sql.jobs_for_projection((), "another-app") == []
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 1)] == [latest.id]
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 5)] == [
-        latest.id,
-        first.id,
-    ]
+    recent = await sql.recent_costs("default", None, 5)
+    assert [job.id for job, _ in recent] == [latest.id, unprojected.id, first.id]
+    assert [None if cost is None else cost.job_id for _, cost in recent] == [latest.id, None, first.id]
+    assert [job.id for job, _ in await sql.recent_costs("default", None, 1)] == [latest.id]
+
+
+async def test_unprojected_jobs_are_scoped_to_the_application_actor_and_window(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    def cost(job_id: UUID, status: str, *, attempts: bool = True) -> JobCost:
+        fees = Fees(fee_eth=Decimal(0), fee_usd=None, row_count=0)
+        return JobCost(
+            job_id=job_id, status=status, fees=fees,  # type: ignore[arg-type]
+            attempts=(AttemptCost(attempt_number=1, cost_class="pending", fees=fees),) if attempts else (),
+            first_observed_at=None, updated_at=clock.now(),
+        )  # fmt: skip
+
+    running = make_job(clock, state="running")
+    never = make_job(clock)  # ended, never projected
+    pending = make_job(clock)  # sync keeps re-selecting it; a read serves the stored row
+    empty = make_job(clock)  # observed with no attempts: an earlier release
+    covered = make_job(clock)
+    other_actor = make_job(clock, actor="bob")
+    for job in (running, never, pending, empty, covered, other_actor):
+        await sql.create_job(job, None)
+    await sql.save_projection(cost(pending.id, "pending"))
+    await sql.save_projection(cost(empty.id, "observed", attempts=False))
+    await sql.save_projection(cost(covered.id, "observed"))
+    clock.advance(1)
+    ended_later = make_job(clock)  # its row was stored before it ended (an earlier release)
+    await sql.create_job(ended_later.model_copy(update={"state": "running", "completed_at": None}), None)
+    await sql.save_projection(cost(ended_later.id, "observed"))
+    clock.advance(1)
+    await sql.finish_job(ended_later.id, JobState.SUCCEEDED, None, None, clock.now())
+
+    window = (clock.now() - timedelta(days=1), clock.now() + timedelta(days=1))
+    found = {job.id for job in await sql.unprojected_jobs("default", "alice", *window)}
+    assert found == {running.id, never.id, empty.id, ended_later.id}
+    assert {job.id for job in await sql.unprojected_jobs("default", None, *window)} == found | {
+        other_actor.id
+    }
+    assert await sql.unprojected_jobs("another-app", None, *window) == []
+    assert await sql.unprojected_jobs("default", None, window[1], window[1] + timedelta(days=1)) == []
 
 
 async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:

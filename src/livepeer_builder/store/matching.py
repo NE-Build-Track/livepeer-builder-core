@@ -17,25 +17,33 @@ from livepeer_builder.store import schema as t
 _CHUNK = 500
 
 
-def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
-    """Ended jobs whose projection should be recomputed, including observed rows stored with no attempts.
+def unprojected() -> ColumnElement[bool]:
+    """No stored projection covers this ended job (on ``jobs`` outer-joined to ``cost_projections``).
 
-    A job that has not ended is never projected: it may still pay, so reads compute it live.
+    None is stored, it was stored before the job ended (an earlier release stored running jobs), or
+    it has a cost and no attempts. Reads compute these jobs and cost sync stores them. The service
+    applies the same rule to a row it holds (``services.costs._unprojected``).
     """
-    touched = t.jobs.c.id.in_(job_ids) if job_ids else false()
     missing_attempts = and_(
         t.cost_projections.c.status.in_([status for status in CostStatus if status.has_cost]),
         func.json_array_length(t.cost_projections.c.attempts) == 0,
     )
+    return or_(
+        t.cost_projections.c.job_id.is_(None),
+        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
+        missing_attempts,
+    )
+
+
+def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
+    """Ended jobs cost sync recomputes: touched by new usage, still ``pending``, or unprojected.
+
+    A job that has not ended is never projected: it may still pay, so reads compute it live.
+    """
+    touched = t.jobs.c.id.in_(job_ids) if job_ids else false()
     return and_(
         t.jobs.c.state.in_([state for state in JobState if state.ended]),
-        or_(
-            touched,
-            t.cost_projections.c.job_id.is_(None),
-            t.cost_projections.c.status == CostStatus.PENDING,
-            t.jobs.c.completed_at > t.cost_projections.c.updated_at,
-            missing_attempts,
-        ),
+        or_(touched, t.cost_projections.c.status == CostStatus.PENDING, unprojected()),
     )
 
 

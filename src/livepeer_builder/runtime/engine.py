@@ -195,7 +195,15 @@ class BuilderEngine:
             ),
         )
         worker = CostSyncWorker(usage_source, store) if usage_source is not None else None
-        costs = CostService(store, policy, clock, worker, payments, settings.cost_sync_interval_s)
+        costs = CostService(
+            store,
+            policy,
+            clock,
+            worker,
+            payments,
+            settings.cost_sync_interval_s,
+            settings.cost_settle_after_s,
+        )
         return cls(
             settings=settings,
             store=store,

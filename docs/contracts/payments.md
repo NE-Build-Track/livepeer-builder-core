@@ -97,13 +97,17 @@ Each attempt that opened a payment session is classified:
 | `delivered` | The attempt succeeded | Bill under its retail policy |
 | `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**) | Absorb; don't bill |
 | `uncertain` | The job is `uncertain`, or the attempt never reported back | Hold, then reconcile |
-| `pending` | Payment went out; no applied usage row yet | Wait. **Never zero** |
+| `pending` | The job is still running, or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
 
-**Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
+**Settling a missing row.** A paid attempt of an ended job that still has no row
+`cost_settle_after_s` (default 3600) after the job ended is classified by its outcome with zero known
+fees (`row_count` 0), so no job stays `pending` forever. A row that arrives later corrects it.
+
+**Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` + `pending` +
+`unattributed`, where `pending` holds the fees matched so far on running jobs. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
 mode it balances exactly per user.
 
 **Network cost is the expected value at signing.** Tickets the orchestrator rejects after signing are
@@ -119,6 +123,9 @@ it ended `uncertain` with no payment evidence, or some paid attempt lacks rows),
 signed again). Projections are persisted in `lpb_cost_projections` and updated by each cost sync,
 for ended jobs only. A job that has not ended is computed on each read, with the fees matched so far
 and status `pending`, so ending without payment becomes `none` without waiting for the next sync.
+An ended job whose projection is missing, `pending`, or older than its `completed_at` is recomputed
+(and stored) on read, so a fee matched while it ran shows as soon as it ends. Summaries and
+reconciliation include running jobs as `pending`.
 
 In code, statuses and classes are the `CostStatus` and `CostClass` `StrEnum`s, whose values are the
 strings above. `CostStatus.has_cost` is true for `observed` and `corrected`.

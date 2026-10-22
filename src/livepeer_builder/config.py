@@ -45,6 +45,7 @@ class EngineSettings(Contract):
     shared_allocation_id: str | None = None  # per_application: the allocation behind shared_payment_key
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
+    cost_settle_after_s: float = Field(default=3600.0, gt=0)  # a paid attempt with no row: stop pending
 
     # operations
     log_json: bool = True

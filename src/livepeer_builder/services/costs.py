@@ -7,7 +7,10 @@ Classification (accepted 12 October, docs/contracts/payments.md#cost-classificat
   pending               payment went out and no applied usage row has arrived yet (never zero)
 A job's cost is ``pending`` until the job ends, and is not stored until then. An ended job with no
 classified attempt is ``none`` when it ended ``succeeded`` or ``failed``, and ``pending`` when it ended
-``uncertain`` (it may have paid before the engine stopped).
+``uncertain`` (it may have paid before the engine stopped). A paid attempt with no row ``settle_after_s``
+after its job ended is classified by its outcome with zero known fees (``row_count`` 0), so it never
+stays ``pending``; a row that arrives later corrects it. Running jobs are computed on each read and
+count in summaries and reconciliation as ``pending``.
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
@@ -100,6 +103,7 @@ class CostService:
         worker: CostSyncWorker | None = None,
         allowances: AllowanceReader | None = None,
         interval_s: float = 30.0,
+        settle_after_s: float = 3600.0,
     ) -> None:
         self._store = store
         self._policy = policy
@@ -107,6 +111,7 @@ class CostService:
         self._worker = worker
         self._allowances = allowances
         self._interval_s = interval_s
+        self._settle_after_s = settle_after_s
         self.last_synced_at: datetime | None = None
         self.last_error: str | None = None
 
@@ -175,7 +180,9 @@ class CostService:
         if not job.state.ended:
             return await self._compute(job)  # never stored; ignores a row an earlier version wrote
         projection = await self._store.get_projection(job_id)
-        return projection if projection is not None else classify(job, ())
+        if projection is None or _stale(projection, job):
+            return await self._refresh_projection(job)  # ended since the last sync: serve it fresh
+        return projection
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
         target = None if actor.credential_kind == "admin" else actor.actor_id
@@ -189,7 +196,8 @@ class CostService:
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
-        for cost in await self._store.projections_between(actor.application_id, target, start, end):
+        live = await self._running_costs(actor.application_id, target, start, end)
+        for cost in [*await self._store.projections_between(actor.application_id, target, start, end), *live]:
             with_cost += cost.status.has_cost
             pending += cost.status == CostStatus.PENDING
             for attempt in cost.attempts:
@@ -213,7 +221,9 @@ class CostService:
         if allocation_id is None:
             raise NotFound("no allocation pays for that actor or application")
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        for cost in await self._store.projections_between(application_id, actor_id, _EPOCH, _FAR_FUTURE):
+        stored = await self._store.projections_between(application_id, actor_id, _EPOCH, _FAR_FUTURE)
+        live = await self._running_costs(application_id, actor_id, _EPOCH, _FAR_FUTURE)
+        for cost in [*stored, *live]:
             for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
@@ -243,15 +253,33 @@ class CostService:
             }
         )
         rows = await self._store.usage_for_payment_sessions(session_ids) if session_ids else []
-        return classify(job, rows)
+        settled = job.completed_at is not None and (
+            (self._clock.now() - job.completed_at).total_seconds() >= self._settle_after_s
+        )
+        return classify(job, rows, settled=settled)
+
+    async def _running_costs(
+        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    ) -> list[JobCost]:
+        """Live costs of running jobs: their matched rows are in no projection and not unattributed."""
+        return [
+            await self._compute(job)
+            for job in await self._store.jobs_in_state(JobState.RUNNING)
+            if job.application_id == application_id
+            and (actor_id is None or job.actor_id == actor_id)
+            and start <= job.created_at < end
+        ]
 
 
-def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
-    """Pure classification of one job's charges. Only ``applied`` rows count as cost."""
+def classify(job: Job, rows: Sequence[UsageRow], *, settled: bool = False) -> JobCost:
+    """Pure classification of one job's charges. Only ``applied`` rows count as cost.
+
+    ``settled``: the job ended long enough ago that a missing row will not arrive in normal operation.
+    """
     applied = [row for row in rows if row.status == "applied"]
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
-        cost = _classify_attempt(job, attempt, applied)
+        cost = _classify_attempt(job, attempt, applied, settled)
         if cost is not None:
             attempts.append(cost)
     return JobCost(
@@ -264,7 +292,9 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     )
 
 
-def _classify_attempt(job: Job, attempt: Attempt, applied: Sequence[UsageRow]) -> AttemptCost | None:
+def _classify_attempt(
+    job: Job, attempt: Attempt, applied: Sequence[UsageRow], settled: bool
+) -> AttemptCost | None:
     """One attempt's charge. An attempt that never opened payment is omitted."""
     if not attempt.sessions and not attempt.payment_sent:
         return None
@@ -276,16 +306,16 @@ def _classify_attempt(job: Job, attempt: Attempt, applied: Sequence[UsageRow]) -
     mine = [row for row in applied if row.payment_session_id in matched]
     return AttemptCost(
         attempt_number=attempt.number,
-        cost_class=_attempt_class(job, attempt, mine),
+        cost_class=_attempt_class(job, attempt, mine, settled),
         fees=fees_of(mine),
     )
 
 
-def _attempt_class(job: Job, attempt: Attempt, mine: Sequence[UsageRow]) -> CostClass:
+def _attempt_class(job: Job, attempt: Attempt, mine: Sequence[UsageRow], settled: bool) -> CostClass:
     if any(session.match == "ambiguous" for session in attempt.sessions):
         return CostClass.UNCERTAIN
-    if not mine:
-        return CostClass.PENDING
+    if not job.state.ended or (not mine and not settled):
+        return CostClass.PENDING  # a running job's fees so far are not final
     if attempt.outcome == AttemptOutcome.SUCCEEDED:
         return CostClass.DELIVERED
     if job.state == JobState.UNCERTAIN or attempt.outcome == AttemptOutcome.IN_FLIGHT:
@@ -330,6 +360,17 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
     if spent.currency == "ETH":
         return total.fee_eth == spent.amount
     return None if total.fee_usd is None else total.fee_usd == spent.amount
+
+
+def _stale(projection: JobCost, job: Job) -> bool:
+    """Stored before the job ended (an earlier release), or still waiting on rows."""
+    if projection.status == CostStatus.PENDING:
+        return True
+    return (
+        projection.updated_at is not None
+        and job.completed_at is not None
+        and (projection.updated_at < job.completed_at)
+    )
 
 
 def _resource(application_id: str, owner: str | None) -> ResourceRef:

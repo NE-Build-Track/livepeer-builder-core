@@ -240,9 +240,9 @@ async def test_cost_matches_while_the_paid_request_runs_and_reads_pending_until_
         assert (live.status, live.fees.fee_eth) == ("pending", Decimal("0.3"))
         transport.release.set()
         assert (await task).job.state == "succeeded"
-    assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # ended; not projected yet
-    await engine.costs.sync_once()
+    # Ended, and no sync since: the read computes it from the rows already matched, and stores it.
     observed = await engine.costs.for_job(alice, job.id)
+    assert await engine.store.get_projection(job.id) == observed
     assert (observed.status, observed.fees.fee_eth) == ("observed", Decimal("0.3"))
     assert [(a.attempt_number, a.cost_class) for a in observed.attempts] == [(2, "delivered")]
 

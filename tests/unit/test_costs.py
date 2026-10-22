@@ -496,7 +496,8 @@ async def test_a_stored_none_is_ignored_while_the_job_runs(
     await engine.store.finish_attempt(paid)
     clock.advance(1)
     await engine.store.finish_job(job.id, "succeeded", None, None, clock.now())
-    assert (await engine.costs.sync_once()).jobs_updated == 1  # completed after the stale row: recomputed
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # the stale none is not served
+    assert (await engine.costs.sync_once()).jobs_updated == 1  # still pending: the worker keeps it
     assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # paid, no usage row yet
 
 
@@ -553,6 +554,77 @@ async def test_a_stream_with_matched_rows_stays_pending_until_it_ends(
     ended = await engine.costs.for_job(alice, job_id)
     assert (ended.status, ended.fees.fee_eth) == ("observed", Decimal("0.2"))
     assert [attempt.cost_class for attempt in ended.attempts] == ["delivered"]
+
+
+async def test_a_running_stream_counts_in_reconciliation_and_summary(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    transport.opens = [StreamScript(events=[b"a"], manifest_ids=("m-live",))]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    usage.rows = [row("u1", "sess-live", "0.2", allocation=actor.allocation_id, manifest="m-live")]
+    await engine.costs.sync_once()  # matched, so not unattributed; no projection while it runs
+    manager.allocations[actor.allocation_id].spent = Decimal("0.2")
+
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert result.by_class["pending"].fee_eth == Decimal("0.2")
+    assert result.unattributed.fee_eth == 0 and result.balanced is True
+    window = (FixedClock().now() - timedelta(days=1), FixedClock().now() + timedelta(days=1))
+    summary = await engine.costs.summary(alice, *window)
+    assert (summary.jobs_pending, summary.by_class["pending"].fee_eth) == (1, Decimal("0.2"))
+    await stream.aclose()
+
+
+async def test_a_paid_attempt_with_no_row_settles_after_the_horizon(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource, clock: FixedClock,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    transport.steps = [
+        RunnerCallError("payment", "tickets rejected", payment_sent=True, manifest_ids=("m-x",))
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    job_id = failed.value.job.id
+    await engine.costs.sync_once()
+    assert (await engine.costs.for_job(alice, job_id)).status == "pending"  # the row may still arrive
+
+    clock.advance(engine.settings.cost_settle_after_s)
+    await engine.costs.sync_once()  # pending projections are re-selected on every sync
+    settled = await engine.costs.for_job(alice, job_id)
+    assert settled.status == "observed" and settled.fees.row_count == 0  # no row: zero known fees
+    assert [a.cost_class for a in settled.attempts] == ["failed_after_payment"]
+    assert (await engine.costs.summary(alice, clock.now() - timedelta(days=1), clock.now())).jobs_pending == 0
+
+
+def test_settled_classification_follows_the_outcome() -> None:
+    assert (
+        classify(job_with(("succeeded", ("s",), True)), [], settled=True).attempts[0].cost_class
+        == "delivered"
+    )
+    uncertain = classify(job_with(("timeout", ("s",), True), state="uncertain"), [], settled=True)
+    assert uncertain.attempts[0].cost_class == "uncertain"
+    running = classify(job_with(("in_flight", ("s",), True), state="running"), [], settled=True)
+    assert running.attempts[0].cost_class == "pending"  # never settled while it runs
 
 
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(

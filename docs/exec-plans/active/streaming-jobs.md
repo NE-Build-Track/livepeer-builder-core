@@ -212,6 +212,8 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
       streamable runner bodies on upstream `main`). The engine does not use streamable bodies yet.
       Adapter aligned with #81 (D41): `on_payment_session` is the sole source of `payment_sent` (no
       callback = `payment_sent=False` and job `failed`), and a missing payload is sent as `{}`.
+- [x] 2026-10-22: SDK re-pinned from NE `dev/bytestreaming` `3238731` to livepeer/livepeer-python-gateway
+      `main` `76a1a1c`. #80 and #81 are on `main`. D41 is unchanged.
 
 ## Decision log
 
@@ -228,3 +230,7 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
   signing runs before the paid runner request and `on_payment_session` fires only once a valid payment
   session is obtained, so no callback means `payment_sent=False` and the job ends `failed`; a missing
   payload keeps the `{}` body (D41). Source: PR #31.
+- 2026-10-22: Drop the NE fork pin. Upstream `main` `76a1a1c` contains
+  [#80](https://github.com/livepeer/livepeer-python-gateway/pull/80) and
+  [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), so the engine pins that commit.
+  Source: the fork and upstream `main` now carry the same callback and streamable-body behavior.

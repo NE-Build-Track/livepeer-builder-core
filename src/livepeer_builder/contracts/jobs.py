@@ -38,21 +38,20 @@ class JobRequest(Contract):
         return self
 
 
-# "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment
-# params, price above the session ceiling). Safe to fail over. "payment": any other payment failure.
-# "abandoned": the caller stopped reading a stream before the runner finished
-# (docs/contracts/engine.md#streaming).
-AttemptOutcome = Literal[
-    "in_flight",
-    "succeeded",
-    "refused",
-    "unreachable",
-    "payment_refused",
-    "payment",
-    "timeout",
-    "http",
-    "abandoned",
-]
+class AttemptOutcome(StrEnum):
+    """How one runner call ended (docs/contracts/engine.md). The values are the wire strings."""
+
+    IN_FLIGHT = "in_flight"  # written before the call; no answer yet
+    SUCCEEDED = "succeeded"
+    REFUSED = "refused"  # the runner said no (503) before doing the work
+    UNREACHABLE = "unreachable"
+    # The signer refused to pay *this orchestrator* before anything was sent (bad payment params, price
+    # above the session ceiling). Safe to fail over.
+    PAYMENT_REFUSED = "payment_refused"
+    PAYMENT = "payment"  # any other payment failure
+    TIMEOUT = "timeout"
+    HTTP = "http"  # the runner answered with an error status
+    ABANDONED = "abandoned"  # the caller stopped reading a stream before the runner finished
 
 
 class SignedSession(Contract):
@@ -85,19 +84,20 @@ class Attempt(Contract):
     ended_at: datetime | None
 
 
-FailureKind = Literal[
-    "no_offering",
-    "no_capacity",
-    "not_provisioned",
-    "refused",
-    "unreachable",
-    "payment",
-    "timeout",
-    "runner_rejected",
-    "runner_error",
-    "interrupted",
-    "abandoned",
-]
+class FailureKind(StrEnum):
+    """Why a job did not succeed (docs/contracts/engine.md). The values are the wire strings."""
+
+    NO_OFFERING = "no_offering"
+    NO_CAPACITY = "no_capacity"
+    NOT_PROVISIONED = "not_provisioned"
+    REFUSED = "refused"
+    UNREACHABLE = "unreachable"
+    PAYMENT = "payment"
+    TIMEOUT = "timeout"
+    RUNNER_REJECTED = "runner_rejected"  # the runner answered 4xx
+    RUNNER_ERROR = "runner_error"  # the runner answered 5xx, or failed mid-stream
+    INTERRUPTED = "interrupted"  # the engine stopped while the job ran
+    ABANDONED = "abandoned"
 
 
 class Failure(Contract):

@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
     AttemptCost,
+    AttemptOutcome,
     CostClass,
     CostStatus,
     CostSummary,
@@ -285,9 +286,9 @@ def _attempt_class(job: Job, attempt: Attempt, mine: Sequence[UsageRow]) -> Cost
         return CostClass.UNCERTAIN
     if not mine:
         return CostClass.PENDING
-    if attempt.outcome == "succeeded":
+    if attempt.outcome == AttemptOutcome.SUCCEEDED:
         return CostClass.DELIVERED
-    if job.state == JobState.UNCERTAIN or attempt.outcome == "in_flight":
+    if job.state == JobState.UNCERTAIN or attempt.outcome == AttemptOutcome.IN_FLIGHT:
         return CostClass.UNCERTAIN
     return CostClass.FAILED_AFTER_PAYMENT
 

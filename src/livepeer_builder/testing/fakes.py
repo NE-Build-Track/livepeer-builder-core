@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     Allowance,
+    AttemptOutcome,
     GrantRecord,
     JobRequest,
     Money,
@@ -182,7 +183,10 @@ class ScriptedStreamTransport(ScriptedTransport):
         if step.honors_deadline and step.open_delay_s > request.first_byte_timeout_s:
             await asyncio.sleep(request.first_byte_timeout_s)
             raise RunnerCallError(
-                "timeout", "no response", payment_sent=step.payment_sent, manifest_ids=step.manifest_ids
+                AttemptOutcome.TIMEOUT,
+                "no response",
+                payment_sent=step.payment_sent,
+                manifest_ids=step.manifest_ids,
             )
         await asyncio.sleep(step.open_delay_s)
         stream = ScriptedStream(step)

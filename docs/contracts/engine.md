@@ -39,7 +39,9 @@ missing `payload` as the JSON object `{}` (D41).
 
 In code these are `JobState` members (`JobState.SUCCEEDED`, ...), a `StrEnum` whose values are the strings
 above. `JobState.ended` is true for `succeeded`, `failed` and `uncertain`: `completed_at` is set and the
-state never changes again.
+state never changes again. Attempt outcomes and failure kinds are the `AttemptOutcome` and `FailureKind`
+`StrEnum`s in the same way; `RunnerCallError` accepts either the member or its string and rejects an
+unknown outcome.
 
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
 `sessions` (one entry per session the signer signed, in order, each with a `manifest_id` and a

@@ -222,6 +222,8 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
 - [x] 2026-10-22: payment evidence is stored when the signer signs, before the paid request (D42), for
       buffered and streamed calls, so a cancellation or a restart mid-request keeps the manifests and
       cost sync can attribute the charge.
+- [x] 2026-10-22: `AttemptOutcome` and `FailureKind` became `StrEnum`s too (same wire strings), so the
+      engine, adapters and HTTP status mapping use named members instead of strings.
 
 ## Decision log
 

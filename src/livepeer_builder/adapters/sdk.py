@@ -173,7 +173,7 @@ class SdkRunnerTransport:
                 stream = await call_runner(url, stream=True, **kwargs)
         except TimeoutError as error:
             raise RunnerCallError(
-                "timeout",
+                AttemptOutcome.TIMEOUT,
                 f"no response from {url} within {request.first_byte_timeout_s:g}s",
                 payment_sent=sessions.signed,
                 manifest_ids=tuple(sessions.manifest_ids),
@@ -249,14 +249,15 @@ def call_error(
     if isinstance(error, LivepeerHTTPError) and error.url == runner_url:
         status = error.status_code
         body = error.body[:_BODY_LIMIT] if error.body else None
-        kind = "refused" if status == 503 else "http"
+        kind = AttemptOutcome.REFUSED if status == 503 else AttemptOutcome.HTTP
     elif isinstance(error, LivepeerHTTPError):
         # An HTTP error from any other URL came from the signer.
         orchestrator_specific = error.status_code in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES
-        kind = "payment_refused" if orchestrator_specific and not payment_sent else "payment"
+        refused = orchestrator_specific and not payment_sent
+        kind = AttemptOutcome.PAYMENT_REFUSED if refused else AttemptOutcome.PAYMENT
         status = error.status_code
     elif isinstance(error, _PAYMENT_ERRORS):
-        kind = "payment"
+        kind = AttemptOutcome.PAYMENT
     else:
         kind = network_kind(error)
     return RunnerCallError(
@@ -273,11 +274,11 @@ def network_kind(error: BaseException) -> AttemptOutcome:
     current: BaseException | None = error
     while current is not None:
         if isinstance(current, TimeoutError):
-            return "timeout"
+            return AttemptOutcome.TIMEOUT
         if isinstance(current, (ConnectionError, OSError, aiohttp.ClientConnectionError)):
-            return "unreachable"
+            return AttemptOutcome.UNREACHABLE
         current = current.__cause__
-    return "http"
+    return AttemptOutcome.HTTP
 
 
 def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:

@@ -2,8 +2,10 @@
 
 from typing import TYPE_CHECKING
 
+from livepeer_builder.contracts import AttemptOutcome
+
 if TYPE_CHECKING:
-    from livepeer_builder.contracts import AttemptOutcome, Job
+    from livepeer_builder.contracts import Job
 
 
 class EngineError(Exception):
@@ -105,7 +107,7 @@ class RunnerCallError(EngineError):
 
     def __init__(
         self,
-        kind: "AttemptOutcome",
+        kind: AttemptOutcome | str,
         message: str,
         *,
         payment_sent: bool,
@@ -114,7 +116,7 @@ class RunnerCallError(EngineError):
         body: str | None = None,
     ) -> None:
         super().__init__(message)
-        self.kind = kind
+        self.kind = AttemptOutcome(kind)  # raises ValueError for an outcome the engine does not know
         self.payment_sent = payment_sent
         self.manifest_ids = manifest_ids
         self.status_code = status_code

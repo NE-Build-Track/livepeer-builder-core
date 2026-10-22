@@ -21,8 +21,8 @@ pip install "livepeer-builder[server]"            # REST service
 pip install "livepeer-builder[server,postgres]"   # optional PostgreSQL store
 ```
 
-M2 pins the SDK to the NE-Build-Track fork at the head of its `dev/bytestreaming` branch (see
-[docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
+The engine pins the SDK to [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway)
+`main` at `76a1a1c` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
 
 ## Embed it
 

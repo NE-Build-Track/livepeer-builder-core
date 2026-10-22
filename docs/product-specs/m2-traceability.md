@@ -51,7 +51,7 @@ change that moves a ticket.
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |
 | Stable references (session log → `payment_session_id`) | `services/costs.py::classify`, `store/matching.py`, `lpb_payment_sessions` | `test_failed_after_payment_and_forged_manifest_reconcile`, `test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed` | [payments.md#correlation](../contracts/payments.md#correlation) |
 | Implementation evidence | — | — | [evidence/2026-10-12-dev-stack-paid-run.md](../references/evidence/2026-10-12-dev-stack-paid-run.md) and [evidence/2026-10-14-dev-stack-public-orchestrators.md](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md), [evidence/2026-10-19-dev-stack-session-log.md](../references/evidence/2026-10-19-dev-stack-session-log.md): balanced reconciliation |
-| **Carried forward** | SDK #77 merge into `main` (T1); a caller-owned reference so `manifest_id` is a label only (T13); Mode B (M4) | | |
+| **Carried forward** | A caller-owned reference so `manifest_id` is a label only (T13); Mode B (M4). SDK #81 is on `main` and the pin is `76a1a1c`; a PyPI release remains (T1) | | |
 
 ## ISS-05: Core packages (closed 19 October)
 
@@ -95,7 +95,7 @@ change that moves a ticket.
 | Final idempotency rules; the interim 409 stands until then | D11, T2 | ISS-14, ISS-23 |
 | Live forged-manifest and rejected-ticket cases (unit-tested) | [m2-attribution-rerun](../exec-plans/completed/m2-attribution-rerun.md) | ISS-16 |
 | Is a fresh ManifestID per challenge an orchestrator guarantee? | T13, livepeer-python-gateway#74 | ISS-16 |
-| Re-pin the SDK when livepeer-python-gateway#77 merges; adopt upstream's "Enforce TLS" (#76) | T1, #13 | ISS-12 |
+| Re-pin the SDK from git SHA `76a1a1c` to a PyPI release that includes #81 | T1 | ISS-12 |
 | Josh's code review of the engine | D6 | ISS-12 |
 | Orchestrators serve CA-signed certificates; drop certificate pinning | D27, T12 | ISS-13 |
 | xode's discovery listed no runners on 19 October | [evidence](../references/evidence/2026-10-19-dev-stack-session-log.md) | ISS-13 |

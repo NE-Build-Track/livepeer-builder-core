@@ -122,8 +122,9 @@ with the fees matched so far and status `pending`, so ending without payment bec
 waiting for the next sync. An ended job whose projection is missing, `pending`, or older than its
 `completed_at` is recomputed on read (not stored), so a fee matched while it ran shows as soon as it
 ends. Summaries and reconciliation do the same for ended jobs in their window, include running jobs
-as `pending`, and count each job once: a recompute wins over a stored projection, which wins over a
-running snapshot.
+as `pending`, and count each job once. They read running jobs, then stored projections, then recompute
+due jobs, and the later read wins, so a projection cost sync commits during the read is never
+replaced by an older value.
 
 In code, statuses and classes are the `CostStatus` and `CostClass` `StrEnum`s, whose values are the
 strings above. `CostStatus.has_cost` is true for `observed` and `corrected`.

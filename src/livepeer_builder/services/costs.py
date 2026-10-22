@@ -199,9 +199,7 @@ class CostService:
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
-        running, due = await self._live_costs(actor.application_id, target, start, end)
-        stored = await self._store.projections_between(actor.application_id, target, start, end)
-        for cost in _one_per_job(running, stored, due):
+        for cost in await self._rollup(actor.application_id, target, start, end):
             with_cost += cost.status.has_cost
             pending += cost.status == CostStatus.PENDING
             for attempt in cost.attempts:
@@ -225,9 +223,7 @@ class CostService:
         if allocation_id is None:
             raise NotFound("no allocation pays for that actor or application")
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        running, due = await self._live_costs(application_id, actor_id, _EPOCH, _FAR_FUTURE)
-        stored = await self._store.projections_between(application_id, actor_id, _EPOCH, _FAR_FUTURE)
-        for cost in _one_per_job(running, stored, due):
+        for cost in await self._rollup(application_id, actor_id, _EPOCH, _FAR_FUTURE):
             for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
@@ -259,12 +255,18 @@ class CostService:
         rows = await self._store.usage_for_payment_sessions(session_ids) if session_ids else []
         return classify(job, rows)
 
-    async def _live_costs(
+    async def _rollup(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> tuple[list[JobCost], list[JobCost]]:
-        """Costs no stored projection holds yet, computed and never stored: running jobs, and ended jobs
-        not projected since they ended (as ``for_job`` serves them), so a fee matched while a job ran
-        never drops out of a rollup between its end and the next sync. Returns (running, due)."""
+    ) -> list[JobCost]:
+        """One cost per job in the window, without storing any: stored projections, plus running jobs
+        and ended jobs not projected since they ended (as ``for_job`` serves them), so a fee matched
+        while a job ran never drops out between its end and the next sync.
+
+        Each read is at least as fresh as the one before, and the later read wins: running snapshots,
+        then stored projections, then due jobs. Due jobs are listed before the stored read and reloaded
+        and recomputed after it, so a projection cost sync commits in between is never replaced by an
+        older compute, and a job it projects in between is still counted.
+        """
 
         def mine(job: Job) -> bool:
             return (
@@ -276,12 +278,15 @@ class CostService:
         running = [
             await self._compute(job) for job in await self._store.jobs_in_state(JobState.RUNNING) if mine(job)
         ]
+        listed = [job.id for job in await self._store.jobs_for_projection([], application_id) if mine(job)]
+        stored = await self._store.projections_between(application_id, actor_id, start, end)
+        # Passing the listed ids reloads them even if a sync projected them since (as when it touches them).
         due = [
             await self._project(job)
-            for job in await self._store.jobs_for_projection([], application_id)
+            for job in await self._store.jobs_for_projection(listed, application_id)
             if mine(job)
         ]
-        return running, due
+        return _one_per_job(running, stored, due)
 
 
 def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
@@ -373,9 +378,7 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
 
 
 def _one_per_job(*reads: Sequence[JobCost]) -> list[JobCost]:
-    """One cost per job; a later read wins. Pass (running, stored, due): a job that ended between the
-    reads keeps its stored ended projection over the running snapshot, and a due recompute (newer
-    than what was stored) replaces both."""
+    """One cost per job; pass the reads oldest first, and a later read wins."""
     by_job = {cost.job_id: cost for read in reads for cost in read}
     return list(by_job.values())
 

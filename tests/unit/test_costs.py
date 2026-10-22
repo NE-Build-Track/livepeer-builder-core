@@ -685,6 +685,45 @@ async def test_a_job_stored_while_a_rollup_reads_wins_over_its_running_snapshot(
     assert result.balanced is True
 
 
+async def test_a_projection_synced_during_a_rollup_is_not_replaced_by_an_older_compute(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager, store: SqlStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    engine = await make_engine(default_currency="ETH")
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default",
+            actor_id="alice",
+            amount=Money(amount=Decimal(1), currency="ETH"),
+            grant_id="grant_1",
+        ),
+    )
+    allocation = actor.allocation_id
+    transport.opens = [StreamScript(events=[b"a"], manifest_ids=("m-live",))]
+    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    usage.rows = [row("u1", "sess-live", "0.2", allocation=allocation, manifest="m-live")]
+    await engine.costs.sync_once()
+    assert b"".join([chunk async for chunk in stream]) == b"a"  # ended, not projected: due
+    manager.allocations[allocation].spent = Decimal("0.3")
+    stored_between = store.projections_between
+    overlapped = False
+
+    async def sync_then_read(*args):  # type: ignore[no-untyped-def]
+        # After reconcile listed the job as due: one more row arrives and cost sync stores 0.3.
+        nonlocal overlapped
+        if not overlapped:
+            overlapped = True
+            usage.rows.append(row("u2", "sess-live", "0.1", allocation=allocation, manifest="m-live"))
+            await engine.costs.sync_once()
+        return await stored_between(*args)
+
+    monkeypatch.setattr(store, "projections_between", sync_then_read)
+    result = await engine.costs.reconcile(admin, "default", "alice")
+    assert overlapped
+    assert result.by_class["delivered"].fee_eth == Decimal("0.3") and result.balanced is True
+
+
 async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
     usage: FakeUsageSource, manager: FakeAllocationManager,

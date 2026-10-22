@@ -30,6 +30,7 @@ from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import report_signed_session
 from livepeer_builder.services.evidence import SignedSessionRecorder
 from livepeer_builder.store import SqlStore
+from livepeer_builder.store import sql as store_sql
 from livepeer_builder.testing import (
     FakeAllocationManager,
     FakeUsageSource,
@@ -159,19 +160,21 @@ async def test_a_cancelled_paid_call_keeps_its_evidence_and_its_cost(
     assert (reconciled.unattributed.fee_eth, reconciled.balanced) == (0, True)  # attributed to the job
 
 
-async def test_a_paid_call_cancelled_during_the_evidence_write_keeps_it(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:  # fmt: skip
+async def test_a_disconnect_during_the_evidence_write_keeps_it_and_frees_the_slot(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
     engine, _ = await provisioned(make_engine, admin)
     engine.jobs._transport = SignsThenWaits()
-    writing = asyncio.Event()
+    in_write, release = asyncio.Event(), asyncio.Event()
+    append = store_sql.append_sessions
 
-    async def never_commits(attempt: Attempt) -> None:
-        writing.set()
-        await asyncio.Event().wait()  # the caller goes away while this write is in progress
+    async def held_in_the_transaction(conn, attempt):  # type: ignore[no-untyped-def]
+        if not in_write.is_set():  # the evidence write: its update has run, the session insert waits
+            in_write.set()
+            await release.wait()
+        await append(conn, attempt)
 
-    monkeypatch.setattr(store, "record_payment_evidence", never_commits)
+    monkeypatch.setattr(store_sql, "append_sessions", held_in_the_transaction)
     scope = anyio.CancelScope()
 
     async def request() -> None:
@@ -179,14 +182,18 @@ async def test_a_paid_call_cancelled_during_the_evidence_write_keeps_it(
             await engine.jobs.run(alice, JobRequest(app=APP))
 
     task = asyncio.create_task(request())
-    await writing.wait()
-    scope.cancel()
-    await task
-    await asyncio.gather(*utils._SHIELDED)  # closing runs in its own task; let it finish
-    (job,) = await engine.jobs.list_jobs(alice)
+    await in_write.wait()
+    async with asyncio.timeout(5):  # a write cut off mid-transaction hangs on the broken connection
+        async with engine.admission._lock:  # another job holds the limiter while this one leaves
+            scope.cancel()
+            await task
+        release.set()
+        await asyncio.gather(*utils._SHIELDED)  # the write, the close and the release have their own tasks
+    (job,) = await engine.jobs.list_jobs(alice)  # the store is intact, with the rows from before the cancel
     assert job.failure is not None
     assert (job.state, job.failure.payment_sent) == ("uncertain", True)
     assert evidence(job.attempts[0]) == (True, ["m-1"])  # cost sync can still attribute the charge
+    assert engine.admission.running == 0
 
 
 async def test_a_restart_during_the_paid_request_finds_the_evidence(

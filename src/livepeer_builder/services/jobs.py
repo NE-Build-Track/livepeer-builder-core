@@ -108,7 +108,9 @@ class JobService:
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
         """Dispatch one immediate job and wait for its result. Raises JobFailed, OperationExists."""
         fingerprint = await self._admit_request(actor, request)
-        async with self._admission.admit(request.app):
+        slot = contextlib.AsyncExitStack()
+        await slot.enter_async_context(self._admission.admit(request.app))
+        try:
             job = self._new_job(actor, request)
             await self._store.create_job(job, fingerprint)
             attempts: list[Attempt] = []
@@ -120,6 +122,8 @@ class JobService:
                 # Shielded as in stream (D34): a host that cancels every await must not cut off the evidence.
                 await run_shielded(self._close_after_error(job, attempts, exc))
                 raise
+        finally:
+            await run_shielded(slot.aclose())  # nor leave the admission slot taken
 
     async def stream(self, actor: ActorContext, request: JobRequest) -> JobStream:
         """Dispatch one immediate job and hand its response back as it arrives.

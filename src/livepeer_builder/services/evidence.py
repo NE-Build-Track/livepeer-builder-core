@@ -1,10 +1,11 @@
 """Payment evidence on an attempt: written when the signer signs, and never shrunk (D42).
 
 A transport reports each signed session through ``protocols.report_signed_session`` before the paid
-request goes out. ``SignedSessionRecorder`` puts it on the in-memory attempt first, so a cancellation
-during the write still leaves it for the engine's error path, then writes it with ``record_payment_evidence``
-(append-only, D39). A failed write is logged, not raised: the signer has already charged, so the call
-goes on, and the write after the call stores the same rows.
+request goes out. ``SignedSessionRecorder`` puts it on the in-memory attempt first, so the engine's
+error path also has it, then writes it with ``record_payment_evidence`` (append-only, D39) in a task
+the caller cannot cancel (D34): a disconnect never cuts that transaction off half way. A failed write
+is logged, not raised: the signer has already charged, so the call goes on, and the write after the
+call stores the same rows.
 """
 
 import logging
@@ -12,6 +13,7 @@ from collections.abc import Sequence
 
 from livepeer_builder.contracts import Attempt, SignedSession
 from livepeer_builder.protocols import JobRepo
+from livepeer_builder.utils import run_shielded
 
 _LOG = logging.getLogger(__name__)
 
@@ -31,6 +33,9 @@ class SignedSessionRecorder:
     async def __call__(self, manifest_id: str) -> None:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
         self._attempts[self._index] = attempt
+        await run_shielded(self._write(attempt))
+
+    async def _write(self, attempt: Attempt) -> None:
         try:
             await self._store.record_payment_evidence(attempt)  # never rewrites a stored outcome
         except Exception as exc:

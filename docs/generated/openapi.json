@@ -169,19 +169,7 @@
             "title": "Orchestrator Url"
           },
           "outcome": {
-            "enum": [
-              "in_flight",
-              "succeeded",
-              "refused",
-              "unreachable",
-              "payment_refused",
-              "payment",
-              "timeout",
-              "http",
-              "abandoned"
-            ],
-            "title": "Outcome",
-            "type": "string"
+            "$ref": "#/components/schemas/AttemptOutcome"
           },
           "payment_sent": {
             "title": "Payment Sent",
@@ -259,6 +247,22 @@
         ],
         "title": "AttemptCost",
         "type": "object"
+      },
+      "AttemptOutcome": {
+        "description": "How one runner call ended (docs/contracts/engine.md). The values are the wire strings.",
+        "enum": [
+          "in_flight",
+          "succeeded",
+          "refused",
+          "unreachable",
+          "payment_refused",
+          "payment",
+          "timeout",
+          "http",
+          "abandoned"
+        ],
+        "title": "AttemptOutcome",
+        "type": "string"
       },
       "CostClass": {
         "description": "What one attempt's charge was for (docs/contracts/payments.md#cost-classification).",
@@ -525,21 +529,7 @@
             "title": "Body"
           },
           "kind": {
-            "enum": [
-              "no_offering",
-              "no_capacity",
-              "not_provisioned",
-              "refused",
-              "unreachable",
-              "payment",
-              "timeout",
-              "runner_rejected",
-              "runner_error",
-              "interrupted",
-              "abandoned"
-            ],
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/FailureKind"
           },
           "message": {
             "title": "Message",
@@ -568,6 +558,24 @@
         ],
         "title": "Failure",
         "type": "object"
+      },
+      "FailureKind": {
+        "description": "Why a job did not succeed (docs/contracts/engine.md). The values are the wire strings.",
+        "enum": [
+          "no_offering",
+          "no_capacity",
+          "not_provisioned",
+          "refused",
+          "unreachable",
+          "payment",
+          "timeout",
+          "runner_rejected",
+          "runner_error",
+          "interrupted",
+          "abandoned"
+        ],
+        "title": "FailureKind",
+        "type": "string"
       },
       "Fees": {
         "additionalProperties": false,

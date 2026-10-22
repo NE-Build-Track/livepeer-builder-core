@@ -17,6 +17,7 @@ from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
+    AttemptOutcome,
     Fees,
     Job,
     JobCost,
@@ -486,7 +487,11 @@ async def test_a_stored_none_is_ignored_while_the_job_runs(
     )  # fmt: skip
     await engine.store.start_attempt(attempt)
     paid = attempt.model_copy(
-        update={"sessions": (SignedSession(manifest_id="m-x"),), "payment_sent": True, "outcome": "succeeded"}
+        update={
+            "sessions": (SignedSession(manifest_id="m-x"),),
+            "payment_sent": True,
+            "outcome": AttemptOutcome.SUCCEEDED,
+        }
     )
     await engine.store.finish_attempt(paid)
     clock.advance(1)

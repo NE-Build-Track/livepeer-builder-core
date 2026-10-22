@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
+    AttemptOutcome,
     Failure,
     FailureKind,
     Job,
@@ -67,15 +68,16 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, with_evidence
-from livepeer_builder.services.streams import JobStream, StreamLimits, failure_kind
+from livepeer_builder.services.streams import JobStream, StreamLimits, failure_kind, failure_of
 from livepeer_builder.utils import run_shielded
 
 _LOG = logging.getLogger(__name__)
-_BODY_LIMIT = 4096
 _FAILOVER_OUTCOMES = frozenset(
-    {"refused", "unreachable", "payment_refused"}
+    {AttemptOutcome.REFUSED, AttemptOutcome.UNREACHABLE, AttemptOutcome.PAYMENT_REFUSED}
 )  # only while payment_sent is false
-_UNCERTAIN_OUTCOMES = frozenset({"unreachable", "timeout"})  # after payment the runner may have run
+_UNCERTAIN_OUTCOMES = frozenset(
+    {AttemptOutcome.UNREACHABLE, AttemptOutcome.TIMEOUT}
+)  # after payment the runner may have run
 _OPEN_BACKSTOP_GRACE_S = 5.0  # how far past its deadline a transport's open runs before the engine stops it
 
 
@@ -225,9 +227,9 @@ class JobService:
         """Resolve jobs a restart left ``running``. Anything that may have paid becomes ``uncertain``."""
         recovered = 0
         for job in await self._store.jobs_in_state(JobState.RUNNING):
-            maybe_paid = any(a.payment_sent or a.outcome == "in_flight" for a in job.attempts)
+            maybe_paid = any(a.payment_sent or a.outcome == AttemptOutcome.IN_FLIGHT for a in job.attempts)
             failure = Failure(
-                kind="interrupted",
+                kind=FailureKind.INTERRUPTED,
                 message="the engine stopped while this job was running",
                 payment_sent=any(a.payment_sent for a in job.attempts),
             )
@@ -267,13 +269,17 @@ class JobService:
         """Who could run this, and with which credential. Fails the job (before payment) when nobody can."""
         candidates = self._discovery.candidates(request.app)
         if not candidates:
-            raise await self._fail(job, attempts, "no_offering", f"no runner advertises app {request.app!r}")
+            raise await self._fail(
+                job, attempts, FailureKind.NO_OFFERING, f"no runner advertises app {request.app!r}"
+            )
         if all(r.capacity_available is not None and r.capacity_available <= 0 for r in candidates):
-            raise await self._fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
+            raise await self._fail(
+                job, attempts, FailureKind.NO_CAPACITY, f"every runner for {request.app!r} is busy"
+            )
         try:
             credential = await self._credentials.credential(actor)
         except NotProvisioned as exc:
-            raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
+            raise await self._fail(job, attempts, FailureKind.NOT_PROVISIONED, str(exc)) from exc
         ordered = list(self._selection.order(candidates, request))[: request.max_attempts]
         return ordered, credential
 
@@ -288,7 +294,7 @@ class JobService:
             allocation_id=credential.allocation_id,
             sessions=(),
             payment_sent=False,
-            outcome="in_flight",
+            outcome=AttemptOutcome.IN_FLIGHT,
             status_code=None,
             started_at=self._clock.now(),
             ended_at=None,
@@ -309,14 +315,12 @@ class JobService:
         if paid or error.kind not in _FAILOVER_OUTCOMES:
             paid_unknown = paid and error.kind in _UNCERTAIN_OUTCOMES
             state = JobState.UNCERTAIN if paid_unknown else JobState.FAILED
-            return JobFailed(await self._finish(job, state, _failure(error, paid), None, attempts))
+            return JobFailed(await self._finish(job, state, failure_of(error, paid), None, attempts))
         return None
 
     async def _exhausted(self, job: Job, attempts: list[Attempt]) -> JobFailed:
         last = attempts[-1]  # only refused or unreachable attempts reach this point
-        kind: FailureKind = (
-            "payment" if last.outcome == "payment_refused" else cast(FailureKind, last.outcome)
-        )
+        kind = failure_kind(last.outcome, last.status_code)  # payment_refused → payment
         message = f"all {len(attempts)} runners refused, were unreachable, or could not be paid"
         return await self._fail(job, attempts, kind, message)
 
@@ -336,7 +340,7 @@ class JobService:
                 continue
             attempts[-1] = with_evidence(attempts[-1], reply.manifest_ids, reply.payment_sent).model_copy(
                 update={
-                    "outcome": "succeeded",
+                    "outcome": AttemptOutcome.SUCCEEDED,
                     "status_code": reply.status_code,
                     "ended_at": self._clock.now(),
                 }
@@ -380,7 +384,9 @@ class JobService:
                 continue
             except TimeoutError as error:
                 # The transport ignored its deadline. Payment is unknown, so assume it was sent.
-                unknown = RunnerCallError("timeout", "no answer within first_byte_timeout", payment_sent=True)
+                unknown = RunnerCallError(
+                    AttemptOutcome.TIMEOUT, "no answer within first_byte_timeout", payment_sent=True
+                )
                 raise cast(JobFailed, await self._attempt_failed(job, attempts, unknown)) from error
             # Payment evidence is recorded now, so a restart mid-stream resolves the job as uncertain.
             attempts[-1] = with_evidence(attempts[-1], opened.manifest_ids, opened.payment_sent).model_copy(
@@ -406,13 +412,13 @@ class JobService:
         return JobFailed(await self._finish(job, JobState.FAILED, failure, None, attempts))
 
     async def _close_after_error(self, job: Job, attempts: list[Attempt], exc: BaseException) -> None:
-        if attempts and attempts[-1].outcome == "in_flight" and attempts[-1].payment_sent:
+        if attempts and attempts[-1].outcome == AttemptOutcome.IN_FLIGHT and attempts[-1].payment_sent:
             # Cancelled or failed after the signer signed: keep that evidence even if its write was cut off.
             with contextlib.suppress(Exception):
                 await self._store.finish_attempt(attempts[-1])
-        maybe_paid = any(a.payment_sent or a.outcome == "in_flight" for a in attempts)
+        maybe_paid = any(a.payment_sent or a.outcome == AttemptOutcome.IN_FLIGHT for a in attempts)
         failure = Failure(
-            kind="runner_error",
+            kind=FailureKind.RUNNER_ERROR,
             message=f"engine error: {type(exc).__name__}",
             payment_sent=any(a.payment_sent for a in attempts),
         )
@@ -483,14 +489,4 @@ def _result_ref(reply: RunnerReply) -> ResultRef:
         content_type=reply.content_type,
         size_bytes=len(reply.content),
         sha256=hashlib.sha256(reply.content).hexdigest(),
-    )
-
-
-def _failure(error: RunnerCallError, payment_sent: bool) -> Failure:
-    return Failure(
-        kind=failure_kind(error.kind, error.status_code),
-        message=str(error),
-        status_code=error.status_code,
-        body=error.body[:_BODY_LIMIT] if error.body else None,
-        payment_sent=payment_sent,
     )

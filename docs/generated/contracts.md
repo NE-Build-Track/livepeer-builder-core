@@ -70,13 +70,13 @@ classDiagram
         +str? allocation_id
         +SignedSession[] sessions
         +bool payment_sent
-        +enum outcome
+        +AttemptOutcome outcome
         +int? status_code
         +datetime started_at
         +datetime? ended_at
     }
     class Failure {
-        +enum kind
+        +FailureKind kind
         +str message
         +int? status_code
         +str? body

@@ -9,6 +9,8 @@ import pytest
 from livepeer_builder.contracts import (
     AccessKey,
     AttemptCost,
+    AttemptOutcome,
+    CostStatus,
     Failure,
     Fees,
     JobCost,
@@ -36,7 +38,7 @@ async def test_jobs_attempts_and_sessions_round_trip(sql: SqlStore, clock: Fixed
     job = make_job(clock, state="running")
     await sql.create_job(job, "fp")
     await sql.start_attempt(
-        make_attempt(job.id, clock).model_copy(update={"outcome": "in_flight", "ended_at": None})
+        make_attempt(job.id, clock).model_copy(update={"outcome": AttemptOutcome.IN_FLIGHT, "ended_at": None})
     )
     await sql.finish_attempt(
         make_attempt(job.id, clock, manifest_ids=("b", "a", "b"), allocation_id="alloc-1")
@@ -155,7 +157,7 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
     await sql.save_projection(projection)
-    await sql.save_projection(projection.model_copy(update={"status": "corrected"}))
+    await sql.save_projection(projection.model_copy(update={"status": CostStatus.CORRECTED}))
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
     assert loaded.attempts == (attempt_cost,)

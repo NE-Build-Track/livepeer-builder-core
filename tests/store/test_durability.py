@@ -10,6 +10,7 @@ from sqlalchemy import insert, inspect, text
 
 from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder.contracts import AttemptOutcome
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import (
     SqlStore,
@@ -158,7 +159,9 @@ async def test_records_survive_restart_and_interrupted_jobs_resolve(
     running = make_job(clock, state="running")
     await first.create_job(running, None)
     await first.start_attempt(
-        make_attempt(running.id, clock).model_copy(update={"outcome": "in_flight", "ended_at": None})
+        make_attempt(running.id, clock).model_copy(
+            update={"outcome": AttemptOutcome.IN_FLIGHT, "ended_at": None}
+        )
     )
     await first.close()  # the process dies mid-call
 

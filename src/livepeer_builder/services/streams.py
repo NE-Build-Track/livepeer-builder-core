@@ -23,7 +23,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Literal, cast
+from typing import Literal
 
 from livepeer_builder.contracts import (
     Attempt,
@@ -71,7 +71,7 @@ class _Ending:
     settle: bool = False  # wait settle_s for the runner to end the stream before deciding
 
 
-_SUCCEEDED = _Ending("succeeded")
+_SUCCEEDED = _Ending(AttemptOutcome.SUCCEEDED)
 _STOPPED = "the caller stopped reading the stream"
 _DISCONNECTED = "the client disconnected"
 
@@ -168,7 +168,9 @@ class JobStream:
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
         if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
-            await run_shielded(self._wait(self._begin(_Ending("abandoned", _STOPPED, settle=True))))
+            await run_shielded(
+                self._wait(self._begin(_Ending(AttemptOutcome.ABANDONED, _STOPPED, settle=True)))
+            )
         else:
             await self.aclose()
 
@@ -185,12 +187,14 @@ class JobStream:
         """Stop now: close the runner stream (spending stops) and record the attempt ``abandoned``."""
         if self._final is None:
             self._caller_stopped = True
-        await run_shielded(self._wait(self._begin(_Ending("abandoned", _STOPPED))))
+        await run_shielded(self._wait(self._begin(_Ending(AttemptOutcome.ABANDONED, _STOPPED))))
 
     async def disconnected(self) -> None:
         """The client this stream was serving went away. The runner gets ``settle_s`` to end the
         stream by itself (then ``succeeded``), else the attempt is ``abandoned`` (D38, D40)."""
-        await run_shielded(self._wait(self._begin(_Ending("abandoned", _DISCONNECTED, settle=True))))
+        await run_shielded(
+            self._wait(self._begin(_Ending(AttemptOutcome.ABANDONED, _DISCONNECTED, settle=True)))
+        )
 
     async def wait_ended(self) -> None:
         """Wait until the stream has ended and its job record is written (or given up on)."""
@@ -198,7 +202,7 @@ class JobStream:
 
     async def abandon(self, message: str) -> None:
         """End the stream for a reason that is not the caller's (engine shutdown)."""
-        await run_shielded(self._wait(self._begin(_Ending("abandoned", message))))
+        await run_shielded(self._wait(self._begin(_Ending(AttemptOutcome.ABANDONED, message))))
 
     # -- reading ----------------------------------------------------------------------------------------
 
@@ -216,26 +220,26 @@ class JobStream:
                 self._count(item)
                 yield item
         except _Timeout as timeout:
-            await run_shielded(self._wait(self._begin(_Ending("timeout", str(timeout)))))
+            await run_shielded(self._wait(self._begin(_Ending(AttemptOutcome.TIMEOUT, str(timeout)))))
             raise JobFailed(self._job) from None
         except RunnerCallError as error:
             ending = _Ending(error.kind, str(error), status_code=error.status_code, body=error.body)
             await run_shielded(self._wait(self._begin(ending)))
             raise JobFailed(self._job) from error
         except asyncio.CancelledError:
-            final = self._begin(_Ending("abandoned", _STOPPED, settle=True))  # before any await
+            final = self._begin(_Ending(AttemptOutcome.ABANDONED, _STOPPED, settle=True))  # before any await
             await run_shielded(self._wait(final))
             raise
         except GeneratorExit:  # the iterator was closed or dropped: the caller stopped (D40)
             if self._final is None:
                 self._caller_stopped = True
-            await run_shielded(self._wait(self._begin(_Ending("abandoned", _STOPPED))))
+            await run_shielded(self._wait(self._begin(_Ending(AttemptOutcome.ABANDONED, _STOPPED))))
             raise
         except JobFailed:
             raise
         except Exception as exc:
             await run_shielded(
-                self._wait(self._begin(_Ending("http", f"engine error: {type(exc).__name__}")))
+                self._wait(self._begin(_Ending(AttemptOutcome.HTTP, f"engine error: {type(exc).__name__}")))
             )
             raise JobFailed(self._job) from exc
         await run_shielded(self._wait(self._begin(_SUCCEEDED)))
@@ -299,7 +303,7 @@ class JobStream:
         """``timeout_s`` ran out. A waiting reader times out by itself; anything else ends here, unless
         the runner already finished: then the caller is only handling chunks it has, and ends it."""
         if self._final is None and not self._waiting and not self._runner_finished:
-            self._begin(_Ending("timeout", _TIMEOUT_MESSAGES["total"]))
+            self._begin(_Ending(AttemptOutcome.TIMEOUT, _TIMEOUT_MESSAGES["total"]))
 
     # -- finishing --------------------------------------------------------------------------------------
 
@@ -352,7 +356,7 @@ class JobStream:
                     if isinstance(item, RunnerCallError):
                         return _Ending(item.kind, str(item), status_code=item.status_code, body=item.body)
                     if isinstance(item, Exception):
-                        return _Ending("http", f"engine error: {type(item).__name__}")
+                        return _Ending(AttemptOutcome.HTTP, f"engine error: {type(item).__name__}")
                     if item == _END:
                         return _SUCCEEDED
                     self._count(item)
@@ -371,7 +375,7 @@ class JobStream:
     async def _record(self, ending: _Ending) -> None:
         await self._stop_runner()
         await self._store_attempt(ending.outcome, ending.status_code)
-        if ending.outcome == "succeeded":
+        if ending.outcome == AttemptOutcome.SUCCEEDED:
             result = ResultRef(
                 storage="inline",
                 content_type=self._stream.content_type,
@@ -416,11 +420,22 @@ class JobStream:
 
 def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKind:
     """Attempt outcome → failure kind, for a call that failed or a stream that ended early."""
-    if outcome == "http":
+    if outcome == AttemptOutcome.HTTP:
         status = status_code or 0
-        return "runner_rejected" if 400 <= status < 500 else "runner_error"
-    if outcome == "payment_refused":
-        return "payment"
-    if outcome in ("in_flight", "succeeded"):
-        return "runner_error"
-    return cast(FailureKind, outcome)
+        return FailureKind.RUNNER_REJECTED if 400 <= status < 500 else FailureKind.RUNNER_ERROR
+    if outcome == AttemptOutcome.PAYMENT_REFUSED:
+        return FailureKind.PAYMENT
+    if outcome in (AttemptOutcome.IN_FLIGHT, AttemptOutcome.SUCCEEDED):
+        return FailureKind.RUNNER_ERROR
+    return FailureKind(outcome)  # the remaining outcomes share their failure kind's name
+
+
+def failure_of(error: RunnerCallError, payment_sent: bool) -> Failure:
+    """The job's failure for a runner call that failed. ``payment_sent`` includes reported signatures."""
+    return Failure(
+        kind=failure_kind(error.kind, error.status_code),
+        message=str(error),
+        status_code=error.status_code,
+        body=error.body[:_BODY_LIMIT] if error.body else None,
+        payment_sent=payment_sent,
+    )

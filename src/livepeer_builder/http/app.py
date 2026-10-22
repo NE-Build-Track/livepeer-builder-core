@@ -25,6 +25,7 @@ from livepeer_builder.contracts import (
     CredentialKind,
     EngineHealth,
     EventPage,
+    FailureKind,
     FundRequest,
     GrantRecord,
     IssuedKey,
@@ -61,18 +62,23 @@ from livepeer_builder.runtime import BuilderEngine
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
 _FAILURE_STATUS = {
-    "no_offering": 404,
-    "no_capacity": 503,
-    "not_provisioned": 402,
-    "refused": 503,
-    "unreachable": 503,
-    "payment": 503,
-    "timeout": 504,
-    "runner_rejected": 422,
-    "runner_error": 502,
-    "interrupted": 502,
+    FailureKind.NO_OFFERING: 404,
+    FailureKind.NO_CAPACITY: 503,
+    FailureKind.NOT_PROVISIONED: 402,
+    FailureKind.REFUSED: 503,
+    FailureKind.UNREACHABLE: 503,
+    FailureKind.PAYMENT: 503,
+    FailureKind.TIMEOUT: 504,
+    FailureKind.RUNNER_REJECTED: 422,
+    FailureKind.RUNNER_ERROR: 502,
+    FailureKind.INTERRUPTED: 502,
 }
-_RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
+_RETRY_AFTER = {
+    FailureKind.NO_CAPACITY: "5",
+    FailureKind.REFUSED: "5",
+    FailureKind.UNREACHABLE: "5",
+    FailureKind.PAYMENT: "10",
+}
 
 
 class IssueKeyBody(BaseModel):
@@ -328,8 +334,8 @@ def _install_error_handlers(app: FastAPI, engine: BuilderEngine) -> None:
     @app.exception_handler(JobFailed)
     async def _failed(_: Request, exc: JobFailed) -> Response:
         failure = exc.job.failure
-        kind = failure.kind if failure else "runner_error"
-        if failure and kind == "runner_rejected" and failure.status_code:
+        kind = failure.kind if failure else FailureKind.RUNNER_ERROR
+        if failure and kind == FailureKind.RUNNER_REJECTED and failure.status_code:
             status = failure.status_code
         else:
             status = _FAILURE_STATUS.get(kind, 502)

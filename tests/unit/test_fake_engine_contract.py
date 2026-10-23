@@ -5,6 +5,7 @@ to the same outcome. When a case passes on both, application unit tests written 
 the same thing against the engine.
 """
 
+import hashlib
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -203,3 +204,52 @@ async def test_a_paid_runner_error_fails_the_job_with_the_runner_s_words(side: S
     assert job.state == "failed" and job.failure is not None
     assert (job.failure.payment_sent, job.failure.body, job.failure.status_code) == (True, "trace", 500)
     assert job.attempts[-1].payment_sent
+
+
+async def test_reading_a_stream_to_the_end_succeeds_with_a_result_of_the_bytes_read(side: Side) -> None:
+    async with side(chunks=(b"a", b"bc")) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        async with await streaming.stream(ALICE, JobRequest(app=APP)) as stream:
+            received = [chunk async for chunk in stream]
+        job = await engine.jobs.get(ALICE, stream.job.id)
+    assert received == [b"a", b"bc"] and stream.finished and stream.job.state == "succeeded"
+    assert job.state == "succeeded" and job.result is not None
+    assert (job.result.size_bytes, job.result.sha256) == (3, hashlib.sha256(b"abc").hexdigest())
+    assert (job.attempts[-1].outcome, job.attempts[-1].status_code) == ("succeeded", 200)
+
+
+async def test_complete_succeeds_with_the_bytes_read_so_far(side: Side) -> None:
+    async with side(chunks=(b"a", b"bc")) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        async with await streaming.stream(ALICE, JobRequest(app=APP)) as stream:
+            chunks = aiter(stream)
+            assert await anext(chunks) == b"a"
+            await stream.complete()  # the caller has what it needs (D38)
+        job = await engine.jobs.get(ALICE, stream.job.id)
+    assert job.state == "succeeded" and job.result is not None and job.result.size_bytes == 1
+
+
+async def test_closing_a_paid_stream_early_abandons_it(side: Side) -> None:
+    async with side(chunks=(b"a", b"bc")) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        stream = await streaming.stream(ALICE, JobRequest(app=APP))
+        chunks = aiter(stream)
+        assert await anext(chunks) == b"a"
+        await stream.aclose()
+        await stream.complete()  # too late: the stream already ended
+        job = await engine.jobs.get(ALICE, stream.job.id)
+    assert stream.finished and job.state == "uncertain" and job.result is None  # paid, so not "failed"
+    assert job.failure is not None and (job.failure.kind, job.failure.payment_sent) == ("abandoned", True)
+    assert job.attempts[-1].outcome == "abandoned"
+
+
+async def test_usage_can_be_reported_for_a_finished_stream(side: Side) -> None:
+    async with side(chunks=(b"a",)) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        async with await streaming.stream(ALICE, JobRequest(app=APP)) as stream:
+            _ = [chunk async for chunk in stream]
+        await engine.jobs.report_usage(ALICE, stream.job.id, {"prompt_tokens": 1})

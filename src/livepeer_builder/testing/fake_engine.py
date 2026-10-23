@@ -20,6 +20,7 @@ Script replies per ``(app, path)``::
     )
 """
 
+import hashlib
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +32,7 @@ from livepeer_builder.contracts import (
     ActorContext,
     Allowance,
     Attempt,
+    AttemptOutcome,
     CostSummary,
     EngineHealth,
     Failure,
@@ -41,6 +43,7 @@ from livepeer_builder.contracts import (
     JobResult,
     JobState,
     Offering,
+    ResultRef,
     Runner,
 )
 from livepeer_builder.errors import (
@@ -93,14 +96,22 @@ class Raises:
 
 
 class FakeJobStream:
-    """A ``JobStreamApi`` over scripted chunks. Records ``aclose`` and ``disconnected``.
+    """A ``JobStreamApi`` over scripted chunks that ends the job the way the engine's ``JobStream`` does.
 
-    A ``Fails`` among the chunks raises ``JobFailed`` there; the job is then ``uncertain``, because the
-    call was paid before it broke.
+    The job ends once. Reading to the end, or ``complete()``, records it ``succeeded`` with a
+    ``ResultRef`` of the bytes read. ``aclose()``, or leaving ``async with`` early, records the attempt
+    ``abandoned`` and the paid job ``uncertain``. ``disconnected()`` lets the runner finish: the
+    scripted chunks are all there, so the stream succeeds unless a ``Fails`` comes first. A ``Fails``
+    among the chunks raises ``JobFailed`` there. ``closed`` and ``disconnected_called`` record the
+    caller's calls.
     """
 
     def __init__(self, job: Job, reply: Reply, jobs: "FakeJobs") -> None:
         self._job, self._reply, self._jobs = job, reply, jobs
+        self._next = 0  # the next scripted chunk
+        self._read = hashlib.sha256()
+        self._size = 0
+        self._ended = False
         self.closed = False
         self.disconnected_called = False
 
@@ -116,23 +127,31 @@ class FakeJobStream:
     def content_type(self) -> str:
         return self._reply.content_type
 
+    @property
+    def finished(self) -> bool:
+        return self._ended
+
     def __aiter__(self) -> AsyncGenerator[bytes, None]:
         return self._iterate()
 
     async def _iterate(self) -> AsyncGenerator[bytes, None]:
-        for chunk in self._reply.chunks:
-            if self.closed:
-                return
-            if isinstance(chunk, Fails):
-                self._job = self._jobs.broke(self._job, chunk)
-                raise JobFailed(self._job)
-            yield chunk
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-    async def disconnected(self) -> None:
-        self.disconnected_called = True
+        try:
+            while not self._ended:
+                if self._next == len(self._reply.chunks):
+                    self._succeed()
+                    return
+                chunk = self._reply.chunks[self._next]
+                self._next += 1
+                if isinstance(chunk, Fails):
+                    self._fail(chunk)
+                    raise JobFailed(self._job)
+                self._count(chunk)
+                yield chunk
+            if self._job.state != "succeeded" and not self.closed:
+                raise JobFailed(self._job)  # iterating a stream that already failed
+        except GeneratorExit:  # the iterator was closed or dropped: the caller stopped
+            self._abandon()
+            raise
 
     async def __aenter__(self) -> "FakeJobStream":
         return self
@@ -141,6 +160,52 @@ class FakeJobStream:
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
     ) -> None:
         await self.aclose()
+
+    async def complete(self) -> None:
+        self._succeed()
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self._abandon()
+
+    async def disconnected(self) -> None:
+        self.disconnected_called = True
+        while not self._ended and self._next < len(self._reply.chunks):
+            chunk = self._reply.chunks[self._next]
+            self._next += 1
+            if isinstance(chunk, Fails):
+                self._fail(chunk)
+                return
+            self._count(chunk)
+        self._succeed()
+
+    def _count(self, chunk: bytes) -> None:
+        self._read.update(chunk)
+        self._size += len(chunk)
+
+    def _succeed(self) -> None:
+        if not self._ended:
+            self._ended = True
+            result = ResultRef(
+                storage="inline",
+                content_type=self._reply.content_type,
+                size_bytes=self._size,
+                sha256=self._read.hexdigest(),
+            )
+            self._job = self._jobs.ended(self._job, "succeeded", self._reply.status_code, result=result)
+
+    def _abandon(self) -> None:
+        if not self._ended:
+            self._ended = True
+            failure = Failure(
+                kind="abandoned", message="the caller stopped reading the stream", payment_sent=True
+            )
+            self._job = self._jobs.ended(self._job, "abandoned", self._reply.status_code, failure=failure)
+
+    def _fail(self, fails: Fails) -> None:
+        if not self._ended:
+            self._ended = True
+            self._job = self._jobs.broke(self._job, fails)
 
 
 class FakeStreaming:
@@ -243,19 +308,40 @@ class FakeJobs:
             self._operations[key] = (request_fingerprint(request), job.id)
         return job
 
-    def broke(self, job: Job, fails: Fails) -> Job:
-        """A paid stream that failed part-way: ``uncertain`` until usage settles what it cost."""
+    def ended(
+        self,
+        job: Job,
+        outcome: AttemptOutcome,
+        status_code: int | None,
+        *,
+        result: ResultRef | None = None,
+        failure: Failure | None = None,
+    ) -> Job:
+        """Record how a stream ended: the attempt's outcome, then ``succeeded``, or ``uncertain`` when
+        a paid call did not finish (``failed`` when it was not paid)."""
         now = datetime.now(UTC)
-        failure = Failure(kind=fails.kind, message=fails.message, body=fails.body, payment_sent=True)
         attempts = tuple(
-            attempt.model_copy(update={"outcome": "http", "status_code": 200, "ended_at": now})
+            attempt.model_copy(update={"outcome": outcome, "status_code": status_code, "ended_at": now})
             for attempt in job.attempts
         )
-        broken = job.model_copy(
-            update={"state": "uncertain", "failure": failure, "attempts": attempts, "completed_at": now}
+        paid = any(attempt.payment_sent for attempt in attempts)
+        state: JobState = "succeeded" if failure is None else "uncertain" if paid else "failed"
+        done = job.model_copy(
+            update={
+                "state": state,
+                "failure": failure,
+                "result": result,
+                "attempts": attempts,
+                "completed_at": now,
+            }
         )
-        self._jobs[job.id] = broken
-        return broken
+        self._jobs[job.id] = done
+        return done
+
+    def broke(self, job: Job, fails: Fails) -> Job:
+        """A paid stream that failed part-way: ``uncertain`` until usage settles what it cost."""
+        failure = Failure(kind=fails.kind, message=fails.message, body=fails.body, payment_sent=True)
+        return self.ended(job, "http", 200, failure=failure)
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
         reply = self.reply_for(actor, request)

@@ -17,7 +17,8 @@ on). Check for ``None`` before use; never probe with ``hasattr``. Members are re
 
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Protocol
+from types import TracebackType
+from typing import Protocol, Self
 from uuid import UUID
 
 from livepeer_builder.contracts import (
@@ -49,7 +50,13 @@ from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
 
 class JobStreamApi(Protocol):
-    """One streamed job: iterate the bytes; ``aclose`` ends it early."""
+    """One streamed job. Use it with ``async with`` and iterate the bytes.
+
+    The job ends once. Reading to the end, or ``complete()`` once the caller has what it needs (D38),
+    records it ``succeeded`` with a result describing the bytes read. ``aclose()``, or leaving the block
+    early, records the attempt ``abandoned``; the job is then ``uncertain`` if the call was paid.
+    ``disconnected()`` gives the runner a moment to finish first (D40). Later endings do nothing.
+    """
 
     @property
     def job(self) -> Job: ...
@@ -57,7 +64,14 @@ class JobStreamApi(Protocol):
     def status_code(self) -> int: ...
     @property
     def content_type(self) -> str: ...
+    @property
+    def finished(self) -> bool: ...
     def __aiter__(self) -> AsyncGenerator[bytes, None]: ...
+    async def __aenter__(self) -> Self: ...
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None: ...
+    async def complete(self) -> None: ...
     async def aclose(self) -> None: ...
     async def disconnected(self) -> None: ...
 

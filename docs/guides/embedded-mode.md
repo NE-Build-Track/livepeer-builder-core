@@ -179,7 +179,8 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   answers per `(app, path)` with `Reply(...)` (a body, its parsed `data`, stream chunks), `Fails(...)`
   (`JobFailed`, paid or not; among stream chunks, a failure part-way that leaves the job `uncertain`) or
   `Raises(error)` (an engine error such as `NoCapacity`; also accepted as a job's cost). Like the
-  engine, it records an attempt on the first runner for the app and rejects a repeated
+  engine, it records an attempt on the first runner for the app, ends a stream once (read to the end
+  or `complete()`: `succeeded`; `aclose()` or an early exit: `abandoned`), and rejects a repeated
   `operation_ref`. It does not model admission, failover or payment.
 - **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
   fakes (`async with make_engine(runners=[...]) as engine:`).

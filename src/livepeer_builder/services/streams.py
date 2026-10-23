@@ -87,7 +87,7 @@ class JobStream:
 
     Use it as an async context manager and iterate it::
 
-        stream = await engine.jobs.stream(actor, request)
+        stream = await engine.jobs.streaming.stream(actor, request)
         async with stream:
             async for chunk in stream:
                 ...

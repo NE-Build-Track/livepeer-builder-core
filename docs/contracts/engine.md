@@ -94,14 +94,18 @@ unique index, so concurrent duplicates are also refused.
 
 ## Streaming
 
-`jobs.stream(actor, request)` dispatches the same immediate job as `jobs.run` and hands the runner's
+`jobs.streaming.stream(actor, request)` dispatches the same immediate job as `jobs.run` and hands the runner's
 response back **as it arrives**: a `JobStream` with the `Job` (state `running` until the stream
 ends), the runner's `status_code` and `content_type`, and an async iterator of `bytes`. The engine
 moves bytes; it never interprets them, so server-sent events, ndjson and audio all ride the same
 path (D29). Streaming is a delivery choice, not an execution mode: `mode` stays `immediate`.
+`jobs.streaming` is `None` when the configured transport cannot stream (D33); the REST route then
+answers 400.
 
 ```python
-stream = await engine.jobs.stream(actor, JobRequest(app="example/chat", path="/v1/chat/completions"))
+stream = await engine.jobs.streaming.stream(
+    actor, JobRequest(app="example/chat", path="/v1/chat/completions")
+)
 async with stream:  # leaving the block ends the stream, however the block ends
     async for chunk in stream:
         if my_format_says_done(chunk):
@@ -120,7 +124,7 @@ The admission slot is held until the stream ends.
 
 | Field | Default | What it bounds |
 | --- | --- | --- |
-| `timeout_s` | 300 s | The whole job, from the call to `jobs.stream` to the runner's last byte. It also ends a stream that nobody reads. Once the runner has ended the stream it no longer applies: a caller still handling the last chunks reads them and the end, and the job succeeds. |
+| `timeout_s` | 300 s | The whole job, from the call to `jobs.streaming.stream` to the runner's last byte. It also ends a stream that nobody reads. Once the runner has ended the stream it no longer applies: a caller still handling the last chunks reads them and the end, and the job succeeds. |
 | `first_byte_timeout_s` | 60 s | From each runner request to its first body chunk: payment, headers and the first chunk. Capped at `timeout_s`; setting it higher is rejected (422). |
 | `idle_timeout_s` | 60 s | The longest gap between chunks once data flows. `null` turns it off. |
 

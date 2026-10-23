@@ -207,7 +207,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 ### Then: consumers, in their own repositories
 
-- [ ] **ChatLPT:**
+- [x] **ChatLPT:** done 2026-10-23 on ChatLPT's `tasks/mz/dependency-injection-refactor` (its plan 08), pinned to `165e601`. Every item below landed; `livepeer_gateway` is no longer imported at all, because discovery decorates the default. It surfaced the `FakeEngine` gaps fixed in `bdf2630` and `165e601`.
   - re-pin to the refactored core;
   - build the engine with `BuilderEngine.create(settings, decorate=...)`, passing `EngineSettings` into its builder so its tests stop setting `LPB_*` environment variables;
   - decorate `parts.discovery_source` instead of re-implementing discovery;
@@ -300,6 +300,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - `Raises(error)` for engine errors the real engine raises before a job exists (`NoCapacity`, `ProviderUnavailable`), as a reply or a cost.
 
   Four new contract cases first failed on the fake and passed on the real engine (probed: `NotProvisioned` is wrapped in `JobFailed`, so it is not a `Raises` example). `runner()` takes `orchestrator_url` and `metadata`. The embedded guide no longer lists `LPB_BATTERIES_OPERATOR_TOKEN` as required.
+- [x] 2026-10-23: **ChatLPT moved onto the refactor** (its branch `tasks/mz/dependency-injection-refactor`, six commits, plan 08 complete). It builds with `create(engine_settings, decorate=...)` and types against `JourneyApi`. Its tests use `FakeEngine`, and a structural test keeps its imports to the public API. Not yet shown live on the deployed stack. Next: the builder console.
 
 ## Decision log
 

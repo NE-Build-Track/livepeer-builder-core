@@ -59,7 +59,10 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    is written when the signer signs**, before the paid request goes out: the transport calls
    `on_signed(manifest_id)` and the engine stores `payment_sent` and the session on the attempt then
    (D42). A cancel, a disconnect or a crash during the paid request therefore keeps the charge
-   attributed to its job. If the engine dies mid-call, `recover_interrupted()` marks the job
+   attributed to its job. If that write fails, the call goes on, and the write after the call, or the
+   close after an error or cancel, stores the same sessions again. A report that arrives after the job
+   ended increments the job's evidence version, so its stored cost projection is out of date and the
+   next read and sync count it. If the engine dies mid-call, `recover_interrupted()` marks the job
    `uncertain` when anything may have paid, and `failed` otherwise.
 4. **Admission and provisioning are checked before any payment.** The admission limits
    (`max_concurrent_jobs`, `max_concurrent_jobs_per_app`) refuse with 503 and `Retry-After`. An

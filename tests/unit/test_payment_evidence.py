@@ -12,6 +12,7 @@ import pytest
 
 from livepeer_builder.contracts import (
     ActorContext,
+    Attempt,
     JobRequest,
     Money,
     ProvisionRequest,
@@ -143,3 +144,72 @@ async def test_a_stream_cancelled_before_its_first_byte_keeps_its_evidence(
     [job] = await store.jobs_in_state("uncertain")
     assert job.attempts[-1].payment_sent
     assert [session.manifest_id for session in job.attempts[-1].sessions] == ["m-1"]
+
+
+def fails_first_evidence_write(store: SqlStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The write at signing fails (the database blipped); later writes work."""
+    real = store.record_payment_evidence
+    calls = 0
+
+    async def flaky(attempt: Attempt) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError("database unavailable")
+        await real(attempt)
+
+    monkeypatch.setattr(store, "record_payment_evidence", flaky)
+
+
+async def test_a_cancel_after_a_failed_evidence_write_still_stores_the_evidence(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip  # #44 review: the close path wrote only the job row, so the signature was lost
+    fails_first_evidence_write(store, monkeypatch)
+    transport = SignsThenWaits(store)
+    engine = await provisioned(make_engine, admin, transport)
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
+    await signed(transport, task)
+    task.cancel()  # the caller disconnects during the paid request
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    [job] = await store.jobs_in_state("uncertain")
+    assert job.attempts[-1].payment_sent
+    assert [session.manifest_id for session in job.attempts[-1].sessions] == ["m-1"]
+
+
+async def test_a_stream_cancelled_after_a_failed_evidence_write_still_stores_the_evidence(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    fails_first_evidence_write(store, monkeypatch)
+    transport = OpensAfterSigning(store)
+    engine = await provisioned(make_engine, admin, transport)
+    streaming = engine.jobs.streaming
+    assert streaming is not None
+    task = asyncio.create_task(streaming.stream(alice, JobRequest(app=APP)))
+    await signed(transport, task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    [job] = await store.jobs_in_state("uncertain")
+    assert [session.manifest_id for session in job.attempts[-1].sessions] == ["m-1"]
+
+
+async def test_a_store_that_cannot_take_evidence_still_closes_the_job(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    async def down(attempt: Attempt) -> None:
+        raise ConnectionError("database unavailable")
+
+    monkeypatch.setattr(store, "record_payment_evidence", down)
+    transport = SignsThenWaits(store)
+    engine = await provisioned(make_engine, admin, transport)
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
+    await signed(transport, task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    [job] = await store.jobs_in_state("uncertain")  # closed all the same: maybe paid, outcome unknown
+    assert job.failure is not None and job.failure.payment_sent

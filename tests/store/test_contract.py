@@ -356,3 +356,30 @@ async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
     [kept] = stored.attempts
     assert (kept.outcome, kept.status_code, kept.payment_sent) == ("succeeded", 200, True)  # not reopened
     assert [session.manifest_id for session in kept.sessions] == ["m1", "m2"]  # appended once each
+
+
+async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of_date(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # a projection stored before the report would serve none for a paid job
+    job = make_job(clock)  # ended
+    await sql.create_job(job, None)
+    attempt = make_attempt(job.id, clock)
+    await sql.start_attempt(attempt)
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    await sql.save_projection(
+        JobCost(
+            job_id=job.id,
+            status="none",
+            fees=none,
+            attempts=(),
+            first_observed_at=None,
+            updated_at=clock.now(),
+        ),
+        evidence_version=0,
+    )
+    late = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),), "payment_sent": True})
+    await sql.record_payment_evidence(late)
+    async with sql.cost_snapshot() as reads:
+        found = await reads.job_with_projection(job.id)
+    assert found is not None and found[1] is None  # computed live: pending, not the stored none
+    assert job.id in {selected.id for selected in await sql.jobs_for_projection([])}

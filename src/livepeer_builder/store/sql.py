@@ -212,6 +212,7 @@ class SqlStore:
         async with self.engine.begin() as conn:  # outcome, status and timing are left as they are
             await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
             await _append_sessions(conn, attempt)
+            await bump_evidence(conn, [str(attempt.job_id)])  # a late report on an ended job changes its cost
 
     async def finish_job(
         self,

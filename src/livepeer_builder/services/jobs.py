@@ -65,7 +65,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
-from livepeer_builder.services.evidence import SignedSessionRecorder, with_evidence
+from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
@@ -415,6 +415,7 @@ class JobService:
             message=f"engine error: {type(exc).__name__}",
             payment_sent=any(a.payment_sent for a in attempts),
         )
+        await store_evidence(self._store, attempts)  # the write at signing may have failed (D42)
         try:
             await self._finish(job, "uncertain" if maybe_paid else "failed", failure, None, attempts)
         except Exception:

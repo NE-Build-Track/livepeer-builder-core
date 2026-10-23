@@ -5,7 +5,8 @@ goes out. ``SignedSessionRecorder`` is that callback for one runner call. It put
 in-memory attempt first, so the engine's error path has it too, then writes it with
 ``record_payment_evidence`` in a task the caller cannot cancel (D34): a disconnect never cuts the write
 off half way. A failed write is logged, not raised: the signer has already charged, so the call goes
-on, and the write after the call stores the same sessions.
+on, and the write after the call (``finish_attempt``), or the close after an error or cancel
+(``record_payment_evidence`` again), stores the same sessions.
 """
 
 import logging
@@ -31,20 +32,26 @@ class SignedSessionRecorder:
     async def __call__(self, manifest_id: str) -> None:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
         self._attempts[self._index] = attempt
-        await run_shielded(self._write(attempt))
+        await run_shielded(_write(self._store, attempt))
 
-    async def _write(self, attempt: Attempt) -> None:
-        try:
-            await self._store.record_payment_evidence(attempt)
-        except Exception as exc:
-            _LOG.warning(
-                "could not store payment evidence before the paid request",
-                extra={
-                    "event": "jobs.evidence_write_failed",
-                    "job_id": str(attempt.job_id),
-                    "error": str(exc),
-                },
-            )
+
+async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:
+    """Store every attempt's evidence again, for the close after an error or cancel. Appending is
+    idempotent, so this is harmless when the write at signing worked."""
+    for attempt in attempts:
+        if attempt.payment_sent or attempt.sessions:
+            await _write(store, attempt)
+
+
+async def _write(store: JobRepo, attempt: Attempt) -> None:
+    """Logged, never raised: the signer has already charged, and a later write stores it again."""
+    try:
+        await store.record_payment_evidence(attempt)
+    except Exception as exc:
+        _LOG.warning(
+            "could not store payment evidence",
+            extra={"event": "jobs.evidence_write_failed", "job_id": str(attempt.job_id), "error": str(exc)},
+        )
 
 
 def with_evidence(attempt: Attempt, manifest_ids: Sequence[str], payment_sent: bool) -> Attempt:

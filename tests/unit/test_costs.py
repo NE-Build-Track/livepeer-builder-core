@@ -138,7 +138,11 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.5")
     assert observed.attempts[0].cost_class == "delivered"
 
-    await engine.store.save_projection(observed.model_copy(update={"attempts": ()}))
+    found = await engine.store.job_for_projection(job.id)
+    assert found is not None
+    await engine.store.save_projection(
+        observed.model_copy(update={"attempts": ()}), evidence_version=found[1]
+    )
     assert (await engine.costs.for_job(alice, job.id)).attempts == ()
     rebuilt_sync = await engine.costs.sync_once()  # no new usage; the empty attempt list is stale
     assert rebuilt_sync.rows_new == 0
@@ -371,7 +375,8 @@ async def test_a_none_projection_an_older_release_stored_for_a_running_job_is_no
     job, _ = await running_job(store, clock, paid=True)
     old = classify(job.model_copy(update={"state": "succeeded"}), ())  # what the old sync stored
     await store.save_projection(
-        old.model_copy(update={"status": "none", "attempts": (), "updated_at": clock.now()})
+        old.model_copy(update={"status": "none", "attempts": (), "updated_at": clock.now()}),
+        evidence_version=0,
     )
     assert (await engine.costs.for_job(alice, job.id)).status == "pending"
 
@@ -555,3 +560,31 @@ async def test_a_match_counts_before_sync_stores_the_projection(
     await store.match_sessions([arrived])  # matched: no longer unattributed; the projection is not saved yet
     assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.5")
     assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.5")
+
+
+async def test_a_row_committed_while_a_sync_classifies_the_job_is_never_lost(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
+    usage: FakeUsageSource, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip  # #43 review: two syncs at once (the loop and POST /v1/admin/costs/sync)
+    engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
+    first = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
+    usage.rows = [first]
+    await engine.costs.sync_once()
+    second = row("u2", "sess-1", "0.25", allocation=allocation, manifest="m-1")
+    read_usage = store.usage_for_payment_sessions
+
+    async def other_sync_commits_meanwhile(payment_session_ids: Any) -> list[UsageRow]:
+        rows = await read_usage(payment_session_ids)  # this sync has read the job's usage...
+        monkeypatch.setattr(store, "usage_for_payment_sessions", read_usage)
+        await store.apply_usage([second], SyncCheckpoint(resume_cursor="c2"))  # ...the other commits a row
+        return rows
+
+    monkeypatch.setattr(store, "usage_for_payment_sessions", other_sync_commits_meanwhile)
+    clock.advance(5)
+    await engine.costs.refresh_projection(job.id)  # stores the fee it classified before the new row
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.75")
+    assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.75")
+    usage.rows = [first, second]
+    await engine.costs.sync_once()  # the next sync stores the job again
+    stored = await store.get_projection(job.id)
+    assert stored is not None and stored.fees.fee_eth == Decimal("0.75")

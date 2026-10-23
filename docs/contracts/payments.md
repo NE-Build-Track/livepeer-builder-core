@@ -125,11 +125,14 @@ since its projection was stored, from its matched usage rows. A paid job therefo
 `none`, even between syncs. Each read uses one consistent snapshot of the store, so a sync committing
 meanwhile can never make it count a usage row twice or nowhere.
 
-Sync commits usage rows, then session matches, then projections, one transaction each. A new usage row
-on a matched session, or a changed match, marks the job's projection stale in the same transaction.
-Reads compute a stale job live, and the next sync stores it again, even when sync stopped (a crash,
-an error) before it reached that job. A state between two of sync's commits therefore still counts
-every row once.
+Sync commits usage rows, then session matches, then projections, one transaction each, and two syncs
+can run at once (the loop and `POST /v1/admin/costs/sync`). Each job has an evidence version: a new
+usage row on a matched session, a changed match or a late session report increments it in the same
+transaction. A projection records the version it was computed from, read before the job's evidence,
+and stands for the job only while that version is current; a save never replaces a projection computed
+from newer evidence. Reads compute an out-of-date job live, and the next sync stores it again, even
+when a sync stopped (a crash, an error) before it reached that job, or a concurrent sync saved an older
+classification. A state between two of sync's commits therefore still counts every row once.
 
 ## Allowance
 

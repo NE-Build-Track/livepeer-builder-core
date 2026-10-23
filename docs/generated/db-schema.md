@@ -56,7 +56,7 @@ erDiagram
         json attempts
         datetime first_observed_at
         datetime updated_at
-        boolean stale
+        integer evidence_version
     }
     lpb_jobs {
         string id PK
@@ -74,6 +74,7 @@ erDiagram
         json usage
         datetime created_at
         datetime completed_at
+        integer evidence_version
     }
     lpb_payment_sessions {
         string job_id PK
@@ -179,7 +180,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `attempts` | JSON | no |  |
 | `first_observed_at` | DATETIME | yes |  |
 | `updated_at` | DATETIME | no |  |
-| `stale` | BOOLEAN | no |  |
+| `evidence_version` | INTEGER | no |  |
 
 ## `lpb_jobs`
 
@@ -200,6 +201,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `usage` | JSON | yes |  |
 | `created_at` | DATETIME | no |  |
 | `completed_at` | DATETIME | yes |  |
+| `evidence_version` | INTEGER | no |  |
 
 Indexes:
 

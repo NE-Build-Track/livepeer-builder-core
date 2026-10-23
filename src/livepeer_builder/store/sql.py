@@ -31,10 +31,10 @@ from livepeer_builder.store import cost_reads
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
+    bump_evidence,
+    bump_evidence_on_new_rows,
     in_window,
     jobs_needing_projection,
-    mark_stale,
-    mark_stale_on_new_rows,
     match_payment_sessions,
 )
 from livepeer_builder.store.migrate import upgrade
@@ -262,7 +262,7 @@ class SqlStore:
     async def apply_usage(self, rows: Sequence[UsageRow], checkpoint: SyncCheckpoint) -> list[UsageRow]:
         """Insert rows not seen before and move the cursor, in one transaction. Returns the new rows.
 
-        A new row on an already matched session marks that job's projection stale in the same transaction."""
+        A new row on an already matched session bumps that job's evidence version in the same transaction."""
         new: list[UsageRow] = []
         synced_at = datetime.now(UTC)
         async with self.engine.begin() as conn:
@@ -276,7 +276,7 @@ class SqlStore:
                 seen.add(row.id)
                 await conn.execute(insert(t.usage_rows).values(_usage_values(row) | {"synced_at": synced_at}))
                 new.append(row)
-            await mark_stale_on_new_rows(conn, new)
+            await bump_evidence_on_new_rows(conn, new)
             cursor = {"resume_cursor": checkpoint.resume_cursor, "filters": checkpoint.filters}
             moved = await conn.execute(update(t.cost_cursor).where(t.cost_cursor.c.id == 1).values(cursor))
             if moved.rowcount == 0:
@@ -284,11 +284,11 @@ class SqlStore:
         return new
 
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]:
-        """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute, and marks their
-        projections stale in the same transaction."""
+        """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute, and bumps their
+        evidence versions in the same transaction."""
         async with self.engine.begin() as conn:
             changed = await match_payment_sessions(conn, rows)
-            await mark_stale(conn, (str(job_id) for job_id in changed))
+            await bump_evidence(conn, (str(job_id) for job_id in changed))
             return changed
 
     async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]:
@@ -301,6 +301,18 @@ class SqlStore:
         query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
         async with self.engine.connect() as conn:
             return await load_jobs(conn, list((await conn.execute(query)).mappings()))
+
+    async def job_for_projection(self, job_id: UUID) -> tuple[Job, int] | None:
+        """The job and its evidence version, read first: evidence changed after this read bumps it again,
+        so a projection saved with this version can never claim evidence it did not see."""
+        async with self.engine.connect() as conn:
+            query = select(t.jobs.c.evidence_version).where(t.jobs.c.id == str(job_id))
+            version = (await conn.execute(query)).scalar_one_or_none()
+            if version is None:
+                return None
+            rows = list((await conn.execute(select(t.jobs).where(t.jobs.c.id == str(job_id)))).mappings())
+            [job] = await load_jobs(conn, rows)
+        return job, version
 
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]:
         async with self.engine.connect() as conn:
@@ -317,7 +329,9 @@ class SqlStore:
     def cost_snapshot(self) -> AbstractAsyncContextManager[cost_reads.SqlCostSnapshot]:
         return cost_reads.snapshot(self.engine)
 
-    async def save_projection(self, cost: JobCost) -> None:
+    async def save_projection(self, cost: JobCost, *, evidence_version: int) -> None:
+        """Store the cost computed from ``evidence_version``. Never replaces one computed from newer evidence
+        (a slower concurrent sync)."""
         values = {
             "status": cost.status,
             "fee_eth": str(cost.fees.fee_eth),
@@ -326,11 +340,14 @@ class SqlStore:
             "attempts": [attempt.model_dump(mode="json") for attempt in cost.attempts],
             "first_observed_at": cost.first_observed_at,
             "updated_at": cost.updated_at,
-            "stale": False,
+            "evidence_version": evidence_version,
         }
         key = t.cost_projections.c.job_id == str(cost.job_id)
+        not_newer = t.cost_projections.c.evidence_version <= evidence_version
         async with self.engine.begin() as conn:
-            if (await conn.execute(update(t.cost_projections).where(key).values(values))).rowcount == 0:
+            if (await conn.execute(update(t.cost_projections).where(key, not_newer).values(values))).rowcount:
+                return
+            if (await conn.execute(select(t.cost_projections.c.job_id).where(key))).first() is None:
                 await conn.execute(insert(t.cost_projections).values(job_id=str(cost.job_id), **values))
 
     # -- secrets --------------------------------------------------------------------------------------

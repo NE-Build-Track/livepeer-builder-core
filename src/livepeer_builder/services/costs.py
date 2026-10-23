@@ -123,7 +123,9 @@ class CostService:
         affected = await self._store.match_sessions(new_rows)
         jobs = await self._store.jobs_for_projection(list(affected))
         for job in jobs:
-            await self._refresh_projection(job)
+            found = await self._store.job_for_projection(job.id)  # reloaded with its evidence version
+            if found is not None:
+                await self._refresh_projection(*found)
         self.last_synced_at, self.last_error = self._clock.now(), None
         return report.model_copy(update={"jobs_updated": len(jobs)})
 
@@ -146,12 +148,12 @@ class CostService:
                 continue
 
     async def refresh_projection(self, job_id: UUID) -> JobCost | None:
-        job = await self._store.get_job(job_id)
-        if job is None:
+        found = await self._store.job_for_projection(job_id)
+        if found is None:
             return None
-        return await self._refresh_projection(job)
+        return await self._refresh_projection(*found)
 
-    async def _refresh_projection(self, job: Job) -> JobCost:
+    async def _refresh_projection(self, job: Job, evidence_version: int) -> JobCost:
         computed = await self._compute(job)
         if job.state not in _ENDED:
             return computed  # it may still pay: never stored, computed on each read instead
@@ -169,7 +171,7 @@ class CostService:
         projection = computed.model_copy(
             update={"status": status, "first_observed_at": first, "updated_at": self._clock.now()}
         )
-        await self._store.save_projection(projection)
+        await self._store.save_projection(projection, evidence_version=evidence_version)
         return projection
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:

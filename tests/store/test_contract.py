@@ -154,8 +154,8 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
         job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(attempt_cost,),
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_projection(projection)
-    await sql.save_projection(projection.model_copy(update={"status": "corrected"}))
+    await sql.save_projection(projection, evidence_version=0)
+    await sql.save_projection(projection.model_copy(update={"status": "corrected"}), evidence_version=0)
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
     assert loaded.attempts == (attempt_cost,)
@@ -181,7 +181,8 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
             attempts=(),
             first_observed_at=clock.now(),
             updated_at=clock.now(),
-        )
+        ),
+        evidence_version=0,
     )
     await sql.save_projection(
         JobCost(
@@ -191,7 +192,8 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
             attempts=(AttemptCost(attempt_number=1, cost_class="delivered", fees=delivered),),
             first_observed_at=clock.now(),
             updated_at=clock.now(),
-        )
+        ),
+        evidence_version=0,
     )
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
@@ -224,7 +226,8 @@ async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_job
         await sql.save_projection(
             JobCost(
                 job_id=job_id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=at
-            )
+            ),
+            evidence_version=0,
         )
     assert running.id not in {job.id for job in await sql.jobs_for_projection([running.id])}
     window = (clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1))
@@ -275,7 +278,7 @@ async def test_a_cost_snapshot_does_not_see_a_write_committed_while_it_is_open(
     assert sorted(row.id for row in await sql.unattributed_usage("a1")) == ["u1", "u2"]
 
 
-async def test_new_evidence_marks_a_projection_stale_until_it_is_stored_again(
+async def test_new_evidence_puts_a_projection_out_of_date_until_one_from_that_evidence_is_stored(
     sql: SqlStore, clock: FixedClock
 ) -> None:  # #43 review: sync commits rows and matches before it stores the projection, if it gets there
     def usage(row_id: str) -> UsageRow:
@@ -302,13 +305,27 @@ async def test_new_evidence_marks_a_projection_stale_until_it_is_stored_again(
     stored = JobCost(
         job_id=job.id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=clock.now()
     )
-    await sql.save_projection(stored)
+
+    async def version() -> int:
+        found = await sql.job_for_projection(job.id)
+        assert found is not None
+        return found[1]
+
+    await sql.save_projection(stored, evidence_version=await version())
     await sql.apply_usage([usage("u1")], SyncCheckpoint(resume_cursor="c1"))  # its session is not matched yet
     assert await served() is not None and not await needs_projection()
+    before = await version()
     assert await sql.match_sessions([usage("u1")]) == {job.id}  # the match changed
     assert await served() is None and await needs_projection()
-    await sql.save_projection(stored)
+    await sql.save_projection(stored, evidence_version=before)  # a sync that classified before the match
+    assert await served() is None and await needs_projection()  # cannot hide it
+    current = await version()
+    await sql.save_projection(stored, evidence_version=current)
     assert await served() is not None and not await needs_projection()
+    await sql.save_projection(stored.model_copy(update={"status": "pending"}), evidence_version=before)
+    served_now = await served()
+    assert served_now is not None and served_now.status == "none"  # an older save never replaces a newer one
     await sql.apply_usage([usage("u2")], SyncCheckpoint(resume_cursor="c2"))  # a new row, matched session
     assert await served() is None and await needs_projection()
+    assert await version() == current + 1
     assert await sql.get_projection(job.id) is not None  # sync still reads it (first observed, corrected)

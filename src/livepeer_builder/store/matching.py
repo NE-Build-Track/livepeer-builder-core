@@ -21,27 +21,35 @@ _CHUNK = 500
 ENDED = ("succeeded", "failed", "uncertain")  # a job in one of these states can no longer pay
 
 
+def projection_current() -> ColumnElement[bool]:
+    """The projection was computed from the job's current evidence."""
+    return t.cost_projections.c.evidence_version >= t.jobs.c.evidence_version
+
+
 def projection_out_of_date() -> ColumnElement[bool]:
-    """No projection, one stored before the job ended, or one whose evidence changed since (stale)."""
+    """No projection, one stored before the job ended, or one computed from older evidence."""
     return or_(
         t.cost_projections.c.job_id.is_(None),
         t.jobs.c.completed_at > t.cost_projections.c.updated_at,
-        t.cost_projections.c.stale.is_(True),
+        ~projection_current(),
     )
 
 
-async def mark_stale(conn: AsyncConnection, job_ids: Iterable[str]) -> None:
-    """Sync changed these jobs' evidence: their projections no longer stand for them (#43 review).
+async def bump_evidence(conn: AsyncConnection, job_ids: Iterable[str]) -> None:
+    """These jobs' evidence changed: their projections no longer stand for them (#43 review).
 
-    Called in the transaction that changes the evidence, so no committed state has a projection that
-    misses a committed row. Reads compute a stale job live; the next sync stores it again."""
+    Called in the transaction that changes the evidence. A version, not a flag: a sync that classified
+    the job earlier stores the version it read, which is already behind, so no save can hide the change.
+    Reads compute an out-of-date job live; the next sync stores it again."""
     for chunk in _chunks(sorted(set(job_ids))):
         await conn.execute(
-            update(t.cost_projections).where(t.cost_projections.c.job_id.in_(chunk)).values(stale=True)
+            update(t.jobs)
+            .where(t.jobs.c.id.in_(chunk))
+            .values(evidence_version=t.jobs.c.evidence_version + 1)
         )
 
 
-async def mark_stale_on_new_rows(conn: AsyncConnection, rows: Sequence[UsageRow]) -> None:
+async def bump_evidence_on_new_rows(conn: AsyncConnection, rows: Sequence[UsageRow]) -> None:
     """A new applied row on a session that is already matched adds to that job's fee."""
     sessions = sorted(
         {row.payment_session_id for row in rows if row.status == "applied" and row.payment_session_id}
@@ -53,7 +61,7 @@ async def mark_stale_on_new_rows(conn: AsyncConnection, rows: Sequence[UsageRow]
                 t.payment_sessions.c.payment_session_id.in_(chunk),
             )
         )
-        await mark_stale(conn, found.scalars())
+        await bump_evidence(conn, found.scalars())
 
 
 def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:

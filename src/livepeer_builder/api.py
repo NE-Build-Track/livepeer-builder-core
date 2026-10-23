@@ -56,8 +56,8 @@ class JobStreamApi(Protocol):
     records it ``succeeded`` with a result describing the bytes read. ``aclose()``, or leaving the block
     early (``break``, ``return``, an error), records the attempt ``abandoned`` at once; the job is then
     ``uncertain`` if the call was paid. A cancellation leaving the block, and ``disconnected()``, give
-    the runner ``LPB_STREAM_SETTLE_S`` to finish first, then succeed or abandon (D38, D40). Later
-    endings do nothing.
+    the runner ``LPB_STREAM_SETTLE_S`` to finish first: the stream then succeeds, fails with the
+    runner's error, or (when the window runs out) is abandoned (D38, D40). Later endings do nothing.
     """
 
     @property

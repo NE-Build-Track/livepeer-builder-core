@@ -20,13 +20,10 @@ import enum
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
-from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import SecretRef
@@ -55,7 +52,9 @@ from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.services.streams import StreamLimits
-from livepeer_builder.store import SqlStore
+
+if TYPE_CHECKING:
+    from livepeer_builder.adapters.secrets import SettingsSecretStore
 
 _LOG = logging.getLogger(__name__)
 _SHARED_KEY = "shared_payment_key"
@@ -144,7 +143,16 @@ def own(stack: contextlib.AsyncExitStack, resource: object, close: Callable[[], 
 async def default_parts(
     settings: EngineSettings, stack: contextlib.AsyncExitStack, supply: EngineSupply | None = None
 ) -> EngineParts:
-    """Build every part that was not supplied. Resources go on ``stack`` the moment they open."""
+    """Build every part that was not supplied. Resources go on ``stack`` the moment they open.
+
+    The default adapters and the SQL store are imported here, not at module level, so importing the
+    package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
+    """
+    from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
+    from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
+    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
+    from livepeer_builder.store import SqlStore
+
     supply = supply or EngineSupply()
     clock = supply.clock if not isinstance(supply.clock, _Unset) else SystemClock()
     policy = supply.policy if not isinstance(supply.policy, _Unset) else DefaultPolicy()
@@ -315,7 +323,9 @@ async def create(
         return assemble(settings, parts, stack.pop_all())  # success: the engine owns what opened
 
 
-def _configured_secrets(settings: EngineSettings) -> SettingsSecretStore:
+def _configured_secrets(settings: EngineSettings) -> "SettingsSecretStore":
+    from livepeer_builder.adapters.secrets import SettingsSecretStore
+
     shared_key = settings.shared_payment_key.get_secret_value() if settings.shared_payment_key else None
     return SettingsSecretStore({_SHARED_KEY: shared_key} if shared_key else {})
 

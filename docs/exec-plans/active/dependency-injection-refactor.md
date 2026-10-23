@@ -162,15 +162,15 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 **Prerequisite:** the separate Swagger fix (see [Out of scope](#out-of-scope)) lands first, so Railway needs no OpenAPI patch here.
 
-- [ ] **Two entry points in `livepeer_builder/http/server.py`** (part of the `[server]` extra):
+- [x] **Two entry points in `livepeer_builder/http/server.py`** (part of the `[server]` extra):
   - **`build_app(settings, *, supply, decorate, extend) -> FastAPI`**, for mounting the engine in another ASGI stack. The app's lifespan starts and stops the engine, and `build_app` does not configure logging.
   - **`serve(settings, *, supply, decorate, extend)`**, which runs the whole service with guaranteed cleanup: `engine = await create(...)`, then `try:` run uvicorn `finally: await engine.stop()` (idempotent, step 2). This closes today's leak when uvicorn fails before its lifespan runs. `serve` calls `configure_logging(json_lines=settings.log_json)`, because it is the reference application's composition root.
   - `lpb serve`, the Railway entrypoint and the docs use `serve`.
   - The `uvicorn` confinement in `tests/structure/test_layers.py` moves from `cli.py` to `http/server.py`.
-- [ ] **Extra endpoints get the engine explicitly.** `extend: Callable[[FastAPI, EngineApi], None]` receives the app and the engine; routes are added with `app.include_router(make_router(engine))`. There is no `app.state.engine` lookup. `http.server` exports `actor_dependency(engine)`, the same dependency the built-in routes use, so extra endpoints get the same authentication and policy checks.
-- [ ] **No new `lpb serve` flag.** A customized service is a small entrypoint of its own: `asyncio.run(serve(EngineSettings.from_env(), supply=..., decorate=..., extend=...))`. A `--app module:attr` loader can come later if operators ask for it.
-- [ ] **A tested service-mode example,** in `tests/unit/test_service_mode_example.py`: an enterprise authenticator supplied, the discovery source decorated, and one endpoint added through `extend` using `actor_dependency`. It is shown in a new "Service mode" section of `extending-the-engine.md` and kept in step by the same docs marker check as step 3.
-- [ ] **The Railway entrypoint calls `serve(settings)`**, with settings built as values: `EngineSettings.from_env().model_copy(update={"database_url": asyncpg_url(...)})`. It no longer rewrites `os.environ` for the serve path or patches the spec (the Swagger fix has landed). The migrate path that shells out to `lpb` keeps its env rewrite.
+- [x] **Extra endpoints get the engine explicitly.** `extend: Callable[[FastAPI, EngineApi], None]` receives the app and the engine; routes are added with `app.include_router(make_router(engine))`. There is no `app.state.engine` lookup. `http.server` exports `actor_dependency(engine)`, the same dependency the built-in routes use, so extra endpoints get the same authentication and policy checks.
+- [x] **No new `lpb serve` flag.** A customized service is a small entrypoint of its own: `asyncio.run(serve(EngineSettings.from_env(), supply=..., decorate=..., extend=...))`. A `--app module:attr` loader can come later if operators ask for it.
+- [x] **A tested service-mode example,** in `tests/unit/test_service_mode_example.py`: an enterprise authenticator supplied, the discovery source decorated, and one endpoint added through `extend` using `actor_dependency`. It is shown in a new "Service mode" section of `extending-the-engine.md` and kept in step by the same docs marker check as step 3.
+- [x] **The Railway entrypoint calls `serve(settings)`**, with settings built as values: `EngineSettings.from_env().model_copy(update={"database_url": asyncpg_url(...)})`. It no longer rewrites `os.environ` for the serve path or patches the spec (the Swagger fix has landed). The migrate path that shells out to `lpb` keeps its env rewrite.
 
 ### Step 6: import weight and declared dependencies
 
@@ -268,6 +268,14 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   Part 3: complete exports, with two structural tests (types reachable from the facade Protocols, through model fields, and every `EngineError`). They named 22 contracts and 6 errors to add. Ports consumers implement stay in the public `livepeer_builder.protocols`. The embedded guide covers role typing, capabilities, `FakeEngine` and `make_engine`.
 
   Deviations, recorded here: `api.py` imports `protocols` (it reuses `Authenticator`, `EventFeed` and `SessionManager` for engine members that are those ports), and `streaming` is a plain attribute rather than a property, which keeps `services/jobs.py` under the 500-line limit.
+- [x] 2026-10-23: **step 5 done**:
+  - `livepeer_builder/http/server.py` with `build_app` and `serve`, both taking `supply`, `decorate` and an `extend(app, engine)` hook;
+  - `actor_dependency(engine)`, the built-in routes' own dependency, exported for extra endpoints;
+  - `lpb serve` and the Railway entrypoint call `serve`; Railway builds settings as values and no longer rewrites `os.environ` for the serve path or patches the spec;
+  - `uvicorn` is confined to `http/server.py`;
+  - a tested service-mode example (an SSO authenticator, decorated discovery, an extra authenticated route), drift-checked in the new "Service mode" section of `extending-the-engine.md`.
+
+  `serve`'s cleanup is pinned by an `extend` hook that raises. A first test, which bound a port already in use, still passed with the `finally` removed, because uvicorn's lifespan had already stopped the engine. It was replaced.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log

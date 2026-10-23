@@ -5,7 +5,7 @@ contracts (async jobs, sessions, events) answer 501. The generated schema is com
 docs/generated/openapi.json and checked for drift in CI.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -107,20 +107,12 @@ class UsageBody(BaseModel):
     quantities: dict[str, int]
 
 
-def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if manage_lifecycle:
-            await engine.start()
-        try:
-            yield
-        finally:
-            if manage_lifecycle:
-                await engine.stop()
+def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, ActorContext]]:
+    """The FastAPI dependency every authenticated route uses: the engine's authenticator chain.
 
-    app = FastAPI(title="livepeer-builder", version=engine.health().version, lifespan=lifespan)
-    _install_error_handlers(app, engine)
-
+    Extra endpoints added through ``livepeer_builder.http.server`` (``extend=``) use it too, so they
+    authenticate like the built-in routes: ``Annotated[ActorContext, Depends(actor_dependency(engine))]``.
+    """
     # Declares the bearer scheme in OpenAPI, so Swagger UI shows Authorize. Authentication itself
     # stays with engine.authenticator, which reads the raw headers below.
     bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
@@ -140,7 +132,24 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
             raise NotAuthenticated("a credential is required")
         return actor
 
-    Actor = Annotated[ActorContext, Depends(actor_from)]
+    return actor_from
+
+
+def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if manage_lifecycle:
+            await engine.start()
+        try:
+            yield
+        finally:
+            if manage_lifecycle:
+                await engine.stop()
+
+    app = FastAPI(title="livepeer-builder", version=engine.health().version, lifespan=lifespan)
+    _install_error_handlers(app, engine)
+
+    Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     @app.get("/livez", include_in_schema=False)
     async def livez() -> dict[str, str]:

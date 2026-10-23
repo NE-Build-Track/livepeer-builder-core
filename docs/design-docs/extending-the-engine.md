@@ -182,8 +182,62 @@ await engine.start()
 ```
 
 The same engine serves both integration modes: call it in-process with your own `ActorContext`
-(imported; [embedded-mode.md](../guides/embedded-mode.md)), or pass it to
-`livepeer_builder.http.create_app(engine)` (service).
+(imported; [embedded-mode.md](../guides/embedded-mode.md)), or run it behind HTTP
+([Service mode](#service-mode)).
+
+## Service mode
+
+`livepeer_builder.http.server` (the `[server]` extra) has two entry points. Both take the same
+`supply` and `decorate` as `create`, plus `extend`, a hook that adds routes:
+
+- **`serve(settings, *, supply, decorate, extend)`** runs the whole service, as `lpb serve` does.
+  It configures logging, creates the engine and runs uvicorn on `LPB_HTTP_HOST`/`LPB_HTTP_PORT`. It
+  stops the engine whatever happens, including when an `extend` hook raises or uvicorn fails
+  before its lifespan runs.
+- **`build_app(settings, *, supply, decorate, extend)`** returns the FastAPI app without running it,
+  for mounting in another ASGI stack. The app's lifespan starts and stops the engine. Logging is
+  left to the host.
+
+`extend(app, engine)` receives the app and the engine, so a router gets the engine as an argument
+rather than from `app.state`. `actor_dependency(engine)` is the dependency the built-in routes use:
+an extra endpoint that depends on it gets the same authenticators, and the same 401 for a missing
+or bad credential.
+
+<!-- example: tests/unit/test_service_mode_example.py#service-mode -->
+```python
+def corp_supply() -> EngineSupply:
+    return EngineSupply(authenticators=(SignedSsoHeaderAuthenticator(SECRET),))
+
+
+def corp_decorations(parts: EngineParts) -> EngineParts:
+    approved = ApprovedOrchestratorsOnly(parts.discovery_source, approved={"https://orch.example"})
+    return dataclasses.replace(parts, discovery_source=approved)
+
+
+def corp_routes(app: FastAPI, engine: EngineApi) -> None:
+    """An extra endpoint: it gets the engine and the same authentication as the built-in routes."""
+    router = APIRouter()
+    Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
+
+    @router.get("/v1/corp/whoami")
+    async def whoami(actor: Actor) -> dict[str, str]:
+        return {"actor_id": actor.actor_id, "application_id": actor.application_id}
+
+    app.include_router(router)
+```
+
+A customized service is a small entrypoint of its own; there is no `lpb serve` flag for it:
+
+```python
+asyncio.run(
+    serve(
+        EngineSettings.from_env(),
+        supply=corp_supply(),
+        decorate=corp_decorations,
+        extend=corp_routes,
+    )
+)
+```
 
 ## Rules every implementation must keep
 

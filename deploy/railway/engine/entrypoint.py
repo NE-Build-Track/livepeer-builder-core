@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Start the engine on Railway Postgres, with bearer auth in Swagger.
+"""Start the engine on Railway Postgres.
 
 Railway's DATABASE_URL uses the postgresql:// scheme. The engine's async
 SQLAlchemy engine requires postgresql+asyncpg://. The rest of the URL,
-including the password, is left unchanged and is not logged.
-
-Swagger's Authorize button is added here so this deployment can send
-Authorization: Bearer without changing the upstream API.
+including the password, is left unchanged and is not logged. The rewritten
+URL is passed as a settings value to the server and as an explicit
+environment to the `lpb` subprocesses; the process environment is not changed.
 """
 
 import asyncio
@@ -14,12 +13,8 @@ import os
 import subprocess
 import sys
 
-import uvicorn
-
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.http import create_app
-from livepeer_builder.runtime import BuilderEngine
-from livepeer_builder.runtime.logging import configure_logging
+from livepeer_builder.http.server import serve
 
 ASYNCPG_SCHEME = "postgresql+asyncpg://"
 
@@ -34,31 +29,17 @@ def asyncpg_url(url: str) -> str:
     sys.exit("LPB_DATABASE_URL must be a postgresql URL")
 
 
-async def serve() -> None:
-    settings = EngineSettings.from_env()
-    configure_logging(json_lines=settings.log_json)
-    app = create_app(await BuilderEngine.create(settings))
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host=settings.http_host,
-            port=settings.http_port,
-            log_config=None,
-        )
-    )
-    await server.serve()
-
-
-def prepare_database_url() -> None:
+def database_url() -> str:
     raw = os.environ.get("LPB_DATABASE_URL", "")
     if not raw:
         sys.exit("LPB_DATABASE_URL is required")
-    os.environ["LPB_DATABASE_URL"] = asyncpg_url(raw)
+    return asyncpg_url(raw)
 
 
 def lpb(command: str) -> int:
     # `command` is only "migrate" or "revision", chosen by this file.
-    completed = subprocess.run(["/usr/local/bin/lpb", command], check=False)  # noqa: S603
+    env = {**os.environ, "LPB_DATABASE_URL": database_url()}
+    completed = subprocess.run(["/usr/local/bin/lpb", command], check=False, env=env)  # noqa: S603
     return completed.returncode
 
 
@@ -71,7 +52,6 @@ def migrate() -> int:
     Preview shares one Postgres across every branch, so a preview deploy only
     checks the revision. Production applies the packaged migrations first.
     """
-    prepare_database_url()
     if os.environ.get("RAILWAY_ENVIRONMENT_NAME") != "preview":
         code = lpb("migrate")
         if code != 0:
@@ -86,14 +66,14 @@ def main() -> None:
         sys.exit(migrate())
     if sys.argv[1:] not in ([], ["serve"]):
         sys.exit("usage: entrypoint.py [serve|migrate]")
-    prepare_database_url()
+    settings = EngineSettings.from_env().model_copy(update={"database_url": database_url()})
     # LPB_AUTO_MIGRATE=false: refuse a database that is not at package head
     # rather than migrating from the process that is about to take traffic.
-    if not EngineSettings.from_env().auto_migrate:
+    if not settings.auto_migrate:
         code = lpb("revision")
         if code != 0:
             sys.exit(code)
-    asyncio.run(serve())
+    asyncio.run(serve(settings))
 
 
 if __name__ == "__main__":

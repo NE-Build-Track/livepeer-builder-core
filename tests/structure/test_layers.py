@@ -61,7 +61,7 @@ CONFINED: dict[str, tuple[str, ...]] = {
     "aiosqlite": ("store/",),
     "fastapi": ("http/",),
     "starlette": ("http/",),
-    "uvicorn": ("cli.py",),
+    "uvicorn": ("http/server.py",),
 }
 
 REMEDIATION = {

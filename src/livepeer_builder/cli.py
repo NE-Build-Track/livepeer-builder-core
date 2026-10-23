@@ -148,21 +148,11 @@ async def _smoke(_: argparse.Namespace) -> int:
 
 async def _serve(_: argparse.Namespace) -> None:
     try:
-        import uvicorn
-
-        from livepeer_builder.http import create_app
+        from livepeer_builder.http.server import serve
     except ImportError:
         print("the REST service needs: pip install 'livepeer-builder[server]'", file=sys.stderr)
         raise SystemExit(2) from None
-    from livepeer_builder.runtime.logging import configure_logging
-
-    settings = EngineSettings.from_env()
-    configure_logging(json_lines=settings.log_json)
-    app = create_app(await BuilderEngine.create(settings))
-    server = uvicorn.Server(
-        uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
-    )
-    await server.serve()
+    await serve(EngineSettings.from_env())
 
 
 async def _gen_docs(args: argparse.Namespace) -> int:

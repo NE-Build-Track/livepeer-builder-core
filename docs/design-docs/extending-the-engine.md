@@ -146,7 +146,8 @@ behavior around a default, decorate it. A decorated part is not seen by parts bu
 decoration.
 
 **Engine API keys off.** Supplying `api_keys=None` removes the key routes from the app and its
-OpenAPI, makes `lpb bootstrap-admin` refuse, and accepts no `lpk_` key. Your authenticator then
+OpenAPI, sets `engine.keys` to `None`, and accepts no `lpk_` key. The stock `lpb bootstrap-admin`
+uses the default wiring, so a keys-off deployment has no bootstrap command. Your authenticator then
 carries every caller, so it must grant admin permissions to operators.
 
 ## Wiring it
@@ -256,7 +257,7 @@ named here show each one.
 | `SecretStore` | Return an opaque `SecretRef`, never the secret. Never log secret values. `get` raises `NotFound` for unknown refs. Rotation is `put` new, then `delete` old |
 | `SelectionPolicy` | Pure and fast: order candidates, don't call the network. The engine applies `max_attempts` and the failover-before-payment rule |
 | `DiscoverySource` | Return contract `Runner`s. Raising keeps the last good snapshot (`discovery_error` in health) |
-| `CredentialResolver` | Return a `PaymentCredential` with the signer bearer and the allocation that bearer spends. `token` is `None` for an unpaid call |
+| `CredentialResolver` (implemented by `PaymentsService`; not replaceable today) | Return a `PaymentCredential` with the signer bearer and the allocation that bearer spends. `token` is `None` for an unpaid call |
 | `RunnerTransport` | Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them. Use `payment_refused` only for orchestrator-specific refusals before payment |
 | `StreamingRunnerTransport` | `open` returns once the runner answered (status, content type), with `payment_sent` and `manifest_ids` already known. It must give up after `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the payment evidence so far; the engine stops an `open` that runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) longer and treats it as paid (D35). Iteration raises `RunnerCallError` mid-stream; `aclose` closes the connection and stops any ongoing funding, and may be called more than once (`tests/unit/test_stream_deadlines.py`) |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result |

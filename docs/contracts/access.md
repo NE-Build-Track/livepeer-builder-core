@@ -43,8 +43,9 @@ class AccessPolicy(Protocol):
   - An `ActorContext`: a valid credential.
   - `NotAuthenticated`: "my credential, but invalid"; the chain **stops** with 401 and never falls
     through.
-- `AuthenticatorChain` runs authenticators in configuration order and combines their challenges into
-  one `WWW-Authenticate` header.
+- `AuthenticatorChain` runs the deployment's own authenticators (`EngineSupply.authenticators`) in
+  order, then `ApiKeyAuthenticator` when engine API keys are on, and combines their challenges into one
+  `WWW-Authenticate` header.
 - **Imported mode needs no authenticator.** The application builds `ActorContext` itself. The policy
   still applies.
 
@@ -66,7 +67,7 @@ enterprise identity provider's concern.
 
 | Mode | Where it lives | Status |
 | --- | --- | --- |
-| Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented** (standalone baseline) |
+| Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/admin/keys` routes are absent and OpenAPI declares no bearer scheme |
 | JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | Defined, M4 |
 | MCP OAuth (PKCE public clients) | Enterprise authorization server issues; engine verifies with JWT bearer and publishes RFC 9728 protected-resource metadata | Defined, with MCP (M3/M4) |
 | Trusted backend (see [service mode](#service-mode)) | `ServiceCredentialAuthenticator` | Defined, M4 |
@@ -97,7 +98,8 @@ Both are generic: no enterprise logic lives in the engine.
   engine through the enterprise backend, or directly with a JWT whose audience is the engine. CORS is
   off by default.
 - **Admin:** admin is a distinct credential kind. The first admin key comes from
-  `lpb bootstrap-admin`, which works only once (when no admin key exists). There is no network
+  `lpb bootstrap-admin`, which works only while no active admin key exists, and only when engine API
+  keys are on. There is no network
   bootstrap route and no static admin token.
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
@@ -111,6 +113,7 @@ Both are generic: no enterprise logic lives in the engine.
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
 | Engine admin credential | `lpb bootstrap-admin`, then an admin | Operator | Engine admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
+| Batteries operator credential (grant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_OPERATOR_TOKEN`), optional; without it the grant desk is off | Batteries operator |
 | Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-key` / `revoke` |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 

@@ -18,7 +18,7 @@ change that moves a ticket.
 | --- | --- | --- | --- |
 | Access context | `contracts/access.py` | `tests/unit/test_access.py` | [access.md](../contracts/access.md) |
 | Capabilities and rates | `contracts/discovery.py`, `services/discovery.py`, `adapters/sdk.py` | `test_adapters.py::test_discovery_entries_become_runners` | [engine.md#discovery](../contracts/engine.md#discovery) |
-| Jobs and attempts; failover; idempotency; write ordering; recovery; admission | `contracts/jobs.py`, `services/jobs.py`, `services/admission.py` | `tests/unit/test_jobs.py` (12 tests) | [engine.md](../contracts/engine.md#behavior-the-contract-fixes) |
+| Jobs and attempts; failover; idempotency; write ordering; recovery; admission | `contracts/jobs.py`, `services/jobs.py`, `services/admission.py` | `tests/unit/test_jobs.py` (12 tests at M2 close) | [engine.md](../contracts/engine.md#behavior-the-contract-fixes) |
 | Results | `ResultRef` (inline sha256 and size) | `test_success_records_attempt_payment_and_result_reference` | [engine.md#results](../contracts/engine.md#results) |
 | Measured usage | `JobService.report_usage`, `MeasuredUsage` | `test_usage_is_reported_once_by_the_owner` | [engine.md#measured-usage](../contracts/engine.md#measured-usage) |
 | Cost states and classification | `contracts/costs.py`, `services/costs.py` | `tests/unit/test_costs.py` | [payments.md#cost-classification](../contracts/payments.md#cost-classification) |
@@ -46,7 +46,7 @@ change that moves a ticket.
 | Need | Code | Tests | Doc |
 | --- | --- | --- | --- |
 | Allocation modes; no fallback to a shared key | `services/payments.py` | `test_unprovisioned_actor_fails_before_any_payment`, `test_per_application_mode_uses_the_configured_key` | [payments.md#allocation-modes](../contracts/payments.md#allocation-modes) |
-| Explicit provisioning; idempotent money moves; rotation and revocation | `services/payments.py`, `adapters/batteries.py` | `tests/unit/test_payments.py` (9 tests), `test_create_key_for_grant_is_one_idempotent_call` | [payments.md#provisioning](../contracts/payments.md#provisioning) |
+| Explicit provisioning; idempotent money moves; rotation and revocation | `services/payments.py`, `adapters/batteries.py` | `tests/unit/test_payments.py` (9 tests at M2 close), `test_create_key_for_grant_is_one_idempotent_call` | [payments.md#provisioning](../contracts/payments.md#provisioning) |
 | Least-privilege management credential | `deploy/dev-stack/config/init-secrets.py` | dev-stack run | [batteries-api.md](../references/batteries-api.md) |
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |
 | Stable references (session log → `payment_session_id`) | `services/costs.py::classify`, `store/matching.py`, `lpb_payment_sessions` | `test_failed_after_payment_and_forged_manifest_reconcile`, `test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed` | [payments.md#correlation](../contracts/payments.md#correlation) |

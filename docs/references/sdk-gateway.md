@@ -5,8 +5,9 @@ Baseline `44df061`. Pinned to `76a1a1c`, the head of [livepeer/livepeer-python-g
 | SDK surface | Engine use |
 | --- | --- |
 | `discovery.discover_runners(signer_url, signer_headers, discovery_url)` | `SignerDiscoverySource` |
-| `live_runner.call_runner(url, runner=…, payload, method, signer_url, signer_headers, timeout)` | `SdkRunnerTransport`; the payment is per call (402 challenge → signer → retry). `JobRequest.payload` is a dict or `None`; at `76a1a1c` the SDK sends `None` as an empty body, so the adapter passes `{}` instead, as earlier pins sent (D41, T15) |
+| `live_runner.call_runner(url, runner=…, payload, method, signer_url, signer_headers, timeout, max_payment_challenge_retries)` | `SdkRunnerTransport`; the payment is per call (402 challenge → signer → retry). `JobRequest.payload` is a dict or `None`; at `76a1a1c` the SDK sends `None` as an empty body, so the adapter passes `{}` instead, as earlier pins sent (D41, T15) |
 | `call_runner(..., on_payment_session=callback)` (#81) | Called once for each new session the signer signs, after the SDK validates the signer's reply (non-empty `payment` and `segCreds`) and before the paid request goes out. `SdkRunnerTransport` collects `session.manifest_id` into `RunnerReply.manifest_ids` and derives `payment_sent` solely from whether `on_payment_session` ran: if signing fails or times out before the callback runs, `payment_sent` is `False` and the job fails (D41, T14) |
+| `call_runner(..., stream=True)` → `LiveRunnerCallStream` | `SdkRunnerTransport.open` (`jobs.streaming`); the 402 is paid before the first byte, and the engine bounds the wait for the runner's headers (`first_byte_timeout_s`, D35) |
 | `LivePaymentSession.manifest_id` | The manifest ID from the 402 challenge. The SDK does not read the signer's state |
 | `LivepeerHTTPError.status_code` / `.url` | Runner refusal vs signer refusal; signer 400/481 → `payment_refused` (failover) |
 | `selection.reserve_session(...)` → `LiveRunnerSession(app_url, control_url)` | Persistent sessions (M4), proxied by the engine |

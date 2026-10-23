@@ -101,8 +101,8 @@ This path skips it.
 
 ## 3. Provision before paid work
 
-Jobs that hit the network spend from an allocation. An unprovisioned actor raises `NotProvisioned`
-(HTTP 402 in service mode). Provisioning is an admin operation. There is no automatic provisioning
+Jobs that hit the network spend from an allocation. A job for an unprovisioned actor fails with
+`JobFailed` (`job.failure.kind == "not_provisioned"`; HTTP 402 in service mode). Provisioning is an admin operation. There is no automatic provisioning
 ([payments.md](../contracts/payments.md)).
 
 ```python
@@ -116,6 +116,7 @@ await engine.payments.provision(
         application_id="default",
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
+        grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
     ),
 )
 ```
@@ -149,9 +150,8 @@ Failures are Python exceptions, not HTTP statuses:
 | Exception | When |
 | --- | --- |
 | `AccessDenied` | The actor lacks the operation, or the resource belongs to someone else |
-| `NotProvisioned` | No allocation for this actor |
-| `JobFailed` | The job finished without a runner result (`job.failure` names the kind) |
-| `NoCapacity` | No ready runner after selection |
+| `JobFailed` | The job finished without a runner result; `job.failure.kind` names why (`not_provisioned`, `no_offering`, `no_capacity`, `timeout`, …) |
+| `NoCapacity` | The engine or the app is at its concurrent-job limit (before any payment) |
 | `OperationExists` / `OperationConflict` | The caller's `operation_ref` collided |
 
 ## Type against the role you use, and test without a network

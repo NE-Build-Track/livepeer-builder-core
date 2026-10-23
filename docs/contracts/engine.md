@@ -34,7 +34,7 @@ missing `payload` as the JSON object `{}` (D41).
 | `queued` | Reserved for async jobs (M4) |
 | `running` | Dispatching. A restart resolves leftover `running` jobs on start |
 | `succeeded` | A runner answered 2xx |
-| `failed` | It ended, and nothing went out that might have run the work |
+| `failed` | It ended with a known outcome: nothing went out that might have run the work, or the runner answered with an error. `failure.payment_sent` says whether it was paid |
 | `uncertain` | Payment went out (or may have) and the outcome is unknown. Never retried automatically |
 
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
@@ -86,11 +86,11 @@ unique index, so concurrent duplicates are also refused.
 | `not_provisioned` | no | 402 |
 | `refused`, `unreachable` (all runners) | no | 503 + `Retry-After` |
 | `payment` (includes every orchestrator refused by the signer) | maybe | 503 + `Retry-After` |
-| `timeout` | yes → job `uncertain` | 504 |
+| `timeout` | maybe → `uncertain` when paid, else `failed` | 504 |
 | `runner_rejected` (4xx) | yes | the runner's own 4xx |
 | `runner_error` (5xx) | yes | 502 |
 | `interrupted` (restart) | maybe | 502 |
-| `abandoned` (the caller stopped reading a stream) | yes → job `uncertain` | n/a: the response had already started |
+| `abandoned` (the caller stopped reading a stream) | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started |
 
 ## Streaming
 
@@ -134,7 +134,8 @@ another runner, paid or not, exactly as for `run`. The SDK transport enforces th
 itself and keeps the sessions signed so far: a timeout after `on_payment_session` has
 `payment_sent=True` (job `uncertain`), while a timeout or failure during signing before
 `on_payment_session` has `payment_sent=False` (job `failed`, D41). The engine stops a transport that
-runs 5 s past the limit and treats the payment as sent, because it cannot know.
+runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
+cannot know.
 
 ### How a stream ends
 

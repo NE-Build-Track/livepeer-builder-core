@@ -15,7 +15,7 @@ flowchart TB
         AD["adapters: SDK, Batteries, auth, secrets"]
         ST["store: SQLite / PostgreSQL"]
     end
-    SDK["livepeer-python-gateway (SDK #71)"]
+    SDK["livepeer-python-gateway (pinned 76a1a1c)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
     Orch["Orchestrators + Live Runners (on the network)"]
@@ -59,7 +59,7 @@ Services never touch a database, SDK or HTTP client directly: they receive proto
 from the runtime. That is what lets an enterprise replace authentication, policy, secret storage,
 discovery or transport **without patching core**.
 
-The services satisfy the facade Protocols structurally; mypy checks it through
+`BuilderEngine` (and `FakeEngine`, for `ActorApi`) satisfies the facade Protocols structurally; mypy checks it through
 `create_app(engine: EngineApi)` and `tests/structure/test_conformance.py`. The CLI, the stock
 server and the Railway entrypoint import only the public API
 (`tests/structure/test_public_api.py`). Importing the root or `api` loads no heavy dependency
@@ -96,6 +96,8 @@ Each third-party package is confined to one module so a dependency change has on
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |
 | `fastapi`, `starlette` | `http/` |
+| `uvicorn` | `http/server.py` |
+| DI containers (`dishka`, `dependency_injector`, `injector`, …) | nowhere (decision 1) |
 
 ## Domains
 

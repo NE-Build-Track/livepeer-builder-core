@@ -9,7 +9,7 @@ Python gateway SDK, controls access, and reports network cost. Use it in two way
 Retail pricing, customer accounts and billing stay in your application. The engine reports
 wholesale **network** cost and classifies every charge, so you can reconcile what you bill.
 
-> Status: **M2 scaffold** (Cloud SPE Build Track). The contracts are defined; the core paths work.
+> Status: **M3 in progress** (Cloud SPE Build Track; M2 closed 19 October 2026). The contracts are defined; the core paths work.
 > Async jobs, persistent sessions and the events feed are defined but not yet implemented: they
 > answer `501`. See [docs/PLANS.md](docs/PLANS.md).
 
@@ -54,7 +54,8 @@ stops it, closing what it opened. This block is tested (`tests/unit/test_readme_
 ```sh
 export LPB_DATABASE_URL=sqlite+aiosqlite:///./livepeer-builder.db
 export LPB_SIGNER_URL=https://signer.example LPB_BATTERIES_URL=https://batteries.example
-export LPB_BATTERIES_TOKEN=... LPB_BATTERIES_OPERATOR_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
+export LPB_BATTERIES_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
+export LPB_BATTERIES_OPERATOR_TOKEN=...   # optional: turns on the grant desk (list and create grants)
 uv run lpb migrate
 uv run lpb bootstrap-admin   # prints the first admin key once
 uv run lpb serve

@@ -160,8 +160,12 @@ async def test_keys_off_removes_key_issuance_and_acceptance(
 ) -> None:
     engine, client = keys_off
     assert engine.keys is None
-    paths = (await client.get("/openapi.json")).json()["paths"]
+    spec = (await client.get("/openapi.json")).json()
+    paths = spec["paths"]
     assert not [path for path in paths if path.startswith("/v1/admin/keys")]
+    # no lpk_ bearer is advertised: Swagger would offer a credential this deployment rejects
+    assert "securitySchemes" not in spec.get("components", {})
+    assert not [(p, m) for p, ops in paths.items() for m, op in ops.items() if "security" in op]
     # a key that exists in the store is not accepted, because nothing accepts keys
     issued = await (
         await BuilderEngine.create(settings(), supply=EngineSupply(store=store))

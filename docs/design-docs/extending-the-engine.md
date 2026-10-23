@@ -204,6 +204,9 @@ The same engine serves both integration modes: call it in-process with your own 
 rather than from `app.state`. `actor_dependency(engine)` is the dependency the built-in routes use:
 an extra endpoint that depends on it gets the same authenticators, and the same 401 for a missing
 or bad credential.
+With API keys on, it also declares the `lpk_` bearer scheme, so Swagger offers Authorize. With keys
+off it declares none, because the engine cannot know what your authenticator expects; declare your
+scheme in `extend` if Swagger should send it.
 
 <!-- example: tests/unit/test_service_mode_example.py#service-mode -->
 ```python

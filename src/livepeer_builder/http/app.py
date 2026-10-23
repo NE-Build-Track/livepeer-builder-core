@@ -112,27 +112,41 @@ def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, Act
 
     Extra endpoints added through ``livepeer_builder.http.server`` (``extend=``) use it too, so they
     authenticate like the built-in routes: ``Annotated[ActorContext, Depends(actor_dependency(engine))]``.
+
+    When the engine accepts API keys, it also declares the ``lpk_`` bearer scheme in OpenAPI, so Swagger
+    UI shows Authorize. With keys off it declares none: the engine cannot know what a supplied
+    authenticator expects, so a service that wants Swagger to send its credential declares it in ``extend``.
     """
-    # Declares the bearer scheme in OpenAPI, so Swagger UI shows Authorize. Authentication itself
-    # stays with engine.authenticator, which reads the raw headers below.
+    if engine.keys is None:
+
+        async def actor_from(request: Request) -> ActorContext:
+            return await _authenticated(engine, request)
+
+        return actor_from
+
+    # Declares the scheme only; authentication itself stays with engine.authenticator (raw headers).
     bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
 
-    async def actor_from(
+    async def actor_from_key(
         request: Request,
         _declared: Annotated[HTTPAuthorizationCredentials | None, Security(bearer)],
     ) -> ActorContext:
-        auth = AuthRequest(
-            method=request.method,
-            path=request.url.path,
-            headers={key.lower(): value for key, value in request.headers.items()},
-            client_address=request.client.host if request.client else None,
-        )
-        actor = await engine.authenticator.authenticate(auth)
-        if actor is None:
-            raise NotAuthenticated("a credential is required")
-        return actor
+        return await _authenticated(engine, request)
 
-    return actor_from
+    return actor_from_key
+
+
+async def _authenticated(engine: EngineApi, request: Request) -> ActorContext:
+    auth = AuthRequest(
+        method=request.method,
+        path=request.url.path,
+        headers={key.lower(): value for key, value in request.headers.items()},
+        client_address=request.client.host if request.client else None,
+    )
+    actor = await engine.authenticator.authenticate(auth)
+    if actor is None:
+        raise NotAuthenticated("a credential is required")
+    return actor
 
 
 def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:

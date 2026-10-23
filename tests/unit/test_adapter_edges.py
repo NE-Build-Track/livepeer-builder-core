@@ -555,7 +555,7 @@ def test_the_engine_parses_runners_as_the_sdk_does() -> None:
 
 
 def test_one_bad_orchestrator_does_not_drop_the_rest(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.WARNING, logger=sdk.__name__)
+    caplog.set_level(logging.WARNING, logger="livepeer_builder.adapters.discovery_entries")
     entries = [
         {"address": "https://bad.example", "score": "high", "runners": [{"url": "https://bad/r", "app": "a"}]},
         {"address": "https://late.example", "last_seen": "yesterday", "runners": [{"url": "https://l/r", "app": "a"}]},

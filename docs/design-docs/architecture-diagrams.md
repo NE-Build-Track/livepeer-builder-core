@@ -274,11 +274,13 @@ sequenceDiagram
     participant Bat as Batteries
     Op->>C: GET /v1/admin/reconciliation?actor_id=alice
     C->>Pay: allocation_for(app, actor)
-    C->>DB: projections_between(app, actor) → sum attempts by cost_class
+    Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
+    C->>DB: projections_and_unprojected(app, actor) → stored projections, jobs none covers
+    C->>C: classify the uncovered jobs live (running ones are pending) → sum attempts by cost_class
     C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)
     Pay->>Bat: GET /v1/allocations/{id} → spent_usd
-    C-->>Op: by_class + unattributed + balanced (spent == sum)
+    C-->>Op: by_class (with pending) + unattributed + balanced (spent == sum)
 ```
 
 ## 9. Restart recovery
@@ -347,9 +349,10 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> none: no attempt opened a payment session
-    [*] --> pending: paid, no applied usage row yet
-    pending --> observed: every paid attempt has rows
+    [*] --> pending: the job is running (it may still pay)
+    pending --> none: ended, no attempt opened a payment session
+    pending --> observed: ended, every paid attempt has rows
+    pending --> pending: ended paid, an applied usage row still missing
     observed --> corrected: the total changed after first observed
     corrected --> corrected: changes again
 ```

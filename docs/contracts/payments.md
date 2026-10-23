@@ -122,7 +122,8 @@ Only cost sync stores projections (`lpb_cost_projections`), and only for jobs th
 running job may still pay, so a projection of it would go stale (#33). Every read (`for_job`,
 `recent`, `summary`, reconciliation) computes live any job no projection covers yet, running or ended
 since its projection was stored, from its matched usage rows. A paid job therefore never reads as
-`none`, even between syncs.
+`none`, even between syncs. Each read uses one consistent snapshot of the store, so a sync committing
+meanwhile can never make it count a usage row twice or nowhere.
 
 ## Allowance
 

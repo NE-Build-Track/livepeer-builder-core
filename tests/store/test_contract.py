@@ -196,9 +196,12 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
     assert first.id in selected and unprojected.id in selected and latest.id not in selected
-    newest = await sql.recent_costs("default", None, 1)
+    async with sql.cost_snapshot() as reads:
+        newest = await reads.recent_with_projections("default", None, 1)
+        every = await reads.recent_with_projections(
+            "default", None, 5
+        )  # each recent job, projection if stored
     assert [(job.id, cost is not None) for job, cost in newest] == [(latest.id, True)]
-    every = await sql.recent_costs("default", None, 5)  # every recent job, with its projection if stored
     assert [(job.id, cost is not None) for job, cost in every] == [
         (latest.id, True),
         (unprojected.id, False),
@@ -225,9 +228,11 @@ async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_job
         )
     assert running.id not in {job.id for job in await sql.jobs_for_projection([running.id])}
     window = (clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1))
-    uncovered = {job.id for job in await sql.jobs_not_projected("default", None, *window)}
-    assert uncovered == {running.id, stale.id}
-    assert {job.id for job in await sql.jobs_not_projected("default", "bob", *window)} == set()
+    async with sql.cost_snapshot() as reads:
+        stored, uncovered = await reads.projections_and_unprojected("default", None, *window)
+        _, none_for_bob = await reads.projections_and_unprojected("default", "bob", *window)
+    assert {job.id for job in uncovered} == {running.id, stale.id}
+    assert {cost.job_id for cost in stored} == {covered.id, stale.id} and none_for_bob == []
 
 
 async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:
@@ -250,3 +255,21 @@ async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) ->
         ("m1", "s1", "matched"),
         ("m2", None, "unmatched"),
     ]
+
+
+async def test_a_cost_snapshot_does_not_see_a_write_committed_while_it_is_open(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # a cost read must not mix states while cost sync writes (#43 review)
+    def usage(row_id: str) -> UsageRow:
+        return UsageRow(
+            id=row_id, event_id=None, status="applied", manifest_id=None, allocation_id="a1",
+            payment_session_id=None, request_id=None, pipeline=None, computed_fee_eth=Decimal("1"),
+            computed_fee_usd=None, currency=None, created_at=clock.now(),
+        )  # fmt: skip
+
+    await sql.apply_usage([usage("u1")], SyncCheckpoint(resume_cursor="c1"))
+    async with sql.cost_snapshot() as reads:
+        assert [row.id for row in await reads.unattributed_usage("a1")] == ["u1"]
+        await sql.apply_usage([usage("u2")], SyncCheckpoint(resume_cursor="c2"))  # a sync commits
+        assert [row.id for row in await reads.unattributed_usage("a1")] == ["u1"]  # still the same state
+    assert sorted(row.id for row in await sql.unattributed_usage("a1")) == ["u1", "u2"]

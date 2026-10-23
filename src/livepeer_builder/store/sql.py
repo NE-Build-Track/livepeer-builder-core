@@ -1,11 +1,12 @@
 """SqlStore: the EngineStore over SQLAlchemy Core (async). SQLite by default, PostgreSQL via [postgres]."""
 
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, event, exists, func, insert, select, update
+from sqlalchemy import and_, delete, event, func, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -26,16 +27,16 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import OperationExists
+from livepeer_builder.store import cost_reads
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
     in_window,
     jobs_needing_projection,
-    jobs_not_covered,
     match_payment_sessions,
 )
 from livepeer_builder.store.migrate import upgrade
-from livepeer_builder.store.rows import chunks, load_jobs, projection, usage_row
+from livepeer_builder.store.rows import chunks, load_jobs
 
 
 def create_engine(url: str) -> AsyncEngine:
@@ -294,72 +295,19 @@ class SqlStore:
             return await load_jobs(conn, list((await conn.execute(query)).mappings()))
 
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]:
-        rows: list[UsageRow] = []
         async with self.engine.connect() as conn:
-            for chunk in chunks(list(payment_session_ids)):
-                query = select(t.usage_rows).where(t.usage_rows.c.payment_session_id.in_(chunk))
-                rows.extend(usage_row(row) for row in (await conn.execute(query)).mappings())
-        return rows
+            return await cost_reads.usage_for_payment_sessions(conn, payment_session_ids)
 
     async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]:
-        attributed = exists().where(
-            t.payment_sessions.c.payment_session_id == t.usage_rows.c.payment_session_id,
-            t.payment_sessions.c.match_status == "matched",
-        )
-        query = select(t.usage_rows).where(
-            t.usage_rows.c.allocation_id == allocation_id, t.usage_rows.c.status == "applied", ~attributed
-        )
         async with self.engine.connect() as conn:
-            return [usage_row(row) for row in (await conn.execute(query)).mappings()]
+            return await cost_reads.unattributed_usage(conn, allocation_id)
 
     async def get_projection(self, job_id: UUID) -> JobCost | None:
-        query = select(t.cost_projections).where(t.cost_projections.c.job_id == str(job_id))
         async with self.engine.connect() as conn:
-            row = (await conn.execute(query)).mappings().first()
-        if row is None:
-            return None
-        return projection(row)
+            return await cost_reads.get_projection(conn, job_id)
 
-    async def projections_between(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[JobCost]:
-        query = (
-            select(t.cost_projections)
-            .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
-            .where(*in_window(application_id, actor_id, start, end))
-        )
-        async with self.engine.connect() as conn:
-            return [projection(row) for row in (await conn.execute(query)).mappings()]
-
-    async def jobs_not_projected(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[Job]:
-        selected = (
-            select(t.jobs.c.id)
-            .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)
-            .where(*in_window(application_id, actor_id, start, end), jobs_not_covered())
-        )
-        query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
-        async with self.engine.connect() as conn:
-            return await load_jobs(conn, list((await conn.execute(query)).mappings()))
-
-    async def recent_costs(
-        self, application_id: str, actor_id: str | None, limit: int
-    ) -> list[tuple[Job, JobCost | None]]:
-        query = select(t.jobs).where(t.jobs.c.application_id == application_id)
-        if actor_id is not None:
-            query = query.where(t.jobs.c.actor_id == actor_id)
-        query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
-        async with self.engine.connect() as conn:
-            jobs = await load_jobs(conn, list((await conn.execute(query)).mappings()))
-            ids = [str(job.id) for job in jobs]
-            costs: dict[UUID, JobCost] = {}
-            if ids:
-                stored = select(t.cost_projections).where(t.cost_projections.c.job_id.in_(ids))
-                for row in (await conn.execute(stored)).mappings():
-                    cost = projection(row)
-                    costs[cost.job_id] = cost
-        return [(job, costs.get(job.id)) for job in jobs]
+    def cost_snapshot(self) -> AbstractAsyncContextManager[cost_reads.SqlCostSnapshot]:
+        return cost_reads.snapshot(self.engine)
 
     async def save_projection(self, cost: JobCost) -> None:
         values = {

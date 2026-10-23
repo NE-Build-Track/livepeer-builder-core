@@ -40,7 +40,15 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import AccessDenied, CursorMismatch, NotFound, ProviderUnavailable
-from livepeer_builder.protocols import AccessPolicy, AllowanceReader, Clock, CostRepo, JobRepo, UsageSource
+from livepeer_builder.protocols import (
+    AccessPolicy,
+    AllowanceReader,
+    Clock,
+    CostRepo,
+    CostSnapshot,
+    JobRepo,
+    UsageSource,
+)
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -165,24 +173,26 @@ class CostService:
         return projection
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
-        job = await self._store.get_job(job_id)
-        if job is None:
-            raise NotFound(f"job {job_id} not found")
-        try:
-            self._policy.check(actor, Operation.COSTS_READ, _resource(job.application_id, job.actor_id))
-        except AccessDenied as exc:
-            raise NotFound(f"job {job_id} not found") from exc
-        projection = await self._store.get_projection(job_id)
-        if projection is not None and _covered(projection, job):
-            return projection
-        return await self._compute(job)  # running, or ended since sync stored it: never stale (#33)
+        async with self._store.cost_snapshot() as reads:
+            found = await reads.job_with_projection(job_id)
+            if found is None:
+                raise NotFound(f"job {job_id} not found")
+            job, projection = found
+            try:
+                self._policy.check(actor, Operation.COSTS_READ, _resource(job.application_id, job.actor_id))
+            except AccessDenied as exc:
+                raise NotFound(f"job {job_id} not found") from exc
+            if projection is not None and _covered(projection, job):
+                return projection
+            return (await _compute_all([job], reads))[0]  # running, or ended since sync stored it (#33)
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
         target = None if actor.credential_kind == "admin" else actor.actor_id
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
-        recent = await self._store.recent_costs(actor.application_id, target, limit)
-        due = [job for job, cost in recent if not _covered(cost, job)]
-        computed = {cost.job_id: cost for cost in await self._compute_all(due)}
+        async with self._store.cost_snapshot() as reads:
+            recent = await reads.recent_with_projections(actor.application_id, target, limit)
+            due = [job for job, cost in recent if not _covered(cost, job)]
+            computed = {cost.job_id: cost for cost in await _compute_all(due, reads)}
         return [
             cost if cost is not None and _covered(cost, job) else computed[job.id] for job, cost in recent
         ]
@@ -194,7 +204,9 @@ class CostService:
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
-        for cost in await self._rollup(actor.application_id, target, start, end):
+        async with self._store.cost_snapshot() as reads:
+            costs = await _rollup(reads, actor.application_id, target, start, end)
+        for cost in costs:
             with_cost += cost.status in ("observed", "corrected")
             pending += cost.status == "pending"
             for attempt in cost.attempts:
@@ -210,7 +222,12 @@ class CostService:
     async def reconcile(
         self, admin: ActorContext, application_id: str, actor_id: str | None
     ) -> Reconciliation:
-        """provider spent == delivered + failed_after_payment + uncertain + unattributed."""
+        """provider spent == delivered + failed_after_payment + uncertain + pending + unattributed.
+
+        The engine side (the classes and the unattributed rows) comes from one snapshot, so a sync running
+        alongside can never count a row twice or nowhere. ``spent`` is read from the provider afterwards
+        and can be ahead of usage the engine has not synced yet; ``balanced`` is then ``False`` until it is.
+        """
         self._policy.check(admin, Operation.ADMIN_COSTS)
         if self._allowances is None:
             raise ProviderUnavailable("no payment provider is configured")
@@ -218,11 +235,13 @@ class CostService:
         if allocation_id is None:
             raise NotFound("no allocation pays for that actor or application")
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        for cost in await self._rollup(application_id, actor_id, _EPOCH, _FAR_FUTURE):
+        async with self._store.cost_snapshot() as reads:
+            costs = await _rollup(reads, application_id, actor_id, _EPOCH, _FAR_FUTURE)
+            unattributed = fees_of(await reads.unattributed_usage(allocation_id))
+        for cost in costs:
             for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
-        unattributed = fees_of(await self._store.unattributed_usage(allocation_id))
         spent: Money | None = None
         try:
             spent = (await self._allowances.read_allowance(allocation_id)).spent
@@ -238,31 +257,33 @@ class CostService:
             balanced=_balanced(spent, [*by_class.values(), unattributed]),
         )
 
-    async def _rollup(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[JobCost]:
-        """One cost per job in the window: the stored projections, plus a live compute of the jobs none
-        covers. Those jobs are read first, so a projection sync stores in between is taken as stored."""
-        not_projected = await self._store.jobs_not_projected(application_id, actor_id, start, end)
-        costs = {
-            cost.job_id: cost
-            for cost in await self._store.projections_between(application_id, actor_id, start, end)
-        }
-        due = [job for job in not_projected if not _covered(costs.get(job.id), job)]
-        costs.update((cost.job_id, cost) for cost in await self._compute_all(due))
-        return list(costs.values())
-
     async def _compute(self, job: Job) -> JobCost:
-        return (await self._compute_all([job]))[0]
+        return (await _compute_all([job], self._store))[0]
 
-    async def _compute_all(self, jobs: Sequence[Job]) -> list[JobCost]:
-        """Classify jobs from their matched usage rows, read once for all of them. Never stored."""
-        keys = sorted({key for job in jobs for key in _matched_sessions(job)})
-        rows = await self._store.usage_for_payment_sessions(keys) if keys else []
-        return [
-            classify(job, [row for row in rows if row.payment_session_id in _matched_sessions(job)])
-            for job in jobs
-        ]
+
+class _UsageReads(Protocol):
+    async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
+
+
+async def _rollup(
+    reads: CostSnapshot, application_id: str, actor_id: str | None, start: datetime, end: datetime
+) -> list[JobCost]:
+    """One cost per job in the window: the stored projections, plus a live compute of the jobs none covers."""
+    stored, not_projected = await reads.projections_and_unprojected(application_id, actor_id, start, end)
+    costs = {cost.job_id: cost for cost in stored}
+    due = [job for job in not_projected if not _covered(costs.get(job.id), job)]
+    costs.update((cost.job_id, cost) for cost in await _compute_all(due, reads))
+    return list(costs.values())
+
+
+async def _compute_all(jobs: Sequence[Job], reads: _UsageReads) -> list[JobCost]:
+    """Classify jobs from their matched usage rows, read once for all of them. Never stored."""
+    keys = sorted({key for job in jobs for key in _matched_sessions(job)})
+    rows = await reads.usage_for_payment_sessions(keys) if keys else []
+    return [
+        classify(job, [row for row in rows if row.payment_session_id in _matched_sessions(job)])
+        for job in jobs
+    ]
 
 
 def _matched_sessions(job: Job) -> set[str]:

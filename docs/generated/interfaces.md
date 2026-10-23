@@ -87,6 +87,14 @@ classDiagram
         +async purge(now, jobs_days, usage_days) PurgeReport
         +async schema_revision() str?
     }
+    class CostSnapshot {
+        <<interface>>
+        +async job_with_projection(job_id) Job[]?
+        +async projections_and_unprojected(application_id, actor_id, start, end) JobCost[][]
+        +async recent_with_projections(application_id, actor_id, limit) Job[][]
+        +async unattributed_usage(allocation_id) UsageRow[]
+        +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
+    }
     class Clock {
         <<interface>>
         +now() datetime
@@ -115,6 +123,7 @@ classDiagram
     class SdkRunnerTransport
     class SettingsSecretStore
     class SignerDiscoverySource
+    class SqlCostSnapshot
     class SqlMaintenance
     class SqlStore
     class StaticDiscoverySource
@@ -137,6 +146,7 @@ classDiagram
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
+    CostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
     EventFeed <|.. ReservedEventFeed
     SessionManager <|.. ReservedSessions
@@ -164,6 +174,7 @@ classDiagram
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
+| `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |
 | `EventFeed` | `ReservedEventFeed` | `livepeer_builder.services.reserved` |
 | `SessionManager` | `ReservedSessions` | `livepeer_builder.services.reserved` |
@@ -177,5 +188,5 @@ classDiagram
 | `ActorRepo` | `get_actor`, `save_actor`, `list_actors` |
 | `KeyRepo` | `insert_access_key`, `access_key_by_hash`, `revoke_access_key`, `list_access_keys`, `count_active_admin_keys` |
 | `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
-| `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `projections_between`, `jobs_not_projected`, `recent_costs`, `save_projection` |
+| `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `cost_snapshot`, `save_projection` |
 | `SecretRepo` | `put_secret`, `get_secret`, `delete_secret` |

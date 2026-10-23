@@ -267,9 +267,18 @@ class CostRepo(Protocol):
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> list[JobCost]: ...
 
-    async def recent_projections(
+    async def jobs_not_projected(
+        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    ) -> list[Job]:
+        """Jobs created in the window that no projection covers: running, or ended since their
+        projection was stored (or never projected). Cost reads compute these live."""
+        ...
+
+    async def recent_costs(
         self, application_id: str, actor_id: str | None, limit: int
-    ) -> list[JobCost]: ...
+    ) -> list[tuple[Job, JobCost | None]]:
+        """The newest jobs, each with its stored projection or ``None``."""
+        ...
 
     async def save_projection(self, cost: JobCost) -> None: ...
 

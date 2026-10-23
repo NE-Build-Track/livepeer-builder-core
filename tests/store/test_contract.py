@@ -1,7 +1,7 @@
 """The EngineStore contract, identical on SQLite and PostgreSQL (ISS-06)."""
 
 from collections.abc import AsyncIterator
-from datetime import UTC
+from datetime import UTC, timedelta
 from decimal import Decimal
 
 import pytest
@@ -196,11 +196,38 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
     assert first.id in selected and unprojected.id in selected and latest.id not in selected
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 1)] == [latest.id]
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 5)] == [
-        latest.id,
-        first.id,
+    newest = await sql.recent_costs("default", None, 1)
+    assert [(job.id, cost is not None) for job, cost in newest] == [(latest.id, True)]
+    every = await sql.recent_costs("default", None, 5)  # every recent job, with its projection if stored
+    assert [(job.id, cost is not None) for job, cost in every] == [
+        (latest.id, True),
+        (unprojected.id, False),
+        (first.id, True),
     ]
+
+
+async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_jobs(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # #33: a projection of a running job goes stale the moment it pays
+    running = make_job(clock, state="running")
+    await sql.create_job(running, None)
+    covered = make_job(clock)
+    await sql.create_job(covered, None)
+    clock.advance(1)
+    stale = make_job(clock)  # projected, then ended later: its projection predates its end
+    await sql.create_job(stale, None)
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    for job_id, at in ((covered.id, clock.now()), (stale.id, clock.now() - timedelta(seconds=5))):
+        await sql.save_projection(
+            JobCost(
+                job_id=job_id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=at
+            )
+        )
+    assert running.id not in {job.id for job in await sql.jobs_for_projection([running.id])}
+    window = (clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1))
+    uncovered = {job.id for job in await sql.jobs_not_projected("default", None, *window)}
+    assert uncovered == {running.id, stale.id}
+    assert {job.id for job in await sql.jobs_not_projected("default", "bob", *window)} == set()
 
 
 async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:

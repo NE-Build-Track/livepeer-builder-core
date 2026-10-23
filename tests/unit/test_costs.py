@@ -19,6 +19,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.services.costs import classify
+from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
 from tests.conftest import EngineFactory
 
@@ -282,3 +283,86 @@ async def test_cursor_mismatch_restarts_from_the_beginning(
     await engine.store.apply_usage((), SyncCheckpoint(resume_cursor="not-a-cursor"))  # Batteries answers 400
     report = await engine.costs.sync_once()
     assert (report.rows_seen, report.rows_new) == (1, 0)  # resynced from the start; nothing applied twice
+
+
+async def running_job(store: SqlStore, clock: FixedClock, *, paid: bool = False) -> tuple[Job, Attempt]:
+    """A job with one attempt still in flight, as the engine stores it before the runner answers."""
+    now = clock.now()
+    job = Job(
+        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
+        created_at=now, completed_at=None,
+    )  # fmt: skip
+    await store.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="alloc_1",
+        sessions=(SignedSession(manifest_id="m-run"),) if paid else (), payment_sent=paid,
+        outcome="in_flight", status_code=None, started_at=now, ended_at=None,
+    )  # fmt: skip
+    await store.start_attempt(attempt)
+    return job, attempt
+
+
+async def test_a_sync_during_a_job_never_leaves_a_paid_job_reading_as_none(
+    make_engine: EngineFactory, alice: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:  # #33: the sync stored "none" for a job still signing, and the read served it after payment
+    engine = await make_engine()
+    job, attempt = await running_job(store, clock)  # still signing: nothing paid yet
+    await engine.costs.sync_once()
+    clock.advance(5)
+    paid = attempt.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m-1"),), "payment_sent": True,
+                "outcome": "succeeded", "status_code": 200, "ended_at": clock.now()}
+    )  # fmt: skip
+    await store.finish_attempt(paid)
+    await store.finish_job(job.id, "succeeded", None, None, clock.now())
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # paid, usage not here yet
+
+
+async def test_a_running_job_reads_pending_never_zero(
+    make_engine: EngineFactory, alice: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    job, _ = await running_job(store, clock)  # it may still pay, so its cost is not known to be zero
+    cost = await engine.costs.for_job(alice, job.id)
+    assert cost.status == "pending"
+    await engine.costs.sync_once()
+    assert await store.get_projection(job.id) is None  # only an ended job is projected
+
+
+async def test_a_job_that_ended_since_the_last_sync_counts_in_summary_and_recent(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    clock: FixedClock,
+) -> None:  # fmt: skip
+    engine = await make_engine()
+    await engine.payments.provision(
+        admin,
+        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+                         grant_id="grant_1"),
+    )  # fmt: skip
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-new",))]
+    job = (await engine.jobs.run(alice, JobRequest(app=APP))).job  # no sync since it ended
+    summary = await engine.costs.summary(
+        alice, clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1)
+    )
+    assert summary.jobs_pending == 1
+    assert [cost.job_id for cost in await engine.costs.recent(alice)] == [job.id]
+
+
+async def test_a_none_projection_an_older_release_stored_for_a_running_job_is_not_served(
+    make_engine: EngineFactory, alice: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:  # an upgraded database can hold #33's rows; a read must not trust them
+    engine = await make_engine()
+    job, _ = await running_job(store, clock, paid=True)
+    old = classify(job.model_copy(update={"state": "succeeded"}), ())  # what the old sync stored
+    await store.save_projection(
+        old.model_copy(update={"status": "none", "attempts": (), "updated_at": clock.now()})
+    )
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+
+
+def test_a_running_job_keeps_matched_fees_pending_until_it_ends() -> None:
+    running = job_with(("in_flight", ("s1",), True), state="running")
+    cost = classify(running, [row("1", "s1", "0.5")])
+    assert cost.status == "pending" and cost.fees.fee_eth == Decimal("0.5")
+    assert [(a.cost_class, a.fees.fee_eth) for a in cost.attempts] == [("pending", Decimal("0.5"))]

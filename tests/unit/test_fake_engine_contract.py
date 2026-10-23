@@ -382,3 +382,22 @@ async def test_a_runner_failure_inside_the_settle_window_ends_the_stream_uncerta
         True,
         "http",
     )
+
+
+async def test_a_paid_job_costs_pending_until_its_usage_arrives(side: Side) -> None:
+    # Missing evidence is never zero (ISS-17): a paid job with no usage yet reads pending, never none.
+    async with side() as engine:
+        job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        cost = await engine.costs.for_job(ALICE, job.id)
+    assert cost.job_id == job.id and cost.status == "pending"
+    assert [attempt.cost_class for attempt in cost.attempts] == ["pending"]
+
+
+async def test_a_running_stream_costs_pending(side: Side) -> None:
+    async with side(chunks=(b"a", b"bc")) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        stream = await streaming.stream(ALICE, JobRequest(app=APP))
+        cost = await engine.costs.for_job(ALICE, stream.job.id)  # still running: it may still pay
+        await stream.aclose()
+    assert cost.status == "pending"

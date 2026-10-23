@@ -5,6 +5,7 @@ Anything else is ambiguous: the entries keep no payment_session_id, and the rows
 """
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, false, func, or_, select, update
@@ -17,20 +18,47 @@ from livepeer_builder.store import schema as t
 _CHUNK = 500
 
 
+ENDED = ("succeeded", "failed", "uncertain")  # a job in one of these states can no longer pay
+
+
+def projection_out_of_date() -> ColumnElement[bool]:
+    """No projection, or one stored before the job ended."""
+    return or_(t.cost_projections.c.job_id.is_(None), t.jobs.c.completed_at > t.cost_projections.c.updated_at)
+
+
 def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
-    """Jobs whose projection should be recomputed, including observed rows stored with no attempts."""
+    """Ended jobs whose projection should be recomputed, including observed rows stored with no attempts.
+
+    A running job is never projected: it may still pay, and a projection of it would be stale the
+    moment it did (#33). Reads compute it live instead (``jobs_not_covered``)."""
     touched = t.jobs.c.id.in_(job_ids) if job_ids else false()
     missing_attempts = and_(
         t.cost_projections.c.status.in_(("observed", "corrected")),
         func.json_array_length(t.cost_projections.c.attempts) == 0,
     )
-    return or_(
-        touched,
-        t.cost_projections.c.job_id.is_(None),
-        t.cost_projections.c.status == "pending",
-        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
-        missing_attempts,
+    return and_(
+        t.jobs.c.state.in_(ENDED),
+        or_(touched, projection_out_of_date(), t.cost_projections.c.status == "pending", missing_attempts),
     )
+
+
+def in_window(
+    application_id: str, actor_id: str | None, start: datetime, end: datetime
+) -> list[ColumnElement[bool]]:
+    """Jobs of one application (and actor, when given) created in [start, end)."""
+    clauses = [
+        t.jobs.c.application_id == application_id,
+        t.jobs.c.created_at >= start,
+        t.jobs.c.created_at < end,
+    ]
+    if actor_id is not None:
+        clauses.append(t.jobs.c.actor_id == actor_id)
+    return clauses
+
+
+def jobs_not_covered() -> ColumnElement[bool]:
+    """Jobs a cost read must compute: still running, or ended with no projection since they ended."""
+    return or_(t.jobs.c.state.not_in(ENDED), projection_out_of_date())
 
 
 async def match_payment_sessions(conn: AsyncConnection, rows: Sequence[UsageRow]) -> set[UUID]:

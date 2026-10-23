@@ -61,8 +61,8 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 4. **Admission and provisioning are checked before any payment.** The admission limits
    (`max_concurrent_jobs`, `max_concurrent_jobs_per_app`) refuse with 503 and `Retry-After`. An
    unprovisioned actor fails with `not_provisioned`.
-5. **A cost that hasn't arrived is `pending`.** Only a job that never reached payment has cost status
-   `none`.
+5. **A cost that hasn't arrived is `pending`.** So is a job still running, which may yet pay. Only a job
+   that ended without reaching payment has cost status `none`.
 
 ### Idempotency
 

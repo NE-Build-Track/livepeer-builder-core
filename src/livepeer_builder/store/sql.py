@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import and_, delete, event, exists, func, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from livepeer_builder.contracts import (
@@ -22,16 +22,20 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
-    SignedSession,
     SyncCheckpoint,
     UsageRow,
 )
 from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.maintenance import SqlMaintenance
-from livepeer_builder.store.matching import jobs_needing_projection, match_payment_sessions
+from livepeer_builder.store.matching import (
+    in_window,
+    jobs_needing_projection,
+    jobs_not_covered,
+    match_payment_sessions,
+)
 from livepeer_builder.store.migrate import upgrade
-from livepeer_builder.store.rows import chunks, projection, usage_row
+from livepeer_builder.store.rows import chunks, load_jobs, projection, usage_row
 
 
 def create_engine(url: str) -> AsyncEngine:
@@ -157,12 +161,12 @@ class SqlStore:
             row = (await conn.execute(query)).mappings().first()
             if row is None:
                 return None
-            return (await _load_jobs(conn, [row]))[0], row["request_fingerprint"]
+            return (await load_jobs(conn, [row]))[0], row["request_fingerprint"]
 
     async def get_job(self, job_id: UUID) -> Job | None:
         async with self.engine.connect() as conn:
             row = (await conn.execute(select(t.jobs).where(t.jobs.c.id == str(job_id)))).mappings().first()
-            return (await _load_jobs(conn, [row]))[0] if row else None
+            return (await load_jobs(conn, [row]))[0] if row else None
 
     async def list_jobs(
         self, application_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
@@ -174,25 +178,21 @@ class SqlStore:
             query = query.where(t.jobs.c.created_at < before)
         query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
         async with self.engine.connect() as conn:
-            return await _load_jobs(conn, list((await conn.execute(query)).mappings()))
+            return await load_jobs(conn, list((await conn.execute(query)).mappings()))
 
     async def jobs_between(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> list[Job]:
-        query = select(t.jobs).where(
-            t.jobs.c.application_id == application_id, t.jobs.c.created_at >= start, t.jobs.c.created_at < end
-        )
-        if actor_id is not None:
-            query = query.where(t.jobs.c.actor_id == actor_id)
+        query = select(t.jobs).where(*in_window(application_id, actor_id, start, end))
         async with self.engine.connect() as conn:
-            return await _load_jobs(
+            return await load_jobs(
                 conn, list((await conn.execute(query.order_by(t.jobs.c.created_at))).mappings())
             )
 
     async def jobs_in_state(self, state: JobState) -> list[Job]:
         async with self.engine.connect() as conn:
             rows = list((await conn.execute(select(t.jobs).where(t.jobs.c.state == state))).mappings())
-            return await _load_jobs(conn, rows)
+            return await load_jobs(conn, rows)
 
     async def start_attempt(self, attempt: Attempt) -> None:
         async with self.engine.begin() as conn:
@@ -291,7 +291,7 @@ class SqlStore:
         )
         query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
         async with self.engine.connect() as conn:
-            return await _load_jobs(conn, list((await conn.execute(query)).mappings()))
+            return await load_jobs(conn, list((await conn.execute(query)).mappings()))
 
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]:
         rows: list[UsageRow] = []
@@ -326,30 +326,40 @@ class SqlStore:
         query = (
             select(t.cost_projections)
             .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
-            .where(
-                t.jobs.c.application_id == application_id,
-                t.jobs.c.created_at >= start,
-                t.jobs.c.created_at < end,
-            )
+            .where(*in_window(application_id, actor_id, start, end))
         )
-        if actor_id is not None:
-            query = query.where(t.jobs.c.actor_id == actor_id)
         async with self.engine.connect() as conn:
             return [projection(row) for row in (await conn.execute(query)).mappings()]
 
-    async def recent_projections(
-        self, application_id: str, actor_id: str | None, limit: int
-    ) -> list[JobCost]:
-        query = (
-            select(t.cost_projections)
-            .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
-            .where(t.jobs.c.application_id == application_id)
+    async def jobs_not_projected(
+        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    ) -> list[Job]:
+        selected = (
+            select(t.jobs.c.id)
+            .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)
+            .where(*in_window(application_id, actor_id, start, end), jobs_not_covered())
         )
+        query = select(t.jobs).where(t.jobs.c.id.in_(selected)).order_by(t.jobs.c.created_at)
+        async with self.engine.connect() as conn:
+            return await load_jobs(conn, list((await conn.execute(query)).mappings()))
+
+    async def recent_costs(
+        self, application_id: str, actor_id: str | None, limit: int
+    ) -> list[tuple[Job, JobCost | None]]:
+        query = select(t.jobs).where(t.jobs.c.application_id == application_id)
         if actor_id is not None:
             query = query.where(t.jobs.c.actor_id == actor_id)
         query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
         async with self.engine.connect() as conn:
-            return [projection(row) for row in (await conn.execute(query)).mappings()]
+            jobs = await load_jobs(conn, list((await conn.execute(query)).mappings()))
+            ids = [str(job.id) for job in jobs]
+            costs: dict[UUID, JobCost] = {}
+            if ids:
+                stored = select(t.cost_projections).where(t.cost_projections.c.job_id.in_(ids))
+                for row in (await conn.execute(stored)).mappings():
+                    cost = projection(row)
+                    costs[cost.job_id] = cost
+        return [(job, costs.get(job.id)) for job in jobs]
 
     async def save_projection(self, cost: JobCost) -> None:
         values = {
@@ -387,71 +397,6 @@ class SqlStore:
 
 
 # -- row mapping --------------------------------------------------------------------------------------
-
-
-async def _load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
-    ids = [row["id"] for row in rows]
-    attempts_by_job: dict[str, list[dict[str, Any]]] = {job_id: [] for job_id in ids}
-    sessions_by_attempt: dict[tuple[str, int], list[dict[str, Any]]] = {}
-    for chunk in chunks(ids):
-        found = await conn.execute(
-            select(t.attempts).where(t.attempts.c.job_id.in_(chunk)).order_by(t.attempts.c.number)
-        )
-        for attempt in found.mappings():
-            attempts_by_job[attempt["job_id"]].append(dict(attempt))
-        sessions = await conn.execute(
-            select(t.payment_sessions)
-            .where(t.payment_sessions.c.job_id.in_(chunk))
-            .order_by(t.payment_sessions.c.seq)
-        )
-        for session in sessions.mappings():
-            key = (session["job_id"], session["attempt_number"])
-            sessions_by_attempt.setdefault(key, []).append(dict(session))
-    jobs: list[Job] = []
-    for row in rows:
-        attempts = tuple(
-            Attempt(
-                job_id=UUID(a["job_id"]),
-                number=a["number"],
-                runner_url=a["runner_url"],
-                orchestrator_url=a["orchestrator_url"],
-                allocation_id=a["allocation_id"],
-                sessions=tuple(
-                    SignedSession(
-                        manifest_id=session["manifest_id"],
-                        payment_session_id=session["payment_session_id"],
-                        match=session["match_status"],
-                    )
-                    for session in sessions_by_attempt.get((a["job_id"], a["number"]), ())
-                ),
-                payment_sent=bool(a["payment_sent"]),
-                outcome=a["outcome"],
-                status_code=a["status_code"],
-                started_at=a["started_at"],
-                ended_at=a["ended_at"],
-            )
-            for a in attempts_by_job[row["id"]]
-        )
-        jobs.append(
-            Job(
-                id=UUID(row["id"]),
-                actor_id=row["actor_id"],
-                application_id=row["application_id"],
-                operation_ref=row["operation_ref"],
-                mode=row["mode"],
-                app=row["app"],
-                capability=row["capability"],
-                model=row["model"],
-                state=row["state"],
-                attempts=attempts,
-                failure=Failure.model_validate(row["failure"]) if row["failure"] else None,
-                result=ResultRef.model_validate(row["result"]) if row["result"] else None,
-                usage=MeasuredUsage.model_validate(row["usage"]) if row["usage"] else None,
-                created_at=row["created_at"],
-                completed_at=row["completed_at"],
-            )
-        )
-    return jobs
 
 
 def _job_values(job: Job) -> dict[str, Any]:

@@ -5,13 +5,14 @@ to the same outcome. When a case passes on both, application unit tests written 
 the same thing against the engine.
 """
 
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -19,8 +20,10 @@ from livepeer_builder import (
     ActorApi,
     ActorContext,
     EngineSupply,
+    Job,
     JobFailed,
     JobRequest,
+    JobStreamApi,
     Money,
     OperationConflict,
     OperationExists,
@@ -310,3 +313,39 @@ async def test_no_offering_fails_without_an_attempt(side: Side) -> None:
     job = failed.value.job
     assert job.state == "failed" and job.failure is not None and job.failure.kind == "no_offering"
     assert job.attempts == ()
+
+
+async def test_a_cancelled_stream_lets_the_runner_finish_within_the_settle_window(side: Side) -> None:
+    # A cancel (a task timeout, a server shutting the request down) is not the caller choosing to stop:
+    # the engine waits LPB_STREAM_SETTLE_S for the runner, and a runner that finishes in time succeeds
+    # (D38, D40). The scripted runner here has nothing left to wait for, so it finishes.
+    async with side(chunks=(b"a", b"bc")) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        read_one = asyncio.Event()
+        opened: list[JobStreamApi] = []
+
+        async def reader() -> None:
+            async with await streaming.stream(ALICE, JobRequest(app=APP)) as stream:
+                opened.append(stream)
+                chunks = aiter(stream)  # held: a dropped iterator is the caller stopping (D40)
+                assert await anext(chunks) == b"a"
+                read_one.set()
+                await asyncio.Event().wait()  # until cancelled
+
+        task = asyncio.create_task(reader())
+        await read_one.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        job = await ended(engine, opened[0].job.id)
+    assert job.state == "succeeded" and job.result is not None and job.result.size_bytes == 3
+
+
+async def ended(engine: ActorApi, job_id: UUID, within_s: float = 5.0) -> Job:
+    """The job once its stream's ending is written (the engine writes it in a shielded task)."""
+    async with asyncio.timeout(within_s):
+        # The facade exposes no event for "ending written", so this polls under a deadline.
+        while (job := await engine.jobs.get(ALICE, job_id)).state == "running":  # noqa: ASYNC110
+            await asyncio.sleep(0.02)
+    return job

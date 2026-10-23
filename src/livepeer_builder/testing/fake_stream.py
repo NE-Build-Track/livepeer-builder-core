@@ -1,5 +1,6 @@
 """``FakeJobStream``: a scripted ``JobStreamApi`` that ends its job as the engine's ``JobStream`` does."""
 
+import asyncio
 import hashlib
 from collections.abc import AsyncGenerator
 from types import TracebackType
@@ -30,8 +31,9 @@ class FakeJobStream:
     """A ``JobStreamApi`` over scripted chunks that ends the job the way the engine's ``JobStream`` does.
 
     The job ends once. Reading to the end, or ``complete()``, records it ``succeeded`` with a
-    ``ResultRef`` of the bytes read. ``aclose()``, or leaving ``async with`` early, records the attempt
-    ``abandoned`` and the paid job ``uncertain``. ``disconnected()`` lets the runner finish: the
+    ``ResultRef`` of the bytes read. ``aclose()``, or leaving ``async with`` early (``break``,
+    ``return``, an error), records the attempt ``abandoned`` and the paid job ``uncertain``. A
+    cancellation leaving the block, and ``disconnected()``, give the runner its settle window: the
     scripted chunks are all there, so the stream succeeds unless a ``Fails`` comes first. A ``Fails``
     among the chunks raises ``JobFailed`` there. ``closed`` and ``disconnected_called`` record the
     caller's calls.
@@ -90,7 +92,10 @@ class FakeJobStream:
     async def __aexit__(
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
     ) -> None:
-        await self.aclose()
+        if kind is not None and issubclass(kind, asyncio.CancelledError):
+            self._settle()  # a cancel is not the caller choosing to stop: the runner may finish (D38)
+        else:
+            await self.aclose()  # a normal exit, break, return or another error stops at once (D40)
 
     async def complete(self) -> None:
         self._succeed()
@@ -101,6 +106,11 @@ class FakeJobStream:
 
     async def disconnected(self) -> None:
         self.disconnected_called = True
+        self._settle()
+
+    def _settle(self) -> None:
+        """The runner gets its settle window. The scripted chunks are all there, so it finishes inside
+        it: the stream succeeds with every chunk counted, unless a ``Fails`` comes first."""
         while not self._ended and self._next < len(self._reply.chunks):
             chunk = self._reply.chunks[self._next]
             self._next += 1

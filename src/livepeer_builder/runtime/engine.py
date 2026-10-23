@@ -27,6 +27,7 @@ from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.payments import PaymentsService
+from livepeer_builder.utils import run_shielded
 
 if TYPE_CHECKING:
     from livepeer_builder.api import ActorApi, AdminApi, EngineApi
@@ -98,11 +99,19 @@ class BuilderEngine:
         return await create(settings, supply=supply, decorate=decorate)
 
     async def start(self) -> None:
-        """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops."""
+        """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops.
+
+        If starting fails (a store error, or a cancellation), the engine stops: what ``create`` opened is
+        closed before the error reaches the caller, and a new engine is needed.
+        """
         if self._stopped:
             raise RuntimeError("engine is stopped; create a new one")
-        await self.jobs.recover_interrupted()
-        await self.discovery.refresh()
+        try:
+            await self.jobs.recover_interrupted()
+            await self.discovery.refresh()
+        except BaseException:
+            await run_shielded(self.stop())  # __aexit__ and a lifespan's finally never run after this
+            raise
         self._stop.clear()
         self._tasks = [
             asyncio.create_task(self.discovery.run(self._stop), name="lpb-discovery"),

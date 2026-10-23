@@ -2,17 +2,20 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
-from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply, PurgeReport
+from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply, PurgeReport
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import SignerDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder.http import create_app
 from livepeer_builder.runtime import engine as engine_module
 from livepeer_builder.runtime.assembly import assemble, default_parts
 from livepeer_builder.runtime.logging import JsonFormatter, configure_logging
@@ -289,3 +292,62 @@ async def test_retention_runs_every_retention_interval(
         await engine.stop()
     purges = [r for r in caplog.records if getattr(r, "event", None) == "store.purged"]
     assert len(purges) >= 3
+
+
+def record_closes(monkeypatch: pytest.MonkeyPatch) -> list[SqlStore]:
+    """Spy on SqlStore.close (it records, then closes): the stores ``create`` opened that were closed."""
+    closed: list[SqlStore] = []
+    close = SqlStore.close
+
+    async def recording_close(self: SqlStore) -> None:
+        closed.append(self)
+        await close(self)
+
+    monkeypatch.setattr(SqlStore, "close", recording_close)
+    return closed
+
+
+def unmigrated() -> EngineSettings:
+    """No tables: ``start()`` fails in ``recover_interrupted`` after ``create`` opened the store."""
+    return EngineSettings(database_url=MEMORY, auto_migrate=False, log_json=False)
+
+
+QUIET = EngineSupply(discovery_source=StaticDiscoverySource())
+
+
+async def test_a_failed_start_in_async_with_closes_what_create_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed = record_closes(monkeypatch)
+    engine = await BuilderEngine.create(unmigrated(), supply=QUIET)
+    with pytest.raises(OperationalError):
+        async with engine:
+            pytest.fail("the block must not run when start() fails")
+    assert len(closed) == 1
+    with pytest.raises(RuntimeError, match="engine is stopped"):
+        await engine.start()
+
+
+async def test_a_failed_start_in_the_http_lifespan_closes_what_create_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed = record_closes(monkeypatch)
+    engine = await BuilderEngine.create(unmigrated(), supply=QUIET)
+    app = create_app(engine)
+    with pytest.raises(OperationalError):
+        async with app.router.lifespan_context(app):
+            pytest.fail("the app must not serve when start() fails")
+    assert len(closed) == 1
+
+
+async def test_a_failure_in_assemble_closes_what_create_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed = record_closes(monkeypatch)
+
+    def broken(parts: EngineParts) -> EngineParts:
+        return dataclasses.replace(parts, api_keys=object())  # type: ignore[arg-type]  # assemble cannot use it
+
+    with pytest.raises(AttributeError):
+        await BuilderEngine.create(
+            EngineSettings(database_url=MEMORY, log_json=False), supply=QUIET, decorate=broken
+        )
+    assert len(closed) == 1

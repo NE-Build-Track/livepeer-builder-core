@@ -63,7 +63,9 @@ when other parts depend on it, or **decorate** the configured default
 `start()` recovers interrupted jobs, takes a discovery snapshot, then runs the background loops
 (discovery refresh, cost sync, retention). Call `await engine.stop()` on shutdown. `stop()` is safe to call
 twice and closes everything the engine opened; an engine is single-use, so after `stop()` create a new one.
-If construction fails part-way, whatever it had already opened is closed before the error reaches you.
+If construction fails part-way, whatever it had already opened is closed before the error reaches you. So
+is a failed `start()` (a store error, or a cancellation): the engine stops, which also covers
+`async with engine:`, whose exit does not run when entry fails.
 
 Public imports come from the package root: `BuilderEngine`, `EngineSettings`, the construction types
 (`EngineSupply`, `EngineParts`, `ApiKeys`, `UNSET`), contracts

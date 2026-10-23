@@ -195,8 +195,10 @@ The same engine serves both integration modes: call it in-process with your own 
   stops the engine whatever happens, including when an `extend` hook raises or uvicorn fails
   before its lifespan runs.
 - **`build_app(settings, *, supply, decorate, extend)`** returns the FastAPI app without running it,
-  for mounting in another ASGI stack. The app's lifespan starts and stops the engine. Logging is
-  left to the host.
+  for mounting in another ASGI stack. The engine lives as long as the app's lifespan, which starts and
+  stops it (a failed start stops it too), so the host must run that lifespan, as any ASGI server does.
+  To hold the engine yourself, build it with `BuilderEngine.create` and pass it to
+  `livepeer_builder.http.create_app`. Logging is left to the host.
 
 `extend(app, engine)` receives the app and the engine, so a router gets the engine as an argument
 rather than from `app.state`. `actor_dependency(engine)` is the dependency the built-in routes use:

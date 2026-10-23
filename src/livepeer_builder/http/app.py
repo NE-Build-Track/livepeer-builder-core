@@ -138,9 +138,9 @@ def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, Act
 def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if manage_lifecycle:
-            await engine.start()
         try:
+            if manage_lifecycle:
+                await engine.start()
             yield
         finally:
             if manage_lifecycle:

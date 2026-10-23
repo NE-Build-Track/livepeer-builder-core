@@ -320,7 +320,12 @@ async def create(
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
-        return assemble(settings, parts, stack.pop_all())  # success: the engine owns what opened
+        resources = stack.pop_all()  # out of the stack: assemble hands them to the engine
+    try:
+        return assemble(settings, parts, resources)
+    except BaseException:
+        await resources.aclose()  # assemble failed: nothing owns them yet
+        raise
 
 
 def _configured_secrets(settings: EngineSettings) -> "SettingsSecretStore":

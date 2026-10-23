@@ -26,7 +26,11 @@ async def build_app(
     decorate: Decorate | None = None,
     extend: Extend | None = None,
 ) -> FastAPI:
-    """An app for your own ASGI stack. Its lifespan starts and stops the engine; logging is yours."""
+    """An app for your own ASGI stack; logging is yours.
+
+    The engine lives as long as the app's lifespan, which starts and stops it, so run that lifespan (any
+    ASGI server does). To hold the engine yourself, use ``BuilderEngine.create`` and ``create_app``.
+    """
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:
         return _app(engine, extend)

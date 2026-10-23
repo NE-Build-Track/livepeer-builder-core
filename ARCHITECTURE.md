@@ -60,7 +60,7 @@ from the runtime. That is what lets an enterprise replace authentication, policy
 discovery or transport **without patching core**.
 
 The services satisfy the facade Protocols structurally; mypy checks it through
-`create_app(engine: EngineApi)` and the typing assertions in `runtime/engine.py`. The CLI, the stock
+`create_app(engine: EngineApi)` and `tests/structure/test_conformance.py`. The CLI, the stock
 server and the Railway entrypoint import only the public API
 (`tests/structure/test_public_api.py`). Importing the root or `api` loads no heavy dependency
 (`test_import_weight.py`), and no module may import a DI container (`test_layers.py`).

@@ -23,7 +23,6 @@ Script replies per ``(app, path)``::
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from livepeer_builder.contracts import (
@@ -61,9 +60,6 @@ from livepeer_builder.testing.scripts import (
     Reply,
     attempt_outcome,
 )
-
-if TYPE_CHECKING:
-    from livepeer_builder.api import ActorApi
 
 
 class FakeStreaming:
@@ -372,9 +368,3 @@ class FakeEngine:
 
     async def stop(self) -> None:
         self.stopped = True
-
-
-if TYPE_CHECKING:  # mypy proves the fake offers the actor API
-
-    def _actor_api(fake: FakeEngine) -> "ActorApi":
-        return fake

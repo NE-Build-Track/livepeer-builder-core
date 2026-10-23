@@ -42,7 +42,6 @@ from livepeer_builder.protocols import (
     SessionManager,
     UsageSource,
 )
-from livepeer_builder.runtime.engine import BuilderEngine
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.discovery import DiscoveryService, MostCapacityFirst
@@ -53,6 +52,9 @@ from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.services.streams import StreamLimits
 
+# The one deliberate conditional import: the default adapters load inside default_parts, so that
+# `import livepeer_builder` stays light (tests/structure/test_import_weight.py). This annotation-only
+# import keeps cryptography out of the import too.
 if TYPE_CHECKING:
     from livepeer_builder.adapters.secrets import SettingsSecretStore
 
@@ -247,10 +249,27 @@ async def default_parts(
     )
 
 
-def assemble(
-    settings: EngineSettings, parts: EngineParts, resources: contextlib.AsyncExitStack | None = None
-) -> BuilderEngine:
-    """Build every service from the final parts. No I/O; ``resources`` is what construction opened."""
+@dataclass(frozen=True)
+class EngineServices:
+    """Every service, built from the final parts by ``assemble``. ``BuilderEngine`` holds them."""
+
+    store: EngineStore
+    clock: Clock
+    policy: AccessPolicy
+    authenticator: AuthenticatorChain
+    discovery: DiscoveryService
+    jobs: JobService
+    payments: PaymentsService
+    costs: CostService
+    keys: KeyService | None
+    admission: AdmissionLimiter
+    events: EventFeed
+    sessions: SessionManager
+    own_authenticators: int  # the deployment's, tried before API keys
+
+
+def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
+    """Build every service from the final parts. No I/O: it opens nothing, so it leaves nothing open."""
     discovery = DiscoveryService(
         parts.discovery_source, parts.policy, parts.clock, settings.discovery_interval_s
     )
@@ -293,8 +312,7 @@ def assemble(
     if parts.api_keys is not None:
         authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
         keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
-    return BuilderEngine(
-        settings=settings,
+    return EngineServices(
         store=parts.store,
         clock=parts.clock,
         policy=parts.policy,
@@ -308,21 +326,23 @@ def assemble(
         events=parts.events,
         sessions=parts.sessions,
         own_authenticators=len(parts.authenticators),
-        resources=resources,
     )
 
 
-async def create(
+async def build(
     settings: EngineSettings, *, supply: EngineSupply | None = None, decorate: Decorate | None = None
-) -> BuilderEngine:
-    """Supply, then decorate, then assemble. A failure part-way closes whatever was opened."""
+) -> tuple[EngineServices, contextlib.AsyncExitStack]:
+    """Supply, then decorate, then assemble: the services, and the stack of what construction opened.
+
+    ``BuilderEngine.create`` owns the stack from here. A failure part-way closes whatever was opened.
+    """
     async with contextlib.AsyncExitStack() as stack:
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
-        resources = stack.pop_all()  # out of the stack: assemble hands them to the engine
+        resources = stack.pop_all()  # out of the stack: the caller takes them with the services
     try:
-        return assemble(settings, parts, resources)
+        return assemble(settings, parts), resources
     except BaseException:
         await resources.aclose()  # assemble failed: nothing owns them yet
         raise

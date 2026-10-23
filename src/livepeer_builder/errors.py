@@ -1,9 +1,6 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from livepeer_builder.contracts import AttemptOutcome, Job
+from livepeer_builder.contracts import AttemptOutcome, Job
 
 
 class EngineError(Exception):
@@ -29,7 +26,7 @@ class InvalidRequest(EngineError):
 class OperationExists(EngineError):
     """This (application, actor, operation_ref) already dispatched a job with the same request (409)."""
 
-    def __init__(self, job: "Job") -> None:
+    def __init__(self, job: Job) -> None:
         super().__init__(f"operation_ref {job.operation_ref!r} already used by job {job.id}")
         self.job = job
 
@@ -37,7 +34,7 @@ class OperationExists(EngineError):
 class OperationConflict(EngineError):
     """The operation_ref was reused with a different request body (409)."""
 
-    def __init__(self, job: "Job") -> None:
+    def __init__(self, job: Job) -> None:
         super().__init__(f"operation_ref {job.operation_ref!r} was used by job {job.id} with another request")
         self.job = job
 
@@ -45,7 +42,7 @@ class OperationConflict(EngineError):
 class JobFailed(EngineError):
     """The job ended without a result. Switch on ``job.failure.kind``."""
 
-    def __init__(self, job: "Job") -> None:
+    def __init__(self, job: Job) -> None:
         failure = job.failure
         super().__init__(failure.message if failure is not None else f"job {job.id} {job.state}")
         self.job = job
@@ -105,7 +102,7 @@ class RunnerCallError(EngineError):
 
     def __init__(
         self,
-        kind: "AttemptOutcome",
+        kind: AttemptOutcome,
         message: str,
         *,
         payment_sent: bool,

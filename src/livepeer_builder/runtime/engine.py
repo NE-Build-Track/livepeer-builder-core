@@ -9,29 +9,11 @@ import asyncio
 import contextlib
 import logging
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING
 
-from livepeer_builder.adapters.auth import AuthenticatorChain
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import EngineHealth, PurgeReport
-from livepeer_builder.protocols import (
-    AccessPolicy,
-    Clock,
-    EngineStore,
-    EventFeed,
-    SessionManager,
-)
-from livepeer_builder.services.admission import AdmissionLimiter
-from livepeer_builder.services.costs import CostService
-from livepeer_builder.services.discovery import DiscoveryService
-from livepeer_builder.services.jobs import JobService
-from livepeer_builder.services.keys import KeyService
-from livepeer_builder.services.payments import PaymentsService
+from livepeer_builder.runtime.assembly import Decorate, EngineServices, EngineSupply, build
 from livepeer_builder.utils import run_shielded
-
-if TYPE_CHECKING:
-    from livepeer_builder.api import ActorApi, AdminApi, EngineApi
-    from livepeer_builder.runtime.assembly import Decorate, EngineSupply
 
 _LOG = logging.getLogger(__name__)
 
@@ -46,38 +28,29 @@ def package_version() -> str:
 class BuilderEngine:
     def __init__(
         self,
-        *,
         settings: EngineSettings,
-        store: EngineStore,
-        clock: Clock,
-        policy: AccessPolicy,
-        authenticator: AuthenticatorChain,
-        discovery: DiscoveryService,
-        jobs: JobService,
-        payments: PaymentsService,
-        costs: CostService,
-        keys: KeyService | None,
-        admission: AdmissionLimiter,
-        events: EventFeed,
-        sessions: SessionManager,
-        own_authenticators: int = 0,
+        services: EngineServices,
         resources: contextlib.AsyncExitStack | None = None,
     ) -> None:
+        """Hold the assembled services; ``resources`` is what construction opened, closed by ``stop()``.
+
+        Use ``BuilderEngine.create`` rather than calling this directly.
+        """
         self.settings = settings
-        self.store = store
-        self.clock = clock
-        self.policy = policy
-        self.authenticator = authenticator
-        self.discovery = discovery
-        self.jobs = jobs
-        self.payments = payments
-        self.costs = costs
-        self.keys = keys
-        self.admission = admission
-        self.events = events
-        self.sessions = sessions
-        self._own_authenticators = own_authenticators  # the deployment's, tried before API keys
-        self._resources = resources or contextlib.AsyncExitStack()  # what construction opened
+        self.store = services.store
+        self.clock = services.clock
+        self.policy = services.policy
+        self.authenticator = services.authenticator
+        self.discovery = services.discovery
+        self.jobs = services.jobs
+        self.payments = services.payments
+        self.costs = services.costs
+        self.keys = services.keys
+        self.admission = services.admission
+        self.events = services.events
+        self.sessions = services.sessions
+        self._own_authenticators = services.own_authenticators  # the deployment's, tried before API keys
+        self._resources = resources or contextlib.AsyncExitStack()
         self._stopped = False
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
@@ -87,16 +60,15 @@ class BuilderEngine:
         cls,
         settings: EngineSettings,
         *,
-        supply: "EngineSupply | None" = None,
-        decorate: "Decorate | None" = None,
+        supply: EngineSupply | None = None,
+        decorate: Decorate | None = None,
     ) -> "BuilderEngine":
         """Build an engine: supplied parts replace defaults, then ``decorate`` wraps the parts.
 
         See livepeer_builder.runtime.assembly and docs/design-docs/extending-the-engine.md.
         """
-        from livepeer_builder.runtime.assembly import create
-
-        return await create(settings, supply=supply, decorate=decorate)
+        services, resources = await build(settings, supply=supply, decorate=decorate)
+        return cls(settings, services, resources)
 
     async def start(self) -> None:
         """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops.
@@ -188,9 +160,3 @@ class BuilderEngine:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.settings.retention_interval_s)
             except TimeoutError:
                 continue
-
-
-if TYPE_CHECKING:  # mypy proves BuilderEngine offers every role's surface (livepeer_builder.api)
-
-    def _offers(engine: BuilderEngine) -> tuple["ActorApi", "AdminApi", "EngineApi"]:
-        return engine, engine, engine

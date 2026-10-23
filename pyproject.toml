@@ -80,7 +80,8 @@ ignore = ["S101"]  # assert is how pytest checks
 [tool.mypy]
 strict = true
 mypy_path = "src"
-packages = ["livepeer_builder"]
+# The package, and the test that proves the engine and FakeEngine satisfy the facade Protocols.
+files = ["src/livepeer_builder", "tests/structure/test_conformance.py"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]

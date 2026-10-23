@@ -152,6 +152,35 @@ Failures are Python exceptions, not HTTP statuses:
 | `NoCapacity` | No ready runner after selection |
 | `OperationExists` / `OperationConflict` | The caller's `operation_ref` collided |
 
+## Type against the role you use, and test without a network
+
+Depend on the narrowest Protocol your code uses, not on `BuilderEngine`
+([livepeer_builder.api](../../src/livepeer_builder/api.py)): `JourneyApi` to run jobs and read their
+results, costs and catalog; `AdminApi` for operator work; `EngineApi` for both.
+
+```python
+from livepeer_builder import ActorContext, JobRequest, JourneyApi
+
+
+async def answer(engine: JourneyApi, actor: ActorContext, prompt: dict[str, str]) -> bytes:
+    streaming = engine.jobs.streaming  # None when the transport cannot stream
+    if streaming is None:
+        return (await engine.jobs.run(actor, JobRequest(app="chat/llm", payload=prompt))).content
+    async with await streaming.stream(actor, JobRequest(app="chat/llm", payload=prompt)) as stream:
+        return b"".join([chunk async for chunk in stream])
+```
+
+Optional capabilities are `X | None` members: `jobs.streaming`, and on `AdminApi`, `keys` and
+`payments.grants`. Check for `None`; do not probe with `hasattr`.
+
+Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps them in step:
+
+- **`FakeEngine`** for your unit tests: it implements `JourneyApi`, answers per `(app, path)` with
+  `Reply(...)` or `Fails(...)`, and records `jobs.requests`. It returns real contracts and raises real
+  errors, but does not model money rules (idempotency, admission, failover).
+- **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
+  fakes (`async with make_engine(runners=[...]) as engine:`).
+
 ## 5. What you still run as an operator
 
 Your process is the process that holds the engine. There is no separate `lpb serve`. You still:

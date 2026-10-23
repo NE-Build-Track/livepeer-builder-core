@@ -111,9 +111,9 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 ### Step 4: the facade API
 
-- [ ] **Facade Protocols in a new module `livepeer_builder/api.py`.** This module holds what the engine *offers*, kept apart from `protocols/`, which holds what it *needs*. It is re-exported from the package root and imports only contracts and errors.
-- [ ] **Nested shape, mirroring today's surface:** `EngineApi` has `jobs`, `costs`, `discovery`, `payments`, `keys`, `events`, `sessions` and `authenticator` members, plus `health()`, `start()` and `stop()`.
-- [ ] **Split by role:**
+- [x] **Facade Protocols in a new module `livepeer_builder/api.py`.** This module holds what the engine *offers*, kept apart from `protocols/`, which holds what it *needs*. It is re-exported from the package root and imports only contracts and errors.
+- [x] **Nested shape, mirroring today's surface:** `EngineApi` has `jobs`, `costs`, `discovery`, `payments`, `keys`, `events`, `sessions` and `authenticator` members, plus `health()`, `start()` and `stop()`.
+- [x] **Split by role:**
   - **`JourneyApi`**, what an end-user application needs:
     - `jobs`: `run`, `get`, `list_jobs`, `result`, `report_usage`, and `streaming: StreamingApi | None` (with `stream`);
     - `costs`: `for_job`, `summary`;
@@ -125,16 +125,16 @@ Make the change easy, then make the easy change. Today's tests patch module inte
     - `keys: KeysApi | None` (`issue`, `list_keys`, `revoke`);
     - `costs`: `recent`, `reconcile`, `sync_now`.
   - **`EngineApi`** combines both, plus `authenticator` (`authenticate`, `challenge`), `events` (`after`) and `sessions` (`open`). `events` and `sessions` stay engine-only while they are M4 placeholders.
-- [ ] **Members are read-only properties,** so `EngineApi` can narrow a member it combines (for example `payments`) under mypy's rules.
+- [x] **Members are read-only properties,** so `EngineApi` can narrow a member it combines (for example `payments`) under mypy's rules.
 
   Applications type against the narrowest Protocol they use: ChatLPT uses `JourneyApi`, and `http/` uses `EngineApi`.
-- [ ] **Full coverage.** The Protocols cover every engine member `http/` calls, and `http/` is typed against `EngineApi`, so the server and embedders share one contract. `BuilderEngine` satisfies the Protocols (mypy-checked).
-- [ ] **Optional capabilities are `X | None` members, decided once at construction from the parts:**
+- [x] **Full coverage.** The Protocols cover every engine member `http/` calls, and `http/` is typed against `EngineApi`, so the server and embedders share one contract. `BuilderEngine` satisfies the Protocols (mypy-checked).
+- [x] **Optional capabilities are `X | None` members, decided once at construction from the parts:**
   - `jobs.streaming: StreamingApi | None` is present only when the transport streams. `stream()` moves onto it, and `hasattr(engine.jobs, "stream")` goes from consumers.
   - `keys: KeysApi | None` and `payments.grants: GrantsApi | None` follow the same rule.
   - Future capabilities (async jobs, ISS-26; persistent endpoints, ISS-27) follow the same pattern.
   - Any capability report (in health) is derived from which members are present.
-- [ ] **Shipped doubles, option (iii):**
+- [x] **Shipped doubles, option (iii):**
   - **`livepeer_builder.testing.make_engine(*, runners=..., supply=..., decorate=..., **settings)`**, for integration-level tests. It is an async context manager, promoted from the `make_engine` test fixture:
     - it builds a real engine with `create` over in-memory SQLite and the shipped port fakes, each of which can be supplied;
     - it takes one discovery snapshot and does not start the loops, so tests are deterministic;
@@ -152,11 +152,11 @@ Make the change easy, then make the easy change. Today's tests patch module inte
     - `streaming` is `None` for a non-streaming transport and yields chunks for a streaming one;
     - `health()` reports ready after a snapshot.
   - Admin members stay real-only. Applications that need to script admin flows use `make_engine` or a small fake typed against `AdminApi`.
-- [ ] **Complete exports.** Every type that appears in a public return value or raised error is exported from the root: at least `Attempt`, `Fees`, `AttemptCost` and `NotFound`. Two structural tests enforce it:
+- [x] **Complete exports.** Every type that appears in a public return value or raised error is exported from the root: at least `Attempt`, `Fees`, `AttemptCost` and `NotFound`. Two structural tests enforce it:
   - a walk over the type hints of every `JourneyApi`, `AdminApi` and `EngineApi` member, including fields of returned models, asserts each builder-core type reached is exported;
   - every `EngineError` subclass in `errors.py` is exported.
-- [ ] **`create_app(engine: EngineApi)`**, so `http/`, embedders and `FakeEngine` share one contract.
-- [ ] `docs/guides/embedded-mode.md` shows typing against `JourneyApi`, the capability check, `FakeEngine` and `make_engine`.
+- [x] **`create_app(engine: EngineApi)`**, so `http/`, embedders and `FakeEngine` share one contract.
+- [x] `docs/guides/embedded-mode.md` shows typing against `JourneyApi`, the capability check, `FakeEngine` and `make_engine`.
 
 ### Step 5: the stock server is a composition root
 
@@ -252,7 +252,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] 2026-10-23: **step 1 done**: SDK injection (`3e4ad23`), tuning settings (`eb2b9ba`), body limit (`7f9d7ae`), env-read guard. Every commit leaves the CI gate green.
 - [x] 2026-10-23: **step 2 done**: exit stack with logged cleanup, idempotent single-use engine, failing-first partial-failure test (spies on `SqlStore.connect`/`close`), behavioural loop check replacing `engine._tasks`. The close-failure test injects the fault on `SqlStore.close`, since no seam exists for an engine-owned resource.
 - [x] 2026-10-23: **step 3 done**, in three commits. Part 1: `runtime/assembly.py` (`EngineParts`, `EngineSupply`, `UNSET`, `ApiKeys`, `default_parts`, `assemble`), `BuilderEngine.create`, `async with`, keys-off and grant-desk capabilities with conditional routes, mode log in `start()`. Each behaviour was shown to fail its test under a deliberate mutation. The spec generator now turns every optional capability on, so `docs/generated/openapi.json` still documents the grant desk. Part 2 landed: every caller (CLI, Railway, the spec generator, tests) uses `create`; `from_settings` and its shim are removed; the private-attribute wiring tests and the post-construction rewiring (`engine.jobs._transport = …`, a monkeypatched `finish_job`) are replaced by supplied parts and assertions on `default_parts`; the unfiltered usage feed is checked through the request it sends. `engine.jobs._open_streams` stays as a test-synchronisation poll. Part 3: `extending-the-engine.md` rewritten around supply and decorate, with its example kept equal to the tested region by a new `check_docs.py` check (shown to fail on a drifted block); tests for borrowed supplied parts and the start-up mode log.
-- [ ] 2026-10-23: step 4 in progress. Part 1 landed:
+- [x] 2026-10-23: **step 4 done**, in three commits. Part 1:
   - `livepeer_builder/api.py` with the role-split Protocols, nested, as read-only properties;
   - `jobs.streaming` as an optional capability (`Streaming` in `services/streams.py`), and `create_app(engine: EngineApi)`;
   - mypy proves `BuilderEngine` satisfies `JourneyApi`, `AdminApi` and `EngineApi`;
@@ -265,6 +265,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - a contract test running eight journey cases against both, which caught each of four deliberate breaks in the fake.
 
   The `testing` layer may now import what `runtime` does, because `make_engine` builds a real engine.
+  Part 3: complete exports, with two structural tests (types reachable from the facade Protocols, through model fields, and every `EngineError`). They named 22 contracts and 6 errors to add. Ports consumers implement stay in the public `livepeer_builder.protocols`. The embedded guide covers role typing, capabilities, `FakeEngine` and `make_engine`.
 
   Deviations, recorded here: `api.py` imports `protocols` (it reuses `Authenticator`, `EventFeed` and `SessionManager` for engine members that are those ports), and `streaming` is a plain attribute rather than a property, which keeps `services/jobs.py` under the 500-line limit.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.

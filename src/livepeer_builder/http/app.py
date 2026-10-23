@@ -243,25 +243,28 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
 
     # -- admin (admin credential) -------------------------------------------------------------------
 
-    @app.post("/v1/admin/keys", response_model=IssuedKey, status_code=201)
-    async def issue_key(actor: Actor, body: IssueKeyBody) -> IssuedKey:
-        return await engine.keys.issue(
-            actor,
-            kind=body.kind,
-            actor_id=body.actor_id,
-            application_id=body.application_id,
-            permissions=body.permissions,
-            label=body.label,
-        )
+    if engine.keys is not None:  # API keys off: the key routes do not exist (decision 2)
+        keys = engine.keys
 
-    @app.get("/v1/admin/keys", response_model=list[AccessKey])
-    async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
-        return await engine.keys.list_keys(actor, application_id)
+        @app.post("/v1/admin/keys", response_model=IssuedKey, status_code=201)
+        async def issue_key(actor: Actor, body: IssueKeyBody) -> IssuedKey:
+            return await keys.issue(
+                actor,
+                kind=body.kind,
+                actor_id=body.actor_id,
+                application_id=body.application_id,
+                permissions=body.permissions,
+                label=body.label,
+            )
 
-    @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
-    async def revoke_key(actor: Actor, key_id: str) -> Response:
-        await engine.keys.revoke(actor, key_id)
-        return Response(status_code=204)
+        @app.get("/v1/admin/keys", response_model=list[AccessKey])
+        async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
+            return await keys.list_keys(actor, application_id)
+
+        @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
+        async def revoke_key(actor: Actor, key_id: str) -> Response:
+            await keys.revoke(actor, key_id)
+            return Response(status_code=204)
 
     base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"
 
@@ -282,13 +285,16 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     async def fund(actor: Actor, application_id: str, actor_id: str, body: FundRequest) -> ProvisionedActor:
         return await engine.payments.fund(actor, application_id, actor_id, body)
 
-    @app.get("/v1/admin/grants", response_model=list[GrantRecord])
-    async def list_grants(actor: Actor) -> list[GrantRecord]:
-        return await engine.payments.list_grants(actor)
+    if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
+        desk = engine.payments.grants
 
-    @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
-    async def create_grant(actor: Actor, body: GrantBody) -> GrantRecord:
-        return await engine.payments.create_grant(actor, body.name, body.amount)
+        @app.get("/v1/admin/grants", response_model=list[GrantRecord])
+        async def list_grants(actor: Actor) -> list[GrantRecord]:
+            return await desk.list_grants(actor)
+
+        @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
+        async def create_grant(actor: Actor, body: GrantBody) -> GrantRecord:
+            return await desk.create_grant(actor, body.name, body.amount)
 
     @app.post("/v1/admin/grant/fund", status_code=204)
     async def fund_grant(actor: Actor, body: FundRequest) -> Response:

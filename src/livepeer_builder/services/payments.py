@@ -39,6 +39,32 @@ def idempotency_key(engine_id: str, operation: str, step: str) -> str:
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
+class GrantDesk:
+    """Listing and creating grants: an optional capability (decision 7 in the DI refactor plan).
+
+    Present only when a grants manager exists (``LPB_BATTERIES_OPERATOR_TOKEN``, or one supplied).
+    The engine's own token can fund grants but not list or create them, so without the operator
+    credential the desk is absent rather than failing at first use.
+    """
+
+    def __init__(self, manager: AllocationManager, policy: AccessPolicy, currency: Currency) -> None:
+        self._manager = manager
+        self._policy = policy
+        self._currency = currency
+
+    async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        return await self._manager.list_grants()
+
+    async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        if not name.strip():
+            raise InvalidRequest("a grant name is required")
+        if amount.currency != self._currency or amount.amount <= 0:
+            raise InvalidRequest(f"a grant needs a positive amount in {self._currency}")
+        return await self._manager.create_grant(name.strip(), amount)
+
+
 class PaymentsService:
     def __init__(
         self,
@@ -62,7 +88,7 @@ class PaymentsService:
         self._clock = clock
         self._engine_id = engine_id
         self._manager = manager
-        self._grants = grants
+        self.grants: GrantDesk | None = GrantDesk(grants, policy, currency) if grants is not None else None
         self._currency = currency
         self._shared_secret = shared_secret
         self._shared_allocation_id = shared_allocation_id
@@ -153,18 +179,6 @@ class PaymentsService:
             idempotency_key(self._engine_id, f"fund:{actor.allocation_id}:{request.operation_ref}", "fund"),
         )
         return await self._update_status(actor, "active" if actor.status == "exhausted" else actor.status)
-
-    async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
-        return await self._require_grants().list_grants()
-
-    async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
-        if not name.strip():
-            raise InvalidRequest("a grant name is required")
-        if amount.currency != self._currency or amount.amount <= 0:
-            raise InvalidRequest(f"a grant needs a positive amount in {self._currency}")
-        return await self._require_grants().create_grant(name.strip(), amount)
 
     async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
         """Add funds to the named grant, or to the grant of the caller's own allocation."""
@@ -258,11 +272,6 @@ class PaymentsService:
         if self._manager is None:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
-
-    def _require_grants(self) -> AllocationManager:
-        if self._grants is None:
-            raise ProviderUnavailable("LPB_BATTERIES_OPERATOR_TOKEN is not configured")
-        return self._grants
 
     def _now(self) -> datetime:
         return self._clock.now()

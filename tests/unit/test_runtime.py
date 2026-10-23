@@ -1,6 +1,7 @@
 """Runtime: structured logging and the BuilderEngine lifecycle (loops, retention, default adapters)."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from importlib.metadata import PackageNotFoundError
@@ -11,8 +12,8 @@ from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import SignerDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
-from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.runtime import engine as engine_module
+from livepeer_builder.runtime.assembly import assemble, default_parts
 from livepeer_builder.runtime.logging import JsonFormatter, configure_logging
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeUsageSource, FixedClock
@@ -65,15 +66,18 @@ def test_package_version_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine_module.package_version() == "0.0.0+unknown"
 
 
-async def test_batteries_without_an_operator_token_does_not_start() -> None:
+async def test_batteries_without_an_operator_token_starts_without_the_grant_desk() -> None:
     settings = EngineSettings(
         database_url=MEMORY,
         batteries_url="https://batteries.example",
         batteries_token="t",
         log_json=False,
     )
-    with pytest.raises(InvalidRequest, match="LPB_BATTERIES_OPERATOR_TOKEN"):
-        await BuilderEngine.from_settings(settings)
+    async with contextlib.AsyncExitStack() as stack:
+        parts = await default_parts(settings, stack)
+        assert isinstance(parts.allocation_manager, BatteriesClient)  # funding still works
+        assert parts.grants_manager is None  # the engine token cannot list or create grants
+        assert assemble(settings, parts).payments.grants is None
 
 
 async def test_default_adapters_follow_settings() -> None:
@@ -104,13 +108,12 @@ async def test_operator_token_wires_a_separate_grants_client() -> None:
         batteries_operator_token="operator",
         log_json=False,
     )
-    engine = await BuilderEngine.from_settings(settings)
-    try:
-        assert isinstance(engine.payments._manager, BatteriesClient)
-        assert isinstance(engine.payments._grants, BatteriesClient)
-        assert engine.payments._grants is not engine.payments._manager
-    finally:
-        await engine.stop()
+    async with contextlib.AsyncExitStack() as stack:
+        parts = await default_parts(settings, stack)
+        assert isinstance(parts.allocation_manager, BatteriesClient)
+        assert isinstance(parts.grants_manager, BatteriesClient)
+        assert parts.grants_manager is not parts.allocation_manager
+        assert assemble(settings, parts).payments.grants is not None
 
 
 async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: FixedClock) -> None:

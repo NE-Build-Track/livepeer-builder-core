@@ -118,6 +118,8 @@ async def _purge(_: argparse.Namespace) -> None:
 async def _bootstrap(args: argparse.Namespace) -> None:
     engine = await BuilderEngine.from_settings(EngineSettings.from_env())
     try:
+        if engine.keys is None:
+            raise SystemExit("API keys are disabled in this deployment")
         issued = await engine.keys.bootstrap_admin(args.label)
         _emit({"key_id": issued.key.key_id, "token": issued.token, "note": "shown once; store it now"})
     finally:

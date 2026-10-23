@@ -60,11 +60,17 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Fails:
-    """The job fails: ``run`` and ``stream`` raise ``JobFailed`` with this failure."""
+    """The job fails: ``run`` and ``stream`` raise ``JobFailed`` with this failure.
+
+    ``payment_sent=True`` is a runner error after payment: the job fails on that runner (no failover)
+    and its cost counts as failed spend. ``body`` is the runner's own words.
+    """
 
     kind: FailureKind = "runner_error"
     message: str = "scripted failure"
     status_code: int | None = 500
+    payment_sent: bool = False
+    body: str | None = None
 
 
 @dataclass(frozen=True)
@@ -170,7 +176,13 @@ class FakeJobs:
         if isinstance(scripted, Raises):
             raise scripted.error
         if isinstance(scripted, Fails):
-            failure = Failure(kind=scripted.kind, message=scripted.message, status_code=scripted.status_code)
+            failure = Failure(
+                kind=scripted.kind,
+                message=scripted.message,
+                status_code=scripted.status_code,
+                body=scripted.body,
+                payment_sent=scripted.payment_sent,
+            )
             raise JobFailed(self.record(actor, request, "failed", failure))
         return scripted
 
@@ -200,7 +212,7 @@ class FakeJobs:
                 orchestrator_url=runner.orchestrator_url,
                 allocation_id=None,
                 sessions=(),
-                payment_sent=failure is None,
+                payment_sent=failure is None or failure.payment_sent,
                 outcome="in_flight" if state == "running" else "succeeded" if failure is None else "http",
                 status_code=failure.status_code if failure is not None else None,
                 started_at=now,
@@ -234,7 +246,7 @@ class FakeJobs:
     def broke(self, job: Job, fails: Fails) -> Job:
         """A paid stream that failed part-way: ``uncertain`` until usage settles what it cost."""
         now = datetime.now(UTC)
-        failure = Failure(kind=fails.kind, message=fails.message, payment_sent=True)
+        failure = Failure(kind=fails.kind, message=fails.message, body=fails.body, payment_sent=True)
         attempts = tuple(
             attempt.model_copy(update={"outcome": "http", "status_code": 200, "ended_at": now})
             for attempt in job.attempts

@@ -177,7 +177,7 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
 
 - **`FakeEngine`** for your unit tests: it implements `JourneyApi` and records `jobs.requests`. It
   answers per `(app, path)` with `Reply(...)` (a body, its parsed `data`, stream chunks), `Fails(...)`
-  (`JobFailed`; among stream chunks, a failure part-way that leaves the job `uncertain`) or
+  (`JobFailed`, paid or not; among stream chunks, a failure part-way that leaves the job `uncertain`) or
   `Raises(error)` (an engine error such as `NoCapacity`; also accepted as a job's cost). Like the
   engine, it records an attempt on the first runner for the app and rejects a repeated
   `operation_ref`. It does not model admission, failover or payment.

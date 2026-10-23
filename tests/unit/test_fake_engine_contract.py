@@ -54,9 +54,11 @@ async def fake(
     chunks: tuple[bytes, ...] | None = None,
     data: dict[str, Any] | None = None,
     fails_mid_stream: bool = False,
+    paid: bool = False,
 ) -> AsyncIterator[JourneyApi]:
     script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((Fails(),) if fails_mid_stream else ()))
-    reply: Reply | Fails = Fails() if fails else Reply(chunks=script, data=data)
+    failed = Fails(payment_sent=True, body="trace") if paid else Fails()
+    reply: Reply | Fails = failed if fails else Reply(chunks=script, data=data)
     yield FakeEngine(replies={(APP, ""): reply}, runners=RUNNERS, streaming=chunks is not None)
 
 
@@ -67,6 +69,7 @@ async def real(
     chunks: tuple[bytes, ...] | None = None,
     data: dict[str, Any] | None = None,
     fails_mid_stream: bool = False,
+    paid: bool = False,
 ) -> AsyncIterator[JourneyApi]:
     if chunks is not None:
         broken = [RunnerCallError("http", "cut", payment_sent=True)] if fails_mid_stream else []
@@ -74,7 +77,10 @@ async def real(
             opens=[StreamScript(events=[*chunks, *broken])]
         )
     elif fails:
-        transport = ScriptedTransport([RunnerCallError("http", "boom", payment_sent=False, status_code=500)])
+        error = RunnerCallError(
+            "http", "boom", payment_sent=paid, status_code=500, body="trace" if paid else None
+        )
+        transport = ScriptedTransport([error])
     elif data is not None:  # the SDK parsed the body: data is set and content is its JSON
         body = json.dumps(data).encode()
         transport = ScriptedTransport([ScriptedTransport.ok(body).model_copy(update={"data": data})])
@@ -187,3 +193,13 @@ async def test_a_repeated_operation_ref_raises_operation_exists_or_conflict(side
         with pytest.raises(OperationConflict) as conflict:
             await engine.jobs.run(ALICE, JobRequest(app=APP, path="/other", operation_ref="op-1"))
     assert exists.value.job.id == first.id and conflict.value.job.id == first.id
+
+
+async def test_a_paid_runner_error_fails_the_job_with_the_runner_s_words(side: Side) -> None:
+    async with side(fails=True, paid=True) as engine:
+        with pytest.raises(JobFailed) as failed:
+            await engine.jobs.run(ALICE, JobRequest(app=APP))
+    job = failed.value.job  # paid, so no failover: the job fails on this runner
+    assert job.state == "failed" and job.failure is not None
+    assert (job.failure.payment_sent, job.failure.body, job.failure.status_code) == (True, "trace", 500)
+    assert job.attempts[-1].payment_sent

@@ -216,7 +216,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - declare `livepeer_gateway` if still imported directly;
   - drop `LPB_BATTERIES_OPERATOR_TOKEN` from its configuration;
   - clean up on partial failure.
-- [ ] **Builder console:**
+- [x] **Builder console:** done 2026-10-23 on its `tasks/mz/dependency-injection-refactor` (`fcf5b38`, `229a35c`): engine image `165e601`; the spec differs only by the bearer scheme and the types are identical; sign-in calls, the grant desk and operator writes shown on the rebuilt stack.
   - re-pin the engine image;
   - re-copy `openapi/` if the default spec changed;
   - confirm sign-in, the grant desk and operator writes still work. The console keeps the operator token.
@@ -301,6 +301,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
   Four new contract cases first failed on the fake and passed on the real engine (probed: `NotProvisioned` is wrapped in `JobFailed`, so it is not a `Raises` example). `runner()` takes `orchestrator_url` and `metadata`. The embedded guide no longer lists `LPB_BATTERIES_OPERATOR_TOKEN` as required.
 - [x] 2026-10-23: **ChatLPT moved onto the refactor** (its branch `tasks/mz/dependency-injection-refactor`, six commits, plan 08 complete). It builds with `create(engine_settings, decorate=...)` and types against `JourneyApi`. Its tests use `FakeEngine`, and a structural test keeps its imports to the public API. Not yet shown live on the deployed stack. Next: the builder console.
+- [x] 2026-10-23: **the builder console is on the refactor.** Its stack was rebuilt from the pins and shown working: the sign-in calls, the grant desk (on, because it keeps the operator token), and key issue and revoke. Both consumers are done. Left: review and merge of the three branches, then re-pin the consumers to the merge (ChatLPT T9), resolving the overlap with PR #40.
 
 ## Decision log
 

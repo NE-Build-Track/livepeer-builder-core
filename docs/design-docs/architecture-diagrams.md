@@ -61,7 +61,7 @@ flowchart TB
         Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/admin/*"]
     end
     subgraph Wiring["runtime/ — app wiring"]
-        BE["BuilderEngine.from_settings · start · stop · health"]
+        BE["BuilderEngine.create · start · stop · health"]
     end
     subgraph Services["services/ — business rules"]
         direction LR
@@ -161,13 +161,14 @@ sequenceDiagram
     participant Bat as Batteries management API
     participant Sec as EncryptedDbSecretStore
     participant DB as SqlStore (lpb_actors)
-    Op->>H: POST {amount: {amount: "1", currency: "USD"}}
+    Op->>H: POST {amount: {amount: "1", currency: "USD"}, grant_id: "g_…"}
     H->>Pay: provision(admin, ProvisionRequest)
     Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
     Pay->>DB: get_actor(app, actor)
     alt already provisioned
         DB-->>Op: existing ProvisionedActor (no money moves)
     else new
+        Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
         Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)
         B->>Bat: POST /v1/api-keys {grant_id, amount_usd}
         Bat-->>B: {allocation_id, id, api_key=lpg_…}
@@ -200,7 +201,7 @@ sequenceDiagram
     J->>DB: job_by_operation_ref → 409 if already used
     J->>Adm: admit(app) → NoCapacity 503 if full (before payment)
     J->>DB: create_job(state=running, fingerprint)
-    J->>Pay: credential(actor) → PaymentCredential(token, allocation_id), or NotProvisioned
+    J->>Pay: credential(actor) → PaymentCredential(token, allocation_id), or JobFailed(not_provisioned) before any attempt
     loop each candidate (SelectionPolicy order, max_attempts)
         J->>DB: start_attempt(outcome=in_flight)
         J->>T: call(runner, request, credential)
@@ -251,6 +252,7 @@ sequenceDiagram
         end
     end
     C->>DB: match_sessions(new rows) on (allocation_id, manifest_id)
+    C->>DB: jobs_for_projection(affected job ids)
     loop each affected job
         C->>DB: usage_for_payment_sessions(matched payment_session_id)
         C->>C: classify → delivered / failed_after_payment / uncertain / pending
@@ -272,7 +274,7 @@ sequenceDiagram
     participant Bat as Batteries
     Op->>C: GET /v1/admin/reconciliation?actor_id=alice
     C->>Pay: allocation_for(app, actor)
-    C->>DB: jobs_between(app, actor) → classify each attempt
+    C->>DB: projections_between(app, actor) → sum attempts by cost_class
     C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)
     Pay->>Bat: GET /v1/allocations/{id} → spent_usd

@@ -8,7 +8,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import insert, inspect, text
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import (
@@ -163,8 +163,8 @@ async def test_records_survive_restart_and_interrupted_jobs_resolve(
     await first.close()  # the process dies mid-call
 
     settings = EngineSettings(database_url=database_url, log_json=False)
-    engine = await BuilderEngine.from_settings(
-        settings, clock=clock, discovery_source=StaticDiscoverySource()
+    engine = await BuilderEngine.create(
+        settings, supply=EngineSupply(clock=clock, discovery_source=StaticDiscoverySource())
     )
     await engine.start()
     recovered = await engine.store.get_job(running.id)

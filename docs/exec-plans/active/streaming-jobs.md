@@ -5,7 +5,10 @@
 Owner: Mike. Ticket: Mike is filing it (new M3 ticket; touches ISS-14 immediate execution, ISS-20 REST,
 ISS-28 failure classification). Branch `tasks/m3/mz/stream-support` off `releases/m3`. **Implemented and
 shown live on 19 October; a review on 20 October found two blocking lifecycle bugs, fixed on 20 October
-(D34–D39). Awaiting Mike's review, a live rerun, and Josh's review of the engine code. Not merged.**
+(D34–D39). Merged to `releases/m3` (PR #28, 21 October). Awaiting Mike's and Josh's review of the
+engine code.** Since the dependency-injection refactor (PR #41), the entry point is the optional
+capability `jobs.streaming.stream(...)` (`None` when the transport has no `open`, D33), and the stream
+code lives in `services/streams.py`; the items below record the API as first built.
 Requested by the first enterprise reference
 app (ChatLPT, `NE-Build-Track/chatlpt-sample-enterprise-app`), whose design note is the origin of
 this plan: `docs/design-docs/streaming-through-the-engine.md` in that repository.

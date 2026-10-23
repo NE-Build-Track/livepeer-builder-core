@@ -30,7 +30,8 @@ docker compose up -d --build clearinghouse signer
 docker compose exec clearinghouse clearinghouse --db-path /data/clearinghouse.db \
   grant create --name Dev --sponsor Dev --amount-usd 5 --status active      # note the grant id
 cp .env.example .env && chmod 600 .env     # fill LPB_BATTERIES_TOKEN (secrets/engine-token),
-                                           # LPB_BATTERIES_OPERATOR_TOKEN (secrets/grant-desk-token),
+                                           # LPB_BATTERIES_OPERATOR_TOKEN (secrets/grant-desk-token;
+                                           #   optional, turns on the grant desk),
                                            # LPB_SECRET_KEY
 docker compose up -d --build engine
 ```
@@ -64,8 +65,8 @@ Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliatio
 - **Stacks created before 16 October** lack the `grant-desk` credential, and their `builder-engine`
   credential lacks `grants.fund`. Add both to `secrets/clearinghouse.toml` (as `config/init-secrets.py`
   writes them), save the grant-desk secret as `secrets/grant-desk-token`, set
-  `LPB_BATTERIES_OPERATOR_TOKEN` in `.env`, and recreate `clearinghouse` and `engine`. The engine
-  refuses to start without the operator token.
+  `LPB_BATTERIES_OPERATOR_TOKEN` in `.env`, and recreate `clearinghouse` and `engine`. Without the
+  operator token the engine starts with the grant desk off (`/v1/admin/grants` is absent).
 - **T10 resolved:** the signer at `f970be6` pays orchestrators whose ticket recipient differs from
   their node address. Paid jobs on public orchestrators succeed and reconcile.
 - **T9 resolved:** SDK PR 5 reads node's lower-case `"state"` key, so attempts record their `auth_id`
@@ -83,8 +84,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
   image is an explicit `docker compose push <service>`. Base images (`python`, Go) still come from
   Docker Hub.
-- **The clearinghouse and signer containers run as root** (`user: "0:0"`) so bind-mounted secrets
-  stay readable. This is dev only.
+- **The signer container runs as root** (`user: "0:0"`) so bind-mounted secrets stay readable;
+  clearinghouse runs as its image's default user. This is dev only.
 - **The engine image runs as `lpb` (uid 10001)**, and `/.dockerignore` keeps `secrets/`, `.env`,
   `.venv` and caches out of the build context. An `engine-data` volume created by an older, root-run
   image needs its ownership fixed once:
@@ -93,7 +94,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `grants.fund` and has no `grants.*`. Batteries does not scope that permission to one grant, and an
   engine admin may fund any grant it names. `grant-desk` has `grants.read` and `grants.create` for
   `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
-  `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine will start.
+  `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine's grant desk can
+  list or create grants.
   The Railway Batteries image writes the same `builder-engine` list. `tests/structure/test_deploy.py`
   fails when the two lists drift.
 - **Pinned certificates** are trust-on-first-use and **temporary** (T12). Orchestrators are to serve

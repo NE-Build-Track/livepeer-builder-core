@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned, ProviderUnavailable
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
@@ -113,24 +113,21 @@ async def test_operator_lists_and_creates_grants(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    assert await engine.payments.list_grants(admin) == []
+    desk = engine.payments.grants
+    assert desk is not None  # a grants manager was supplied, so the grant desk exists
+    assert await desk.list_grants(admin) == []
     with pytest.raises(AccessDenied):
-        await engine.payments.list_grants(alice)
+        await desk.list_grants(alice)
     with pytest.raises(InvalidRequest, match="name"):
-        await engine.payments.create_grant(admin, "  ", usd("1"))
+        await desk.create_grant(admin, "  ", usd("1"))
     with pytest.raises(InvalidRequest, match="positive"):
-        await engine.payments.create_grant(admin, "ops", usd("0"))
+        await desk.create_grant(admin, "ops", usd("0"))
     with pytest.raises(InvalidRequest, match="positive"):
-        await engine.payments.create_grant(admin, "ops", Money(amount=Decimal("1"), currency="ETH"))
-    created = await engine.payments.create_grant(admin, " ops ", usd("5"))
+        await desk.create_grant(admin, "ops", Money(amount=Decimal("1"), currency="ETH"))
+    created = await desk.create_grant(admin, " ops ", usd("5"))
     assert created == manager.grants[0]
     assert created.name == "ops" and created.total == "5"
-    assert await engine.payments.list_grants(admin) == [created]
-    engine.payments._grants = None
-    with pytest.raises(ProviderUnavailable, match="LPB_BATTERIES_OPERATOR_TOKEN"):
-        await engine.payments.list_grants(admin)
-    with pytest.raises(ProviderUnavailable, match="LPB_BATTERIES_OPERATOR_TOKEN"):
-        await engine.payments.create_grant(admin, "ops", usd("1"))
+    assert await desk.list_grants(admin) == [created]
 
 
 async def test_funding_a_named_grant_applies_once(
@@ -142,7 +139,7 @@ async def test_funding_a_named_grant_applies_once(
         await engine.payments.fund_grant(alice, request)
     await engine.payments.fund_grant(admin, request)
     await engine.payments.fund_grant(admin, request)  # a retry
-    key = idempotency_key(engine.payments._engine_id, "fund-grant:grant_chosen:topup-1", "fund")
+    key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_chosen:topup-1", "fund")
     assert manager.funded_grants == [("grant_chosen", usd("10"), key)]
     assert 1 <= len(key) <= 256 and all(character.isalnum() or character in "_-" for character in key)
     with pytest.raises(InvalidRequest):
@@ -164,7 +161,7 @@ async def test_omitted_grant_uses_the_callers_allocation(
     await engine.payments.provision(admin, provision_request(grant_id=""))
     assert manager.last_grant_id == "grant_ops"
     await engine.payments.fund_grant(admin, FundRequest(amount=usd("3"), operation_ref="top"))
-    key = idempotency_key(engine.payments._engine_id, "fund-grant:grant_ops:top", "fund")
+    key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_ops:top", "fund")
     assert manager.funded_grants == [("grant_ops", usd("3"), key)]
 
 

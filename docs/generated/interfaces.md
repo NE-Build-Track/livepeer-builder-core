@@ -79,7 +79,13 @@ classDiagram
     class EngineStore {
         <<interface>>
         +async ...ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo methods() None
+        +maintenance StoreMaintenance?
         +async close() None
+    }
+    class StoreMaintenance {
+        <<interface>>
+        +async purge(now, jobs_days, usage_days) PurgeReport
+        +async schema_revision() str?
     }
     class Clock {
         <<interface>>
@@ -109,6 +115,7 @@ classDiagram
     class SdkRunnerTransport
     class SettingsSecretStore
     class SignerDiscoverySource
+    class SqlMaintenance
     class SqlStore
     class StaticDiscoverySource
     class SystemClock
@@ -129,6 +136,7 @@ classDiagram
     UsageSource <|.. BatteriesUsageSource
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
+    StoreMaintenance <|.. SqlMaintenance
     Clock <|.. SystemClock
     EventFeed <|.. ReservedEventFeed
     SessionManager <|.. ReservedSessions
@@ -155,6 +163,7 @@ classDiagram
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
+| `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |
 | `EventFeed` | `ReservedEventFeed` | `livepeer_builder.services.reserved` |
 | `SessionManager` | `ReservedSessions` | `livepeer_builder.services.reserved` |

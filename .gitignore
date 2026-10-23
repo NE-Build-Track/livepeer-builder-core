@@ -229,3 +229,4 @@ deploy/dev-stack/.env
 deploy/dev-stack/config/pinned-certs/
 .railway/
 coverage.json
+.idea/

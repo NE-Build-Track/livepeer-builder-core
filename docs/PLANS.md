@@ -36,5 +36,6 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | Ticket | Plan | Owners |
 | --- | --- | --- |
 | Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
+| Dependency-injection refactor (internal, before ISS-32) | [active/dependency-injection-refactor.md](exec-plans/active/dependency-injection-refactor.md) | Mike |
 
 Nothing closes without Mike's review. Josh reviews engine code.

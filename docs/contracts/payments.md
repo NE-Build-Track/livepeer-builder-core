@@ -39,8 +39,8 @@ key of `base64url(sha256(engine_id:operation:step))`.
 | `provision(application, actor, amount, grant_id)` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | per actor; a repeat returns the original |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | per `operation_ref` (required). `grant_id` on this body is ignored |
 | `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
-| `list_grants()` | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
-| `create_grant(name, amount)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | a repeat creates another grant |
+| `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
+| `grants.create_grant(name, amount)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | a repeat creates another grant |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | per `operation_ref` |
@@ -56,7 +56,8 @@ key of `base64url(sha256(engine_id:operation:step))`.
 - **The engine's management credential** is least-privilege: `allocations.*`, `api_keys.*`,
   `usage.read`, and `grants.fund`. It has **no `grants.*`**.
 - **Listing and creating grants** uses `LPB_BATTERIES_OPERATOR_TOKEN` (`grants.read`, `grants.create`).
-  The engine does not start when `LPB_BATTERIES_URL` is set and that token is missing.
+  The token is optional. Without it the grant desk is off: `engine.payments.grants` is `None` and the
+  grant list and create routes are absent. Funding grants still works with `LPB_BATTERIES_TOKEN`.
 - **Cost sync** reads `GET /v1/usage` with no grant filter. Rows for allocations this engine did not
   provision are stored and are not part of any actor's reconciliation. A cursor saved under the old
   `grant_id` filter does not match, so the first sync after this change restarts from the beginning

@@ -5,16 +5,18 @@ contracts (async jobs, sessions, events) answer 501. The generated schema is com
 docs/generated/openapi.json and checked for drift in CI.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi import Depends, FastAPI, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
     AccessKey,
     ActorContext,
@@ -57,7 +59,6 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.http.streaming import stream_response
-from livepeer_builder.runtime import BuilderEngine
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
 _FAILURE_STATUS = {
@@ -106,12 +107,54 @@ class UsageBody(BaseModel):
     quantities: dict[str, int]
 
 
-def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastAPI:
+def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, ActorContext]]:
+    """The FastAPI dependency every authenticated route uses: the engine's authenticator chain.
+
+    Extra endpoints added through ``livepeer_builder.http.server`` (``extend=``) use it too, so they
+    authenticate like the built-in routes: ``Annotated[ActorContext, Depends(actor_dependency(engine))]``.
+
+    When the engine accepts API keys, it also declares the ``lpk_`` bearer scheme in OpenAPI, so Swagger
+    UI shows Authorize. With keys off it declares none: the engine cannot know what a supplied
+    authenticator expects, so a service that wants Swagger to send its credential declares it in ``extend``.
+    """
+    if engine.keys is None:
+
+        async def actor_from(request: Request) -> ActorContext:
+            return await _authenticated(engine, request)
+
+        return actor_from
+
+    # Declares the scheme only; authentication itself stays with engine.authenticator (raw headers).
+    bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
+
+    async def actor_from_key(
+        request: Request,
+        _declared: Annotated[HTTPAuthorizationCredentials | None, Security(bearer)],
+    ) -> ActorContext:
+        return await _authenticated(engine, request)
+
+    return actor_from_key
+
+
+async def _authenticated(engine: EngineApi, request: Request) -> ActorContext:
+    auth = AuthRequest(
+        method=request.method,
+        path=request.url.path,
+        headers={key.lower(): value for key, value in request.headers.items()},
+        client_address=request.client.host if request.client else None,
+    )
+    actor = await engine.authenticator.authenticate(auth)
+    if actor is None:
+        raise NotAuthenticated("a credential is required")
+    return actor
+
+
+def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if manage_lifecycle:
-            await engine.start()
         try:
+            if manage_lifecycle:
+                await engine.start()
             yield
         finally:
             if manage_lifecycle:
@@ -120,19 +163,7 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     app = FastAPI(title="livepeer-builder", version=engine.health().version, lifespan=lifespan)
     _install_error_handlers(app, engine)
 
-    async def actor_from(request: Request) -> ActorContext:
-        auth = AuthRequest(
-            method=request.method,
-            path=request.url.path,
-            headers={key.lower(): value for key, value in request.headers.items()},
-            client_address=request.client.host if request.client else None,
-        )
-        actor = await engine.authenticator.authenticate(auth)
-        if actor is None:
-            raise NotAuthenticated("a credential is required")
-        return actor
-
-    Actor = Annotated[ActorContext, Depends(actor_from)]
+    Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     @app.get("/livez", include_in_schema=False)
     async def livez() -> dict[str, str]:
@@ -172,7 +203,10 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
         stream: Annotated[bool, Query(description="stream the runner's response as it arrives")] = False,
     ) -> Response:
         if stream or "text/event-stream" in request.headers.get("accept", ""):
-            opened = await engine.jobs.stream(actor, body)
+            streaming = engine.jobs.streaming
+            if streaming is None:
+                raise InvalidRequest("the configured runner transport does not support streaming")
+            opened = await streaming.stream(actor, body)
             return await stream_response(
                 opened, {JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"}
             )
@@ -235,25 +269,28 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
 
     # -- admin (admin credential) -------------------------------------------------------------------
 
-    @app.post("/v1/admin/keys", response_model=IssuedKey, status_code=201)
-    async def issue_key(actor: Actor, body: IssueKeyBody) -> IssuedKey:
-        return await engine.keys.issue(
-            actor,
-            kind=body.kind,
-            actor_id=body.actor_id,
-            application_id=body.application_id,
-            permissions=body.permissions,
-            label=body.label,
-        )
+    if engine.keys is not None:  # API keys off: the key routes do not exist (decision 2)
+        keys = engine.keys
 
-    @app.get("/v1/admin/keys", response_model=list[AccessKey])
-    async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
-        return await engine.keys.list_keys(actor, application_id)
+        @app.post("/v1/admin/keys", response_model=IssuedKey, status_code=201)
+        async def issue_key(actor: Actor, body: IssueKeyBody) -> IssuedKey:
+            return await keys.issue(
+                actor,
+                kind=body.kind,
+                actor_id=body.actor_id,
+                application_id=body.application_id,
+                permissions=body.permissions,
+                label=body.label,
+            )
 
-    @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
-    async def revoke_key(actor: Actor, key_id: str) -> Response:
-        await engine.keys.revoke(actor, key_id)
-        return Response(status_code=204)
+        @app.get("/v1/admin/keys", response_model=list[AccessKey])
+        async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
+            return await keys.list_keys(actor, application_id)
+
+        @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
+        async def revoke_key(actor: Actor, key_id: str) -> Response:
+            await keys.revoke(actor, key_id)
+            return Response(status_code=204)
 
     base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"
 
@@ -274,13 +311,16 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     async def fund(actor: Actor, application_id: str, actor_id: str, body: FundRequest) -> ProvisionedActor:
         return await engine.payments.fund(actor, application_id, actor_id, body)
 
-    @app.get("/v1/admin/grants", response_model=list[GrantRecord])
-    async def list_grants(actor: Actor) -> list[GrantRecord]:
-        return await engine.payments.list_grants(actor)
+    if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
+        desk = engine.payments.grants
 
-    @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
-    async def create_grant(actor: Actor, body: GrantBody) -> GrantRecord:
-        return await engine.payments.create_grant(actor, body.name, body.amount)
+        @app.get("/v1/admin/grants", response_model=list[GrantRecord])
+        async def list_grants(actor: Actor) -> list[GrantRecord]:
+            return await desk.list_grants(actor)
+
+        @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
+        async def create_grant(actor: Actor, body: GrantBody) -> GrantRecord:
+            return await desk.create_grant(actor, body.name, body.amount)
 
     @app.post("/v1/admin/grant/fund", status_code=204)
     async def fund_grant(actor: Actor, body: FundRequest) -> Response:
@@ -314,7 +354,7 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     return app
 
 
-def _install_error_handlers(app: FastAPI, engine: BuilderEngine) -> None:
+def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
     def problem(
         status: int, message: str, headers: dict[str, str] | None = None, **extra: Any
     ) -> JSONResponse:

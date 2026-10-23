@@ -7,8 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply, generate_secret_key
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
     ActorContext,
@@ -29,11 +28,17 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
     RunnerCallError,
 )
-from livepeer_builder.services.costs import CostSyncWorker, _balanced, add_fees
+from livepeer_builder.services.costs import CostService, CostSyncWorker, _balanced, add_fees
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import FakeAllocationManager, FixedClock, ScriptedTransport, runner
+from livepeer_builder.testing import (
+    FakeAllocationManager,
+    FixedClock,
+    ScriptedStreamTransport,
+    ScriptedTransport,
+    runner,
+)
 from tests.conftest import EngineFactory
 
 APP = "example/echo"
@@ -95,17 +100,11 @@ async def test_reprovisioning_after_revoke_is_a_new_operation(
 async def test_provisioning_needs_a_provider_and_a_grant(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
-    secret_key = EncryptedDbSecretStore.generate_key()
-    no_provider = await BuilderEngine.from_settings(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False),
-        store=store, clock=clock, discovery_source=StaticDiscoverySource(),
-    )  # fmt: skip
+    secret_key = generate_secret_key()
+    no_provider = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource()))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="management API"):
         await no_provider.payments.provision(admin, provision())
-    no_grant = await BuilderEngine.from_settings(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False),
-        store=store, clock=clock, discovery_source=StaticDiscoverySource(), allocation_manager=FakeAllocationManager(),
-    )  # fmt: skip
+    no_grant = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource(), allocation_manager=FakeAllocationManager(), grants_manager=FakeAllocationManager()))  # fmt: skip
     with pytest.raises(InvalidRequest, match="choose a grant"):
         await no_grant.payments.provision(admin, provision(grant_id=""))
     with pytest.raises(ProviderUnavailable, match="management API"):
@@ -135,6 +134,7 @@ async def test_cost_service_guard_clauses(
     admin: ActorContext,
     alice: ActorContext,
     bob: ActorContext,
+    transport: ScriptedStreamTransport,
 ) -> None:
     engine = await make_engine()
     with pytest.raises(AccessDenied):
@@ -146,22 +146,21 @@ async def test_cost_service_guard_clauses(
         await engine.costs.reconcile(admin, "default", "nobody")
 
     await engine.payments.provision(admin, provision())
-    engine.jobs._transport = ScriptedTransport([ScriptedTransport.ok()])
+    transport.steps = [ScriptedTransport.ok()]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     with pytest.raises(NotFound):
         await engine.costs.for_job(bob, job.id)  # another actor's cost is invisible
 
 
 async def test_costs_without_a_provider(store: SqlStore, clock: FixedClock, admin: ActorContext) -> None:
-    engine = await BuilderEngine.from_settings(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        store=store, clock=clock, discovery_source=StaticDiscoverySource(),
-    )  # fmt: skip
+    engine = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False), supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource()))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="no usage source"):
         await engine.costs.sync_once()
-    engine.costs._allowances = None
+    await engine.stop()
+    # assemble always gives CostService the payments service; without one it cannot reconcile
+    bare = CostService(store, DefaultPolicy(), clock)
     with pytest.raises(ProviderUnavailable, match="no payment provider"):
-        await engine.costs.reconcile(admin, "default", None)
+        await bare.reconcile(admin, "default", None)
 
 
 async def test_reconciliation_survives_an_unavailable_provider(
@@ -237,7 +236,7 @@ async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock, alice: 
 
 
 async def test_job_guard_clauses(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await make_engine()
     with pytest.raises(InvalidRequest, match="must start with"):
@@ -248,9 +247,7 @@ async def test_job_guard_clauses(
         await engine.jobs.get(alice, uuid4())
 
     await engine.payments.provision(admin, provision())
-    engine.jobs._transport = ScriptedTransport(
-        [RunnerCallError("http", "boom", payment_sent=False, status_code=500)]
-    )
+    transport.steps = [RunnerCallError("http", "boom", payment_sent=False, status_code=500)]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     with pytest.raises(InvalidRequest, match="succeeded job"):
@@ -258,11 +255,11 @@ async def test_job_guard_clauses(
 
 
 async def test_usage_needs_a_quantity(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await make_engine()
     await engine.payments.provision(admin, provision())
-    engine.jobs._transport = ScriptedTransport([ScriptedTransport.ok()])
+    transport.steps = [ScriptedTransport.ok()]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     with pytest.raises(InvalidRequest, match="non-negative"):
         await engine.jobs.report_usage(alice, job.id, {"tokens": -1})
@@ -271,14 +268,12 @@ async def test_usage_needs_a_quantity(
 async def test_engine_error_mid_call_leaves_the_job_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore
 ) -> None:
-    engine = await make_engine()
-    await engine.payments.provision(admin, provision())
-
     class Crashing(ScriptedTransport):
         async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
             raise KeyError("bug in a transport")
 
-    engine.jobs._transport = Crashing()
+    engine = await make_engine(supply=EngineSupply(transport=Crashing()))
+    await engine.payments.provision(admin, provision())
     with pytest.raises(KeyError):
         await engine.jobs.run(alice, JobRequest(app=APP))
     (job,) = await store.list_jobs("default", "alice")
@@ -289,34 +284,32 @@ async def test_failure_to_close_a_job_is_logged(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
-    monkeypatch: pytest.MonkeyPatch,
+    store: SqlStore,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    engine = await make_engine()
-    await engine.payments.provision(admin, provision())
-
     class Crashing(ScriptedTransport):
         async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
             raise KeyError("bug")
 
-    async def broken_finish(*_: object) -> None:
-        raise RuntimeError("database gone")
+    class FinishFails(SqlStore):
+        async def finish_job(self, *_: object, **__: object) -> None:  # type: ignore[override]
+            raise RuntimeError("database gone")
 
-    engine.jobs._transport = Crashing()
-    monkeypatch.setattr(engine.jobs._store, "finish_job", broken_finish)
+    engine = await make_engine(supply=EngineSupply(transport=Crashing(), store=FinishFails(store.engine)))
+    await engine.payments.provision(admin, provision())
     with caplog.at_level(logging.ERROR), pytest.raises(KeyError):
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert any(getattr(r, "event", "") == "jobs.close_failed" for r in caplog.records)
 
 
 async def test_payment_refused_after_signing_is_a_payment_failure(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await make_engine(runners=(runner(url="https://r1"), runner(url="https://r2")))
     await engine.payments.provision(admin, provision())
-    engine.jobs._transport = ScriptedTransport(
-        [RunnerCallError("payment_refused", "late refusal", payment_sent=True, manifest_ids=("m1",))]
-    )
+    transport.steps = [
+        RunnerCallError("payment_refused", "late refusal", payment_sent=True, manifest_ids=("m1",))
+    ]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert failed.value.job.failure is not None and failed.value.job.failure.kind == "payment"

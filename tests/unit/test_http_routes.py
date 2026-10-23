@@ -5,13 +5,14 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.errors import NoCapacity, ProviderError, RunnerCallError
 from livepeer_builder.http import create_app
-from livepeer_builder.testing import FakeUsageSource, ScriptedTransport, runner
+from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
 from tests.conftest import EngineFactory
+from tests.unit.test_runtime import LOOPS, running_loops
 
 APP = "example/echo"
 
@@ -87,15 +88,15 @@ async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ig
     assert (await client.get("/v1/admin/grants", headers=admin)).json() == [created.json()]
 
 
-async def test_grant_fund_is_admin_only(api) -> None:  # type: ignore[no-untyped-def]
-    client, engine, admin, alice = api
+async def test_grant_fund_is_admin_only(api, manager: FakeAllocationManager) -> None:  # type: ignore[no-untyped-def]
+    client, _, admin, alice = api
     body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
     assert (await client.post("/v1/admin/grant/fund", json=body, headers=alice)).status_code == 403
     missing = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g2"}
     assert (await client.post("/v1/admin/grant/fund", json=missing, headers=admin)).status_code == 400
     funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
     assert funded.status_code == 204 and funded.content == b""
-    assert engine.payments._manager.funded_grants[0][0] == "grant_chosen"  # type: ignore[union-attr]
+    assert manager.funded_grants[0][0] == "grant_chosen"
 
 
 async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTransport) -> None:  # type: ignore[no-untyped-def]
@@ -181,20 +182,20 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
 
 
 async def test_lifespan_starts_and_stops_the_engine() -> None:
-    engine = await BuilderEngine.from_settings(
+    engine = await BuilderEngine.create(
         EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        discovery_source=StaticDiscoverySource([runner()]),
+        supply=EngineSupply(discovery_source=StaticDiscoverySource([runner()])),
     )
     app = create_app(engine)
     async with app.router.lifespan_context(app):  # what an ASGI server runs at startup and shutdown
-        assert engine.health().ready and len(engine._tasks) == 3
-    assert engine._tasks == []
+        assert engine.health().ready and running_loops() == LOOPS
+    assert running_loops() == set()
 
 
 async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFactory) -> None:
-    engine = await BuilderEngine.from_settings(
+    engine = await BuilderEngine.create(
         EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        discovery_source=StaticDiscoverySource(),
+        supply=EngineSupply(discovery_source=StaticDiscoverySource()),
     )
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:

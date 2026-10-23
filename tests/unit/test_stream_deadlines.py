@@ -8,11 +8,9 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import ActorContext, JobRequest
 from livepeer_builder.errors import JobFailed
-from livepeer_builder.services import jobs as jobs_module
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.test_streaming import APP, collect, provisioned, read_all
@@ -39,7 +37,7 @@ async def test_a_runner_that_never_answers_times_out_without_failover(
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(open_delay_s=5, payment_sent=paid, manifest_ids=("m-1",) if paid else ())]
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
     job = failed.value.job
     assert job.state == state and job.failure is not None and job.failure.kind == "timeout"
     assert len(job.attempts) == 1  # a timeout never fails over, paid or not (same as a buffered job)
@@ -52,51 +50,58 @@ async def test_the_engine_stops_a_transport_that_ignores_its_deadline(
     admin: ActorContext,
     alice: ActorContext,
     transport: ScriptedStreamTransport,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(jobs_module, "_OPEN_BACKSTOP_GRACE_S", 0.05)
-    engine = await provisioned(make_engine, admin)
+    engine = await provisioned(make_engine, admin, stream_open_grace_s=0.05)
     transport.opens = [StreamScript(open_delay_s=5, honors_deadline=False, payment_sent=False)]
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
     job = failed.value.job
     assert job.state == "uncertain"  # whether it paid is unknown, so the engine assumes it did
     assert job.attempts[0].outcome == "timeout" and job.attempts[0].payment_sent
     assert engine.admission.running == 0
 
 
-@pytest.mark.parametrize("transport", [SdkRunnerTransport("https://signer.example")])
+class _HangsDuringOpen:
+    """An SDK ``call_runner`` that hangs while opening, optionally after the signer signed."""
+
+    def __init__(self, manifest_id: str | None) -> None:
+        self.manifest_id = manifest_id
+        self.called: list[str] = []
+
+    async def __call__(self, url: str, **kwargs: object) -> object:
+        self.called.append(url)
+        if self.manifest_id is not None:
+            kwargs["on_payment_session"](SimpleNamespace(manifest_id=self.manifest_id))  # type: ignore[operator]
+        await asyncio.sleep(5)
+        raise AssertionError("unreachable")
+
+
+_UNPAID, _PAID = _HangsDuringOpen(None), _HangsDuringOpen("m-1")
+
+
 @pytest.mark.parametrize(
-    ("manifest_id", "paid", "state", "manifests"),
-    [(None, False, "failed", ()), ("m-1", True, "uncertain", ("m-1",))],
+    ("transport", "call", "paid", "state", "manifests"),
+    [
+        (SdkRunnerTransport("https://signer.example", call=_UNPAID), _UNPAID, False, "failed", ()),
+        (SdkRunnerTransport("https://signer.example", call=_PAID), _PAID, True, "uncertain", ("m-1",)),
+    ],
 )
 async def test_sdk_open_timeout_follows_whether_on_payment_session_ran(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
-    monkeypatch: pytest.MonkeyPatch,
-    manifest_id: str | None,
+    call: _HangsDuringOpen,
     paid: bool,
     state: str,
     manifests: tuple[str, ...],
 ) -> None:
-    called: list[str] = []
-
-    async def hangs_during_open(url: str, **kwargs: object) -> object:
-        called.append(url)
-        if manifest_id is not None:
-            kwargs["on_payment_session"](SimpleNamespace(manifest_id=manifest_id))  # type: ignore[operator]
-        await asyncio.sleep(5)
-        raise AssertionError("unreachable")
-
-    monkeypatch.setattr(sdk, "call_runner", hangs_during_open)
     engine = await provisioned(make_engine, admin)
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
     job = failed.value.job
     assert job.state == state and job.failure is not None and job.failure.kind == "timeout"
     assert job.failure.payment_sent is paid
-    assert len(called) == 1 and len(job.attempts) == 1  # the second runner is never tried
+    assert len(call.called) == 1 and len(job.attempts) == 1  # the second runner is never tried
     attempt = job.attempts[0]
     assert (attempt.outcome, attempt.payment_sent, tuple(s.manifest_id for s in attempt.sessions)) == (
         "timeout",
@@ -111,7 +116,7 @@ async def test_headers_without_a_first_chunk_time_out_on_first_byte(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[5.0, b"late"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.failure is not None and stream.job.failure.kind == "timeout"
@@ -124,7 +129,9 @@ async def test_time_spent_opening_counts_against_timeout_s(
     engine = await provisioned(make_engine, admin)
     # 60 ms to open plus 60 ms of chunks: within 0.1 s if the clock started at the first read, not overall
     transport.opens = [StreamScript(open_delay_s=0.06, events=[b"a", 0.03, b"b", 0.03, b"c"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, timeout_s=0.1, idle_timeout_s=None))
+    stream = await engine.jobs.streaming.stream(
+        alice, JobRequest(app=APP, timeout_s=0.1, idle_timeout_s=None)
+    )
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.failure is not None and "timeout_s" in stream.job.failure.message
@@ -135,7 +142,7 @@ async def test_timeout_s_does_not_apply_once_the_runner_has_finished(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b"])]  # the runner is done straight away
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, timeout_s=0.05))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, timeout_s=0.05))
     received: list[bytes] = []
     async for chunk in stream:
         received.append(chunk)
@@ -152,7 +159,7 @@ async def test_idle_applies_between_chunks_only(
     # a slow first chunk is fine under first_byte_timeout_s; a gap after it is not under idle_timeout_s
     transport.opens = [StreamScript(events=[0.08, b"a", 0.08, b"b"])]
     request = JobRequest(app=APP, first_byte_timeout_s=1, idle_timeout_s=0.05)
-    stream = await engine.jobs.stream(alice, request)
+    stream = await engine.jobs.streaming.stream(alice, request)
     received: list[bytes] = []
     with pytest.raises(JobFailed):
         await collect(stream, received)

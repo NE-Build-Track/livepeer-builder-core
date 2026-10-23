@@ -27,6 +27,7 @@ from livepeer_builder.contracts import (
     Operation,
     PaymentCredential,
     ProvisionedActor,
+    PurgeReport,
     ResourceRef,
     ResultRef,
     Runner,
@@ -125,7 +126,7 @@ class RunnerStream(Protocol):
 
 @runtime_checkable
 class StreamingRunnerTransport(RunnerTransport, Protocol):
-    """A transport that can also hand the response back unbuffered. Optional: ``jobs.stream`` needs it.
+    """A transport that can also hand the response back unbuffered. ``jobs.streaming`` exists only with one.
 
     ``open`` returns once the runner answered with its status and headers. It must give up after
     ``request.first_byte_timeout_s`` and raise ``RunnerCallError("timeout", ...)`` with the payment
@@ -281,8 +282,22 @@ class SecretRepo(Protocol):
     async def delete_secret(self, ref: str) -> None: ...
 
 
+class StoreMaintenance(Protocol):
+    """Housekeeping a store may offer: retention purges and its schema revision."""
+
+    async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport: ...
+
+    async def schema_revision(self) -> str | None: ...
+
+
 class EngineStore(ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo, Protocol):
     """Every engine-owned record, behind one interface. SQL implementation: livepeer_builder.store."""
+
+    @property
+    def maintenance(self) -> StoreMaintenance | None:
+        """``None`` when the store has no housekeeping: the engine then purges nothing and reports no
+        schema revision."""
+        ...
 
     async def close(self) -> None: ...
 

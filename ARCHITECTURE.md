@@ -15,7 +15,7 @@ flowchart TB
         AD["adapters: SDK, Batteries, auth, secrets"]
         ST["store: SQLite / PostgreSQL"]
     end
-    SDK["livepeer-python-gateway (SDK #71)"]
+    SDK["livepeer-python-gateway (pinned 76a1a1c)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
     Orch["Orchestrators + Live Runners (on the network)"]
@@ -45,18 +45,25 @@ edge and prints how to fix a violation.
 | Types | `contracts/` | nothing internal |
 | Errors | `errors.py` | contracts |
 | Providers | `protocols/` | contracts, errors |
+| Facade | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | contracts, errors, protocols |
 | Config | `config.py` | contracts, errors |
 | Service | `services/` | contracts, errors, protocols, config, utils |
 | Repo | `store/` | contracts, errors, protocols, config, utils |
 | Adapters | `adapters/` | contracts, errors, protocols, config, utils |
-| Test doubles | `testing/` | contracts, errors, protocols, utils |
-| App wiring | `runtime/` | everything above |
-| UI | `http/` | runtime, contracts, errors, config |
-| Entry points | `cli.py`, `docs_gen.py`, `__init__.py` | anything |
+| App wiring | `runtime/` (`assembly.py` builds the parts, `engine.py` runs them) | everything above |
+| Test doubles | `testing/` (`make_engine` builds a real engine) | everything `runtime/` may, plus runtime |
+| UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn) | runtime, api, contracts, errors, config |
+| Entry points | `cli.py`, `docs_gen.py`, `docs_diagrams.py`, `__init__.py` | anything |
 
 Services never touch a database, SDK or HTTP client directly: they receive protocol implementations
 from the runtime. That is what lets an enterprise replace authentication, policy, secret storage,
 discovery or transport **without patching core**.
+
+`BuilderEngine` (and `FakeEngine`, for `ActorApi`) satisfies the facade Protocols structurally; mypy checks it through
+`create_app(engine: EngineApi)` and `tests/structure/test_conformance.py`. The CLI, the stock
+server and the Railway entrypoint import only the public API
+(`tests/structure/test_public_api.py`). Importing the root or `api` loads no heavy dependency
+(`test_import_weight.py`), and no module may import a DI container (`test_layers.py`).
 
 ## Providers
 
@@ -89,6 +96,8 @@ Each third-party package is confined to one module so a dependency change has on
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |
 | `fastapi`, `starlette` | `http/` |
+| `uvicorn` | `http/server.py` |
+| DI containers (`dishka`, `dependency_injector`, `injector`, …) | nowhere (decision 1) |
 
 ## Domains
 
@@ -104,10 +113,13 @@ Each third-party package is confined to one module so a dependency change has on
 
 ## Integration modes
 
-- **Imported:** `engine = await BuilderEngine.from_settings(...)`; the application authenticates its
-  own users and passes an `ActorContext`. The `AccessPolicy` still applies. Walkthrough:
+- **Imported:** `engine = await BuilderEngine.create(settings, supply=..., decorate=...)`, typed as
+  `ActorApi` where it only runs jobs; the application authenticates its own users and passes an
+  `ActorContext`. The `AccessPolicy` still applies. Walkthrough:
   [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
-- **Service:** `lpb serve` (or `create_app(engine)`) runs the same engine behind REST. Requests are
-  authenticated by the authenticator chain. Admin routes need an admin credential.
+- **Service:** `lpb serve` runs the same engine behind REST. Requests are authenticated by the
+  authenticator chain. Admin routes need an admin credential. A customized service calls
+  `livepeer_builder.http.server.serve` (or `build_app`, to mount it elsewhere) with its own parts
+  and routes: [extending-the-engine.md](docs/design-docs/extending-the-engine.md#service-mode).
 
 Both modes run the same release and the same code paths.

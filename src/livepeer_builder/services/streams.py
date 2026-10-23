@@ -26,6 +26,7 @@ from types import TracebackType
 from typing import Literal, cast
 
 from livepeer_builder.contracts import (
+    ActorContext,
     Attempt,
     AttemptOutcome,
     Failure,
@@ -38,10 +39,9 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
-_BODY_LIMIT = 4096
 _END = b""  # the pump's end-of-stream marker; the pump never queues an empty chunk
 FinishJob = Callable[[Job, JobState, Failure | None, ResultRef | None, Sequence[Attempt]], Awaitable[Job]]
 _Deadline = Literal["first_byte", "idle", "total"]
@@ -60,6 +60,7 @@ class StreamLimits:
     finalize_timeout_s: float = 10.0  # the most the finishing writes may take (D34)
     drain_timeout_s: float = 30.0  # how long engine.stop() waits for open streams (D36)
     settle_s: float = 1.0  # after a cancel or disconnect, how long the runner may take to end (D38)
+    open_grace_s: float = 5.0  # how far past its deadline a transport's open runs before the engine stops it
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ class JobStream:
 
     Use it as an async context manager and iterate it::
 
-        stream = await engine.jobs.stream(actor, request)
+        stream = await engine.jobs.streaming.stream(actor, request)
         async with stream:
             async for chunk in stream:
                 ...
@@ -386,7 +387,7 @@ class JobStream:
                 kind=failure_kind(ending.outcome, ending.status_code),
                 message=ending.message,
                 status_code=ending.status_code,
-                body=ending.body[:_BODY_LIMIT] if ending.body else None,
+                body=ending.body[:BODY_LIMIT] if ending.body else None,
                 payment_sent=paid,
             )
             state = "uncertain" if paid else "failed"
@@ -430,3 +431,18 @@ def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKin
     if outcome in ("in_flight", "succeeded"):
         return "runner_error"
     return cast(FailureKind, outcome)
+
+
+class Streaming:
+    """``jobs.streaming``: exists only when the transport implements ``open`` (D33).
+
+    Everything up to the first byte behaves like ``run``; then the job is bound to that runner. Use
+    the returned ``JobStream`` with ``async with`` and iterate it; ``complete()`` or ``aclose()`` end it
+    early.
+    """
+
+    def __init__(self, open_stream: Callable[[ActorContext, JobRequest], Awaitable[JobStream]]) -> None:
+        self._open_stream = open_stream
+
+    async def stream(self, actor: ActorContext, request: JobRequest) -> JobStream:
+        return await self._open_stream(actor, request)

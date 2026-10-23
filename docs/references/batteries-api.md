@@ -9,8 +9,8 @@ Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
   `allocations.fund`, `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`,
   `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.** `grants.fund` covers every
   grant. The engine sends the grant id on the request, or the grant of the caller's own allocation.
-- **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Required when
-  `LPB_BATTERIES_URL` is set.
+- **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Optional: without
+  it the engine starts with the grant desk off (`list_grants`/`create_grant` and their routes absent).
 
 | Engine call | Route | Notes |
 | --- | --- | --- |

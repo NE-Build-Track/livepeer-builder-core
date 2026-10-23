@@ -40,7 +40,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | ISS-13 First funded payment configuration | M3 | `deploy/dev-stack` |
 | ISS-14 Durable submission and immediate execution | M3 | `JobService.run` (implemented) |
 | ISS-15 Owned job history and basic results | M3 | `GET /v1/jobs`, `ResultRef` (implemented) |
-| ISS-16 Capture usage; correlate jobs with payment evidence | M3 | `report_usage`; `auth_id` correlation (implemented) |
+| ISS-16 Capture usage; correlate jobs with payment evidence | M3 | `report_usage`; `manifest_id` → `payment_session_id` correlation through the session log (implemented) |
 | ISS-17 Replayable network-cost projections | M3 | `CostService` projections and `corrected` (implemented) |
 | ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads (implemented); events feed **defined** ([events.md](../contracts/events.md)) |
 | ISS-19 Representative jobs and acceptance matrix | M3 | Open |

@@ -6,11 +6,14 @@ Checks:
 3. Exec plans have the required sections, in order (docs/PLANS.md).
 4. Doc references in source code (``docs/...md#anchor``, ``ARCHITECTURE.md#anchor``) resolve.
 5. Mermaid blocks contain no ``;`` (Mermaid treats it as a statement separator and fails to render).
+6. A code block marked ``<!-- example: path#name -->`` equals the region between ``# docs:start name``
+   and ``# docs:end name`` in that file, so documented examples are the tested ones.
 Each failure says how to fix it.
 """
 
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +125,32 @@ def check_mermaid(errors: list[str]) -> None:
                     )
 
 
+EXAMPLE = re.compile(r"<!-- example: ([\w./-]+)#([\w-]+) -->\n```python\n(.*?)^```", re.MULTILINE | re.DOTALL)
+
+
+def example_region(source: Path, name: str) -> str | None:
+    lines = source.read_text().splitlines()
+    start, end = f"# docs:start {name}", f"# docs:end {name}"
+    try:
+        first = next(i for i, line in enumerate(lines) if line.strip() == start)
+        last = next(i for i, line in enumerate(lines) if line.strip() == end and i > first)
+    except StopIteration:
+        return None
+    return textwrap.dedent("\n".join(lines[first + 1 : last])).strip()
+
+
+def check_examples(errors: list[str]) -> None:
+    for doc in markdown_files():
+        for path, name, block in EXAMPLE.findall(doc.read_text()):
+            source = ROOT / path
+            where = f"{doc.relative_to(ROOT)} example {path}#{name}"
+            region = example_region(source, name) if source.exists() else None
+            if region is None:
+                errors.append(f"{where}: no '# docs:start {name}' / '# docs:end {name}' region in {path}")
+            elif textwrap.dedent(block).strip() != region:
+                errors.append(f"{where}: the block differs from the tested region; copy the region in")
+
+
 def main() -> int:
     errors: list[str] = []
     graph = check_links(errors)
@@ -129,6 +158,7 @@ def main() -> int:
     check_plans(errors)
     check_code_references(errors)
     check_mermaid(errors)
+    check_examples(errors)
     for error in errors:
         sys.stderr.write(f"docs: {error}\n")
     if not errors:

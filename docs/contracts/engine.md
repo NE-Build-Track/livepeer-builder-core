@@ -34,7 +34,7 @@ missing `payload` as the JSON object `{}` (D41).
 | `queued` | Reserved for async jobs (M4) |
 | `running` | Dispatching. A restart resolves leftover `running` jobs on start |
 | `succeeded` | A runner answered 2xx |
-| `failed` | It ended, and nothing went out that might have run the work |
+| `failed` | It ended with a known outcome: nothing went out that might have run the work, or the runner answered with an error. `failure.payment_sent` says whether it was paid |
 | `uncertain` | Payment went out (or may have) and the outcome is unknown. Never retried automatically |
 
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
@@ -86,22 +86,26 @@ unique index, so concurrent duplicates are also refused.
 | `not_provisioned` | no | 402 |
 | `refused`, `unreachable` (all runners) | no | 503 + `Retry-After` |
 | `payment` (includes every orchestrator refused by the signer) | maybe | 503 + `Retry-After` |
-| `timeout` | yes → job `uncertain` | 504 |
+| `timeout` | maybe → `uncertain` when paid, else `failed` | 504 |
 | `runner_rejected` (4xx) | yes | the runner's own 4xx |
 | `runner_error` (5xx) | yes | 502 |
 | `interrupted` (restart) | maybe | 502 |
-| `abandoned` (the caller stopped reading a stream) | yes → job `uncertain` | n/a: the response had already started |
+| `abandoned` (the caller stopped reading a stream) | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started |
 
 ## Streaming
 
-`jobs.stream(actor, request)` dispatches the same immediate job as `jobs.run` and hands the runner's
+`jobs.streaming.stream(actor, request)` dispatches the same immediate job as `jobs.run` and hands the runner's
 response back **as it arrives**: a `JobStream` with the `Job` (state `running` until the stream
 ends), the runner's `status_code` and `content_type`, and an async iterator of `bytes`. The engine
 moves bytes; it never interprets them, so server-sent events, ndjson and audio all ride the same
 path (D29). Streaming is a delivery choice, not an execution mode: `mode` stays `immediate`.
+`jobs.streaming` is `None` when the configured transport cannot stream (D33); the REST route then
+answers 400.
 
 ```python
-stream = await engine.jobs.stream(actor, JobRequest(app="example/chat", path="/v1/chat/completions"))
+stream = await engine.jobs.streaming.stream(
+    actor, JobRequest(app="example/chat", path="/v1/chat/completions")
+)
 async with stream:  # leaving the block ends the stream, however the block ends
     async for chunk in stream:
         if my_format_says_done(chunk):
@@ -120,7 +124,7 @@ The admission slot is held until the stream ends.
 
 | Field | Default | What it bounds |
 | --- | --- | --- |
-| `timeout_s` | 300 s | The whole job, from the call to `jobs.stream` to the runner's last byte. It also ends a stream that nobody reads. Once the runner has ended the stream it no longer applies: a caller still handling the last chunks reads them and the end, and the job succeeds. |
+| `timeout_s` | 300 s | The whole job, from the call to `jobs.streaming.stream` to the runner's last byte. It also ends a stream that nobody reads. Once the runner has ended the stream it no longer applies: a caller still handling the last chunks reads them and the end, and the job succeeds. |
 | `first_byte_timeout_s` | 60 s | From each runner request to its first body chunk: payment, headers and the first chunk. Capped at `timeout_s`; setting it higher is rejected (422). |
 | `idle_timeout_s` | 60 s | The longest gap between chunks once data flows. `null` turns it off. |
 
@@ -130,7 +134,8 @@ another runner, paid or not, exactly as for `run`. The SDK transport enforces th
 itself and keeps the sessions signed so far: a timeout after `on_payment_session` has
 `payment_sent=True` (job `uncertain`), while a timeout or failure during signing before
 `on_payment_session` has `payment_sent=False` (job `failed`, D41). The engine stops a transport that
-runs 5 s past the limit and treats the payment as sent, because it cannot know.
+runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
+cannot know.
 
 ### How a stream ends
 
@@ -173,7 +178,8 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   own HTTP layer should do the same; without it, a closed iterator is the caller stopping.
 
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
-transport implements it; an enterprise transport without `open` makes `jobs.stream` answer 400.
+transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and
+the REST streaming route answers 400 (D33).
 `open` must honour `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the
 payment evidence so far.
 
@@ -223,5 +229,5 @@ These are the explicit decisions for ISS-02.
   [payments.md](payments.md#cost-classification)). The enterprise decides what to bill.
 - **Performance:** admission limits bound concurrent dispatch. Discovery and cost sync run in the
   background (default 15 s and 30 s). There are no latency guarantees in M2.
-- **Streaming is per job, not continuous media.** `jobs.stream` delivers one runner response as it
+- **Streaming is per job, not continuous media.** `jobs.streaming.stream` delivers one runner response as it
   arrives (above); live media and persistent sessions remain M4 (ISS-27).

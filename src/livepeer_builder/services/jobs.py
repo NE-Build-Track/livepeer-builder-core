@@ -16,6 +16,7 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -64,16 +65,14 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
-from livepeer_builder.services.streams import JobStream, StreamLimits, failure_kind, sessions_from
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind, sessions_from
+from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
-_BODY_LIMIT = 4096
 _FAILOVER_OUTCOMES = frozenset(
     {"refused", "unreachable", "payment_refused"}
 )  # only while payment_sent is false
 _UNCERTAIN_OUTCOMES = frozenset({"unreachable", "timeout"})  # after payment the runner may have run
-_OPEN_BACKSTOP_GRACE_S = 5.0  # how far past its deadline a transport's open runs before the engine stops it
 
 
 class JobService:
@@ -98,6 +97,11 @@ class JobService:
         self._admission = admission
         self._clock = clock
         self._stream_limits = stream_limits or StreamLimits()
+        self.streaming: Streaming | None = (  # decided once (D33): only a transport with open() streams
+            Streaming(functools.partial(self._stream, transport=transport))
+            if isinstance(transport, StreamingRunnerTransport)
+            else None
+        )
         self._open_streams: set[JobStream] = set()
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
@@ -115,17 +119,10 @@ class JobService:
                 await self._close_after_error(job, attempts, exc)
                 raise
 
-    async def stream(self, actor: ActorContext, request: JobRequest) -> JobStream:
-        """Dispatch one immediate job and hand its response back as it arrives.
-
-        Everything up to the first byte behaves like ``run``: admission, idempotency, failover before
-        payment, and the same errors. Once the stream is open the job is bound to that runner. Use the
-        returned ``JobStream`` with ``async with`` and iterate it; ``complete()`` or ``aclose()`` end
-        it early.
-        """
-        transport = self._transport
-        if not isinstance(transport, StreamingRunnerTransport):
-            raise InvalidRequest("the configured runner transport does not support streaming")
+    async def _stream(
+        self, actor: ActorContext, request: JobRequest, *, transport: StreamingRunnerTransport
+    ) -> JobStream:
+        """``jobs.streaming.stream``: like ``run`` up to the first byte (see ``Streaming``, streams.py)."""
         deadline = asyncio.get_running_loop().time() + request.timeout_s  # timeout_s counts from here
         fingerprint = await self._admit_request(actor, request)
         slot = contextlib.AsyncExitStack()
@@ -376,7 +373,7 @@ class JobService:
             budget = min(request.first_byte_timeout_s, deadline - started)
             bounded = request.model_copy(update={"first_byte_timeout_s": max(budget, 0.001)})
             try:
-                async with asyncio.timeout(max(budget, 0) + _OPEN_BACKSTOP_GRACE_S):
+                async with asyncio.timeout(max(budget, 0) + self._stream_limits.open_grace_s):
                     opened = await transport.open(runner, bounded, credential.token)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error)
@@ -495,6 +492,6 @@ def _failure(error: RunnerCallError) -> Failure:
         kind=failure_kind(error.kind, error.status_code),
         message=str(error),
         status_code=error.status_code,
-        body=error.body[:_BODY_LIMIT] if error.body else None,
+        body=error.body[:BODY_LIMIT] if error.body else None,
         payment_sent=error.payment_sent,
     )

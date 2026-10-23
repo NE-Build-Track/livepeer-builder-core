@@ -10,7 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, generate_secret_key
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, AuthRequest, Runner
@@ -84,7 +84,7 @@ async def test_replacing_one_part_keeps_the_other_defaults() -> None:
 async def test_a_supplied_store_is_used_and_the_configured_database_is_never_opened(
     store: SqlStore, clock: FixedClock
 ) -> None:
-    key = EncryptedDbSecretStore.generate_key()
+    key = generate_secret_key()
     async with contextlib.AsyncExitStack() as stack:
         parts = await default_parts(
             settings(database_url=UNOPENABLE, secret_key=key), stack, EngineSupply(store=store, clock=clock)

@@ -13,8 +13,8 @@ import os
 import subprocess
 import sys
 
-from livepeer_builder.config import EngineSettings
-from livepeer_builder.http.server import serve
+from livepeer_builder import EngineSettings
+from livepeer_builder.http import serve
 
 ASYNCPG_SCHEME = "postgresql+asyncpg://"
 

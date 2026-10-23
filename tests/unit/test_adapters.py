@@ -11,6 +11,7 @@ import pytest
 from livepeer_gateway.errors import LivepeerHTTPError, PaymentError
 from pydantic import ValidationError
 
+from livepeer_builder import generate_secret_key
 from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import (
     TOKEN_HEADER,
@@ -283,12 +284,12 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
     with pytest.raises(InvalidRequest):
         await configured.put("x", "y")
 
-    key = EncryptedDbSecretStore.generate_key()
+    key = generate_secret_key()
     database = EncryptedDbSecretStore(store, key, clock)
     ref = await database.put("lpg/default/alice", "lpg_alice")
     assert await database.get(ref) == "lpg_alice"
     with pytest.raises(InvalidRequest, match="decrypted"):
-        await EncryptedDbSecretStore(store, EncryptedDbSecretStore.generate_key(), clock).get(ref)
+        await EncryptedDbSecretStore(store, generate_secret_key(), clock).get(ref)
 
     routing = RoutingSecretStore(configured, database)
     assert await routing.get(SecretRef(ref="settings:shared")) == "lpg_shared"

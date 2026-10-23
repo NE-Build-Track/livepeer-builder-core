@@ -1,5 +1,6 @@
 """Config layer: engine settings from ``LPB_*`` environment variables (docs/RELIABILITY.md#configuration)."""
 
+import base64
 import os
 from collections.abc import Mapping
 
@@ -64,3 +65,8 @@ class EngineSettings(Contract):
             if raw is not None and raw != "":
                 values[name] = raw
         return cls.model_validate(values)
+
+
+def generate_secret_key() -> str:
+    """A new ``LPB_SECRET_KEY``: 32 random bytes, URL-safe base64 (the Fernet key format)."""
+    return base64.urlsafe_b64encode(os.urandom(32)).decode()

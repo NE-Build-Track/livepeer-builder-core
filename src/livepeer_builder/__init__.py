@@ -14,7 +14,7 @@ from livepeer_builder.api import (
     KeysApi,
     StreamingApi,
 )
-from livepeer_builder.config import EngineSettings
+from livepeer_builder.config import EngineSettings, generate_secret_key
 from livepeer_builder.contracts import (
     AccessKey,
     ActorContext,
@@ -73,7 +73,7 @@ from livepeer_builder.errors import (
     UnsupportedForBackend,
 )
 from livepeer_builder.runtime import BuilderEngine, JobStream
-from livepeer_builder.runtime.assembly import UNSET, ApiKeys, EngineParts, EngineSupply
+from livepeer_builder.runtime.assembly import UNSET, ApiKeys, Decorate, EngineParts, EngineSupply
 
 __all__ = [
     "UNSET",
@@ -90,6 +90,7 @@ __all__ = [
     "BuilderEngine",
     "CostSummary",
     "CursorMismatch",
+    "Decorate",
     "EngineApi",
     "EngineError",
     "EngineEvent",
@@ -143,4 +144,5 @@ __all__ = [
     "StreamingApi",
     "SyncReport",
     "UnsupportedForBackend",
+    "generate_secret_key",
 ]

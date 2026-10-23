@@ -7,8 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply, generate_secret_key
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
     ActorContext,
@@ -101,7 +100,7 @@ async def test_reprovisioning_after_revoke_is_a_new_operation(
 async def test_provisioning_needs_a_provider_and_a_grant(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
-    secret_key = EncryptedDbSecretStore.generate_key()
+    secret_key = generate_secret_key()
     no_provider = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource()))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="management API"):
         await no_provider.payments.provision(admin, provision())

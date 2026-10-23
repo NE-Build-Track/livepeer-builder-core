@@ -8,6 +8,7 @@ import httpx
 import pytest
 from livepeer_gateway.errors import PaymentError
 
+from livepeer_builder import generate_secret_key
 from livepeer_builder.adapters.batteries import (
     BatteriesClient,
     BatteriesUsageSource,
@@ -199,7 +200,7 @@ async def test_secret_store_edges(store: SqlStore, clock: FixedClock) -> None:
     await configured.delete(configured.ref("k"))  # configuration owns it: a no-op
     assert await configured.get(configured.ref("k")) == "v"
 
-    database = EncryptedDbSecretStore(store, EncryptedDbSecretStore.generate_key(), clock)
+    database = EncryptedDbSecretStore(store, generate_secret_key(), clock)
     with pytest.raises(NotFound):
         await database.get(SecretRef(ref="db:nope"))
 

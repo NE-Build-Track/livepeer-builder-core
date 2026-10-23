@@ -11,12 +11,9 @@ from collections.abc import Callable
 
 from fastapi import FastAPI
 
-from livepeer_builder.api import EngineApi
-from livepeer_builder.config import EngineSettings
+from livepeer_builder import BuilderEngine, Decorate, EngineApi, EngineSettings, EngineSupply
 from livepeer_builder.http.app import actor_dependency, create_app
-from livepeer_builder.runtime.assembly import Decorate, EngineSupply
-from livepeer_builder.runtime.engine import BuilderEngine
-from livepeer_builder.runtime.logging import configure_logging
+from livepeer_builder.runtime import configure_logging
 
 Extend = Callable[[FastAPI, EngineApi], None]
 """Adds routes or middleware to the app; receives the engine, so nothing is looked up."""

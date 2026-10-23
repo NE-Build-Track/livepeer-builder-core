@@ -21,8 +21,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from livepeer_builder.config import EngineSettings
-from livepeer_builder.errors import EngineError
+from livepeer_builder import EngineError, EngineSettings, generate_secret_key
 from livepeer_builder.runtime import BuilderEngine, package_version
 from livepeer_builder.store import SqlStore, backup, current_revision, head_revision, restore, upgrade, verify
 
@@ -127,9 +126,7 @@ async def _bootstrap(args: argparse.Namespace) -> None:
 
 
 async def _gen_secret_key(_: argparse.Namespace) -> None:
-    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
-
-    print(EncryptedDbSecretStore.generate_key())
+    print(generate_secret_key())
 
 
 async def _smoke(_: argparse.Namespace) -> int:
@@ -148,7 +145,7 @@ async def _smoke(_: argparse.Namespace) -> int:
 
 async def _serve(_: argparse.Namespace) -> None:
     try:
-        from livepeer_builder.http.server import serve
+        from livepeer_builder.http import serve
     except ImportError:
         print("the REST service needs: pip install 'livepeer-builder[server]'", file=sys.stderr)
         raise SystemExit(2) from None

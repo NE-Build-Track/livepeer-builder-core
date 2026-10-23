@@ -10,9 +10,8 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
-from livepeer_builder.config import EngineSettings
+from livepeer_builder.config import EngineSettings, generate_secret_key
 from livepeer_builder.contracts import Runner
 from livepeer_builder.runtime.assembly import UNSET, Decorate, EngineSupply
 from livepeer_builder.runtime.engine import BuilderEngine
@@ -46,7 +45,7 @@ async def make_engine(
     values: dict[str, Any] = {
         "database_url": MEMORY_URL,
         "allocation_mode": "per_actor",
-        "secret_key": EncryptedDbSecretStore.generate_key(),
+        "secret_key": generate_secret_key(),
         "log_json": False,
         **settings,
     }

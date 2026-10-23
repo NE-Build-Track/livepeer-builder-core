@@ -27,6 +27,7 @@ from livepeer_builder.contracts import (
     Operation,
     PaymentCredential,
     ProvisionedActor,
+    PurgeReport,
     ResourceRef,
     ResultRef,
     Runner,
@@ -281,8 +282,22 @@ class SecretRepo(Protocol):
     async def delete_secret(self, ref: str) -> None: ...
 
 
+class StoreMaintenance(Protocol):
+    """Housekeeping a store may offer: retention purges and its schema revision."""
+
+    async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport: ...
+
+    async def schema_revision(self) -> str | None: ...
+
+
 class EngineStore(ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo, Protocol):
     """Every engine-owned record, behind one interface. SQL implementation: livepeer_builder.store."""
+
+    @property
+    def maintenance(self) -> StoreMaintenance | None:
+        """``None`` when the store has no housekeeping: the engine then purges nothing and reports no
+        schema revision."""
+        ...
 
     async def close(self) -> None: ...
 

@@ -4,11 +4,12 @@ import asyncio
 import contextlib
 import json
 import logging
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply, PurgeReport
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import SignerDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -223,8 +224,41 @@ async def test_stop_twice_is_safe_and_a_stopped_engine_cannot_restart() -> None:
         await engine.start()
 
 
-async def test_purge_and_revision_without_a_sql_store(clock: FixedClock) -> None:
+async def test_purge_and_revision_go_to_the_store_maintenance(clock: FixedClock) -> None:
+    class Maintenance:
+        def __init__(self) -> None:
+            self.purges: list[tuple[datetime, int | None, int | None]] = []
+
+        async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport:
+            self.purges.append((now, jobs_days, usage_days))
+            return PurgeReport(jobs_deleted=3, usage_rows_deleted=4)
+
+        async def schema_revision(self) -> str | None:
+            return "vault-7"
+
     class NotSql:
+        maintenance = Maintenance()
+
+        async def close(self) -> None:
+            return None
+
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=MEMORY, log_json=False, retention_jobs_days=30, retention_usage_days=7),
+        supply=EngineSupply(
+            store=NotSql(),  # type: ignore[arg-type]
+            clock=clock,
+            discovery_source=StaticDiscoverySource(),
+        ),
+    )
+    assert await engine.purge() == PurgeReport(jobs_deleted=3, usage_rows_deleted=4)
+    assert NotSql.maintenance.purges == [(clock.now(), 30, 7)]
+    assert await engine.schema_revision() == "vault-7"
+
+
+async def test_purge_and_revision_without_store_maintenance(clock: FixedClock) -> None:
+    class NotSql:
+        maintenance = None
+
         async def close(self) -> None:
             return None
 

@@ -27,7 +27,6 @@ from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.payments import PaymentsService
-from livepeer_builder.store import SqlStore, current_revision, purge
 
 if TYPE_CHECKING:
     from livepeer_builder.api import AdminApi, EngineApi, JourneyApi
@@ -156,17 +155,16 @@ class BuilderEngine:
         )
 
     async def purge(self) -> PurgeReport:
-        if not isinstance(self.store, SqlStore):
+        maintenance = self.store.maintenance
+        if maintenance is None:
             return PurgeReport(jobs_deleted=0, usage_rows_deleted=0)
-        return await purge(
-            self.store.engine,
-            self.clock.now(),
-            self.settings.retention_jobs_days,
-            self.settings.retention_usage_days,
+        return await maintenance.purge(
+            self.clock.now(), self.settings.retention_jobs_days, self.settings.retention_usage_days
         )
 
     async def schema_revision(self) -> str | None:
-        return await current_revision(self.store.engine) if isinstance(self.store, SqlStore) else None
+        maintenance = self.store.maintenance
+        return None if maintenance is None else await maintenance.schema_revision()
 
     async def _retention_loop(self) -> None:
         if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:

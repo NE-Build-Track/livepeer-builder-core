@@ -47,6 +47,7 @@ from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.store import SqlStore
+from livepeer_builder.store.maintenance import SqlMaintenance
 
 # Extension protocols shown in the diagram, with their default implementations.
 DEFAULTS: dict[str, tuple[type, ...]] = {
@@ -63,6 +64,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "UsageSource": (BatteriesUsageSource,),
     "AllowanceReader": (PaymentsService,),
     "EngineStore": (SqlStore,),
+    "StoreMaintenance": (SqlMaintenance,),
     "Clock": (SystemClock,),
     "EventFeed": (ReservedEventFeed,),
     "SessionManager": (ReservedSessions,),

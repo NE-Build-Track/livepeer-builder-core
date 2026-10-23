@@ -28,6 +28,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import schema as t
+from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import jobs_needing_projection, match_payment_sessions
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.rows import chunks, projection, usage_row
@@ -56,6 +57,7 @@ def create_engine(url: str) -> AsyncEngine:
 class SqlStore:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
+        self.maintenance = SqlMaintenance(engine)
 
     @classmethod
     async def connect(cls, url: str, *, migrate: bool = True) -> "SqlStore":

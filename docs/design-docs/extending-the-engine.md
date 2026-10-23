@@ -256,7 +256,7 @@ named here show each one.
 | `StreamingRunnerTransport` | `open` returns once the runner answered (status, content type), with `payment_sent` and `manifest_ids` already known. It must give up after `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the payment evidence so far; the engine stops an `open` that runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) longer and treats it as paid (D35). Iteration raises `RunnerCallError` mid-stream; `aclose` closes the connection and stops any ongoing funding, and may be called more than once (`tests/unit/test_stream_deadlines.py`) |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result |
 | `UsageSource` | Opaque cursor. Raise `CursorMismatch` on a rejected cursor so the worker resyncs. Rows are immutable per `id` |
-| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` may run twice for one attempt and must only add signed sessions, never rewrite them (D39) |
+| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` may run twice for one attempt and must only add signed sessions, never rewrite them (D39). `maintenance` may be `None`: the engine then purges nothing and reports no schema revision |
 
 ## Testing your implementation
 

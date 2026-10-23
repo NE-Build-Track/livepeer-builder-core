@@ -10,11 +10,12 @@ from uuid import UUID
 import httpx
 from starlette.requests import ClientDisconnect
 
+from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.runtime import BuilderEngine
-from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
+from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.test_stream_lifecycle import ended
 from tests.unit.test_streaming import APP, provisioned
@@ -144,3 +145,18 @@ async def test_a_client_that_disconnects_as_the_runner_finishes_still_succeeds(
         await ended(engine)
         job = await engine.jobs.get(alice, UUID(job_id_of(sent)))
         assert job.state == "succeeded" and job.attempts[0].outcome == "succeeded", spec
+
+
+async def test_streaming_without_a_streaming_transport_is_a_400(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await provisioned(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
+    assert engine.jobs.streaming is None
+    app = create_app(engine, manage_lifecycle=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+        response = await client.post(
+            "/v1/jobs?stream=true",
+            json={"app": APP},
+            headers={"Authorization": f"Bearer {await bearer(engine, admin)}"},
+        )
+    assert response.status_code == 400 and "does not support streaming" in response.text

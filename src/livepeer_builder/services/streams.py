@@ -26,6 +26,7 @@ from types import TracebackType
 from typing import Literal, cast
 
 from livepeer_builder.contracts import (
+    ActorContext,
     Attempt,
     AttemptOutcome,
     Failure,
@@ -430,3 +431,18 @@ def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKin
     if outcome in ("in_flight", "succeeded"):
         return "runner_error"
     return cast(FailureKind, outcome)
+
+
+class Streaming:
+    """``jobs.streaming``: exists only when the transport implements ``open`` (D33).
+
+    Everything up to the first byte behaves like ``run``; then the job is bound to that runner. Use
+    the returned ``JobStream`` with ``async with`` and iterate it; ``complete()`` or ``aclose()`` end it
+    early.
+    """
+
+    def __init__(self, open_stream: Callable[[ActorContext, JobRequest], Awaitable[JobStream]]) -> None:
+        self._open_stream = open_stream
+
+    async def stream(self, actor: ActorContext, request: JobRequest) -> JobStream:
+        return await self._open_stream(actor, request)

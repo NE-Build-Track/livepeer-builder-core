@@ -252,6 +252,14 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] 2026-10-23: **step 1 done**: SDK injection (`3e4ad23`), tuning settings (`eb2b9ba`), body limit (`7f9d7ae`), env-read guard. Every commit leaves the CI gate green.
 - [x] 2026-10-23: **step 2 done**: exit stack with logged cleanup, idempotent single-use engine, failing-first partial-failure test (spies on `SqlStore.connect`/`close`), behavioural loop check replacing `engine._tasks`. The close-failure test injects the fault on `SqlStore.close`, since no seam exists for an engine-owned resource.
 - [x] 2026-10-23: **step 3 done**, in three commits. Part 1: `runtime/assembly.py` (`EngineParts`, `EngineSupply`, `UNSET`, `ApiKeys`, `default_parts`, `assemble`), `BuilderEngine.create`, `async with`, keys-off and grant-desk capabilities with conditional routes, mode log in `start()`. Each behaviour was shown to fail its test under a deliberate mutation. The spec generator now turns every optional capability on, so `docs/generated/openapi.json` still documents the grant desk. Part 2 landed: every caller (CLI, Railway, the spec generator, tests) uses `create`; `from_settings` and its shim are removed; the private-attribute wiring tests and the post-construction rewiring (`engine.jobs._transport = …`, a monkeypatched `finish_job`) are replaced by supplied parts and assertions on `default_parts`; the unfiltered usage feed is checked through the request it sends. `engine.jobs._open_streams` stays as a test-synchronisation poll. Part 3: `extending-the-engine.md` rewritten around supply and decorate, with its example kept equal to the tested region by a new `check_docs.py` check (shown to fail on a drifted block); tests for borrowed supplied parts and the start-up mode log.
+- [ ] 2026-10-23: step 4 in progress. Part 1 landed:
+  - `livepeer_builder/api.py` with the role-split Protocols, nested, as read-only properties;
+  - `jobs.streaming` as an optional capability (`Streaming` in `services/streams.py`), and `create_app(engine: EngineApi)`;
+  - mypy proves `BuilderEngine` satisfies `JourneyApi`, `AdminApi` and `EngineApi`;
+  - an HTTP test for the 400 a non-streaming transport answers (shown to fail without the guard);
+  - the facade Protocols exported from the root.
+
+  Deviations, recorded here: `api.py` imports `protocols` (it reuses `Authenticator`, `EventFeed` and `SessionManager` for engine members that are those ports), and `streaming` is a plain attribute rather than a property, which keeps `services/jobs.py` under the 500-line limit.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log

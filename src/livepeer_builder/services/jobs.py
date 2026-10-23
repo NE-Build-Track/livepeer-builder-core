@@ -16,6 +16,7 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -64,7 +65,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
-from livepeer_builder.services.streams import JobStream, StreamLimits, failure_kind, sessions_from
+from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind, sessions_from
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -96,6 +97,11 @@ class JobService:
         self._admission = admission
         self._clock = clock
         self._stream_limits = stream_limits or StreamLimits()
+        self.streaming: Streaming | None = (  # decided once (D33): only a transport with open() streams
+            Streaming(functools.partial(self._stream, transport=transport))
+            if isinstance(transport, StreamingRunnerTransport)
+            else None
+        )
         self._open_streams: set[JobStream] = set()
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
@@ -113,17 +119,10 @@ class JobService:
                 await self._close_after_error(job, attempts, exc)
                 raise
 
-    async def stream(self, actor: ActorContext, request: JobRequest) -> JobStream:
-        """Dispatch one immediate job and hand its response back as it arrives.
-
-        Everything up to the first byte behaves like ``run``: admission, idempotency, failover before
-        payment, and the same errors. Once the stream is open the job is bound to that runner. Use the
-        returned ``JobStream`` with ``async with`` and iterate it; ``complete()`` or ``aclose()`` end
-        it early.
-        """
-        transport = self._transport
-        if not isinstance(transport, StreamingRunnerTransport):
-            raise InvalidRequest("the configured runner transport does not support streaming")
+    async def _stream(
+        self, actor: ActorContext, request: JobRequest, *, transport: StreamingRunnerTransport
+    ) -> JobStream:
+        """``jobs.streaming.stream``: like ``run`` up to the first byte (see ``Streaming``, streams.py)."""
         deadline = asyncio.get_running_loop().time() + request.timeout_s  # timeout_s counts from here
         fingerprint = await self._admit_request(actor, request)
         slot = contextlib.AsyncExitStack()

@@ -10,7 +10,7 @@ import pytest
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
-from livepeer_builder.errors import InvalidRequest, JobFailed, OperationExists, RunnerCallError
+from livepeer_builder.errors import JobFailed, OperationExists, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport, StreamScript, runner
 from tests.conftest import EngineFactory
@@ -47,7 +47,7 @@ async def test_stream_delivers_chunks_then_records_a_succeeded_job(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=list(CHUNKS), manifest_ids=("m-1",))]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, path="/v1/chat/completions"))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, path="/v1/chat/completions"))
     assert stream.job.state == "running" and stream.status_code == 200
     assert stream.content_type == "text/event-stream"
     assert engine.admission.running == 1  # the slot is held while the stream is open
@@ -70,7 +70,7 @@ async def test_payment_evidence_is_written_before_the_first_byte(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"x"], manifest_ids=("m-7",))]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     running = await engine.jobs.get(alice, stream.job.id)
     attempt = running.attempts[0]
     assert attempt.outcome == "in_flight" and attempt.payment_sent
@@ -84,7 +84,7 @@ async def test_open_fails_over_only_before_payment(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [RunnerCallError("refused", "503", payment_sent=False), StreamScript(events=[b"ok"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     await read_all(stream)
     assert [a.outcome for a in stream.job.attempts] == ["refused", "succeeded"]
 
@@ -92,7 +92,7 @@ async def test_open_fails_over_only_before_payment(
         RunnerCallError("http", "500", payment_sent=True, manifest_ids=("m-9",), status_code=500)
     ]
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.stream(alice, JobRequest(app=APP))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     assert failed.value.job.state == "failed" and len(failed.value.job.attempts) == 1
     assert engine.admission.running == 0  # released when open fails
 
@@ -103,7 +103,7 @@ async def test_runner_failure_mid_stream_ends_the_job_uncertain(
     engine = await provisioned(make_engine, admin)
     boom = RunnerCallError("unreachable", "connection reset", payment_sent=True, manifest_ids=("m-1",))
     transport.opens = [StreamScript(events=[b"partial ", boom])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     received: list[bytes] = []
     with pytest.raises(JobFailed):
         await collect(stream, received)
@@ -121,7 +121,7 @@ async def test_runner_5xx_mid_stream_is_a_runner_error(
     engine = await provisioned(make_engine, admin)
     error = RunnerCallError("http", "bad trailer", payment_sent=True, status_code=502, body="upstream")
     transport.opens = [StreamScript(events=[b"a", error])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.failure is not None and stream.job.failure.kind == "runner_error"
@@ -133,7 +133,7 @@ async def test_idle_and_total_timeouts_end_the_job_uncertain(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", 0.2, b"never"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, idle_timeout_s=0.02))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, idle_timeout_s=0.02))
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.state == "uncertain" and stream.job.failure is not None
@@ -141,7 +141,7 @@ async def test_idle_and_total_timeouts_end_the_job_uncertain(
     assert transport.streams[0].closed
 
     transport.opens = [StreamScript(events=[b"a", 0.03, b"b", 0.03, b"c", 0.03, b"d"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, timeout_s=0.05))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, timeout_s=0.05))
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.failure is not None and stream.job.failure.kind == "timeout"
@@ -153,7 +153,7 @@ async def test_aclose_records_an_abandoned_attempt(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b", b"c"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     first = await stream.__aiter__().__anext__()
     assert first == b"a"
     await stream.aclose()
@@ -170,7 +170,7 @@ async def test_cancelling_the_consumer_abandons_the_stream(
 ) -> None:
     engine = await provisioned(make_engine, admin, stream_settle_s=0)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
 
     async def consume() -> None:
         async for _ in stream:
@@ -191,7 +191,7 @@ async def test_unpaid_stream_failure_is_failed_not_uncertain(
     engine = await provisioned(make_engine, admin)
     error = RunnerCallError("unreachable", "reset", payment_sent=False)
     transport.opens = [StreamScript(events=[b"a", error], manifest_ids=(), payment_sent=False)]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     with pytest.raises(JobFailed):
         await read_all(stream)
     assert stream.job.state == "failed"
@@ -202,13 +202,12 @@ async def test_stream_keeps_idempotency_and_needs_a_streaming_transport(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a"])]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
     await read_all(stream)
     with pytest.raises(OperationExists):
-        await engine.jobs.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
     plain = await provisioned(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
-    with pytest.raises(InvalidRequest, match="does not support streaming"):
-        await plain.jobs.stream(alice, JobRequest(app=APP))
+    assert plain.jobs.streaming is None  # a transport without open() offers no streaming (D33)
 
 
 async def test_rest_streams_the_body_with_the_job_id_header(
@@ -248,7 +247,7 @@ async def test_restart_resolves_an_open_stream_as_uncertain(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"], manifest_ids=("m-1",))]
-    stream = await engine.jobs.stream(alice, JobRequest(app=APP))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     assert await engine.jobs.recover_interrupted() == 1  # as a fresh process would on start
     job = await engine.jobs.get(alice, stream.job.id)
     assert job.state == "uncertain" and job.failure is not None and job.failure.kind == "interrupted"

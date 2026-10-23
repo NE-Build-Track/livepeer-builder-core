@@ -30,6 +30,7 @@ from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.store import PurgeReport, SqlStore, current_revision, purge
 
 if TYPE_CHECKING:
+    from livepeer_builder.api import AdminApi, EngineApi, JourneyApi
     from livepeer_builder.runtime.assembly import Decorate, EngineSupply
 
 _LOG = logging.getLogger(__name__)
@@ -180,3 +181,9 @@ class BuilderEngine:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.settings.retention_interval_s)
             except TimeoutError:
                 continue
+
+
+if TYPE_CHECKING:  # mypy proves BuilderEngine offers every role's surface (livepeer_builder.api)
+
+    def _offers(engine: BuilderEngine) -> tuple["JourneyApi", "AdminApi", "EngineApi"]:
+        return engine, engine, engine

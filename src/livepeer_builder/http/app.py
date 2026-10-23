@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
     AccessKey,
     ActorContext,
@@ -58,7 +59,6 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.http.streaming import stream_response
-from livepeer_builder.runtime import BuilderEngine
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
 _FAILURE_STATUS = {
@@ -107,7 +107,7 @@ class UsageBody(BaseModel):
     quantities: dict[str, int]
 
 
-def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastAPI:
+def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if manage_lifecycle:
@@ -180,7 +180,10 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
         stream: Annotated[bool, Query(description="stream the runner's response as it arrives")] = False,
     ) -> Response:
         if stream or "text/event-stream" in request.headers.get("accept", ""):
-            opened = await engine.jobs.stream(actor, body)
+            streaming = engine.jobs.streaming
+            if streaming is None:
+                raise InvalidRequest("the configured runner transport does not support streaming")
+            opened = await streaming.stream(actor, body)
             return await stream_response(
                 opened, {JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"}
             )
@@ -328,7 +331,7 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     return app
 
 
-def _install_error_handlers(app: FastAPI, engine: BuilderEngine) -> None:
+def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
     def problem(
         status: int, message: str, headers: dict[str, str] | None = None, **extra: Any
     ) -> JSONResponse:

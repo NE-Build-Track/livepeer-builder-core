@@ -16,8 +16,8 @@ from fastapi import Response
 from fastapi.responses import StreamingResponse
 from starlette.types import Send
 
+from livepeer_builder.api import JobStreamApi
 from livepeer_builder.errors import JobFailed
-from livepeer_builder.runtime import JobStream
 
 
 class _Aborted(Exception):
@@ -27,7 +27,7 @@ class _Aborted(Exception):
 class _AbortableStreamingResponse(StreamingResponse):
     body_iterator: AsyncGenerator[bytes, None]
 
-    def __init__(self, stream: JobStream, body: AsyncGenerator[bytes, None], **kwargs: Any) -> None:
+    def __init__(self, stream: JobStreamApi, body: AsyncGenerator[bytes, None], **kwargs: Any) -> None:
         super().__init__(body, **kwargs)
         self._job_stream = stream
 
@@ -47,7 +47,7 @@ class _AbortableStreamingResponse(StreamingResponse):
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
 
-async def stream_response(stream: JobStream, headers: dict[str, str]) -> Response:
+async def stream_response(stream: JobStreamApi, headers: dict[str, str]) -> Response:
     """Wait for the first chunk (JobFailed before it propagates), then stream the rest."""
     chunks = stream.__aiter__()
     try:

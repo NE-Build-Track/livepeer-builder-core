@@ -361,6 +361,24 @@ async def test_a_disconnected_client_lets_the_runner_finish_within_the_settle_wi
         chunks = aiter(stream)
         assert await anext(chunks) == b"a"
         await stream.disconnected()
-        job = await ended(engine, stream.job.id)
-        await stream.aclose()  # too late: the stream already ended
+        await ended(engine, stream.job.id)
+        await stream.aclose()  # too late: the stream already ended, so the success stands
+        job = await engine.jobs.get(ALICE, stream.job.id)
     assert job.state == "succeeded" and job.result is not None and job.result.size_bytes == 3
+
+
+async def test_a_runner_failure_inside_the_settle_window_ends_the_stream_uncertain(side: Side) -> None:
+    async with side(chunks=(b"a",), fails_mid_stream=True) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        stream = await streaming.stream(ALICE, JobRequest(app=APP))
+        chunks = aiter(stream)
+        assert await anext(chunks) == b"a"
+        await stream.disconnected()  # the runner's next event, inside the window, is its failure
+        job = await ended(engine, stream.job.id)
+    assert job.state == "uncertain" and job.failure is not None  # paid before it broke
+    assert (job.failure.kind, job.failure.payment_sent, job.attempts[-1].outcome) == (
+        "runner_error",
+        True,
+        "http",
+    )

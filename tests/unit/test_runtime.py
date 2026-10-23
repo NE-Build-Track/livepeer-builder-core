@@ -8,7 +8,7 @@ from importlib.metadata import PackageNotFoundError
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import SignerDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -89,15 +89,11 @@ async def test_default_adapters_follow_settings() -> None:
         batteries_operator_token="desk",
         log_json=False,
     )
-    engine = await BuilderEngine.from_settings(settings)
-    try:
-        assert isinstance(engine.discovery._source, SignerDiscoverySource)
-        assert isinstance(engine.payments._manager, BatteriesClient)
-        source = engine.costs._worker._source  # type: ignore[union-attr]
-        assert isinstance(source, BatteriesUsageSource)
-        assert source._filters == {}
-    finally:
-        await engine.stop()  # closes the owned clients and store
+    async with contextlib.AsyncExitStack() as stack:  # closes the owned clients and store
+        parts = await default_parts(settings, stack)
+        assert isinstance(parts.discovery_source, SignerDiscoverySource)
+        assert isinstance(parts.allocation_manager, BatteriesClient)
+        assert isinstance(parts.usage_source, BatteriesUsageSource)  # unfiltered by design (iss-04)
 
 
 async def test_operator_token_wires_a_separate_grants_client() -> None:
@@ -125,8 +121,11 @@ async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: F
         retention_jobs_days=30,
         log_json=False,
     )
-    engine = await BuilderEngine.from_settings(
-        settings, store=store, clock=clock, discovery_source=StaticDiscoverySource(), usage_source=usage
+    engine = await BuilderEngine.create(
+        settings,
+        supply=EngineSupply(
+            store=store, clock=clock, discovery_source=StaticDiscoverySource(), usage_source=usage
+        ),
     )
     await engine.start()
     await asyncio.sleep(0.05)  # let each loop run at least once
@@ -142,8 +141,11 @@ async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedC
             raise RuntimeError("batteries down")
 
     settings = EngineSettings(database_url=MEMORY, cost_sync_interval_s=0.01, log_json=False)
-    engine = await BuilderEngine.from_settings(
-        settings, store=store, clock=clock, discovery_source=StaticDiscoverySource(), usage_source=Broken()
+    engine = await BuilderEngine.create(
+        settings,
+        supply=EngineSupply(
+            store=store, clock=clock, discovery_source=StaticDiscoverySource(), usage_source=Broken()
+        ),
     )
     await engine.start()
     await asyncio.sleep(0.05)
@@ -155,8 +157,8 @@ async def test_retention_failures_are_logged_not_fatal(
     store: SqlStore, clock: FixedClock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = EngineSettings(database_url=MEMORY, retention_usage_days=1, log_json=False)
-    engine = await BuilderEngine.from_settings(
-        settings, store=store, clock=clock, discovery_source=StaticDiscoverySource()
+    engine = await BuilderEngine.create(
+        settings, supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource())
     )
 
     async def broken_purge() -> object:
@@ -178,7 +180,7 @@ async def test_cleanup_failures_are_logged_not_raised(
 
     # Fault injection on builder-core's own store: there is no seam for an engine-owned resource.
     monkeypatch.setattr(SqlStore, "close", fails)
-    engine = await BuilderEngine.from_settings(EngineSettings(database_url=MEMORY, log_json=False))
+    engine = await BuilderEngine.create(EngineSettings(database_url=MEMORY, log_json=False))
     with caplog.at_level(logging.ERROR):
         await engine.stop()  # does not raise
     failures = [r for r in caplog.records if getattr(r, "event", "") == "engine.close_failed"]
@@ -206,13 +208,14 @@ async def test_a_failure_part_way_through_construction_closes_what_it_opened(
     monkeypatch.setattr(SqlStore, "close", recording_close)
     settings = EngineSettings(database_url=MEMORY, secret_key="not-a-fernet-key", log_json=False)
     with pytest.raises(ValueError, match="Fernet key"):
-        await BuilderEngine.from_settings(settings)
+        await BuilderEngine.create(settings)
     assert len(opened) == 1 and closed == opened
 
 
 async def test_stop_twice_is_safe_and_a_stopped_engine_cannot_restart() -> None:
-    engine = await BuilderEngine.from_settings(
-        EngineSettings(database_url=MEMORY, log_json=False), discovery_source=StaticDiscoverySource()
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=MEMORY, log_json=False),
+        supply=EngineSupply(discovery_source=StaticDiscoverySource()),
     )
     await engine.stop()  # before start, as CLI commands do
     await engine.stop()
@@ -225,11 +228,13 @@ async def test_purge_and_revision_without_a_sql_store(clock: FixedClock) -> None
         async def close(self) -> None:
             return None
 
-    engine = await BuilderEngine.from_settings(
+    engine = await BuilderEngine.create(
         EngineSettings(database_url=MEMORY, log_json=False),
-        store=NotSql(),  # type: ignore[arg-type]
-        clock=clock,
-        discovery_source=StaticDiscoverySource(),
+        supply=EngineSupply(
+            store=NotSql(),  # type: ignore[arg-type]
+            clock=clock,
+            discovery_source=StaticDiscoverySource(),
+        ),
     )
     assert (await engine.purge()).jobs_deleted == 0
     assert await engine.schema_revision() is None
@@ -241,8 +246,8 @@ async def test_retention_runs_every_retention_interval(
     settings = EngineSettings(
         database_url=MEMORY, retention_jobs_days=30, retention_interval_s=0.02, log_json=False
     )
-    engine = await BuilderEngine.from_settings(
-        settings, store=store, clock=clock, discovery_source=StaticDiscoverySource()
+    engine = await BuilderEngine.create(
+        settings, supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource())
     )
     with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
         await engine.start()

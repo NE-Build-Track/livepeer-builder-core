@@ -47,21 +47,26 @@ Your app authenticates the human. The engine never sees that credential. It only
 ```python
 from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, JobRequest
 
-engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+engine = await BuilderEngine.create(EngineSettings.from_env())
 await engine.start()
 ```
 
-`from_settings` wires the defaults: SQLite or PostgreSQL store, `DefaultPolicy`,
-`ApiKeyAuthenticator` (present but unused on this path), signer discovery, SDK transport, Batteries,
-and the encrypted secret store. Replace any of those at this call (`policy=`, `discovery_source=`,
-`secret_store=`, …) as in [extending-the-engine.md](../design-docs/extending-the-engine.md).
+`create` wires the defaults: SQLite or PostgreSQL store, `DefaultPolicy`, engine API keys (present
+but unused on this path), signer discovery, SDK transport, Batteries, and the encrypted secret store.
+Settings are always passed in: read the environment with `EngineSettings.from_env()` at your edge, or
+build `EngineSettings(...)` in code. To change a part, **supply** it (`supply=EngineSupply(store=...)`)
+when other parts depend on it, or **decorate** the configured default
+(`decorate=lambda parts: dataclasses.replace(parts, policy=MyPolicy(parts.policy))`), as in
+[extending-the-engine.md](../design-docs/extending-the-engine.md). Scripts and tests can use
+`async with engine:`, which starts on entry and stops on exit.
 
 `start()` recovers interrupted jobs, takes a discovery snapshot, then runs the background loops
 (discovery refresh, cost sync, retention). Call `await engine.stop()` on shutdown. `stop()` is safe to call
 twice and closes everything the engine opened; an engine is single-use, so after `stop()` create a new one.
 If construction fails part-way, whatever it had already opened is closed before the error reaches you.
 
-Public imports come from the package root: `BuilderEngine`, `EngineSettings`, contracts
+Public imports come from the package root: `BuilderEngine`, `EngineSettings`, the construction types
+(`EngineSupply`, `EngineParts`, `ApiKeys`, `UNSET`), contracts
 (`ActorContext`, `JobRequest`, `Offering`, …), and errors (`NotProvisioned`, `JobFailed`, …).
 Everything else is reached through the engine object.
 
@@ -177,8 +182,8 @@ Health is `engine.health()`, not `GET /readyz`.
   session or token onto `actor_id` / `application_id` / `permissions`.
 - **Payment keys never ride on records.** `lpg_` lives in a `SecretStore`; the database holds a
   `SecretRef`. Your handlers must not log or return it.
-- **Replace adapters, not services.** Swap discovery, policy, secrets, or transport through
-  `from_settings`. Do not subclass `JobService` or `PaymentsService`
+- **Replace adapters, not services.** Supply or decorate discovery, policy, secrets, or transport
+  through `BuilderEngine.create`. Do not subclass `JobService` or `PaymentsService`
   ([extending-the-engine.md](../design-docs/extending-the-engine.md)).
 
 ## Checklist
@@ -186,7 +191,7 @@ Health is `engine.health()`, not `GET /readyz`.
 1. Install `livepeer-builder` (add `[postgres]` only if the store is PostgreSQL).
 2. Set `LPB_*` and generate `LPB_SECRET_KEY` with `lpb gen-secret-key`.
 3. Run `lpb migrate` (or rely on `auto_migrate`).
-4. Construct `BuilderEngine.from_settings`, then `await engine.start()` once per process.
+4. Construct `BuilderEngine.create(settings)`, then `await engine.start()` once per process.
 5. Map each authenticated user to an `ActorContext` with the permissions they need.
 6. Provision that actor with an admin `ActorContext` before the first paid job.
 7. Call `engine.discovery`, `engine.jobs`, `engine.costs`, `engine.payments` in your request

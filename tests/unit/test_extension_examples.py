@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
     ActorContext,
@@ -174,17 +174,19 @@ async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore
         ),
         approved={"https://orch.example"},
     )
-    engine = await BuilderEngine.from_settings(
+    engine = await BuilderEngine.create(
         EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        store=store,
-        clock=clock,
-        authenticators=[SignedSsoHeaderAuthenticator(SECRET)],  # tried before the engine's API keys
-        policy=TeamReadPolicy(DIRECTORY),
-        secret_store=vault,
-        selection=CheapestReadyFirst(),
-        discovery_source=discovery,
-        transport=transport,
-        allocation_manager=FakeAllocationManager(),
+        supply=EngineSupply(
+            store=store,
+            clock=clock,
+            authenticators=(SignedSsoHeaderAuthenticator(SECRET),),
+            policy=TeamReadPolicy(DIRECTORY),
+            secret_store=vault,
+            selection=CheapestReadyFirst(),
+            discovery_source=discovery,
+            transport=transport,
+            allocation_manager=FakeAllocationManager(),
+        ),
     )
     await engine.discovery.refresh()
     yield engine, vault, transport

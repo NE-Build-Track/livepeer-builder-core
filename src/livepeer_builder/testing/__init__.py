@@ -1,7 +1,7 @@
 """Test doubles shipped with the package so builders can test without a funded signer.
 
-Imports contracts, errors and protocols only. Use them with ``BuilderEngine.from_settings(...)``
-overrides; persistence tests use a real SQLite store (``sqlite+aiosqlite:///:memory:``).
+Imports contracts, errors and protocols only. Supply them through
+``BuilderEngine.create(settings, supply=EngineSupply(...))``; persistence tests use a real SQLite store (``sqlite+aiosqlite:///:memory:``).
 """
 
 from livepeer_builder.testing.fakes import (

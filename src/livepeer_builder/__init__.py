@@ -1,6 +1,7 @@
 """livepeer-builder: the shared builder engine for Livepeer.
 
-Import the engine and contracts from here; everything else is reached through ``BuilderEngine``.
+Import the engine, its construction types and contracts from here; everything else is reached
+through ``BuilderEngine``. ``BuilderEngine.create(settings, supply=..., decorate=...)`` builds one.
 See AGENTS.md and ARCHITECTURE.md at the repository root.
 """
 
@@ -34,16 +35,21 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.runtime import BuilderEngine, JobStream
+from livepeer_builder.runtime.assembly import UNSET, ApiKeys, EngineParts, EngineSupply
 
 __all__ = [
+    "UNSET",
     "AccessDenied",
     "ActorContext",
     "Allowance",
+    "ApiKeys",
     "BuilderEngine",
     "CostSummary",
     "EngineError",
     "EngineHealth",
+    "EngineParts",
     "EngineSettings",
+    "EngineSupply",
     "Failure",
     "Job",
     "JobCost",

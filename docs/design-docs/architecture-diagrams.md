@@ -61,7 +61,7 @@ flowchart TB
         Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/admin/*"]
     end
     subgraph Wiring["runtime/ — app wiring"]
-        BE["BuilderEngine.from_settings · start · stop · health"]
+        BE["BuilderEngine.create · start · stop · health"]
     end
     subgraph Services["services/ — business rules"]
         direction LR

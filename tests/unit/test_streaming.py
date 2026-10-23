@@ -7,6 +7,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
+from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import InvalidRequest, JobFailed, OperationExists, RunnerCallError
@@ -205,11 +206,9 @@ async def test_stream_keeps_idempotency_and_needs_a_streaming_transport(
     await read_all(stream)
     with pytest.raises(OperationExists):
         await engine.jobs.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
-    engine._jobs_transport = None
-    plain = engine.jobs
-    plain._transport = ScriptedTransport()
+    plain = await provisioned(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
     with pytest.raises(InvalidRequest, match="does not support streaming"):
-        await plain.stream(alice, JobRequest(app=APP))
+        await plain.jobs.stream(alice, JobRequest(app=APP))
 
 
 async def test_rest_streams_the_body_with_the_job_id_header(

@@ -8,7 +8,6 @@ Construction (supply, decorate, assemble) lives in livepeer_builder.runtime.asse
 import asyncio
 import contextlib
 import logging
-from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
@@ -17,17 +16,10 @@ from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import EngineHealth
 from livepeer_builder.protocols import (
     AccessPolicy,
-    AllocationManager,
-    Authenticator,
     Clock,
-    DiscoverySource,
     EngineStore,
     EventFeed,
-    RunnerTransport,
-    SecretStore,
-    SelectionPolicy,
     SessionManager,
-    UsageSource,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.costs import CostService
@@ -104,40 +96,6 @@ class BuilderEngine:
         from livepeer_builder.runtime.assembly import create
 
         return await create(settings, supply=supply, decorate=decorate)
-
-    @classmethod
-    async def from_settings(
-        cls,
-        settings: EngineSettings | None = None,
-        *,
-        store: EngineStore | None = None,
-        clock: Clock | None = None,
-        policy: AccessPolicy | None = None,
-        authenticators: Sequence[Authenticator] = (),
-        discovery_source: DiscoverySource | None = None,
-        transport: RunnerTransport | None = None,
-        selection: SelectionPolicy | None = None,
-        allocation_manager: AllocationManager | None = None,
-        usage_source: UsageSource | None = None,
-        secret_store: SecretStore | None = None,
-    ) -> "BuilderEngine":
-        """Transitional: maps the old keyword overrides onto ``create``. Removed once callers move."""
-        from livepeer_builder.runtime.assembly import UNSET, EngineSupply
-
-        supply = EngineSupply(
-            store=UNSET if store is None else store,
-            clock=UNSET if clock is None else clock,
-            policy=UNSET if policy is None else policy,
-            authenticators=tuple(authenticators),
-            discovery_source=UNSET if discovery_source is None else discovery_source,
-            transport=UNSET if transport is None else transport,
-            selection=UNSET if selection is None else selection,
-            allocation_manager=UNSET if allocation_manager is None else allocation_manager,
-            grants_manager=UNSET if allocation_manager is None else allocation_manager,  # the old fallback
-            usage_source=UNSET if usage_source is None else usage_source,
-            secret_store=UNSET if secret_store is None else secret_store,
-        )
-        return await cls.create(settings or EngineSettings.from_env(), supply=supply)
 
     async def start(self) -> None:
         """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops."""

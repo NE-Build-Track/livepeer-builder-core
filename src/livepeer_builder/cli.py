@@ -108,7 +108,7 @@ async def _verify(args: argparse.Namespace) -> None:
 
 
 async def _purge(_: argparse.Namespace) -> None:
-    engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+    engine = await BuilderEngine.create(EngineSettings.from_env())
     try:
         _emit((await engine.purge()).model_dump())
     finally:
@@ -116,7 +116,7 @@ async def _purge(_: argparse.Namespace) -> None:
 
 
 async def _bootstrap(args: argparse.Namespace) -> None:
-    engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+    engine = await BuilderEngine.create(EngineSettings.from_env())
     try:
         if engine.keys is None:
             raise SystemExit("API keys are disabled in this deployment")
@@ -134,7 +134,7 @@ async def _gen_secret_key(_: argparse.Namespace) -> None:
 
 async def _smoke(_: argparse.Namespace) -> int:
     """The CI install check: proves the installed wheel imports, migrates, starts and stops."""
-    engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+    engine = await BuilderEngine.create(EngineSettings.from_env())
     try:
         await engine.start()
         health = engine.health()
@@ -158,7 +158,7 @@ async def _serve(_: argparse.Namespace) -> None:
 
     settings = EngineSettings.from_env()
     configure_logging(json_lines=settings.log_json)
-    app = create_app(await BuilderEngine.from_settings(settings))
+    app = create_app(await BuilderEngine.create(settings))
     server = uvicorn.Server(
         uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
     )

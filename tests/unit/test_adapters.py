@@ -502,3 +502,17 @@ async def test_a_missing_payload_is_sent_as_an_empty_json_object(
     await transport.call(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
     await transport.open(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
     assert seen == [sent, sent]
+
+
+async def test_usage_feed_is_unfiltered_by_default() -> None:
+    seen: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": [], "next_cursor": None})
+
+    source = BatteriesUsageSource(
+        "https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle))
+    )
+    await source.page(None, limit=10)
+    assert seen == [{"limit": "10"}]  # iss-04: no filters, so desk-created grants still reconcile

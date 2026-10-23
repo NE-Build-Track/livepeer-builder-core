@@ -37,7 +37,7 @@ def asyncpg_url(url: str) -> str:
 async def serve() -> None:
     settings = EngineSettings.from_env()
     configure_logging(json_lines=settings.log_json)
-    app = create_app(await BuilderEngine.from_settings(settings))
+    app = create_app(await BuilderEngine.create(settings))
     server = uvicorn.Server(
         uvicorn.Config(
             app,

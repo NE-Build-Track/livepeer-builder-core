@@ -139,7 +139,7 @@ async def test_funding_a_named_grant_applies_once(
         await engine.payments.fund_grant(alice, request)
     await engine.payments.fund_grant(admin, request)
     await engine.payments.fund_grant(admin, request)  # a retry
-    key = idempotency_key(engine.payments._engine_id, "fund-grant:grant_chosen:topup-1", "fund")
+    key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_chosen:topup-1", "fund")
     assert manager.funded_grants == [("grant_chosen", usd("10"), key)]
     assert 1 <= len(key) <= 256 and all(character.isalnum() or character in "_-" for character in key)
     with pytest.raises(InvalidRequest):
@@ -161,7 +161,7 @@ async def test_omitted_grant_uses_the_callers_allocation(
     await engine.payments.provision(admin, provision_request(grant_id=""))
     assert manager.last_grant_id == "grant_ops"
     await engine.payments.fund_grant(admin, FundRequest(amount=usd("3"), operation_ref="top"))
-    key = idempotency_key(engine.payments._engine_id, "fund-grant:grant_ops:top", "fund")
+    key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_ops:top", "fund")
     assert manager.funded_grants == [("grant_ops", usd("3"), key)]
 
 

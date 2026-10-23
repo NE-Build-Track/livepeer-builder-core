@@ -220,7 +220,7 @@ async def test_orchestrator_list_reads_a_file_and_merges_partial_failures(
             raise RuntimeError("down")
         return _entries(url.removesuffix("/discovery"), url.replace("/discovery", "/runner"))
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     discovery = OrchestratorListDiscoverySource(source)
     runners = await discovery.fetch()
     assert [runner.url for runner in runners] == [
@@ -255,7 +255,7 @@ async def test_orchestrator_list_takes_addresses_inline(monkeypatch: pytest.Monk
         url = str(kwargs["discovery_url"])
         return _entries(url.removesuffix("/discovery"), url.replace("/discovery", "/runner"))
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     source = OrchestratorListDiscoverySource(inline)
     runners = await source.fetch()
     assert await source.fetch() == runners
@@ -300,7 +300,7 @@ async def test_orchestrator_list_raises_the_first_error_when_every_orchestrator_
             await asyncio.sleep(0.01)  # the first error is the first in list order, not the first to finish
         raise RuntimeError(f"down {kwargs['discovery_url']}")
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     discovery = OrchestratorListDiscoverySource(source)
     with pytest.raises(RuntimeError, match=r"https://a\.example:8935/discovery"):
         await discovery.fetch()
@@ -324,7 +324,7 @@ async def test_orchestrator_list_does_not_cache_an_empty_merge_when_a_probe_fail
             return []
         raise RuntimeError(f"down {kwargs['discovery_url']}")
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     discovery = OrchestratorListDiscoverySource(source)
     with pytest.raises(RuntimeError, match=r"https://down\.example:8935/discovery"):
         await discovery.fetch()
@@ -341,7 +341,7 @@ async def test_orchestrator_list_keeps_an_orchestrator_with_no_runners(
     async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
         return []
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     assert await OrchestratorListDiscoverySource(source).fetch() == ()
 
 
@@ -361,7 +361,7 @@ async def test_orchestrator_list_excludes_an_untrusted_certificate(
             raise _untrusted(url)
         return _entries(url.removesuffix("/discovery"), url.replace("/discovery", "/runner"))
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     discovery = OrchestratorListDiscoverySource(source)
     caplog.set_level(logging.INFO, logger=sdk.__name__)
 
@@ -392,7 +392,7 @@ async def test_orchestrator_list_probes_each_address_once_and_each_runner_once(
         probed.append(url)
         return _entries(url.removesuffix("/discovery"), "https://shared.example/runner")
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     (runner,) = await OrchestratorListDiscoverySource(source).fetch()
     assert probed == ["https://a.example/discovery", "https://b.example/discovery"]
     assert runner.orchestrator_url == "https://a.example"  # the first in list order
@@ -413,9 +413,36 @@ async def test_orchestrator_list_bounds_concurrent_probes(
         running -= 1
         return []
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     await OrchestratorListDiscoverySource(source).fetch()
     assert peak == sdk._PROBE_CONCURRENCY
+
+
+async def test_orchestrator_list_does_not_follow_a_discovery_redirect(tmp_path: Path) -> None:
+    followed = False
+
+    async def secret(_request: aiohttp.web.Request) -> aiohttp.web.Response:
+        nonlocal followed
+        followed = True
+        return aiohttp.web.Response(text="internal")
+
+    async def discovery(_request: aiohttp.web.Request) -> aiohttp.web.Response:
+        raise aiohttp.web.HTTPFound("/secret")
+
+    app = aiohttp.web.Application()
+    app.router.add_get("/discovery", discovery)
+    app.router.add_get("/secret", secret)
+    runner = aiohttp.web.AppRunner(app)
+    await runner.setup()
+    await aiohttp.web.TCPSite(runner, "127.0.0.1", 0).start()
+    port = runner.addresses[0][1]
+    try:
+        source = _write_list(tmp_path, [{"address": f"http://127.0.0.1:{port}"}])
+        with pytest.raises(LivepeerGatewayError, match="redirect refused"):
+            await OrchestratorListDiscoverySource(source).fetch()
+        assert not followed
+    finally:
+        await runner.cleanup()
 
 
 async def test_orchestrator_list_propagates_cancellation(
@@ -426,7 +453,7 @@ async def test_orchestrator_list_propagates_cancellation(
     async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    monkeypatch.setattr(sdk, "_fetch_discovery_document", fake_discover)
     with pytest.raises(asyncio.CancelledError):
         await OrchestratorListDiscoverySource(source).fetch()
 

@@ -90,7 +90,7 @@ class OrchestratorListDiscoverySource:
 
     ``LPB_ORCHESTRATOR_LIST`` is addresses inline (comma-separated, or one ``http(s)://`` URL) or a file
     of go-livepeer ``-orchWebhookUrl`` JSON (``[{"address": "https://...", "score": n}]``). The first
-    fetch calls ``GET /discovery`` on every address with ``discover_runners``, TLS verified against the
+    fetch calls ``GET /discovery`` on every address with redirects disabled, TLS verified against the
     process trust store. A later fetch returns that snapshot. An orchestrator that fails, including one
     whose certificate the process does not trust, is left out and never called. The fetch raises when
     the list cannot be read or names no orchestrator, or when the merge is empty and any probe failed;
@@ -119,8 +119,7 @@ class OrchestratorListDiscoverySource:
 
         async def probe(url: str) -> list[dict[str, Any]]:
             async with limit:
-                found: list[dict[str, Any]] = await discover_runners(discovery_url=url)
-                return found
+                return await _fetch_discovery_document(discovery_url=url)
 
         results = await asyncio.gather(*(probe(url) for url in urls), return_exceptions=True)
         entries: list[dict[str, Any]] = []
@@ -154,6 +153,34 @@ class OrchestratorListDiscoverySource:
         except (OSError, ValueError) as error:
             raise LivepeerGatewayError(f"orchestrator list {self._source}: {error}") from error
         return _orchestrator_addresses(payload)
+
+
+async def _fetch_discovery_document(*, discovery_url: str) -> list[dict[str, Any]]:
+    """GET one orchestrator's ``/discovery`` and do not follow redirects.
+
+    ``discover_runners`` uses ``get_json``, which leaves aiohttp's redirect default on. A listed
+    orchestrator must not send this process to another host. A 3xx is a failed probe.
+    """
+    timeout = aiohttp.ClientTimeout(total=5.0)
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.get(discovery_url, allow_redirects=False) as response,
+        ):
+            if 300 <= response.status < 400:
+                raise LivepeerGatewayError(f"discovery redirect refused ({response.status}): {discovery_url}")
+            if response.status != 200:
+                raise LivepeerGatewayError(f"discovery HTTP {response.status}: {discovery_url}")
+            payload = await response.json(content_type=None)
+    except LivepeerGatewayError:
+        raise
+    except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as error:
+        raise LivepeerGatewayError(f"discovery failed: {discovery_url}: {error}") from error
+    if not isinstance(payload, list):
+        raise LivepeerGatewayError(
+            f"discovery response must be a JSON list, got {type(payload).__name__}: {discovery_url}"
+        )
+    return payload
 
 
 def _log_excluded(url: str, error: Exception) -> None:

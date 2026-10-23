@@ -30,8 +30,8 @@ paid call verify TLS with the process trust store, and no deployment installs ex
       `BuilderEngine.from_settings` raises `InvalidRequest`; an empty list clears an image default
       (`tests/unit/test_runtime.py`).
 - [x] The list is inline (comma-separated) or orchWebhook JSON in a file.
-  - Each address is probed with `discover_runners(discovery_url=<address>/discovery)` and no signer
-    headers, at most 16 at once.
+  - Each address is probed with `GET /discovery` and redirects are not followed. No signer headers.
+    At most 16 probes run at once.
   - Failures and untrusted certificates are left out and logged.
   - Probed runners have unknown `capacity_available`.
   - A list that names no orchestrator, or where every probe fails, raises.

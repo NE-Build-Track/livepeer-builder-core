@@ -12,6 +12,7 @@ from livepeer_builder.errors import NoCapacity, ProviderError, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeUsageSource, ScriptedTransport, runner
 from tests.conftest import EngineFactory
+from tests.unit.test_runtime import LOOPS, running_loops
 
 APP = "example/echo"
 
@@ -187,8 +188,8 @@ async def test_lifespan_starts_and_stops_the_engine() -> None:
     )
     app = create_app(engine)
     async with app.router.lifespan_context(app):  # what an ASGI server runs at startup and shutdown
-        assert engine.health().ready and len(engine._tasks) == 3
-    assert engine._tasks == []
+        assert engine.health().ready and running_loops() == LOOPS
+    assert running_loops() == set()
 
 
 async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFactory) -> None:

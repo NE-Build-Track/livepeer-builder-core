@@ -7,7 +7,7 @@ Imported mode: ``engine = await BuilderEngine.from_settings(settings)`` then cal
 import asyncio
 import contextlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from importlib.metadata import PackageNotFoundError, version
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
@@ -55,6 +55,20 @@ def package_version() -> str:
         return "0.0.0+unknown"
 
 
+def _own(stack: contextlib.AsyncExitStack, resource: object, close: Callable[[], Awaitable[None]]) -> None:
+    """Register ``close`` on ``stack``; a failure is logged, never raised, so the rest still close."""
+
+    async def close_logged() -> None:
+        try:
+            await close()
+        except Exception:
+            _LOG.exception(
+                "close failed", extra={"event": "engine.close_failed", "resource": type(resource).__name__}
+            )
+
+    stack.push_async_callback(close_logged)
+
+
 class BuilderEngine:
     def __init__(
         self,
@@ -72,7 +86,7 @@ class BuilderEngine:
         admission: AdmissionLimiter,
         events: EventFeed,
         sessions: SessionManager,
-        closers: Sequence[object] = (),
+        resources: contextlib.AsyncExitStack | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -87,7 +101,10 @@ class BuilderEngine:
         self.admission = admission
         self.events = events
         self.sessions = sessions
-        self._closers = tuple(closers)
+        self._resources = (
+            resources or contextlib.AsyncExitStack()
+        )  # what construction opened; stop() closes it
+        self._stopped = False
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -113,112 +130,119 @@ class BuilderEngine:
             settings.batteries_operator_token and settings.batteries_operator_token.get_secret_value()
         ):
             raise InvalidRequest("LPB_BATTERIES_OPERATOR_TOKEN is required when LPB_BATTERIES_URL is set")
-        clock = clock or SystemClock()
-        policy = policy or DefaultPolicy()
-        closers: list[object] = []
-        if store is None:
-            store = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
-            closers.append(store)
+        # Each resource is registered the moment it opens; a failure part-way closes what opened.
+        async with contextlib.AsyncExitStack() as stack:
+            clock = clock or SystemClock()
+            policy = policy or DefaultPolicy()
+            if store is None:
+                store = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
+                _own(stack, store, store.close)
 
-        shared_key = settings.shared_payment_key.get_secret_value() if settings.shared_payment_key else None
-        configured = SettingsSecretStore({_SHARED_KEY: shared_key} if shared_key else {})
-        shared_ref: SecretRef | None = configured.ref(_SHARED_KEY) if shared_key else None
-        if secret_store is None:
-            database = (
-                EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
-                if settings.secret_key
-                else None
+            shared_key = (
+                settings.shared_payment_key.get_secret_value() if settings.shared_payment_key else None
             )
-            secret_store = RoutingSecretStore(configured, database)
-
-        token = settings.batteries_token.get_secret_value() if settings.batteries_token else None
-        if allocation_manager is None and settings.batteries_url and token:
-            client = BatteriesClient(settings.batteries_url, token, timeout_s=settings.batteries_timeout_s)
-            allocation_manager = client
-            closers.append(client)
-        grants_client = None
-        operator_token = None
-        if settings.batteries_operator_token:
-            operator_token = settings.batteries_operator_token.get_secret_value()
-        if settings.batteries_url and operator_token:
-            grants_client = BatteriesClient(
-                settings.batteries_url, operator_token, timeout_s=settings.batteries_timeout_s
-            )
-            closers.append(grants_client)
-        if usage_source is None and settings.batteries_url and token:
-            source = BatteriesUsageSource(
-                settings.batteries_url, token, timeout_s=settings.batteries_timeout_s
-            )
-            usage_source = source
-            closers.append(source)
-
-        if discovery_source is None:
-            discovery_source = (
-                SignerDiscoverySource(
-                    signer_url=settings.signer_url,
-                    discovery_url=settings.discovery_url,
-                    signer_headers={"Authorization": f"Bearer {shared_key}"} if shared_key else None,
+            configured = SettingsSecretStore({_SHARED_KEY: shared_key} if shared_key else {})
+            shared_ref: SecretRef | None = configured.ref(_SHARED_KEY) if shared_key else None
+            if secret_store is None:
+                database = (
+                    EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
+                    if settings.secret_key
+                    else None
                 )
-                if settings.signer_url or settings.discovery_url
-                else StaticDiscoverySource()
+                secret_store = RoutingSecretStore(configured, database)
+
+            token = settings.batteries_token.get_secret_value() if settings.batteries_token else None
+            if allocation_manager is None and settings.batteries_url and token:
+                client = BatteriesClient(
+                    settings.batteries_url, token, timeout_s=settings.batteries_timeout_s
+                )
+                allocation_manager = client
+                _own(stack, client, client.aclose)
+            grants_client = None
+            operator_token = None
+            if settings.batteries_operator_token:
+                operator_token = settings.batteries_operator_token.get_secret_value()
+            if settings.batteries_url and operator_token:
+                grants_client = BatteriesClient(
+                    settings.batteries_url, operator_token, timeout_s=settings.batteries_timeout_s
+                )
+                _own(stack, grants_client, grants_client.aclose)
+            if usage_source is None and settings.batteries_url and token:
+                source = BatteriesUsageSource(
+                    settings.batteries_url, token, timeout_s=settings.batteries_timeout_s
+                )
+                usage_source = source
+                _own(stack, source, source.aclose)
+
+            if discovery_source is None:
+                discovery_source = (
+                    SignerDiscoverySource(
+                        signer_url=settings.signer_url,
+                        discovery_url=settings.discovery_url,
+                        signer_headers={"Authorization": f"Bearer {shared_key}"} if shared_key else None,
+                    )
+                    if settings.signer_url or settings.discovery_url
+                    else StaticDiscoverySource()
+                )
+            discovery = DiscoveryService(
+                discovery_source,
+                policy,
+                clock,
+                settings.discovery_interval_s,
             )
-        discovery = DiscoveryService(
-            discovery_source,
-            policy,
-            clock,
-            settings.discovery_interval_s,
-        )
-        payments = PaymentsService(
-            mode=settings.allocation_mode,
-            store=store,
-            secrets=secret_store,
-            policy=policy,
-            clock=clock,
-            engine_id=settings.engine_id,
-            manager=allocation_manager,
-            grants=grants_client if grants_client is not None else allocation_manager,
-            currency=settings.default_currency,
-            shared_secret=shared_ref,
-            shared_allocation_id=settings.shared_allocation_id,
-        )
-        admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
-        jobs = JobService(
-            store,
-            discovery,
-            transport or SdkRunnerTransport(settings.signer_url, settings.max_payment_challenge_retries),
-            selection or MostCapacityFirst(),
-            payments,
-            policy,
-            admission,
-            clock,
-            StreamLimits(
-                finalize_timeout_s=settings.stream_finalize_timeout_s,
-                drain_timeout_s=settings.stream_drain_timeout_s,
-                settle_s=settings.stream_settle_s,
-                open_grace_s=settings.stream_open_grace_s,
-            ),
-        )
-        worker = CostSyncWorker(usage_source, store) if usage_source is not None else None
-        costs = CostService(store, policy, clock, worker, payments, settings.cost_sync_interval_s)
-        return cls(
-            settings=settings,
-            store=store,
-            clock=clock,
-            policy=policy,
-            authenticator=AuthenticatorChain([*authenticators, ApiKeyAuthenticator(store)]),
-            discovery=discovery,
-            jobs=jobs,
-            payments=payments,
-            costs=costs,
-            keys=KeyService(store, policy, clock),
-            admission=admission,
-            events=ReservedEventFeed(),
-            sessions=ReservedSessions(),
-            closers=closers,
-        )
+            payments = PaymentsService(
+                mode=settings.allocation_mode,
+                store=store,
+                secrets=secret_store,
+                policy=policy,
+                clock=clock,
+                engine_id=settings.engine_id,
+                manager=allocation_manager,
+                grants=grants_client if grants_client is not None else allocation_manager,
+                currency=settings.default_currency,
+                shared_secret=shared_ref,
+                shared_allocation_id=settings.shared_allocation_id,
+            )
+            admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
+            jobs = JobService(
+                store,
+                discovery,
+                transport or SdkRunnerTransport(settings.signer_url, settings.max_payment_challenge_retries),
+                selection or MostCapacityFirst(),
+                payments,
+                policy,
+                admission,
+                clock,
+                StreamLimits(
+                    finalize_timeout_s=settings.stream_finalize_timeout_s,
+                    drain_timeout_s=settings.stream_drain_timeout_s,
+                    settle_s=settings.stream_settle_s,
+                    open_grace_s=settings.stream_open_grace_s,
+                ),
+            )
+            worker = CostSyncWorker(usage_source, store) if usage_source is not None else None
+            costs = CostService(store, policy, clock, worker, payments, settings.cost_sync_interval_s)
+            return cls(
+                settings=settings,
+                store=store,
+                clock=clock,
+                policy=policy,
+                authenticator=AuthenticatorChain([*authenticators, ApiKeyAuthenticator(store)]),
+                discovery=discovery,
+                jobs=jobs,
+                payments=payments,
+                costs=costs,
+                keys=KeyService(store, policy, clock),
+                admission=admission,
+                events=ReservedEventFeed(),
+                sessions=ReservedSessions(),
+                resources=stack.pop_all(),  # success: the engine now owns what was opened
+            )
 
     async def start(self) -> None:
         """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops."""
+        if self._stopped:
+            raise RuntimeError("engine is stopped; create a new one")
         await self.jobs.recover_interrupted()
         await self.discovery.refresh()
         self._stop.clear()
@@ -238,15 +262,8 @@ class BuilderEngine:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._tasks = []
-        for closer in reversed(self._closers):
-            close = getattr(closer, "aclose", None) or getattr(closer, "close", None)
-            if close is not None:
-                try:
-                    await close()
-                except Exception:
-                    _LOG.exception(
-                        "close failed", extra={"event": "engine.close_failed", "closer": repr(closer)}
-                    )
+        await self._resources.aclose()  # reverse order: clients before the store; failures are logged
+        self._stopped = True
         _LOG.info("engine stopped", extra={"event": "engine.stopped"})
 
     def health(self) -> EngineHealth:

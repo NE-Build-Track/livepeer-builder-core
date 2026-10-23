@@ -51,13 +51,13 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 ### Step 2: construction cleans up on failure
 
-- [ ] **Construction builds into a local `AsyncExitStack`.** Every resource is registered the moment it opens (store, Batteries clients, usage source). On success, `pop_all()` hands the stack to the engine as `self._resources`; on failure, everything opened so far is closed.
-- [ ] **`stop()` keeps today's order:** drain streams, stop the loops, then `await self._resources.aclose()`. Reverse registration order closes the clients before the store. The `closers` list and its `getattr(aclose/close)` duck typing go.
-- [ ] **Cleanup failures are logged, not raised.** Each close is registered through a wrapper that logs its own failure (`engine.close_failed`, with the resource name), so `stop()` never raises from cleanup. A raising `stop()` would mask the original error in lifespans, `finally` blocks and `async with engine:`.
-- [ ] **`stop()` is idempotent and valid before `start()`;** the CLI relies on the latter.
-- [ ] **The engine is single-use.** `start()` after `stop()` raises "engine is stopped; create a new one". Today a restart would run loops against a closed store.
-- [ ] **A failing-first test** proves a failure part-way closes the store. With `secret_key="not-a-fernet-key"`, construction raises after `SqlStore.connect`; today the store is left open (probe 2026-10-23: `created: 1 closed: 0`). The test observes the store through a recording wrapper on `SqlStore.connect` (a spy, which the guide allows when no injection point exists); in step 3 it becomes a plain test with a supplied store.
-- [ ] **Tests:** `stop()` twice is safe; `start()` after `stop()` raises. After `stop()`, no task named `lpb-discovery`, `lpb-cost-sync` or `lpb-retention` remains in `asyncio.all_tasks()`, replacing the private `engine._tasks == []` assertion.
+- [x] **Construction builds into a local `AsyncExitStack`.** Every resource is registered the moment it opens (store, Batteries clients, usage source). On success, `pop_all()` hands the stack to the engine as `self._resources`; on failure, everything opened so far is closed.
+- [x] **`stop()` keeps today's order:** drain streams, stop the loops, then `await self._resources.aclose()`. Reverse registration order closes the clients before the store. The `closers` list and its `getattr(aclose/close)` duck typing go.
+- [x] **Cleanup failures are logged, not raised.** Each close is registered through a wrapper that logs its own failure (`engine.close_failed`, with the resource name), so `stop()` never raises from cleanup. A raising `stop()` would mask the original error in lifespans, `finally` blocks and `async with engine:`.
+- [x] **`stop()` is idempotent and valid before `start()`;** the CLI relies on the latter.
+- [x] **The engine is single-use.** `start()` after `stop()` raises "engine is stopped; create a new one". Today a restart would run loops against a closed store.
+- [x] **A failing-first test** proves a failure part-way closes the store. With `secret_key="not-a-fernet-key"`, construction raises after `SqlStore.connect`; today the store is left open (probe 2026-10-23: `created: 1 closed: 0`). The test observes the store through a recording wrapper on `SqlStore.connect` (a spy, which the guide allows when no injection point exists); in step 3 it becomes a plain test with a supplied store.
+- [x] **Tests:** `stop()` twice is safe; `start()` after `stop()` raises. After `stop()`, no task named `lpb-discovery`, `lpb-cost-sync` or `lpb-retention` remains in `asyncio.all_tasks()`, replacing the private `engine._tasks == []` assertion.
 
 ### Step 3: construction as data
 
@@ -250,6 +250,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] 2026-10-23: step 6 design agreed: lazy default adapters, a store maintenance capability, `PurgeReport` in contracts, `aiohttp` and `starlette` declared with a declared-dependencies test, an import-weight test for the root and `api`. 
 - [x] 2026-10-23: Swagger fix landed as its own commit (`fix(http): declare the bearer scheme so Swagger shows Authorize`), on branch `tasks/mz/swagger-bearer`; the refactor branch is rebased on it.
 - [x] 2026-10-23: **step 1 done**: SDK injection (`3e4ad23`), tuning settings (`eb2b9ba`), body limit (`7f9d7ae`), env-read guard. Every commit leaves the CI gate green.
+- [x] 2026-10-23: **step 2 done**: exit stack with logged cleanup, idempotent single-use engine, failing-first partial-failure test (spies on `SqlStore.connect`/`close`), behavioural loop check replacing `engine._tasks`. The close-failure test injects the fault on `SqlStore.close`, since no seam exists for an engine-owned resource.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log

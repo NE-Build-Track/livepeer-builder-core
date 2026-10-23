@@ -57,7 +57,9 @@ and the encrypted secret store. Replace any of those at this call (`policy=`, `d
 `secret_store=`, …) as in [extending-the-engine.md](../design-docs/extending-the-engine.md).
 
 `start()` recovers interrupted jobs, takes a discovery snapshot, then runs the background loops
-(discovery refresh, cost sync, retention). Call `await engine.stop()` on shutdown.
+(discovery refresh, cost sync, retention). Call `await engine.stop()` on shutdown. `stop()` is safe to call
+twice and closes everything the engine opened; an engine is single-use, so after `stop()` create a new one.
+If construction fails part-way, whatever it had already opened is closed before the error reaches you.
 
 Public imports come from the package root: `BuilderEngine`, `EngineSettings`, contracts
 (`ActorContext`, `JobRequest`, `Offering`, …), and errors (`NotProvisioned`, `JobFailed`, …).

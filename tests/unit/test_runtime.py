@@ -18,6 +18,12 @@ from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeUsageSource, FixedClock
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
+LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention"}
+
+
+def running_loops() -> set[str]:
+    """The engine's background loops still running, observed by their task names."""
+    return {task.get_name() for task in asyncio.all_tasks() if task.get_name() in LOOPS}
 
 
 def test_json_formatter_emits_event_fields_and_exceptions() -> None:
@@ -124,7 +130,7 @@ async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: F
     health = engine.health()
     assert health.ready and health.cost_sync_at is not None
     await engine.stop()
-    assert engine._tasks == []
+    assert running_loops() == set()
 
 
 async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedClock) -> None:
@@ -161,23 +167,54 @@ async def test_retention_failures_are_logged_not_fatal(
     assert any(getattr(r, "event", "") == "store.purge_failed" for r in caplog.records)
 
 
-async def test_closer_failures_are_logged(
-    store: SqlStore, clock: FixedClock, caplog: pytest.LogCaptureFixture
+async def test_cleanup_failures_are_logged_not_raised(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    class BadCloser:
-        async def aclose(self) -> None:
-            raise RuntimeError("socket gone")
+    async def fails(self: SqlStore) -> None:
+        raise RuntimeError("socket gone")
 
-    engine = await BuilderEngine.from_settings(
-        EngineSettings(database_url=MEMORY, log_json=False),
-        store=store,
-        clock=clock,
-        discovery_source=StaticDiscoverySource(),
-    )
-    engine._closers = (BadCloser(), object())
+    # Fault injection on builder-core's own store: there is no seam for an engine-owned resource.
+    monkeypatch.setattr(SqlStore, "close", fails)
+    engine = await BuilderEngine.from_settings(EngineSettings(database_url=MEMORY, log_json=False))
     with caplog.at_level(logging.ERROR):
-        await engine.stop()
-    assert any(getattr(r, "event", "") == "engine.close_failed" for r in caplog.records)
+        await engine.stop()  # does not raise
+    failures = [r for r in caplog.records if getattr(r, "event", "") == "engine.close_failed"]
+    assert len(failures) == 1 and "SqlStore" in str(getattr(failures[0], "resource", ""))
+
+
+async def test_a_failure_part_way_through_construction_closes_what_it_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[SqlStore] = []
+    closed: list[SqlStore] = []
+    connect, close = SqlStore.connect, SqlStore.close
+
+    async def recording_connect(url: str, *, migrate: bool = True) -> SqlStore:
+        store = await connect(url, migrate=migrate)
+        opened.append(store)
+        return store
+
+    async def recording_close(self: SqlStore) -> None:
+        closed.append(self)
+        await close(self)
+
+    # Spies: they record and delegate, changing no behaviour (the store has no injection seam yet).
+    monkeypatch.setattr(SqlStore, "connect", recording_connect)
+    monkeypatch.setattr(SqlStore, "close", recording_close)
+    settings = EngineSettings(database_url=MEMORY, secret_key="not-a-fernet-key", log_json=False)
+    with pytest.raises(ValueError, match="Fernet key"):
+        await BuilderEngine.from_settings(settings)
+    assert len(opened) == 1 and closed == opened
+
+
+async def test_stop_twice_is_safe_and_a_stopped_engine_cannot_restart() -> None:
+    engine = await BuilderEngine.from_settings(
+        EngineSettings(database_url=MEMORY, log_json=False), discovery_source=StaticDiscoverySource()
+    )
+    await engine.stop()  # before start, as CLI commands do
+    await engine.stop()
+    with pytest.raises(RuntimeError, match="engine is stopped"):
+        await engine.start()
 
 
 async def test_purge_and_revision_without_a_sql_store(clock: FixedClock) -> None:

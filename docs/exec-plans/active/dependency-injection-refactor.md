@@ -46,8 +46,8 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - The Batteries adapters build their HTTP client through a public `batteries_http_client(base_url, token, timeout_s=...)`, so the timeout is testable without private attributes.
   - Done in a separate tidy commit: `_BODY_LIMIT` is defined once, as `BODY_LIMIT = 4096` in `utils.py`, instead of in `jobs.py`, `streams.py` and `sdk.py`; it stays an internal constant.
   - Cost-sync usage filters stay unset by design (iss-04: the feed is unfiltered so desk-created grants reconcile).
-- [ ] **Structural test: no environment reads outside `config.py`.** An AST scan of `src/livepeer_builder/` flags `os.environ`, `os.getenv` and `from os import environ/getenv` anywhere except `config.py`, with a message naming the rule ("settings are values: read the environment only in `EngineSettings.from_env`"). `deploy/` entrypoints are application edges and are not scanned. True today; the test keeps it true.
-- [ ] **Lands as one commit per item** (SDK injection, settings, body limit, structural test), each leaving the suite green. Tidy-only commits are marked `tidy:` and change no assertions.
+- [x] **Structural test: no environment reads outside `config.py`.** (`tests/structure/test_settings.py`; shown to fail on an injected `os.environ` read.) An AST scan of `src/livepeer_builder/` flags `os.environ`, `os.getenv` and `from os import environ/getenv` anywhere except `config.py`, with a message naming the rule ("settings are values: read the environment only in `EngineSettings.from_env`"). `deploy/` entrypoints are application edges and are not scanned. True today; the test keeps it true.
+- [x] **Lands as one commit per item** (SDK injection, settings, body limit, structural test), each leaving the suite green. Tidy-only commits are marked `tidy:` and change no assertions.
 
 ### Step 2: construction cleans up on failure
 
@@ -249,6 +249,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] 2026-10-23: step 5 design agreed: `build_app` plus `serve` with guaranteed cleanup, `http/server.py`, logging in `serve` only, an `extend` hook with `actor_dependency` (no `app.state`), no new CLI flag, a tested service-mode example, Railway on `serve`. The Swagger fix lands first (decision 12). 
 - [x] 2026-10-23: step 6 design agreed: lazy default adapters, a store maintenance capability, `PurgeReport` in contracts, `aiohttp` and `starlette` declared with a declared-dependencies test, an import-weight test for the root and `api`. 
 - [x] 2026-10-23: Swagger fix landed as its own commit (`fix(http): declare the bearer scheme so Swagger shows Authorize`), on branch `tasks/mz/swagger-bearer`; the refactor branch is rebased on it.
+- [x] 2026-10-23: **step 1 done**: SDK injection (`3e4ad23`), tuning settings (`eb2b9ba`), body limit (`7f9d7ae`), env-read guard. Every commit leaves the CI gate green.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log

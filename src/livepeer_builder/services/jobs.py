@@ -73,7 +73,6 @@ _FAILOVER_OUTCOMES = frozenset(
     {"refused", "unreachable", "payment_refused"}
 )  # only while payment_sent is false
 _UNCERTAIN_OUTCOMES = frozenset({"unreachable", "timeout"})  # after payment the runner may have run
-_OPEN_BACKSTOP_GRACE_S = 5.0  # how far past its deadline a transport's open runs before the engine stops it
 
 
 class JobService:
@@ -376,7 +375,7 @@ class JobService:
             budget = min(request.first_byte_timeout_s, deadline - started)
             bounded = request.model_copy(update={"first_byte_timeout_s": max(budget, 0.001)})
             try:
-                async with asyncio.timeout(max(budget, 0) + _OPEN_BACKSTOP_GRACE_S):
+                async with asyncio.timeout(max(budget, 0) + self._stream_limits.open_grace_s):
                     opened = await transport.open(runner, bounded, credential.token)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error)

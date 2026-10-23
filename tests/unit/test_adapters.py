@@ -9,9 +9,16 @@ import aiohttp
 import httpx
 import pytest
 from livepeer_gateway.errors import LivepeerHTTPError, PaymentError
+from pydantic import ValidationError
 
 from livepeer_builder.adapters import sdk
-from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource, allowance_from_body
+from livepeer_builder.adapters.batteries import (
+    TOKEN_HEADER,
+    BatteriesClient,
+    BatteriesUsageSource,
+    allowance_from_body,
+    batteries_http_client,
+)
 from livepeer_builder.adapters.sdk import SdkRunnerTransport, call_error, runners_from_entries
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.config import EngineSettings
@@ -303,6 +310,32 @@ def test_settings_from_environment() -> None:
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
     ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
     assert "grant_id" not in ignored.model_dump()
+
+
+def test_tuning_values_are_settings_with_todays_defaults() -> None:
+    defaults = EngineSettings()
+    assert (defaults.stream_open_grace_s, defaults.batteries_timeout_s, defaults.retention_interval_s) == (
+        5.0,
+        30.0,
+        6 * 3600,
+    )
+    tuned = EngineSettings.from_env(
+        {"LPB_STREAM_OPEN_GRACE_S": "0.5", "LPB_BATTERIES_TIMEOUT_S": "7", "LPB_RETENTION_INTERVAL_S": "60"}
+    )
+    assert (tuned.stream_open_grace_s, tuned.batteries_timeout_s, tuned.retention_interval_s) == (
+        0.5,
+        7.0,
+        60.0,
+    )
+    for field in ("stream_open_grace_s", "batteries_timeout_s", "retention_interval_s"):
+        with pytest.raises(ValidationError):
+            EngineSettings.model_validate({field: 0})
+
+
+def test_batteries_http_client_uses_the_configured_timeout() -> None:
+    client = batteries_http_client("https://batteries.example/", "t", timeout_s=7.0)
+    assert client.timeout == httpx.Timeout(7.0)
+    assert str(client.base_url) == "https://batteries.example" and client.headers[TOKEN_HEADER] == "t"
 
 
 # -- streaming (docs/contracts/engine.md#streaming) --------------------------------------------------

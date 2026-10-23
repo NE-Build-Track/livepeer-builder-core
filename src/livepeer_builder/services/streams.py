@@ -60,6 +60,7 @@ class StreamLimits:
     finalize_timeout_s: float = 10.0  # the most the finishing writes may take (D34)
     drain_timeout_s: float = 30.0  # how long engine.stop() waits for open streams (D36)
     settle_s: float = 1.0  # after a cancel or disconnect, how long the runner may take to end (D38)
+    open_grace_s: float = 5.0  # how far past its deadline a transport's open runs before the engine stops it
 
 
 @dataclass(frozen=True)

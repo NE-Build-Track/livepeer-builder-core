@@ -193,3 +193,20 @@ async def test_purge_and_revision_without_a_sql_store(clock: FixedClock) -> None
     )
     assert (await engine.purge()).jobs_deleted == 0
     assert await engine.schema_revision() is None
+
+
+async def test_retention_runs_every_retention_interval(
+    store: SqlStore, clock: FixedClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = EngineSettings(
+        database_url=MEMORY, retention_jobs_days=30, retention_interval_s=0.02, log_json=False
+    )
+    engine = await BuilderEngine.from_settings(
+        settings, store=store, clock=clock, discovery_source=StaticDiscoverySource()
+    )
+    with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
+        await engine.start()
+        await asyncio.sleep(0.15)  # about seven intervals
+        await engine.stop()
+    purges = [r for r in caplog.records if getattr(r, "event", None) == "store.purged"]
+    assert len(purges) >= 3

@@ -11,7 +11,6 @@ from pydantic import ValidationError
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import ActorContext, JobRequest
 from livepeer_builder.errors import JobFailed
-from livepeer_builder.services import jobs as jobs_module
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.test_streaming import APP, collect, provisioned, read_all
@@ -51,10 +50,8 @@ async def test_the_engine_stops_a_transport_that_ignores_its_deadline(
     admin: ActorContext,
     alice: ActorContext,
     transport: ScriptedStreamTransport,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(jobs_module, "_OPEN_BACKSTOP_GRACE_S", 0.05)
-    engine = await provisioned(make_engine, admin)
+    engine = await provisioned(make_engine, admin, stream_open_grace_s=0.05)
     transport.opens = [StreamScript(open_delay_s=5, honors_deadline=False, payment_sent=False)]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))

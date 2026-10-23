@@ -46,7 +46,6 @@ from livepeer_builder.store import PurgeReport, SqlStore, current_revision, purg
 
 _LOG = logging.getLogger(__name__)
 _SHARED_KEY = "shared_payment_key"
-_RETENTION_INTERVAL_S = 6 * 3600
 
 
 def package_version() -> str:
@@ -134,7 +133,7 @@ class BuilderEngine:
 
         token = settings.batteries_token.get_secret_value() if settings.batteries_token else None
         if allocation_manager is None and settings.batteries_url and token:
-            client = BatteriesClient(settings.batteries_url, token)
+            client = BatteriesClient(settings.batteries_url, token, timeout_s=settings.batteries_timeout_s)
             allocation_manager = client
             closers.append(client)
         grants_client = None
@@ -142,10 +141,14 @@ class BuilderEngine:
         if settings.batteries_operator_token:
             operator_token = settings.batteries_operator_token.get_secret_value()
         if settings.batteries_url and operator_token:
-            grants_client = BatteriesClient(settings.batteries_url, operator_token)
+            grants_client = BatteriesClient(
+                settings.batteries_url, operator_token, timeout_s=settings.batteries_timeout_s
+            )
             closers.append(grants_client)
         if usage_source is None and settings.batteries_url and token:
-            source = BatteriesUsageSource(settings.batteries_url, token)
+            source = BatteriesUsageSource(
+                settings.batteries_url, token, timeout_s=settings.batteries_timeout_s
+            )
             usage_source = source
             closers.append(source)
 
@@ -192,6 +195,7 @@ class BuilderEngine:
                 finalize_timeout_s=settings.stream_finalize_timeout_s,
                 drain_timeout_s=settings.stream_drain_timeout_s,
                 settle_s=settings.stream_settle_s,
+                open_grace_s=settings.stream_open_grace_s,
             ),
         )
         worker = CostSyncWorker(usage_source, store) if usage_source is not None else None
@@ -282,6 +286,6 @@ class BuilderEngine:
             except Exception:
                 _LOG.exception("retention purge failed", extra={"event": "store.purge_failed"})
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=_RETENTION_INTERVAL_S)
+                await asyncio.wait_for(self._stop.wait(), timeout=self.settings.retention_interval_s)
             except TimeoutError:
                 continue

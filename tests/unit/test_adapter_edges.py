@@ -308,6 +308,31 @@ async def test_orchestrator_list_raises_the_first_error_when_every_orchestrator_
         await discovery.fetch()  # a failed pass is not kept; the next interval probes again
 
 
+async def test_orchestrator_list_does_not_cache_an_empty_merge_when_a_probe_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_list(
+        tmp_path,
+        [{"address": "https://idle.example:8935"}, {"address": "https://down.example:8935"}],
+    )
+    calls = 0
+
+    async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        if "idle.example" in str(kwargs["discovery_url"]):
+            return []
+        raise RuntimeError(f"down {kwargs['discovery_url']}")
+
+    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
+    discovery = OrchestratorListDiscoverySource(source)
+    with pytest.raises(RuntimeError, match=r"https://down\.example:8935/discovery"):
+        await discovery.fetch()
+    with pytest.raises(RuntimeError, match=r"https://down\.example:8935/discovery"):
+        await discovery.fetch()
+    assert calls == 4  # the empty merge is not cached, so the next interval probes again
+
+
 async def test_orchestrator_list_keeps_an_orchestrator_with_no_runners(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

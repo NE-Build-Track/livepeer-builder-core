@@ -93,8 +93,9 @@ class OrchestratorListDiscoverySource:
     fetch calls ``GET /discovery`` on every address with ``discover_runners``, TLS verified against the
     process trust store. A later fetch returns that snapshot. An orchestrator that fails, including one
     whose certificate the process does not trust, is left out and never called. The fetch raises when
-    the list cannot be read or names no orchestrator, or when every orchestrator fails; that failure is
-    not remembered, so the next discovery interval tries again. Capacity from the probe is stale by the
+    the list cannot be read or names no orchestrator, or when the merge is empty and any probe failed;
+    that failure is not remembered, so the next discovery interval tries again. An empty merge is kept
+    only when every probe answered and none had runners. Capacity from the probe is stale by the
     next job, so ``capacity_available`` is unknown; price stays, because the call needs its unit. A live
     catalog belongs in ``LPB_DISCOVERY_URL``. No credential is sent to orchestrators.
     """
@@ -123,22 +124,26 @@ class OrchestratorListDiscoverySource:
 
         results = await asyncio.gather(*(probe(url) for url in urls), return_exceptions=True)
         entries: list[dict[str, Any]] = []
-        first_error: Exception | None = None
-        answered = False
+        failures: list[tuple[str, Exception]] = []
         for url, result in zip(urls, results, strict=True):
             if isinstance(result, Exception):
-                if first_error is None:
-                    first_error = result
-                _log_excluded(url, result)
+                failures.append((url, result))
             elif isinstance(result, BaseException):
                 raise result
             else:
-                answered = True
                 entries.extend(result)
-        if not answered and first_error is not None:
-            raise first_error
-        runners = _unique_by_url(runners_from_entries(entries))
-        return tuple(runner.model_copy(update={"capacity_available": None}) for runner in runners)
+        runners = tuple(
+            runner.model_copy(update={"capacity_available": None})
+            for runner in _unique_by_url(runners_from_entries(entries))
+        )
+        # An idle orchestrator returns [] and counts as an answer. An empty merge is a success
+        # only when every probe answered; one failure beside those idle answers is still a failure,
+        # and it is not cached, so the next interval probes again.
+        if not runners and failures:
+            raise failures[0][1]
+        for url, error in failures:
+            _log_excluded(url, error)
+        return runners
 
     async def _addresses(self) -> str | list[str]:
         if self._source.startswith(("http://", "https://")) or "," in self._source:

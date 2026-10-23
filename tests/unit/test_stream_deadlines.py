@@ -142,11 +142,11 @@ async def test_timeout_s_does_not_apply_once_the_runner_has_finished(
 ) -> None:
     engine = await provisioned(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b"])]  # the runner is done straight away
-    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, timeout_s=0.05))
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, timeout_s=0.3))
     received: list[bytes] = []
     async for chunk in stream:
         received.append(chunk)
-        await asyncio.sleep(0.08)  # the caller is still handling a chunk when timeout_s runs out
+        await asyncio.sleep(0.4)  # the caller is still handling a chunk when timeout_s runs out
     assert received == [b"a", b"b"]
     assert stream.job.state == "succeeded" and stream.job.attempts[0].outcome == "succeeded"
     assert engine.admission.running == 0

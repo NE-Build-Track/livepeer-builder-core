@@ -8,6 +8,8 @@ from typing import Any
 
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
 
+BODY_LIMIT = 4096  # how much of a runner's or signer's response body an error keeps
+
 
 def token_hash(token: str) -> str:
     """SHA-256 of an engine-issued token. Only the hash is ever stored."""

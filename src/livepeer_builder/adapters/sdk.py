@@ -43,8 +43,8 @@ from livepeer_builder.contracts import (
     RunnerReply,
 )
 from livepeer_builder.errors import RunnerCallError
+from livepeer_builder.utils import BODY_LIMIT
 
-_BODY_LIMIT = 4096
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
 # may succeed. 400 = incomplete/expired params; 481 = price ceiling.
@@ -308,7 +308,7 @@ def call_error(
     body: str | None = None
     if isinstance(error, LivepeerHTTPError) and error.url == runner_url:
         status = error.status_code
-        body = error.body[:_BODY_LIMIT] if error.body else None
+        body = error.body[:BODY_LIMIT] if error.body else None
         kind = "refused" if status == 503 else "http"
     elif isinstance(error, LivepeerHTTPError):
         # An HTTP error from any other URL came from the signer.

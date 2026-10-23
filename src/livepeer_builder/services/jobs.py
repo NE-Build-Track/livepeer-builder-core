@@ -65,10 +65,9 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.streams import JobStream, StreamLimits, failure_kind, sessions_from
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
-_BODY_LIMIT = 4096
 _FAILOVER_OUTCOMES = frozenset(
     {"refused", "unreachable", "payment_refused"}
 )  # only while payment_sent is false
@@ -494,6 +493,6 @@ def _failure(error: RunnerCallError) -> Failure:
         kind=failure_kind(error.kind, error.status_code),
         message=str(error),
         status_code=error.status_code,
-        body=error.body[:_BODY_LIMIT] if error.body else None,
+        body=error.body[:BODY_LIMIT] if error.body else None,
         payment_sent=error.payment_sent,
     )

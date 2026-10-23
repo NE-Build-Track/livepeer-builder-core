@@ -38,10 +38,9 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
-_BODY_LIMIT = 4096
 _END = b""  # the pump's end-of-stream marker; the pump never queues an empty chunk
 FinishJob = Callable[[Job, JobState, Failure | None, ResultRef | None, Sequence[Attempt]], Awaitable[Job]]
 _Deadline = Literal["first_byte", "idle", "total"]
@@ -387,7 +386,7 @@ class JobStream:
                 kind=failure_kind(ending.outcome, ending.status_code),
                 message=ending.message,
                 status_code=ending.status_code,
-                body=ending.body[:_BODY_LIMIT] if ending.body else None,
+                body=ending.body[:BODY_LIMIT] if ending.body else None,
                 payment_sent=paid,
             )
             state = "uncertain" if paid else "failed"

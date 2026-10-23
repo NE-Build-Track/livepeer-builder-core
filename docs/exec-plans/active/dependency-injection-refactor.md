@@ -44,7 +44,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - `_RETENTION_INTERVAL_S` becomes `retention_interval_s` (`LPB_RETENTION_INTERVAL_S`, default `21600.0`, `> 0`).
   - Defaults equal today's constants, so behaviour is unchanged; `docs/RELIABILITY.md` gains the three rows.
   - The Batteries adapters build their HTTP client through a public `batteries_http_client(base_url, token, timeout_s=...)`, so the timeout is testable without private attributes.
-  - (separate commit) `_BODY_LIMIT` is defined once, as `BODY_LIMIT = 4096` in `utils.py`, instead of in `jobs.py`, `streams.py` and `sdk.py`; it stays an internal constant.
+  - Done in a separate tidy commit: `_BODY_LIMIT` is defined once, as `BODY_LIMIT = 4096` in `utils.py`, instead of in `jobs.py`, `streams.py` and `sdk.py`; it stays an internal constant.
   - Cost-sync usage filters stay unset by design (iss-04: the feed is unfiltered so desk-created grants reconcile).
 - [ ] **Structural test: no environment reads outside `config.py`.** An AST scan of `src/livepeer_builder/` flags `os.environ`, `os.getenv` and `from os import environ/getenv` anywhere except `config.py`, with a message naming the rule ("settings are values: read the environment only in `EngineSettings.from_env`"). `deploy/` entrypoints are application edges and are not scanned. True today; the test keeps it true.
 - [ ] **Lands as one commit per item** (SDK injection, settings, body limit, structural test), each leaving the suite green. Tidy-only commits are marked `tidy:` and change no assertions.

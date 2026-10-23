@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from livepeer_builder.adapters.auth import AuthenticatorChain
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import EngineHealth
+from livepeer_builder.contracts import EngineHealth, PurgeReport
 from livepeer_builder.protocols import (
     AccessPolicy,
     Clock,
@@ -27,7 +27,7 @@ from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.payments import PaymentsService
-from livepeer_builder.store import PurgeReport, SqlStore, current_revision, purge
+from livepeer_builder.store import SqlStore, current_revision, purge
 
 if TYPE_CHECKING:
     from livepeer_builder.api import AdminApi, EngineApi, JourneyApi

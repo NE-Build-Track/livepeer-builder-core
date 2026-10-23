@@ -126,7 +126,7 @@ class RunnerStream(Protocol):
 
 @runtime_checkable
 class StreamingRunnerTransport(RunnerTransport, Protocol):
-    """A transport that can also hand the response back unbuffered. Optional: ``jobs.stream`` needs it.
+    """A transport that can also hand the response back unbuffered. ``jobs.streaming`` exists only with one.
 
     ``open`` returns once the runner answered with its status and headers. It must give up after
     ``request.first_byte_timeout_s`` and raise ``RunnerCallError("timeout", ...)`` with the payment

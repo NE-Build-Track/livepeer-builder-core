@@ -177,7 +177,8 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   own HTTP layer should do the same; without it, a closed iterator is the caller stopping.
 
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
-transport implements it; an enterprise transport without `open` makes `jobs.stream` answer 400.
+transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and
+the REST streaming route answers 400 (D33).
 `open` must honour `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the
 payment evidence so far.
 
@@ -227,5 +228,5 @@ These are the explicit decisions for ISS-02.
   [payments.md](payments.md#cost-classification)). The enterprise decides what to bill.
 - **Performance:** admission limits bound concurrent dispatch. Discovery and cost sync run in the
   background (default 15 s and 30 s). There are no latency guarantees in M2.
-- **Streaming is per job, not continuous media.** `jobs.stream` delivers one runner response as it
+- **Streaming is per job, not continuous media.** `jobs.streaming.stream` delivers one runner response as it
   arrives (above); live media and persistent sessions remain M4 (ISS-27).

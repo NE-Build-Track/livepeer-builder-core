@@ -29,18 +29,25 @@ The engine pins the SDK to [livepeer/livepeer-python-gateway](https://github.com
 Your backend authenticates users and calls the engine in-process. Full walkthrough:
 [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
 
+<!-- example: tests/unit/test_readme_example.py#quick-start -->
 ```python
-from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, JobRequest
+from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, EngineSupply, JobCost, JobRequest
 
-engine = await BuilderEngine.from_settings(EngineSettings.from_env())
-await engine.start()
-actor = ActorContext(
-    actor_id="customer-42",
-    permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
-)
-result = await engine.jobs.run(actor, JobRequest(app="livepeer-example/echo", path="/echo", payload={"x": 1}))
-cost = await engine.costs.for_job(actor, result.job.id)  # "pending" until Batteries reports it
+
+async def quick_start(settings: EngineSettings, supply: EngineSupply | None = None) -> JobCost:
+    """Run one paid job for a customer and read what it cost. ``supply`` replaces parts (tests use it)."""
+    async with await BuilderEngine.create(settings, supply=supply) as engine:
+        actor = ActorContext(
+            actor_id="customer-42",
+            permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
+        )
+        job = JobRequest(app="livepeer-example/echo", path="/echo", payload={"x": 1})
+        result = await engine.jobs.run(actor, job)
+        return await engine.costs.for_job(actor, result.job.id)  # "pending" until Batteries reports it
 ```
+
+Run it with `asyncio.run(quick_start(EngineSettings.from_env()))`. `async with` starts the engine and
+stops it, closing what it opened. This block is tested (`tests/unit/test_readme_example.py`).
 
 ## Run the service
 

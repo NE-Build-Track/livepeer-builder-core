@@ -33,10 +33,11 @@ Seven steps, then the consumers. Each step is one reviewable change with its own
 
 Make the change easy, then make the easy change. Today's tests patch module internals, so this step removes the patching first, with no change in behaviour. The tests that assert private wiring move to step 3, which gives them a public seam (`default_parts` returns `EngineParts`); rewriting them here would mean rewriting them twice.
 
-- [ ] **SDK functions are injected:**
-  - `SdkRunnerTransport` takes `call_runner` (default `livepeer_gateway.call_runner`), and `SignerDiscoverySource` takes `discover` (default `discover_runners`). This is builder-core code only; the SDK is not changed.
-  - **Typed with Protocols** `CallRunner` (both `stream=False` and `stream=True` overloads, only the keyword arguments builder-core uses) and `DiscoverRunners`. They live in `adapters/sdk.py` and are adapter-internal. mypy checks that the real SDK functions satisfy them, so an SDK signature change fails builder-core's type check at the boundary.
-  - The 14 `monkeypatch.setattr(sdk.call_runner / sdk.discover_runners, ...)` sites in `tests/unit/test_adapters.py`, `test_adapter_edges.py` and `test_stream_deadlines.py` pass fakes instead.
+- [x] **SDK functions are injected:**
+  - `SdkRunnerTransport` takes `call` (default `livepeer_gateway.call_runner`; named `call` so it does not shadow the SDK import), and `SignerDiscoverySource` takes `discover` (default `discover_runners`). This is builder-core code only; the SDK is not changed.
+  - **Typed with Protocols** `CallRunner` (both `stream=False` and `stream=True` overloads, only the keyword arguments builder-core uses) and `DiscoverRunners`, in `adapters/sdk.py`, adapter-internal.
+  - **SDK drift is caught by a test, not by mypy** (see decision 13). `tests/unit/test_sdk_contract.py` records the keyword arguments the adapter really passes on `call()`, `open()` and `fetch()`, and asserts the real SDK functions accept every one. It was shown to fail when the transport passed a keyword the SDK lacks.
+  - The 14 `monkeypatch.setattr(sdk.call_runner / sdk.discover_runners, ...)` sites in `tests/unit/test_adapters.py`, `test_adapter_edges.py` and `test_stream_deadlines.py` pass fakes instead. The parametrized deadline test now carries its fake per parameter.
 - [ ] **Tuning values live in settings** (decision 8):
   - `jobs._OPEN_BACKSTOP_GRACE_S` becomes `stream_open_grace_s` (`LPB_STREAM_OPEN_GRACE_S`, default `5.0`, `> 0`), carried in `StreamLimits`; `test_stream_deadlines.py` stops patching the module constant.
   - The Batteries HTTP timeout (hard-coded `30.0`) becomes `batteries_timeout_s` (`LPB_BATTERIES_TIMEOUT_S`, default `30.0`, `> 0`).
@@ -246,6 +247,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] 2026-10-23: step 4 design agreed: the role split with exact members, read-only property members, `FakeEngine` modelled on ChatLPT's fake, `make_engine` as an async context manager without loops, the journey contract cases, two export-completeness tests.
 - [x] 2026-10-23: step 5 design agreed: `build_app` plus `serve` with guaranteed cleanup, `http/server.py`, logging in `serve` only, an `extend` hook with `actor_dependency` (no `app.state`), no new CLI flag, a tested service-mode example, Railway on `serve`. The Swagger fix lands first (decision 12). 
 - [x] 2026-10-23: step 6 design agreed: lazy default adapters, a store maintenance capability, `PurgeReport` in contracts, `aiohttp` and `starlette` declared with a declared-dependencies test, an import-weight test for the root and `api`. 
+- [x] 2026-10-23: Swagger fix landed as its own commit (`fix(http): declare the bearer scheme so Swagger shows Authorize`), on branch `tasks/mz/swagger-bearer`; the refactor branch is rebased on it.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log
@@ -302,3 +304,5 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
     The content is unchanged; only grouping and order. Source: Mike.
 12. **2026-10-23: the separate Swagger fix lands before step 5,** so step 5's Railway entrypoint calls plain `serve(settings)` with no OpenAPI patch. The fix stays outside this plan's scope; only its timing is fixed. Source: Mike.
+13. **2026-10-23: SDK signature drift is caught by a contract test, not by mypy.** Step 1's design assumed mypy would check the real SDK functions against the `CallRunner` and `DiscoverRunners` Protocols. The SDK ships no `py.typed`, and builder-core's mypy settings treat `livepeer_gateway` as untyped, so that check cannot happen. Adding type information to the SDK would need Josh's approval (decision 10). A test that records the keyword arguments the adapter passes and checks them against the real signatures gives the same protection inside builder-core. Source: found during step 1 implementation.
+

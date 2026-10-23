@@ -13,7 +13,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal, Protocol, overload
 
 import aiohttp
 from livepeer_gateway.discovery import discover_runners
@@ -25,6 +25,8 @@ from livepeer_gateway.errors import (
     SkipPaymentCycle,
 )
 from livepeer_gateway.live_runner import (
+    LivePaymentSessionCallback,
+    LiveRunnerCallResult,
     LiveRunnerCallStream,
     LiveRunnerInstance,
     LiveRunnerPriceInfo,
@@ -50,6 +52,60 @@ _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, Remote
 _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
 
 
+class DiscoverRunners(Protocol):
+    """The SDK's ``discover_runners``, narrowed to the arguments this adapter passes."""
+
+    async def __call__(
+        self,
+        *,
+        signer_url: str | None,
+        signer_headers: dict[str, str] | None,
+        discovery_url: str | None,
+    ) -> list[dict[str, Any]]: ...
+
+
+class CallRunner(Protocol):
+    """The SDK's ``call_runner``, narrowed to the arguments this adapter passes.
+
+    The SDK ships no type information, so mypy cannot hold the real function to this; a unit test
+    compares the SDK's signature with these keyword names instead.
+    """
+
+    @overload
+    async def __call__(
+        self,
+        runner_url: str,
+        /,
+        *,
+        runner: LiveRunnerInstance | None,
+        payload: Any,
+        method: str,
+        signer_url: str | None,
+        signer_headers: dict[str, str] | None,
+        timeout: float,  # noqa: ASYNC109 - the SDK's own parameter name
+        max_payment_challenge_retries: int,
+        on_payment_session: LivePaymentSessionCallback | None,
+        stream: Literal[False] = False,
+    ) -> LiveRunnerCallResult: ...
+
+    @overload
+    async def __call__(
+        self,
+        runner_url: str,
+        /,
+        *,
+        runner: LiveRunnerInstance | None,
+        payload: Any,
+        method: str,
+        signer_url: str | None,
+        signer_headers: dict[str, str] | None,
+        timeout: float,  # noqa: ASYNC109 - the SDK's own parameter name
+        max_payment_challenge_retries: int,
+        on_payment_session: LivePaymentSessionCallback | None,
+        stream: Literal[True],
+    ) -> LiveRunnerCallStream: ...
+
+
 class SignerDiscoverySource:
     """Reads the signer's discovery endpoint, or a discovery URL that overrides it."""
 
@@ -59,14 +115,16 @@ class SignerDiscoverySource:
         signer_url: str | None = None,
         discovery_url: str | None = None,
         signer_headers: dict[str, str] | None = None,
+        discover: DiscoverRunners = discover_runners,
     ) -> None:
         self._signer_url = signer_url
         self._discovery_url = discovery_url
         self._signer_headers = signer_headers
+        self._discover = discover
 
     async def fetch(self) -> tuple[Runner, ...]:
         # The signer bearer goes to the signer only, never to a separate discovery URL.
-        entries = await discover_runners(
+        entries = await self._discover(
             signer_url=self._signer_url,
             signer_headers=self._signer_headers,
             discovery_url=self._discovery_url,
@@ -97,9 +155,16 @@ class _SignedSessions:
 class SdkRunnerTransport:
     """``call_runner`` with the actor's credential as the signer bearer. Unpaid when there is none."""
 
-    def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
+    def __init__(
+        self,
+        signer_url: str | None,
+        max_payment_challenge_retries: int = 3,
+        *,
+        call: CallRunner = call_runner,
+    ) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
+        self._call = call
 
     def _call_kwargs(
         self, runner: Runner, request: JobRequest, credential: str | None, sessions: "_SignedSessions"
@@ -132,7 +197,7 @@ class SdkRunnerTransport:
         sessions = _SignedSessions()
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
-            result = await call_runner(url, **kwargs)
+            result = await self._call(url, **kwargs)
         except LivepeerGatewayError as error:
             raise call_error(
                 error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
@@ -165,7 +230,7 @@ class SdkRunnerTransport:
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):
-                stream = await call_runner(url, stream=True, **kwargs)
+                stream = await self._call(url, stream=True, **kwargs)
         except TimeoutError as error:
             raise RunnerCallError(
                 "timeout",

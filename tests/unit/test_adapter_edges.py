@@ -8,7 +8,6 @@ import httpx
 import pytest
 from livepeer_gateway.errors import PaymentError
 
-from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import (
     BatteriesClient,
     BatteriesUsageSource,
@@ -128,7 +127,7 @@ def test_wire_format_edges() -> None:
 # -- SDK -----------------------------------------------------------------------------------------------
 
 
-async def test_signer_discovery_parses_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_signer_discovery_parses_entries() -> None:
     async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
         assert kwargs["signer_headers"] == {"Authorization": "Bearer k"}
         return [
@@ -138,8 +137,9 @@ async def test_signer_discovery_parses_entries(monkeypatch: pytest.MonkeyPatch) 
             }
         ]
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
-    source = SignerDiscoverySource(signer_url="https://s", signer_headers={"Authorization": "Bearer k"})
+    source = SignerDiscoverySource(
+        signer_url="https://s", signer_headers={"Authorization": "Bearer k"}, discover=fake_discover
+    )
     (runner,) = await source.fetch()
     assert runner.rate is None and runner.orchestrator_url == "https://o"
 
@@ -168,7 +168,7 @@ def test_network_errors_are_classified_through_their_causes() -> None:
     assert call_error(PaymentError("signer said no"), "https://r", payment_sent=False).kind == "payment"
 
 
-async def test_transport_maps_client_errors_and_passes_rates(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_transport_maps_client_errors_and_passes_rates() -> None:
     runner = Runner(
         url="https://r", app="a", runner_id=None, mode=None, orchestrator_url=None, capacity=None,
         capacity_available=None, rate=NetworkRate(amount=Decimal("0.1"), currency="usd", unit="request"),
@@ -179,9 +179,10 @@ async def test_transport_maps_client_errors_and_passes_rates(monkeypatch: pytest
         seen.update(kwargs)
         raise aiohttp.ClientConnectionError("no route")
 
-    monkeypatch.setattr(sdk, "call_runner", unreachable)
     with pytest.raises(RunnerCallError) as failed:
-        await SdkRunnerTransport("https://signer").call(runner, JobRequest(app="a"), "lpg_k")
+        await SdkRunnerTransport("https://signer", call=unreachable).call(
+            runner, JobRequest(app="a"), "lpg_k"
+        )
     assert (failed.value.kind, failed.value.payment_sent) == ("unreachable", False)
     assert seen["runner"].price_info.price == "0.1"  # type: ignore[attr-defined]
 

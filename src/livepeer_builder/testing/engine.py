@@ -2,7 +2,7 @@
 
 The real services run (money rules, idempotency, admission, failover, streaming lifecycle) over an
 in-memory SQLite store and the shipped port fakes. Use it when the engine's rules matter to the test;
-use ``FakeEngine`` for fast application unit tests that only need the journey's shape.
+use ``FakeEngine`` for fast application unit tests that only need the actor API's shape.
 """
 
 import dataclasses

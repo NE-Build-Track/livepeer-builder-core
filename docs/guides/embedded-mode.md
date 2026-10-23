@@ -155,14 +155,14 @@ Failures are Python exceptions, not HTTP statuses:
 ## Type against the role you use, and test without a network
 
 Depend on the narrowest Protocol your code uses, not on `BuilderEngine`
-([livepeer_builder.api](../../src/livepeer_builder/api.py)): `JourneyApi` to run jobs and read their
+([livepeer_builder.api](../../src/livepeer_builder/api.py)): `ActorApi` to run jobs and read their
 results, costs and catalog; `AdminApi` for operator work; `EngineApi` for both.
 
 ```python
-from livepeer_builder import ActorContext, JobRequest, JourneyApi
+from livepeer_builder import ActorApi, ActorContext, JobRequest
 
 
-async def answer(engine: JourneyApi, actor: ActorContext, prompt: dict[str, str]) -> bytes:
+async def answer(engine: ActorApi, actor: ActorContext, prompt: dict[str, str]) -> bytes:
     streaming = engine.jobs.streaming  # None when the transport cannot stream
     if streaming is None:
         return (await engine.jobs.run(actor, JobRequest(app="chat/llm", payload=prompt))).content
@@ -175,7 +175,7 @@ Optional capabilities are `X | None` members: `jobs.streaming`, and on `AdminApi
 
 Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps them in step:
 
-- **`FakeEngine`** for your unit tests: it implements `JourneyApi` and records `jobs.requests`. It
+- **`FakeEngine`** for your unit tests: it implements `ActorApi` and records `jobs.requests`. It
   answers per `(app, path)` with `Reply(...)` (a body, its parsed `data`, stream chunks), `Fails(...)`
   (`JobFailed`, paid or not; among stream chunks, a failure part-way that leaves the job `uncertain`) or
   `Raises(error)` (an engine error such as `NoCapacity`; also accepted as a job's cost). Like the

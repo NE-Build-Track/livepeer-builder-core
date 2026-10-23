@@ -45,7 +45,7 @@ edge and prints how to fix a violation.
 | Types | `contracts/` | nothing internal |
 | Errors | `errors.py` | contracts |
 | Providers | `protocols/` | contracts, errors |
-| Facade | `api.py` (`JourneyApi`, `AdminApi`, `EngineApi`) | contracts, errors, protocols |
+| Facade | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | contracts, errors, protocols |
 | Config | `config.py` | contracts, errors |
 | Service | `services/` | contracts, errors, protocols, config, utils |
 | Repo | `store/` | contracts, errors, protocols, config, utils |

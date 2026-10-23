@@ -1,12 +1,12 @@
-"""``FakeEngine``: the journey (``JourneyApi``) scripted at the engine level, for application unit tests.
+"""``FakeEngine``: the actor API (``ActorApi``) scripted at the engine level, for application unit tests.
 
 It returns real contract values and raises real engine errors, so code under test cannot tell it from
-the engine for the journey's *shape*: run a job, read it back, stream it, see costs and the catalog.
+the engine for the API's *shape*: run a job, read it back, stream it, see costs and the catalog.
 Like the engine, a run records an attempt on the first runner for the app, a repeated
 ``operation_ref`` raises ``OperationExists`` (or ``OperationConflict`` for a different request), and
 a stream that fails part-way leaves the job ``uncertain``. It does not model the money rules
 (admission, failover, payment); script those outcomes with ``Fails`` and ``Raises``, or use
-``make_engine`` when they matter. A contract test runs the same journey assertions against both.
+``make_engine`` when they matter. A contract test runs the same actor-API assertions against both.
 
 Script replies per ``(app, path)``::
 
@@ -55,7 +55,7 @@ from livepeer_builder.errors import (
 from livepeer_builder.services.jobs import request_fingerprint
 
 if TYPE_CHECKING:
-    from livepeer_builder.api import JourneyApi
+    from livepeer_builder.api import ActorApi
 
 
 @dataclass(frozen=True)
@@ -349,7 +349,7 @@ class FakeAllowance:
 
 
 class FakeEngine:
-    """Implements ``JourneyApi``; ``streaming=False`` gives an engine whose transport cannot stream."""
+    """Implements ``ActorApi``; ``streaming=False`` gives an engine whose transport cannot stream."""
 
     def __init__(
         self,
@@ -393,7 +393,7 @@ class FakeEngine:
         self.stopped = True
 
 
-if TYPE_CHECKING:  # mypy proves the fake offers the journey
+if TYPE_CHECKING:  # mypy proves the fake offers the actor API
 
-    def _journey(fake: FakeEngine) -> "JourneyApi":
+    def _actor_api(fake: FakeEngine) -> "ActorApi":
         return fake

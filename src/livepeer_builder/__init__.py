@@ -6,11 +6,11 @@ See AGENTS.md and ARCHITECTURE.md at the repository root.
 """
 
 from livepeer_builder.api import (
+    ActorApi,
     AdminApi,
     EngineApi,
     GrantsApi,
     JobStreamApi,
-    JourneyApi,
     KeysApi,
     StreamingApi,
 )
@@ -79,6 +79,7 @@ __all__ = [
     "UNSET",
     "AccessDenied",
     "AccessKey",
+    "ActorApi",
     "ActorContext",
     "AdminApi",
     "Allowance",
@@ -113,7 +114,6 @@ __all__ = [
     "JobResult",
     "JobStream",
     "JobStreamApi",
-    "JourneyApi",
     "KeysApi",
     "MeasuredUsage",
     "Money",

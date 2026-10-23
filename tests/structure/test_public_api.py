@@ -25,7 +25,7 @@ from pydantic import BaseModel
 import livepeer_builder
 from livepeer_builder import api, errors
 
-ROLES = (api.JourneyApi, api.AdminApi, api.EngineApi)
+ROLES = (api.ActorApi, api.AdminApi, api.EngineApi)
 ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_MODULES = (
     "livepeer_builder",

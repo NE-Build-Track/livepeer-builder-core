@@ -2,7 +2,7 @@
 
 The port fakes import contracts, errors and protocols only; supply them through
 ``BuilderEngine.create(settings, supply=EngineSupply(...))``. ``make_engine`` builds a real engine
-over them (in-memory SQLite), and ``FakeEngine`` scripts the journey at the engine level.
+over them (in-memory SQLite), and ``FakeEngine`` scripts the actor API at the engine level.
 """
 
 from livepeer_builder.testing.engine import make_engine

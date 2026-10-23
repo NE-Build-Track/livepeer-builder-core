@@ -29,7 +29,7 @@ from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.payments import PaymentsService
 
 if TYPE_CHECKING:
-    from livepeer_builder.api import AdminApi, EngineApi, JourneyApi
+    from livepeer_builder.api import ActorApi, AdminApi, EngineApi
     from livepeer_builder.runtime.assembly import Decorate, EngineSupply
 
 _LOG = logging.getLogger(__name__)
@@ -183,5 +183,5 @@ class BuilderEngine:
 
 if TYPE_CHECKING:  # mypy proves BuilderEngine offers every role's surface (livepeer_builder.api)
 
-    def _offers(engine: BuilderEngine) -> tuple["JourneyApi", "AdminApi", "EngineApi"]:
+    def _offers(engine: BuilderEngine) -> tuple["ActorApi", "AdminApi", "EngineApi"]:
         return engine, engine, engine

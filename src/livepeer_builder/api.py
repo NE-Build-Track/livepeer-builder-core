@@ -2,9 +2,10 @@
 
 ``protocols`` holds what the engine *needs* (ports it calls). This module holds what it *offers*
 (what applications and the HTTP layer call). ``BuilderEngine`` satisfies these structurally, and so
-does ``livepeer_builder.testing.FakeEngine`` for the journey.
+does ``livepeer_builder.testing.FakeEngine`` for the actor API.
 
-- ``JourneyApi``: what an end-user application needs. Type against this when you only run jobs.
+- ``ActorApi``: what an application calls on behalf of its actors (its users), plus the engine's
+  lifecycle. Type against this when you only run jobs.
 - ``AdminApi``: operator work (provisioning, grants, keys, reconciliation).
 - ``EngineApi``: both, plus authentication and the M4 placeholders. ``http/`` is typed against it.
 
@@ -44,7 +45,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
-# -- the journey ---------------------------------------------------------------------------------
+# -- the actor API -------------------------------------------------------------------------------
 
 
 class JobStreamApi(Protocol):
@@ -96,7 +97,7 @@ class AllowanceApi(Protocol):
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance: ...
 
 
-class JourneyApi(Protocol):
+class ActorApi(Protocol):
     """What an end-user application needs: run jobs, read their results and costs, see the catalog."""
 
     @property
@@ -187,7 +188,7 @@ class EngineCostsApi(CostsApi, CostsAdminApi, Protocol):
     pass
 
 
-class EngineApi(JourneyApi, AdminApi, Protocol):
+class EngineApi(ActorApi, AdminApi, Protocol):
     """The whole engine, as the HTTP layer uses it."""
 
     @property
@@ -203,6 +204,7 @@ class EngineApi(JourneyApi, AdminApi, Protocol):
 
 
 __all__ = [
+    "ActorApi",
     "AdminApi",
     "AllowanceApi",
     "CostsAdminApi",
@@ -213,7 +215,6 @@ __all__ = [
     "GrantsApi",
     "JobStreamApi",
     "JobsApi",
-    "JourneyApi",
     "KeysApi",
     "PaymentsAdminApi",
     "PaymentsApi",

@@ -1,4 +1,4 @@
-"""FakeEngine and the real engine honor the same journey contract (livepeer_builder.api.JourneyApi).
+"""FakeEngine and the real engine honor the same actor-API contract (livepeer_builder.api.ActorApi).
 
 Each test runs once against ``FakeEngine`` and once against a real engine from ``make_engine``, scripted
 to the same outcome. When a case passes on both, application unit tests written against the fake mean
@@ -15,11 +15,11 @@ from uuid import uuid4
 import pytest
 
 from livepeer_builder import (
+    ActorApi,
     ActorContext,
     EngineSupply,
     JobFailed,
     JobRequest,
-    JourneyApi,
     Money,
     OperationConflict,
     OperationExists,
@@ -44,7 +44,7 @@ ALICE = ActorContext(
 ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
 RUNNERS = (runner(APP, url="https://r1"), runner(OTHER, url="https://r2"))
 
-Side = Callable[..., AbstractAsyncContextManager[JourneyApi]]
+Side = Callable[..., AbstractAsyncContextManager[ActorApi]]
 
 
 @asynccontextmanager
@@ -55,7 +55,7 @@ async def fake(
     data: dict[str, Any] | None = None,
     fails_mid_stream: bool = False,
     paid: bool = False,
-) -> AsyncIterator[JourneyApi]:
+) -> AsyncIterator[ActorApi]:
     script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((Fails(),) if fails_mid_stream else ()))
     failed = Fails(payment_sent=True, body="trace") if paid else Fails()
     reply: Reply | Fails = failed if fails else Reply(chunks=script, data=data)
@@ -70,7 +70,7 @@ async def real(
     data: dict[str, Any] | None = None,
     fails_mid_stream: bool = False,
     paid: bool = False,
-) -> AsyncIterator[JourneyApi]:
+) -> AsyncIterator[ActorApi]:
     if chunks is not None:
         broken = [RunnerCallError("http", "cut", payment_sent=True)] if fails_mid_stream else []
         transport: ScriptedTransport = ScriptedStreamTransport(

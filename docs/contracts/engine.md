@@ -55,9 +55,12 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      same way.
 2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
    most once (see [idempotency](#idempotency)).
-3. **The attempt row is written before the call** (`in_flight`) and updated after it. If the engine dies
-   mid-call, `recover_interrupted()` marks the job `uncertain` when anything may have paid, and
-   `failed` otherwise.
+3. **The attempt row is written before the call** (`in_flight`) and updated after it. **Payment evidence
+   is written when the signer signs**, before the paid request goes out: the transport calls
+   `on_signed(manifest_id)` and the engine stores `payment_sent` and the session on the attempt then
+   (D42). A cancel, a disconnect or a crash during the paid request therefore keeps the charge
+   attributed to its job. If the engine dies mid-call, `recover_interrupted()` marks the job
+   `uncertain` when anything may have paid, and `failed` otherwise.
 4. **Admission and provisioning are checked before any payment.** The admission limits
    (`max_concurrent_jobs`, `max_concurrent_jobs_per_app`) refuse with 503 and `Retry-After`. An
    unprovisioned actor fails with `not_provisioned`.

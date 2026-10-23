@@ -136,7 +136,7 @@ async def test_attempt_is_written_before_the_call(
     seen_during_call: list[Job] = []
 
     class Observing(ScriptedTransport):
-        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
             seen_during_call.extend(await store.jobs_in_state("running"))
             return ScriptedTransport.ok()
 
@@ -210,7 +210,7 @@ async def test_admission_refuses_before_dispatch(
     release, entered = asyncio.Event(), asyncio.Event()
 
     class Slow(ScriptedTransport):
-        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
             entered.set()  # the first job now holds the only admission slot
             await release.wait()
             return ScriptedTransport.ok()

@@ -8,6 +8,7 @@ import pytest
 
 from livepeer_builder.contracts import (
     AccessKey,
+    Attempt,
     AttemptCost,
     Failure,
     Fees,
@@ -16,6 +17,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SignedSession,
     SyncCheckpoint,
     UsageRow,
 )
@@ -329,3 +331,28 @@ async def test_new_evidence_puts_a_projection_out_of_date_until_one_from_that_ev
     assert await served() is None and await needs_projection()
     assert await version() == current + 1
     assert await sql.get_projection(job.id) is not None  # sync still reads it (first observed, corrected)
+
+
+async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="a1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await sql.start_attempt(attempt)
+    signed = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),), "payment_sent": True})
+    await sql.record_payment_evidence(signed)  # while the call runs
+    done = signed.model_copy(update={"outcome": "succeeded", "status_code": 200, "ended_at": clock.now()})
+    await sql.finish_attempt(done)
+    late = done.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m1"), SignedSession(manifest_id="m2"))}
+    )
+    await sql.record_payment_evidence(late.model_copy(update={"outcome": "in_flight", "ended_at": None}))
+    stored = await sql.get_job(job.id)
+    assert stored is not None
+    [kept] = stored.attempts
+    assert (kept.outcome, kept.status_code, kept.payment_sent) == ("succeeded", 200, True)  # not reopened
+    assert [session.manifest_id for session in kept.sessions] == ["m1", "m2"]  # appended once each

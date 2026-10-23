@@ -71,7 +71,7 @@ class _HangsDuringOpen:
     async def __call__(self, url: str, **kwargs: object) -> object:
         self.called.append(url)
         if self.manifest_id is not None:
-            kwargs["on_payment_session"](SimpleNamespace(manifest_id=self.manifest_id))  # type: ignore[operator]
+            await kwargs["on_payment_session"](SimpleNamespace(manifest_id=self.manifest_id))  # type: ignore[operator]
         await asyncio.sleep(5)
         raise AssertionError("unreachable")
 

@@ -65,7 +65,8 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
-from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind, sessions_from
+from livepeer_builder.services.evidence import SignedSessionRecorder, with_evidence
+from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -116,7 +117,8 @@ class JobService:
             except JobFailed:
                 raise
             except BaseException as exc:
-                await self._close_after_error(job, attempts, exc)
+                # Shielded as in stream (D34): a host that cancels every await must not cut this write off.
+                await run_shielded(self._close_after_error(job, attempts, exc))
                 raise
 
     async def _stream(
@@ -295,21 +297,20 @@ class JobService:
     async def _attempt_failed(
         self, job: Job, attempts: list[Attempt], error: RunnerCallError
     ) -> JobFailed | None:
-        """Record the error on the current attempt. Returns the JobFailed to raise, or None to fail over."""
-        attempts[-1] = attempts[-1].model_copy(
-            update={
-                "sessions": sessions_from(error.manifest_ids),
-                "payment_sent": error.payment_sent,
-                "outcome": error.kind,
-                "status_code": error.status_code,
-                "ended_at": self._clock.now(),
-            }
+        """Record the error on the current attempt. Returns the JobFailed to raise, or None to fail over.
+
+        Evidence the signer reported during the call stays: an error that says ``payment_sent=False``
+        after a session was signed still leaves the attempt paid, so paid work never fails over.
+        """
+        attempts[-1] = with_evidence(attempts[-1], error.manifest_ids, error.payment_sent).model_copy(
+            update={"outcome": error.kind, "status_code": error.status_code, "ended_at": self._clock.now()}
         )
         await self._store.finish_attempt(attempts[-1])
-        if error.payment_sent or error.kind not in _FAILOVER_OUTCOMES:
-            paid_unknown = error.payment_sent and error.kind in _UNCERTAIN_OUTCOMES
+        paid = attempts[-1].payment_sent
+        if paid or error.kind not in _FAILOVER_OUTCOMES:
+            paid_unknown = paid and error.kind in _UNCERTAIN_OUTCOMES
             finished = await self._finish(
-                job, "uncertain" if paid_unknown else "failed", _failure(error), None, attempts
+                job, "uncertain" if paid_unknown else "failed", _failure(error, paid), None, attempts
             )
             return JobFailed(finished)
         return None
@@ -327,18 +328,17 @@ class JobService:
     ) -> JobResult:
         ordered, credential = await self._candidates(job, actor, request, attempts)
         for number, runner in enumerate(ordered, start=1):
-            attempt = await self._start_attempt(job, number, runner, credential, attempts)
+            await self._start_attempt(job, number, runner, credential, attempts)
+            recorder = SignedSessionRecorder(self._store, attempts)
             try:
-                reply = await self._transport.call(runner, request, credential.token)
+                reply = await self._transport.call(runner, request, credential.token, on_signed=recorder)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error)
                 if failed is not None:
                     raise failed from error
                 continue
-            attempts[-1] = attempt.model_copy(
+            attempts[-1] = with_evidence(attempts[-1], reply.manifest_ids, reply.payment_sent).model_copy(
                 update={
-                    "sessions": sessions_from(reply.manifest_ids),
-                    "payment_sent": reply.payment_sent,
                     "outcome": "succeeded",
                     "status_code": reply.status_code,
                     "ended_at": self._clock.now(),
@@ -368,13 +368,14 @@ class JobService:
         loop = asyncio.get_running_loop()
         ordered, credential = await self._candidates(job, actor, request, attempts)
         for number, runner in enumerate(ordered, start=1):
-            attempt = await self._start_attempt(job, number, runner, credential, attempts)
+            await self._start_attempt(job, number, runner, credential, attempts)
+            recorder = SignedSessionRecorder(self._store, attempts)
             started = loop.time()
             budget = min(request.first_byte_timeout_s, deadline - started)
             bounded = request.model_copy(update={"first_byte_timeout_s": max(budget, 0.001)})
             try:
                 async with asyncio.timeout(max(budget, 0) + self._stream_limits.open_grace_s):
-                    opened = await transport.open(runner, bounded, credential.token)
+                    opened = await transport.open(runner, bounded, credential.token, on_signed=recorder)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error)
                 if failed is not None:
@@ -385,12 +386,8 @@ class JobService:
                 unknown = RunnerCallError("timeout", "no answer within first_byte_timeout", payment_sent=True)
                 raise cast(JobFailed, await self._attempt_failed(job, attempts, unknown)) from error
             # Payment evidence is recorded now, so a restart mid-stream resolves the job as uncertain.
-            attempts[-1] = attempt.model_copy(
-                update={
-                    "sessions": sessions_from(opened.manifest_ids),
-                    "payment_sent": opened.payment_sent,
-                    "status_code": opened.status_code,
-                }
+            attempts[-1] = with_evidence(attempts[-1], opened.manifest_ids, opened.payment_sent).model_copy(
+                update={"status_code": opened.status_code}
             )
             try:
                 await self._store.finish_attempt(attempts[-1])
@@ -487,11 +484,11 @@ def _result_ref(reply: RunnerReply) -> ResultRef:
     )
 
 
-def _failure(error: RunnerCallError) -> Failure:
+def _failure(error: RunnerCallError, paid: bool) -> Failure:
     return Failure(
         kind=failure_kind(error.kind, error.status_code),
         message=str(error),
         status_code=error.status_code,
         body=error.body[:BODY_LIMIT] if error.body else None,
-        payment_sent=error.payment_sent,
+        payment_sent=paid,
     )

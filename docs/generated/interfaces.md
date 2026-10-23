@@ -34,12 +34,12 @@ classDiagram
     }
     class RunnerTransport {
         <<interface>>
-        +async call(runner, request, credential) RunnerReply
+        +async call(runner, request, credential, on_signed) RunnerReply
     }
     class StreamingRunnerTransport {
         <<interface>>
-        +async call(runner, request, credential) RunnerReply
-        +async open(runner, request, credential) RunnerStream
+        +async call(runner, request, credential, on_signed) RunnerReply
+        +async open(runner, request, credential, on_signed) RunnerStream
     }
     class RunnerStream {
         <<interface>>
@@ -187,6 +187,6 @@ classDiagram
 | --- | --- |
 | `ActorRepo` | `get_actor`, `save_actor`, `list_actors` |
 | `KeyRepo` | `insert_access_key`, `access_key_by_hash`, `revoke_access_key`, `list_access_keys`, `count_active_admin_keys` |
-| `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
+| `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `record_payment_evidence`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
 | `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `job_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `cost_snapshot`, `save_projection` |
 | `SecretRepo` | `put_secret`, `get_secret`, `delete_secret` |

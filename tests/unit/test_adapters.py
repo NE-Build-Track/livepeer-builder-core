@@ -214,9 +214,9 @@ def _runner() -> Runner:
 async def test_transport_collects_signed_sessions() -> None:
     async def paid_twice(url: str, **kwargs: object) -> SimpleNamespace:
         callback = kwargs["on_payment_session"]
-        callback(_Session("m-1"))  # type: ignore[operator]
-        callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
-        callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
+        await callback(_Session("m-1"))  # type: ignore[operator]
+        await callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
+        await callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
         return SimpleNamespace(
             content=b'{"ok": 1}', data={}, content_type="application/json", session_id="m-1"
         )
@@ -229,7 +229,7 @@ async def test_transport_collects_signed_sessions() -> None:
 
 async def test_transport_failures_carry_the_sessions_signed_before_them() -> None:
     async def signed_then_500(url: str, **kwargs: object) -> SimpleNamespace:
-        kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
         raise LivepeerHTTPError(500, url, body="boom")
 
     with pytest.raises(RunnerCallError) as failed:
@@ -367,7 +367,7 @@ async def test_open_streams_chunks_and_reports_the_signed_session() -> None:
 
     async def paid_stream(url: str, **kwargs: object) -> _FakeLiveStream:
         assert kwargs["stream"] is True and url.endswith("/v1/chat/completions")
-        kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
         return fake
 
     transport = SdkRunnerTransport("https://signer.example", call=paid_stream)
@@ -391,7 +391,7 @@ async def test_open_maps_errors_before_and_during_the_stream() -> None:
     broken = _FakeLiveStream([b"x", aiohttp.ClientPayloadError("cut")])
 
     async def opens_then_breaks(url: str, **kwargs: object) -> _FakeLiveStream:
-        kwargs["on_payment_session"](_Session("m-2"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-2"))  # type: ignore[operator]
         return broken
 
     transport = SdkRunnerTransport("https://signer.example", call=opens_then_breaks)
@@ -444,7 +444,7 @@ def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
 
 async def test_open_gives_up_after_first_byte_timeout_and_keeps_the_signed_session() -> None:
     async def signs_then_hangs(url: str, **kwargs: object) -> _FakeLiveStream:
-        kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
+        await kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
         await asyncio.sleep(5)  # the runner took the payment and never sent its headers
         raise AssertionError("unreachable")
 
@@ -517,3 +517,20 @@ async def test_usage_feed_is_unfiltered_by_default() -> None:
     )
     await source.page(None, limit=10)
     assert seen == [{"limit": "10"}]  # iss-04: no filters, so desk-created grants still reconcile
+
+
+async def test_each_signed_session_reaches_on_signed_before_the_paid_request() -> None:
+    order: list[str] = []
+
+    async def paid(url: str, **kwargs: object) -> SimpleNamespace:
+        await kwargs["on_payment_session"](_Session("m-7"))  # type: ignore[operator]
+        order.append("request sent")
+        return SimpleNamespace(content=b"{}", data=None, content_type="application/json")
+
+    async def on_signed(manifest_id: str) -> None:
+        order.append(f"stored {manifest_id}")
+
+    transport = SdkRunnerTransport("https://signer.example", call=paid)
+    reply = await transport.call(_runner(), JobRequest(app="a/b"), "lpg_k", on_signed=on_signed)
+    assert order == ["stored m-7", "request sent"]  # evidence first (D42)
+    assert reply.payment_sent and reply.manifest_ids == ("m-7",)

@@ -13,11 +13,8 @@ import asyncio
 import os
 import subprocess
 import sys
-from typing import Any
 
 import uvicorn
-from fastapi import FastAPI
-from fastapi.openapi.utils import get_openapi
 
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.http import create_app
@@ -37,34 +34,10 @@ def asyncpg_url(url: str) -> str:
     sys.exit("LPB_DATABASE_URL must be a postgresql URL")
 
 
-def install_swagger_bearer(app: FastAPI) -> None:
-    """Expose an optional bearer scheme so Swagger can set Authorization."""
-
-    def openapi() -> dict[str, Any]:
-        if app.openapi_schema:
-            return app.openapi_schema
-        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
-        components = schema.setdefault("components", {})
-        schemes = components.setdefault("securitySchemes", {})
-        schemes["bearerAuth"] = {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "lpk",
-            "description": "Engine access key. Swagger sends Authorization: Bearer <key>.",
-        }
-        # The empty alternative keeps routes callable when no token is entered.
-        schema["security"] = [{"bearerAuth": []}, {}]
-        app.openapi_schema = schema
-        return schema
-
-    app.openapi = openapi
-
-
 async def serve() -> None:
     settings = EngineSettings.from_env()
     configure_logging(json_lines=settings.log_json)
     app = create_app(await BuilderEngine.from_settings(settings))
-    install_swagger_bearer(app)
     server = uvicorn.Server(
         uvicorn.Config(
             app,

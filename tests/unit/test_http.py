@@ -84,3 +84,13 @@ async def test_failures_and_reserved_routes(api: tuple[httpx.AsyncClient, Builde
     assert (
         await client.post("/v1/sessions", json={"app": "example/echo"}, headers=as_alice)
     ).status_code == 501
+
+
+async def test_openapi_declares_the_bearer_scheme(api: tuple[httpx.AsyncClient, BuilderEngine]) -> None:
+    client, _ = api
+    spec = (await client.get("/openapi.json")).json()
+    schemes = spec["components"].get("securitySchemes", {})
+    bearer = [name for name, scheme in schemes.items() if scheme.get("scheme") == "bearer"]
+    assert bearer, "the spec declares a bearer scheme, so Swagger UI shows Authorize"
+    assert spec["paths"]["/v1/offerings"]["get"]["security"] == [{bearer[0]: []}]
+    assert "security" not in spec["paths"]["/readyz"]["get"]  # health stays unauthenticated

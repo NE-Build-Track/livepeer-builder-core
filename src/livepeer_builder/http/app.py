@@ -11,8 +11,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi import Depends, FastAPI, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from livepeer_builder.contracts import (
@@ -120,7 +121,14 @@ def create_app(engine: BuilderEngine, *, manage_lifecycle: bool = True) -> FastA
     app = FastAPI(title="livepeer-builder", version=engine.health().version, lifespan=lifespan)
     _install_error_handlers(app, engine)
 
-    async def actor_from(request: Request) -> ActorContext:
+    # Declares the bearer scheme in OpenAPI, so Swagger UI shows Authorize. Authentication itself
+    # stays with engine.authenticator, which reads the raw headers below.
+    bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
+
+    async def actor_from(
+        request: Request,
+        _declared: Annotated[HTTPAuthorizationCredentials | None, Security(bearer)],
+    ) -> ActorContext:
         auth = AuthRequest(
             method=request.method,
             path=request.url.path,

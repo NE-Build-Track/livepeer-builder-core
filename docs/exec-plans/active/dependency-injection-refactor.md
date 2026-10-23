@@ -292,6 +292,14 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - the `ARCHITECTURE.md` layer table now lists `api.py`, `testing/`'s real edges, `runtime/assembly.py` and `http/server.py`.
 
   **All seven steps are done.** Next: the consumers (ChatLPT, the builder console) in their own repositories, after the owner confirms.
+- [x] 2026-10-23: **`FakeEngine` gaps found by ChatLPT**, fixed before ChatLPT moves onto it. ChatLPT's tests need what the engine does and the fake did not:
+  - `Reply.data` (the SDK's parsed body, which `JobResult.data` carries);
+  - an attempt recorded on the first runner for the app;
+  - a `Fails` among stream chunks, which raises `JobFailed` there and leaves the job `uncertain`;
+  - `OperationExists` and `OperationConflict` for a repeated `operation_ref`;
+  - `Raises(error)` for engine errors the real engine raises before a job exists (`NoCapacity`, `ProviderUnavailable`), as a reply or a cost.
+
+  Four new contract cases first failed on the fake and passed on the real engine (probed: `NotProvisioned` is wrapped in `JobFailed`, so it is not a `Raises` example). `runner()` takes `orchestrator_url` and `metadata`. The embedded guide no longer lists `LPB_BATTERIES_OPERATOR_TOKEN` as required.
 
 ## Decision log
 

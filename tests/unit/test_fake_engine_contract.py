@@ -5,14 +5,25 @@ to the same outcome. When a case passes on both, application unit tests written 
 the same thing against the engine.
 """
 
-from collections.abc import AsyncIterator, Callable
+import json
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from livepeer_builder import ActorContext, EngineSupply, JobFailed, JobRequest, JourneyApi, Money
+from livepeer_builder import (
+    ActorContext,
+    EngineSupply,
+    JobFailed,
+    JobRequest,
+    JourneyApi,
+    Money,
+    OperationConflict,
+    OperationExists,
+)
 from livepeer_builder.contracts import ProvisionRequest
 from livepeer_builder.errors import NotFound, RunnerCallError
 from livepeer_builder.testing import (
@@ -37,19 +48,38 @@ Side = Callable[..., AbstractAsyncContextManager[JourneyApi]]
 
 
 @asynccontextmanager
-async def fake(*, fails: bool = False, chunks: tuple[bytes, ...] | None = None) -> AsyncIterator[JourneyApi]:
-    reply: Reply | Fails = Fails() if fails else Reply(chunks=chunks or ())
+async def fake(
+    *,
+    fails: bool = False,
+    chunks: tuple[bytes, ...] | None = None,
+    data: dict[str, Any] | None = None,
+    fails_mid_stream: bool = False,
+) -> AsyncIterator[JourneyApi]:
+    script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((Fails(),) if fails_mid_stream else ()))
+    reply: Reply | Fails = Fails() if fails else Reply(chunks=script, data=data)
     yield FakeEngine(replies={(APP, ""): reply}, runners=RUNNERS, streaming=chunks is not None)
 
 
 @asynccontextmanager
-async def real(*, fails: bool = False, chunks: tuple[bytes, ...] | None = None) -> AsyncIterator[JourneyApi]:
+async def real(
+    *,
+    fails: bool = False,
+    chunks: tuple[bytes, ...] | None = None,
+    data: dict[str, Any] | None = None,
+    fails_mid_stream: bool = False,
+) -> AsyncIterator[JourneyApi]:
     if chunks is not None:
-        transport: ScriptedTransport = ScriptedStreamTransport(opens=[StreamScript(events=list(chunks))])
+        broken = [RunnerCallError("http", "cut", payment_sent=True)] if fails_mid_stream else []
+        transport: ScriptedTransport = ScriptedStreamTransport(
+            opens=[StreamScript(events=[*chunks, *broken])]
+        )
     elif fails:
         transport = ScriptedTransport([RunnerCallError("http", "boom", payment_sent=False, status_code=500)])
+    elif data is not None:  # the SDK parsed the body: data is set and content is its JSON
+        body = json.dumps(data).encode()
+        transport = ScriptedTransport([ScriptedTransport.ok(body).model_copy(update={"data": data})])
     else:
-        transport = ScriptedTransport([ScriptedTransport.ok()])
+        transport = ScriptedTransport([ScriptedTransport.ok(), ScriptedTransport.ok()])
     async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport)) as engine:
         amount = Money(amount=Decimal("5"), currency="USD")
         request = ProvisionRequest(
@@ -57,6 +87,11 @@ async def real(*, fails: bool = False, chunks: tuple[bytes, ...] | None = None) 
         )
         await engine.payments.provision(ADMIN, request)
         yield engine
+
+
+async def collect(stream: AsyncIterable[bytes], into: list[bytes]) -> None:
+    async for chunk in stream:
+        into.append(chunk)
 
 
 @pytest.fixture(params=[fake, real], ids=["fake", "real"])
@@ -115,3 +150,40 @@ async def test_streaming_yields_the_chunks(side: Side) -> None:
 async def test_health_is_ready_after_a_discovery_snapshot(side: Side) -> None:
     async with side() as engine:
         assert engine.health().ready
+
+
+async def test_run_returns_the_parsed_body_as_data(side: Side) -> None:
+    async with side(data={"answer": 42}) as engine:
+        result = await engine.jobs.run(ALICE, JobRequest(app=APP))
+    assert result.data == {"answer": 42}
+
+
+async def test_a_run_records_the_attempt_on_the_runner_it_used(side: Side) -> None:
+    async with side() as engine:
+        attempt = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job.attempts[-1]
+    assert (attempt.runner_url, attempt.orchestrator_url) == ("https://r1", "https://orch.example")
+    assert attempt.outcome == "succeeded" and attempt.payment_sent
+
+
+async def test_a_failure_mid_stream_raises_job_failed_after_the_earlier_chunks(side: Side) -> None:
+    async with side(chunks=(b"a",), fails_mid_stream=True) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        stream = await streaming.stream(ALICE, JobRequest(app=APP))
+        received: list[bytes] = []
+        with pytest.raises(JobFailed) as failed:
+            await collect(stream, received)
+        await stream.aclose()
+    assert received == [b"a"]
+    job = failed.value.job  # paid before it broke, so the cost is uncertain until usage settles it
+    assert job.state == "uncertain" and job.failure is not None and job.failure.payment_sent
+
+
+async def test_a_repeated_operation_ref_raises_operation_exists_or_conflict(side: Side) -> None:
+    async with side() as engine:
+        first = (await engine.jobs.run(ALICE, JobRequest(app=APP, operation_ref="op-1"))).job
+        with pytest.raises(OperationExists) as exists:
+            await engine.jobs.run(ALICE, JobRequest(app=APP, operation_ref="op-1"))
+        with pytest.raises(OperationConflict) as conflict:
+            await engine.jobs.run(ALICE, JobRequest(app=APP, path="/other", operation_ref="op-1"))
+    assert exists.value.job.id == first.id and conflict.value.job.id == first.id

@@ -2,14 +2,20 @@
 
 It returns real contract values and raises real engine errors, so code under test cannot tell it from
 the engine for the journey's *shape*: run a job, read it back, stream it, see costs and the catalog.
-It does not model the engine's money rules (idempotency, admission, failover, payment). Use
-``make_engine`` when those matter. A contract test runs the same journey assertions against both.
+Like the engine, a run records an attempt on the first runner for the app, a repeated
+``operation_ref`` raises ``OperationExists`` (or ``OperationConflict`` for a different request), and
+a stream that fails part-way leaves the job ``uncertain``. It does not model the money rules
+(admission, failover, payment); script those outcomes with ``Fails`` and ``Raises``, or use
+``make_engine`` when they matter. A contract test runs the same journey assertions against both.
 
 Script replies per ``(app, path)``::
 
     engine = FakeEngine(
         runners=[runner("chat/llm")],
-        replies={("chat/llm", "/v1/chat"): Reply(content=b'{"answer": 42}')},
+        replies={
+            ("chat/llm", "/v1/chat"): Reply(content=b'{"answer": 42}', data={"answer": 42}),
+            ("chat/llm", "/v1/busy"): Raises(NoCapacity("app is at its limit")),
+        },
         streaming=True,
     )
 """
@@ -18,12 +24,13 @@ from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from livepeer_builder.contracts import (
     ActorContext,
     Allowance,
+    Attempt,
     CostSummary,
     EngineHealth,
     Failure,
@@ -36,20 +43,19 @@ from livepeer_builder.contracts import (
     Offering,
     Runner,
 )
-from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound, NotProvisioned
+from livepeer_builder.errors import (
+    EngineError,
+    InvalidRequest,
+    JobFailed,
+    NotFound,
+    NotProvisioned,
+    OperationConflict,
+    OperationExists,
+)
+from livepeer_builder.services.jobs import request_fingerprint
 
 if TYPE_CHECKING:
     from livepeer_builder.api import JourneyApi
-
-
-@dataclass(frozen=True)
-class Reply:
-    """A successful runner reply. ``chunks`` is what a stream yields."""
-
-    content: bytes = b'{"ok": true}'
-    status_code: int = 200
-    content_type: str = "application/json"
-    chunks: tuple[bytes, ...] = (b'{"ok": true}',)
 
 
 @dataclass(frozen=True)
@@ -61,11 +67,34 @@ class Fails:
     status_code: int | None = 500
 
 
-class FakeJobStream:
-    """A ``JobStreamApi`` over scripted chunks. Records ``aclose`` and ``disconnected``."""
+@dataclass(frozen=True)
+class Reply:
+    """A successful runner reply. ``chunks`` is what a stream yields."""
 
-    def __init__(self, job: Job, reply: Reply) -> None:
-        self._job, self._reply = job, reply
+    content: bytes = b'{"ok": true}'
+    status_code: int = 200
+    content_type: str = "application/json"
+    chunks: tuple[bytes | Fails, ...] = (b'{"ok": true}',)
+    data: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class Raises:
+    """The call raises ``error``, as the engine does before any job exists: ``NoCapacity`` at admission,
+    ``ProviderUnavailable``, and so on. Scripted for a reply, or for a job's cost."""
+
+    error: EngineError
+
+
+class FakeJobStream:
+    """A ``JobStreamApi`` over scripted chunks. Records ``aclose`` and ``disconnected``.
+
+    A ``Fails`` among the chunks raises ``JobFailed`` there; the job is then ``uncertain``, because the
+    call was paid before it broke.
+    """
+
+    def __init__(self, job: Job, reply: Reply, jobs: "FakeJobs") -> None:
+        self._job, self._reply, self._jobs = job, reply, jobs
         self.closed = False
         self.disconnected_called = False
 
@@ -88,6 +117,9 @@ class FakeJobStream:
         for chunk in self._reply.chunks:
             if self.closed:
                 return
+            if isinstance(chunk, Fails):
+                self._job = self._jobs.broke(self._job, chunk)
+                raise JobFailed(self._job)
             yield chunk
 
     async def aclose(self) -> None:
@@ -111,32 +143,73 @@ class FakeStreaming:
 
     async def stream(self, actor: ActorContext, request: JobRequest) -> FakeJobStream:
         reply = self._jobs.reply_for(actor, request)
-        return FakeJobStream(self._jobs.record(actor, request, "running", None), reply)
+        return FakeJobStream(self._jobs.record(actor, request, "running", None), reply, self._jobs)
 
 
 class FakeJobs:
-    def __init__(self, replies: Mapping[tuple[str, str], Reply | Fails], streaming: bool) -> None:
+    def __init__(
+        self,
+        replies: Mapping[tuple[str, str], Reply | Fails | Raises],
+        streaming: bool,
+        discovery: "FakeDiscovery",
+    ) -> None:
         self.replies = dict(replies)
         self.requests: list[tuple[ActorContext, JobRequest]] = []
         self.usage_reports: list[tuple[UUID, dict[str, int]]] = []
         self.streaming: FakeStreaming | None = FakeStreaming(self) if streaming else None
+        self._discovery = discovery
         self._jobs: dict[UUID, Job] = {}
         self._results: dict[UUID, JobResult] = {}
+        self._operations: dict[tuple[str, str, str], tuple[str, UUID]] = {}
 
     def reply_for(self, actor: ActorContext, request: JobRequest) -> Reply:
+        """The scripted reply, after the checks the engine makes before it dispatches."""
         self.requests.append((actor, request))
+        self._check_operation(actor, request)
         scripted = self.replies.get((request.app, request.path), Reply())
+        if isinstance(scripted, Raises):
+            raise scripted.error
         if isinstance(scripted, Fails):
             failure = Failure(kind=scripted.kind, message=scripted.message, status_code=scripted.status_code)
             raise JobFailed(self.record(actor, request, "failed", failure))
         return scripted
 
+    def _check_operation(self, actor: ActorContext, request: JobRequest) -> None:
+        if request.operation_ref is None:
+            return
+        found = self._operations.get((actor.application_id, actor.actor_id, request.operation_ref))
+        if found is None:
+            return
+        fingerprint, job_id = found
+        existing = self._jobs[job_id]
+        if fingerprint != request_fingerprint(request):
+            raise OperationConflict(existing)
+        raise OperationExists(existing)
+
     def record(
         self, actor: ActorContext, request: JobRequest, state: JobState, failure: Failure | None
     ) -> Job:
         now = datetime.now(UTC)
+        job_id = uuid4()
+        used = self._discovery.candidates(request.app)[:1]
+        attempts = tuple(
+            Attempt(
+                job_id=job_id,
+                number=1,
+                runner_url=runner.url,
+                orchestrator_url=runner.orchestrator_url,
+                allocation_id=None,
+                sessions=(),
+                payment_sent=failure is None,
+                outcome="in_flight" if state == "running" else "succeeded" if failure is None else "http",
+                status_code=failure.status_code if failure is not None else None,
+                started_at=now,
+                ended_at=None if state == "running" else now,
+            )
+            for runner in used
+        )
         job = Job(
-            id=uuid4(),
+            id=job_id,
             actor_id=actor.actor_id,
             application_id=actor.application_id,
             operation_ref=request.operation_ref,
@@ -145,7 +218,7 @@ class FakeJobs:
             capability=None,
             model=None,
             state=state,
-            attempts=(),
+            attempts=attempts,
             failure=failure,
             result=None,
             usage=None,
@@ -153,7 +226,24 @@ class FakeJobs:
             completed_at=None if state == "running" else now,
         )
         self._jobs[job.id] = job
+        if request.operation_ref is not None:
+            key = (actor.application_id, actor.actor_id, request.operation_ref)
+            self._operations[key] = (request_fingerprint(request), job.id)
         return job
+
+    def broke(self, job: Job, fails: Fails) -> Job:
+        """A paid stream that failed part-way: ``uncertain`` until usage settles what it cost."""
+        now = datetime.now(UTC)
+        failure = Failure(kind=fails.kind, message=fails.message, payment_sent=True)
+        attempts = tuple(
+            attempt.model_copy(update={"outcome": "http", "status_code": 200, "ended_at": now})
+            for attempt in job.attempts
+        )
+        broken = job.model_copy(
+            update={"state": "uncertain", "failure": failure, "attempts": attempts, "completed_at": now}
+        )
+        self._jobs[job.id] = broken
+        return broken
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
         reply = self.reply_for(actor, request)
@@ -163,7 +253,7 @@ class FakeJobs:
             status_code=reply.status_code,
             content=reply.content,
             content_type=reply.content_type,
-            data=None,
+            data=reply.data,
         )
         self._results[job.id] = result
         return result
@@ -202,14 +292,17 @@ class FakeJobs:
 
 
 class FakeCosts:
-    def __init__(self, costs: Mapping[UUID, JobCost], summary: CostSummary | None) -> None:
+    def __init__(self, costs: Mapping[UUID, JobCost | Raises], summary: CostSummary | None) -> None:
         self.costs = dict(costs)
         self._summary = summary
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
-        if job_id not in self.costs:
+        scripted = self.costs.get(job_id)
+        if scripted is None:
             raise NotFound(f"no cost for job {job_id}")
-        return self.costs[job_id]
+        if isinstance(scripted, Raises):
+            raise scripted.error
+        return scripted
 
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
@@ -249,18 +342,18 @@ class FakeEngine:
     def __init__(
         self,
         *,
-        replies: Mapping[tuple[str, str], Reply | Fails] | None = None,
+        replies: Mapping[tuple[str, str], Reply | Fails | Raises] | None = None,
         runners: Iterable[Runner] = (),
         offerings: Iterable[Offering] = (),
-        costs: Mapping[UUID, JobCost] | None = None,
+        costs: Mapping[UUID, JobCost | Raises] | None = None,
         summary: CostSummary | None = None,
         allowance: Allowance | None = None,
         health: EngineHealth | None = None,
         streaming: bool = False,
     ) -> None:
-        self.jobs = FakeJobs(replies or {}, streaming)
-        self.costs = FakeCosts(costs or {}, summary)
         self.discovery = FakeDiscovery(offerings, runners)
+        self.jobs = FakeJobs(replies or {}, streaming, self.discovery)
+        self.costs = FakeCosts(costs or {}, summary)
         self.payments = FakeAllowance(allowance)
         self._health = health or EngineHealth(
             ready=True,

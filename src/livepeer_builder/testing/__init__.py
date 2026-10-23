@@ -6,7 +6,7 @@ over them (in-memory SQLite), and ``FakeEngine`` scripts the journey at the engi
 """
 
 from livepeer_builder.testing.engine import make_engine
-from livepeer_builder.testing.fake_engine import Fails, FakeEngine, FakeJobStream, Reply
+from livepeer_builder.testing.fake_engine import Fails, FakeEngine, FakeJobStream, Raises, Reply
 from livepeer_builder.testing.fakes import (
     FakeAllocationManager,
     FakeUsageSource,
@@ -27,6 +27,7 @@ __all__ = [
     "FakeUsageSource",
     "FixedClock",
     "MemorySecretStore",
+    "Raises",
     "Reply",
     "ScriptedStream",
     "ScriptedStreamTransport",

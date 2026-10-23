@@ -44,16 +44,19 @@ def runner(
     *,
     capacity_available: int | None = 1,
     price: str | None = "0.10",
+    orchestrator_url: str | None = "https://orch.example",
+    metadata: str | None = None,
 ) -> Runner:
     return Runner(
         url=url,
         app=app,
         runner_id=url.rsplit("/", 1)[-1],
         mode="single-shot",
-        orchestrator_url="https://orch.example",
+        orchestrator_url=orchestrator_url,
         capacity=capacity_available,
         capacity_available=capacity_available,
         rate=NetworkRate(amount=Decimal(price), currency="usd", unit="request") if price else None,
+        metadata=metadata,
     )
 
 

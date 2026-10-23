@@ -175,9 +175,12 @@ Optional capabilities are `X | None` members: `jobs.streaming`, and on `AdminApi
 
 Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps them in step:
 
-- **`FakeEngine`** for your unit tests: it implements `JourneyApi`, answers per `(app, path)` with
-  `Reply(...)` or `Fails(...)`, and records `jobs.requests`. It returns real contracts and raises real
-  errors, but does not model money rules (idempotency, admission, failover).
+- **`FakeEngine`** for your unit tests: it implements `JourneyApi` and records `jobs.requests`. It
+  answers per `(app, path)` with `Reply(...)` (a body, its parsed `data`, stream chunks), `Fails(...)`
+  (`JobFailed`; among stream chunks, a failure part-way that leaves the job `uncertain`) or
+  `Raises(error)` (an engine error such as `NoCapacity`; also accepted as a job's cost). Like the
+  engine, it records an attempt on the first runner for the app and rejects a repeated
+  `operation_ref`. It does not model admission, failover or payment.
 - **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
   fakes (`async with make_engine(runners=[...]) as engine:`).
 
@@ -185,8 +188,10 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
 
 Your process is the process that holds the engine. There is no separate `lpb serve`. You still:
 
-- Set `LPB_DATABASE_URL`, `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`,
-  `LPB_BATTERIES_OPERATOR_TOKEN`, and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)).
+- Set `LPB_DATABASE_URL`, `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and
+  `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
+  `EngineSettings`. `LPB_BATTERIES_OPERATOR_TOKEN` only turns on the grant desk
+  (`engine.payments.grants`); an application that never lists or creates grants leaves it unset.
 - Run `lpb migrate`, or leave `LPB_AUTO_MIGRATE=true`.
 - Run `lpb bootstrap-admin` only if you will use engine-issued admin keys. Embed can pass an
   in-process admin `ActorContext` instead, as above.

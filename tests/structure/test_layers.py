@@ -63,6 +63,20 @@ CONFINED: dict[str, tuple[str, ...]] = {
     "starlette": ("http/",),
     "uvicorn": ("http/server.py",),
 }
+# DI containers are allowed nowhere: the engine is wired by hand in runtime/assembly.py (decision 1 in
+# docs/exec-plans/active/dependency-injection-refactor.md).
+CONTAINERS = (
+    "dishka",
+    "dependency_injector",
+    "wireup",
+    "punq",
+    "lagom",
+    "kink",
+    "svcs",
+    "injector",
+    "that_depends",
+)
+CONFINED.update(dict.fromkeys(CONTAINERS, ()))
 
 REMEDIATION = {
     "services": "Services reach persistence and the network only through protocols in livepeer_builder.protocols.",
@@ -127,6 +141,11 @@ def test_third_party_packages_are_confined(path: Path) -> None:
             continue
         if package == "fastapi" and relative == "cli.py":
             continue
+        if not homes:
+            pytest.fail(
+                f"{relative}:{line} imports {package}, a DI container. The engine is wired by hand: supply "
+                "or decorate parts through EngineSupply and BuilderEngine.create (decision 1)."
+            )
         pytest.fail(
             f"{relative}:{line} imports {package}, which is confined to {homes}. Wrap it behind a protocol "
             f"and implement that protocol in the owning module (ARCHITECTURE.md#third-party-boundaries)."

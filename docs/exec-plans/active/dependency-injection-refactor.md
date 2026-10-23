@@ -189,17 +189,17 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 ### Step 7: remaining structural guards
 
-- [ ] **The server, CLI and Railway import only the public API.** The public API is the root `__all__` plus the `__all__` of the subpackages documented as public: `api`, `runtime`, `http`, `store` and `testing`. The test covers `cli.py`, `http/server.py` and `deploy/railway/engine/entrypoint.py`. Today's violations are fixed as follows:
+- [x] **The server, CLI and Railway import only the public API.** The public API is the root `__all__` plus the `__all__` of the subpackages documented as public: `api`, `runtime`, `http`, `store` and `testing`. The test covers `cli.py`, `http/server.py` and `deploy/railway/engine/entrypoint.py`. Today's violations are fixed as follows:
   - `adapters.secrets.EncryptedDbSecretStore`, used to generate `LPB_SECRET_KEY`, is replaced by a public `generate_secret_key()` exported from the root;
   - `runtime.logging.configure_logging` is added to `livepeer_builder.runtime.__all__`;
   - `docs_gen` and `docs_diagrams` (`lpb gen-docs`) stay as an allowlist entry in the test, with its reason: maintainers' doc tooling, not operator API.
-- [ ] **Guide Rule 1, no DI container:** container packages (`dishka`, `dependency_injector`, `wireup`, `punq`, `lagom`, `kink`, `svcs`, `injector`, `that_depends`) join the third-party confinement test as allowed nowhere. This guards decision 1.
-- [ ] **Guide Rule 11, logging setup belongs to the application:**
+- [x] **Guide Rule 1, no DI container:** container packages (`dishka`, `dependency_injector`, `wireup`, `punq`, `lagom`, `kink`, `svcs`, `injector`, `that_depends`) join the third-party confinement test as allowed nowhere. This guards decision 1.
+- [x] **Guide Rule 11, logging setup belongs to the application:**
   - only `runtime/logging.py` may modify the root logger (its handlers, or `basicConfig`);
   - only `cli.py`, `http/server.py` and the Railway entrypoint may call `configure_logging`.
-- [ ] **Guide Rule 5's optional module-state check is not added.** The one module-level collection, `_SHIELDED` in `utils.py`, holds references to shielded tasks so they are not garbage-collected. It is a legitimate asyncio pattern.
-- [ ] **`EngineSupply` and `EngineParts` have the same fields** (`dataclasses.fields()` names match), with a message naming decision 6.
-- [ ] **Layer table** (`ARCHITECTURE.md` and `tests/structure/test_layers.py`):
+- [x] **Guide Rule 5's optional module-state check is not added.** The one module-level collection, `_SHIELDED` in `utils.py`, holds references to shielded tasks so they are not garbage-collected. It is a legitimate asyncio pattern.
+- [x] **`EngineSupply` and `EngineParts` have the same fields** (`dataclasses.fields()` names match), with a message naming decision 6.
+- [x] **Layer table** (`ARCHITECTURE.md` and `tests/structure/test_layers.py`):
   - `api.py` sits beside `protocols/` and may import contracts and errors;
   - `runtime/assembly.py` is app wiring;
   - `http/server.py` is UI, may import runtime, api, contracts, errors and config, and is where `uvicorn` is confined;
@@ -284,6 +284,14 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
   `StoreMaintenance` is listed in the generated interfaces with `SqlMaintenance` as its default.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
+- [x] 2026-10-23: **step 7 done**, in two commits:
+  - the CLI, `http/server.py` and the Railway entrypoint import only the public API, pinned by a test that first named ten private imports. They were fixed with `generate_secret_key()` (in `config.py`, exported from the root, replacing `EncryptedDbSecretStore.generate_key`), `configure_logging` in `runtime.__all__` and `Decorate` exported from the root. `docs_gen` and `docs_diagrams` are the listed exception;
+  - Rule 1: nine container packages are confined to nowhere (a `dishka` import was caught);
+  - Rule 11: only `runtime/logging.py` reaches the root logger and only the three applications call `configure_logging` (`basicConfig`, `getLogger().addHandler` and a library `configure_logging` call were each caught);
+  - field parity already existed in `tests/unit/test_assembly.py` with the decision 6 message;
+  - the `ARCHITECTURE.md` layer table now lists `api.py`, `testing/`'s real edges, `runtime/assembly.py` and `http/server.py`.
+
+  **All seven steps are done.** Next: the consumers (ChatLPT, the builder console) in their own repositories, after the owner confirms.
 
 ## Decision log
 

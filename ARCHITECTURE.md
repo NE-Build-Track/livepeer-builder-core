@@ -45,18 +45,25 @@ edge and prints how to fix a violation.
 | Types | `contracts/` | nothing internal |
 | Errors | `errors.py` | contracts |
 | Providers | `protocols/` | contracts, errors |
+| Facade | `api.py` (`JourneyApi`, `AdminApi`, `EngineApi`) | contracts, errors, protocols |
 | Config | `config.py` | contracts, errors |
 | Service | `services/` | contracts, errors, protocols, config, utils |
 | Repo | `store/` | contracts, errors, protocols, config, utils |
 | Adapters | `adapters/` | contracts, errors, protocols, config, utils |
-| Test doubles | `testing/` | contracts, errors, protocols, utils |
-| App wiring | `runtime/` | everything above |
-| UI | `http/` | runtime, contracts, errors, config |
-| Entry points | `cli.py`, `docs_gen.py`, `__init__.py` | anything |
+| App wiring | `runtime/` (`assembly.py` builds the parts, `engine.py` runs them) | everything above |
+| Test doubles | `testing/` (`make_engine` builds a real engine) | everything `runtime/` may, plus runtime |
+| UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn) | runtime, api, contracts, errors, config |
+| Entry points | `cli.py`, `docs_gen.py`, `docs_diagrams.py`, `__init__.py` | anything |
 
 Services never touch a database, SDK or HTTP client directly: they receive protocol implementations
 from the runtime. That is what lets an enterprise replace authentication, policy, secret storage,
 discovery or transport **without patching core**.
+
+The services satisfy the facade Protocols structurally; mypy checks it through
+`create_app(engine: EngineApi)` and the typing assertions in `runtime/engine.py`. The CLI, the stock
+server and the Railway entrypoint import only the public API
+(`tests/structure/test_public_api.py`). Importing the root or `api` loads no heavy dependency
+(`test_import_weight.py`), and no module may import a DI container (`test_layers.py`).
 
 ## Providers
 

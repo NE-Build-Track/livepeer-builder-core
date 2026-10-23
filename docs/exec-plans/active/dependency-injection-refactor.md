@@ -174,18 +174,18 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 ### Step 6: import weight and declared dependencies
 
-- [ ] **Lazy default adapters.** The default adapters and `livepeer_builder.store` are imported inside `default_parts`, not at the top of `runtime/engine.py`, so nothing on the root import path loads them.
-- [ ] **A store maintenance capability** replaces `isinstance(self.store, SqlStore)` in `purge()` and `schema_revision()`:
+- [x] **Lazy default adapters.** The default adapters and `livepeer_builder.store` are imported inside `default_parts`, not at the top of `runtime/engine.py`, so nothing on the root import path loads them.
+- [x] **A store maintenance capability** replaces `isinstance(self.store, SqlStore)` in `purge()` and `schema_revision()`:
   - `EngineStore` gains `maintenance: StoreMaintenance | None`, where `StoreMaintenance` has `purge(...)` and `schema_revision()`.
   - `SqlStore` provides it. With `None`, the engine reports a zero purge and no revision, as today.
   - This removes the runtime layer's only reference to the concrete store.
-- [ ] **`PurgeReport` moves** from `store/retention.py` to `contracts/` (it is returned by `engine.purge()`).
-- [ ] **Declared dependencies:**
+- [x] **`PurgeReport` moves** from `store/retention.py` to `contracts/` (it is returned by `engine.purge()`).
+- [x] **Declared dependencies:**
   - `aiohttp>=3.9` in core dependencies (imported in `adapters/sdk.py`; locked at 3.14.5; the floor is confirmed against the code);
   - `starlette` in the `[server]` extra (imported in `http/`).
   - A structural test maps every third-party top-level import in `src/livepeer_builder` to a distribution declared in `[project] dependencies`, or in the extra that owns the module (`http/` → `[server]`), through a small import-name-to-distribution table.
-- [ ] **Import-weight test.** In a fresh interpreter, `import livepeer_builder` loads none of `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg`, `httpx`, `cryptography`, `livepeer_gateway`, `aiohttp`, `fastapi`, `starlette` or `uvicorn`. Any unavoidable module is named in the test with its reason.
-- [ ] **The rule covers only the root and `livepeer_builder.api`.** `livepeer_builder.testing` (`make_engine` needs SQLite), `store` and `http` may load heavy dependencies; they are imported deliberately.
+- [x] **Import-weight test.** In a fresh interpreter, `import livepeer_builder` loads none of `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg`, `httpx`, `cryptography`, `livepeer_gateway`, `aiohttp`, `fastapi`, `starlette` or `uvicorn`. Any unavoidable module is named in the test with its reason.
+- [x] **The rule covers only the root and `livepeer_builder.api`.** `livepeer_builder.testing` (`make_engine` needs SQLite), `store` and `http` may load heavy dependencies; they are imported deliberately.
 
 ### Step 7: remaining structural guards
 
@@ -276,6 +276,13 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - a tested service-mode example (an SSO authenticator, decorated discovery, an extra authenticated route), drift-checked in the new "Service mode" section of `extending-the-engine.md`.
 
   `serve`'s cleanup is pinned by an `extend` hook that raises. A first test, which bound a port already in use, still passed with the `finally` removed, because uvicorn's lifespan had already stopped the engine. It was replaced.
+- [x] 2026-10-23: **step 6 done**, in four commits:
+  - `PurgeReport` moved to `contracts/` and is exported from the root (a tidy commit);
+  - the store maintenance capability: `EngineStore.maintenance: StoreMaintenance | None`, provided by `SqlMaintenance`; the engine delegates to it, so `runtime/engine.py` no longer imports the store (the delegation test failed first);
+  - lazy default adapters inside `default_parts`, pinned by `tests/structure/test_import_weight.py`, which first named six heavy modules loaded by `import livepeer_builder`. `UNAVOIDABLE` is empty;
+  - `aiohttp>=3.9` in core and `starlette>=0.37.2` in `[server]` (the lowest Starlette `fastapi>=0.115` accepts), pinned by `tests/structure/test_dependencies.py`, which first named both.
+
+  `StoreMaintenance` is listed in the generated interfaces with `SqlMaintenance` as its default.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log

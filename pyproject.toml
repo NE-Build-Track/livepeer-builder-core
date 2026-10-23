@@ -18,6 +18,7 @@ dependencies = [
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "cryptography>=42",
+    "aiohttp>=3.9",  # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
     # Pin to livepeer/livepeer-python-gateway main at 76a1a1c (22 October): Enforce TLS (#76),
     # streamable runner bodies (#80) and on_payment_session (#81; reports LivePaymentSession.manifest_id).
     # PyPI 1.0.0 lacks the callback, so this stays a git SHA until a release (tech debt T1).
@@ -25,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-server = ["fastapi>=0.115", "uvicorn>=0.30"]
+server = ["fastapi>=0.115", "starlette>=0.37.2", "uvicorn>=0.30"]
 postgres = ["asyncpg>=0.29"]
 
 [project.scripts]

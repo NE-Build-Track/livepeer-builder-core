@@ -25,7 +25,7 @@ from livepeer_builder import (
     OperationConflict,
     OperationExists,
 )
-from livepeer_builder.contracts import ProvisionRequest
+from livepeer_builder.contracts import AttemptOutcome, FailureKind, ProvisionRequest
 from livepeer_builder.errors import NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
@@ -38,7 +38,7 @@ from livepeer_builder.testing import (
     runner,
 )
 
-APP, OTHER = "example/echo", "example/other"
+APP, OTHER, NONE = "example/echo", "example/other", "example/nobody"  # no runner serves NONE
 ALICE = ActorContext(
     actor_id="alice", permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 )
@@ -46,6 +46,13 @@ ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
 RUNNERS = (runner(APP, url="https://r1"), runner(OTHER, url="https://r2"))
 
 Side = Callable[..., AbstractAsyncContextManager[ActorApi]]
+# A runner error as the engine's transport raises it (attempt outcome, paid), and as FakeEngine scripts it.
+RunnerError = tuple[AttemptOutcome, bool]
+FAILURE_KINDS: dict[str, FailureKind] = {
+    "timeout": "timeout",
+    "unreachable": "unreachable",
+    "refused": "refused",
+}
 
 
 @asynccontextmanager
@@ -56,11 +63,16 @@ async def fake(
     data: dict[str, Any] | None = None,
     fails_mid_stream: bool = False,
     paid: bool = False,
+    error: RunnerError | None = None,
 ) -> AsyncIterator[ActorApi]:
-    script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((Fails(),) if fails_mid_stream else ()))
+    cut = Fails(message="cut", status_code=None)  # a runner error after the first byte, no status of its own
+    script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((cut,) if fails_mid_stream else ()))
     failed = Fails(payment_sent=True, body="trace") if paid else Fails()
-    reply: Reply | Fails = failed if fails else Reply(chunks=script, data=data)
-    yield FakeEngine(replies={(APP, ""): reply}, runners=RUNNERS, streaming=chunks is not None)
+    if error is not None:
+        failed = Fails(kind=FAILURE_KINDS[error[0]], status_code=None, payment_sent=error[1])
+    reply: Reply | Fails = failed if fails or error else Reply(chunks=script, data=data)
+    replies = {(APP, ""): reply, (NONE, ""): Fails(kind="no_offering", status_code=None)}
+    yield FakeEngine(replies=replies, runners=RUNNERS, streaming=chunks is not None)
 
 
 @asynccontextmanager
@@ -71,12 +83,14 @@ async def real(
     data: dict[str, Any] | None = None,
     fails_mid_stream: bool = False,
     paid: bool = False,
+    error: RunnerError | None = None,
 ) -> AsyncIterator[ActorApi]:
-    if chunks is not None:
+    transport: ScriptedTransport
+    if error is not None:
+        transport = ScriptedTransport([RunnerCallError(error[0], "boom", payment_sent=error[1])])
+    elif chunks is not None:
         broken = [RunnerCallError("http", "cut", payment_sent=True)] if fails_mid_stream else []
-        transport: ScriptedTransport = ScriptedStreamTransport(
-            opens=[StreamScript(events=[*chunks, *broken])]
-        )
+        transport = ScriptedStreamTransport(opens=[StreamScript(events=[*chunks, *broken])])
     elif fails:
         error = RunnerCallError(
             "http", "boom", payment_sent=paid, status_code=500, body="trace" if paid else None
@@ -169,7 +183,19 @@ async def test_a_run_records_the_attempt_on_the_runner_it_used(side: Side) -> No
     async with side() as engine:
         attempt = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job.attempts[-1]
     assert (attempt.runner_url, attempt.orchestrator_url) == ("https://r1", "https://orch.example")
-    assert attempt.outcome == "succeeded" and attempt.payment_sent
+    assert attempt.outcome == "succeeded" and attempt.payment_sent and attempt.status_code == 200
+
+
+async def test_a_succeeded_run_records_a_result_of_the_body(side: Side) -> None:
+    async with side() as engine:
+        result = await engine.jobs.run(ALICE, JobRequest(app=APP))
+        stored = await engine.jobs.get(ALICE, result.job.id)
+    for job in (result.job, stored):
+        assert job.result is not None
+        assert (job.result.size_bytes, job.result.sha256) == (
+            len(result.content),
+            hashlib.sha256(result.content).hexdigest(),
+        )
 
 
 async def test_a_failure_mid_stream_raises_job_failed_after_the_earlier_chunks(side: Side) -> None:
@@ -184,6 +210,8 @@ async def test_a_failure_mid_stream_raises_job_failed_after_the_earlier_chunks(s
     assert received == [b"a"]
     job = failed.value.job  # paid before it broke, so the cost is uncertain until usage settles it
     assert job.state == "uncertain" and job.failure is not None and job.failure.payment_sent
+    assert (job.failure.kind, job.failure.status_code) == ("runner_error", None)
+    assert (job.attempts[-1].outcome, job.attempts[-1].status_code) == ("http", 200)  # the stream's status
 
 
 async def test_a_repeated_operation_ref_raises_operation_exists_or_conflict(side: Side) -> None:
@@ -203,7 +231,7 @@ async def test_a_paid_runner_error_fails_the_job_with_the_runner_s_words(side: S
     job = failed.value.job  # paid, so no failover: the job fails on this runner
     assert job.state == "failed" and job.failure is not None
     assert (job.failure.payment_sent, job.failure.body, job.failure.status_code) == (True, "trace", 500)
-    assert job.attempts[-1].payment_sent
+    assert job.attempts[-1].payment_sent and job.attempts[-1].outcome == "http"
 
 
 async def test_reading_a_stream_to_the_end_succeeds_with_a_result_of_the_bytes_read(side: Side) -> None:
@@ -253,3 +281,32 @@ async def test_usage_can_be_reported_for_a_finished_stream(side: Side) -> None:
         async with await streaming.stream(ALICE, JobRequest(app=APP)) as stream:
             _ = [chunk async for chunk in stream]
         await engine.jobs.report_usage(ALICE, stream.job.id, {"prompt_tokens": 1})
+
+
+@pytest.mark.parametrize(
+    ("error", "state"),
+    [
+        (("timeout", True), "uncertain"),  # paid, and the runner may have run: the cost is not known
+        (("unreachable", True), "uncertain"),
+        (("unreachable", False), "failed"),  # nothing paid; with one runner there is nowhere to fail over
+        (("refused", False), "failed"),
+    ],
+)
+async def test_a_runner_error_records_its_kind_and_settles_the_job(
+    side: Side, error: RunnerError, state: str
+) -> None:
+    async with side(error=error) as engine:
+        with pytest.raises(JobFailed) as failed:
+            await engine.jobs.run(ALICE, JobRequest(app=APP))
+    job = failed.value.job
+    assert job.state == state and job.failure is not None and job.failure.kind == error[0]
+    assert (job.attempts[-1].outcome, job.attempts[-1].payment_sent) == error
+
+
+async def test_no_offering_fails_without_an_attempt(side: Side) -> None:
+    async with side() as engine:
+        with pytest.raises(JobFailed) as failed:
+            await engine.jobs.run(ALICE, JobRequest(app=NONE))
+    job = failed.value.job
+    assert job.state == "failed" and job.failure is not None and job.failure.kind == "no_offering"
+    assert job.attempts == ()

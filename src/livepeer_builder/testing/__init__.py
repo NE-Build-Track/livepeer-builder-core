@@ -6,7 +6,8 @@ over them (in-memory SQLite), and ``FakeEngine`` scripts the actor API at the en
 """
 
 from livepeer_builder.testing.engine import make_engine
-from livepeer_builder.testing.fake_engine import Fails, FakeEngine, FakeJobStream, Raises, Reply
+from livepeer_builder.testing.fake_engine import FakeEngine
+from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.fakes import (
     FakeAllocationManager,
     FakeUsageSource,
@@ -18,6 +19,7 @@ from livepeer_builder.testing.fakes import (
     StreamScript,
     runner,
 )
+from livepeer_builder.testing.scripts import Fails, Raises, Reply
 
 __all__ = [
     "Fails",

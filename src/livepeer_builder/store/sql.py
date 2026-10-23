@@ -33,6 +33,8 @@ from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
     in_window,
     jobs_needing_projection,
+    mark_stale,
+    mark_stale_on_new_rows,
     match_payment_sessions,
 )
 from livepeer_builder.store.migrate import upgrade
@@ -258,7 +260,9 @@ class SqlStore:
         return SyncCheckpoint(resume_cursor=row["resume_cursor"], filters=dict(row["filters"]))
 
     async def apply_usage(self, rows: Sequence[UsageRow], checkpoint: SyncCheckpoint) -> list[UsageRow]:
-        """Insert rows not seen before and move the cursor, in one transaction. Returns the new rows."""
+        """Insert rows not seen before and move the cursor, in one transaction. Returns the new rows.
+
+        A new row on an already matched session marks that job's projection stale in the same transaction."""
         new: list[UsageRow] = []
         synced_at = datetime.now(UTC)
         async with self.engine.begin() as conn:
@@ -272,6 +276,7 @@ class SqlStore:
                 seen.add(row.id)
                 await conn.execute(insert(t.usage_rows).values(_usage_values(row) | {"synced_at": synced_at}))
                 new.append(row)
+            await mark_stale_on_new_rows(conn, new)
             cursor = {"resume_cursor": checkpoint.resume_cursor, "filters": checkpoint.filters}
             moved = await conn.execute(update(t.cost_cursor).where(t.cost_cursor.c.id == 1).values(cursor))
             if moved.rowcount == 0:
@@ -279,9 +284,12 @@ class SqlStore:
         return new
 
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]:
-        """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute."""
+        """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute, and marks their
+        projections stale in the same transaction."""
         async with self.engine.begin() as conn:
-            return await match_payment_sessions(conn, rows)
+            changed = await match_payment_sessions(conn, rows)
+            await mark_stale(conn, (str(job_id) for job_id in changed))
+            return changed
 
     async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]:
         selected = (
@@ -318,6 +326,7 @@ class SqlStore:
             "attempts": [attempt.model_dump(mode="json") for attempt in cost.attempts],
             "first_observed_at": cost.first_observed_at,
             "updated_at": cost.updated_at,
+            "stale": False,
         }
         key = t.cost_projections.c.job_id == str(cost.job_id)
         async with self.engine.begin() as conn:

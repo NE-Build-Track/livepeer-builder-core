@@ -496,3 +496,62 @@ async def test_a_running_jobs_matched_fee_is_pending_and_reconciliation_balances
     )
     assert report.balanced
     await stream.aclose()
+
+
+def booked(report: Any) -> Decimal:
+    """Everything a reconciliation counts on the engine side: the classes plus the unattributed rows."""
+    return sum((fees.fee_eth for fees in report.by_class.values()), Decimal(0)) + report.unattributed.fee_eth
+
+
+async def ended_paid_job(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, clock: FixedClock
+) -> tuple[BuilderEngine, Job, str]:
+    """A paid job that ended and was projected, with its session signed for manifest m-1."""
+    engine = await make_engine()
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+                         grant_id="grant_1"),
+    )  # fmt: skip
+    job, attempt = await running_job(store, clock, allocation=actor.allocation_id)
+    await ends_and_projects(engine, store, job, attempt, clock)
+    return engine, job, actor.allocation_id
+
+
+async def test_a_row_on_a_matched_session_counts_before_sync_stores_the_projection(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
+    usage: FakeUsageSource,
+) -> None:  # fmt: skip  # review of #43: sync commits the row, then (later, or never) the projection
+    engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
+    first = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
+    usage.rows = [first]
+    await engine.costs.sync_once()
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.5")
+    clock.advance(5)
+    second = row(
+        "u2", "sess-1", "0.25", allocation=allocation, manifest="m-1"
+    )  # a second charge, same session
+    await store.apply_usage([second], SyncCheckpoint(resume_cursor="c2"))  # sync stops here (crash, error)
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.75")
+    assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.75")
+    usage.rows = [first, second]
+    await engine.costs.sync_once()  # nothing new to copy; the job is projected again all the same
+    stored = await store.get_projection(job.id)
+    assert stored is not None and stored.fees.fee_eth == Decimal("0.75") and stored.status == "corrected"
+    assert (
+        await store.jobs_for_projection([]) == []
+    )  # stored again: no longer stale, not re-projected each sync
+
+
+async def test_a_match_counts_before_sync_stores_the_projection(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
+) -> None:  # fmt: skip  # review of #43: the stored projection is pending (fee 0) and the row just matched
+    engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
+    stored = await store.get_projection(job.id)
+    assert stored is not None and stored.status == "pending"  # paid, no usage yet
+    clock.advance(5)
+    arrived = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
+    await store.apply_usage([arrived], SyncCheckpoint(resume_cursor="c1"))
+    await store.match_sessions([arrived])  # matched: no longer unattributed; the projection is not saved yet
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.5")
+    assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.5")

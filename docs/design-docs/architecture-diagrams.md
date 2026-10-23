@@ -248,15 +248,15 @@ sequenceDiagram
             W->>DB: reset the cursor, resync from the start (known rows skipped)
         else page
             Bat-->>U: items, next_cursor ("" on the last page)
-            W->>DB: apply_usage(new rows, checkpoint) in one transaction
+            W->>DB: apply_usage(new rows, checkpoint) in one transaction (marks stale: jobs with a new row on a matched session)
         end
     end
-    C->>DB: match_sessions(new rows) on (allocation_id, manifest_id)
-    C->>DB: jobs_for_projection(affected job ids)
+    C->>DB: match_sessions(new rows) on (allocation_id, manifest_id) (marks stale: jobs whose match changed)
+    C->>DB: jobs_for_projection(affected job ids, plus every stale or pending projection)
     loop each affected job
         C->>DB: usage_for_payment_sessions(matched payment_session_id)
         C->>C: classify → delivered / failed_after_payment / uncertain / pending
-        C->>DB: save_projection(observed, or corrected if the total changed)
+        C->>DB: save_projection(observed, or corrected if the total changed), no longer stale
     end
 ```
 
@@ -275,7 +275,7 @@ sequenceDiagram
     Op->>C: GET /v1/admin/reconciliation?actor_id=alice
     C->>Pay: allocation_for(app, actor)
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
-    C->>DB: projections_and_unprojected(app, actor) → stored projections, jobs none covers
+    C->>DB: projections_and_unprojected(app, actor) → fresh projections, jobs none covers (running, ended since, stale)
     C->>C: classify the uncovered jobs live (running ones are pending) → sum attempts by cost_class
     C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)

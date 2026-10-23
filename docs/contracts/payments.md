@@ -125,6 +125,12 @@ since its projection was stored, from its matched usage rows. A paid job therefo
 `none`, even between syncs. Each read uses one consistent snapshot of the store, so a sync committing
 meanwhile can never make it count a usage row twice or nowhere.
 
+Sync commits usage rows, then session matches, then projections, one transaction each. A new usage row
+on a matched session, or a changed match, marks the job's projection stale in the same transaction.
+Reads compute a stale job live, and the next sync stores it again, even when sync stopped (a crash,
+an error) before it reached that job. A state between two of sync's commits therefore still counts
+every row once.
+
 ## Allowance
 
 `GET /v1/allowance` reads the allocation (`allocated_*`, `spent_*`, `available_*` in its currency).

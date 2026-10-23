@@ -3,6 +3,8 @@
 A cost read makes several queries: projections, the jobs none covers, their usage rows and, for
 reconciliation, the rows no job claims. Cost sync can commit between any two of them (it matches rows
 and stores projections), and a read that mixed states could count a row nowhere (#43 review).
+Sync marks a projection stale in the transaction that changes its evidence, and these reads skip a
+stale projection, so even a state between two of sync's commits counts every row once.
 ``SqlCostSnapshot`` runs every query on one connection inside one transaction that sees a single state:
 ``REPEATABLE READ`` on PostgreSQL, a read transaction on a SQLite file (WAL). In-memory SQLite has one
 connection for everything, so it reads plainly.
@@ -51,14 +53,16 @@ class SqlCostSnapshot:
         if not rows:
             return None
         [job] = await load_jobs(self._conn, rows)
-        return job, await get_projection(self._conn, job_id)
+        return job, await get_projection(self._conn, job_id, fresh=True)
 
     async def projections_and_unprojected(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> tuple[list[JobCost], list[Job]]:
         window = in_window(application_id, actor_id, start, end)
         stored = (
-            select(t.cost_projections).join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id).where(*window)
+            select(t.cost_projections)
+            .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
+            .where(*window, t.cost_projections.c.stale.is_(False))
         )
         projections = [projection(row) for row in (await self._conn.execute(stored)).mappings()]
         selected = (
@@ -80,7 +84,8 @@ class SqlCostSnapshot:
         costs: dict[UUID, JobCost] = {}
         if jobs:
             stored = select(t.cost_projections).where(
-                t.cost_projections.c.job_id.in_([str(j.id) for j in jobs])
+                t.cost_projections.c.job_id.in_([str(j.id) for j in jobs]),
+                t.cost_projections.c.stale.is_(False),
             )
             for row in (await self._conn.execute(stored)).mappings():
                 cost = projection(row)
@@ -94,8 +99,11 @@ class SqlCostSnapshot:
         return await unattributed_usage(self._conn, allocation_id)
 
 
-async def get_projection(conn: AsyncConnection, job_id: UUID) -> JobCost | None:
+async def get_projection(conn: AsyncConnection, job_id: UUID, *, fresh: bool = False) -> JobCost | None:
+    """The stored projection. ``fresh`` leaves out a stale one, which no longer stands for the job."""
     query = select(t.cost_projections).where(t.cost_projections.c.job_id == str(job_id))
+    if fresh:
+        query = query.where(t.cost_projections.c.stale.is_(False))
     row = (await conn.execute(query)).mappings().first()
     return None if row is None else projection(row)
 

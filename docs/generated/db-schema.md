@@ -56,6 +56,7 @@ erDiagram
         json attempts
         datetime first_observed_at
         datetime updated_at
+        boolean stale
     }
     lpb_jobs {
         string id PK
@@ -178,6 +179,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `attempts` | JSON | no |  |
 | `first_observed_at` | DATETIME | yes |  |
 | `updated_at` | DATETIME | no |  |
+| `stale` | BOOLEAN | no |  |
 
 ## `lpb_jobs`
 

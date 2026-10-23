@@ -22,8 +22,38 @@ ENDED = ("succeeded", "failed", "uncertain")  # a job in one of these states can
 
 
 def projection_out_of_date() -> ColumnElement[bool]:
-    """No projection, or one stored before the job ended."""
-    return or_(t.cost_projections.c.job_id.is_(None), t.jobs.c.completed_at > t.cost_projections.c.updated_at)
+    """No projection, one stored before the job ended, or one whose evidence changed since (stale)."""
+    return or_(
+        t.cost_projections.c.job_id.is_(None),
+        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
+        t.cost_projections.c.stale.is_(True),
+    )
+
+
+async def mark_stale(conn: AsyncConnection, job_ids: Iterable[str]) -> None:
+    """Sync changed these jobs' evidence: their projections no longer stand for them (#43 review).
+
+    Called in the transaction that changes the evidence, so no committed state has a projection that
+    misses a committed row. Reads compute a stale job live; the next sync stores it again."""
+    for chunk in _chunks(sorted(set(job_ids))):
+        await conn.execute(
+            update(t.cost_projections).where(t.cost_projections.c.job_id.in_(chunk)).values(stale=True)
+        )
+
+
+async def mark_stale_on_new_rows(conn: AsyncConnection, rows: Sequence[UsageRow]) -> None:
+    """A new applied row on a session that is already matched adds to that job's fee."""
+    sessions = sorted(
+        {row.payment_session_id for row in rows if row.status == "applied" and row.payment_session_id}
+    )
+    for chunk in _chunks(sessions):
+        found = await conn.execute(
+            select(t.payment_sessions.c.job_id).where(
+                t.payment_sessions.c.match_status == "matched",
+                t.payment_sessions.c.payment_session_id.in_(chunk),
+            )
+        )
+        await mark_stale(conn, found.scalars())
 
 
 def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:

@@ -349,3 +349,18 @@ async def ended(engine: ActorApi, job_id: UUID, within_s: float = 5.0) -> Job:
         while (job := await engine.jobs.get(ALICE, job_id)).state == "running":  # noqa: ASYNC110
             await asyncio.sleep(0.02)
     return job
+
+
+async def test_a_disconnected_client_lets_the_runner_finish_within_the_settle_window(side: Side) -> None:
+    # An HTTP layer whose client went away calls disconnected(): the runner gets LPB_STREAM_SETTLE_S,
+    # and one that finishes in time succeeds with everything it sent (D38, D40).
+    async with side(chunks=(b"a", b"bc")) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        stream = await streaming.stream(ALICE, JobRequest(app=APP))
+        chunks = aiter(stream)
+        assert await anext(chunks) == b"a"
+        await stream.disconnected()
+        job = await ended(engine, stream.job.id)
+        await stream.aclose()  # too late: the stream already ended
+    assert job.state == "succeeded" and job.result is not None and job.result.size_bytes == 3

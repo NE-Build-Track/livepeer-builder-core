@@ -2,6 +2,7 @@
 
 import contextlib
 import dataclasses
+import logging
 from collections.abc import AsyncIterator
 
 import httpx
@@ -213,3 +214,29 @@ async def test_assemble_does_no_io(store: SqlStore, clock: FixedClock) -> None:
         parts = await default_parts(settings(), stack, EngineSupply(store=store, clock=clock))
     engine = assemble(settings(), parts)  # synchronous: nothing to await, nothing opened
     assert engine.store is store and engine.clock is clock
+
+
+async def test_supplied_parts_are_borrowed_not_closed(store: SqlStore) -> None:
+    engine = await BuilderEngine.create(settings(), supply=EngineSupply(store=store))
+    await engine.stop()
+    assert await store.list_jobs("default", "nobody") == []  # still open: the caller owns it
+
+
+async def test_start_logs_the_authentication_and_grant_desk_modes(
+    store: SqlStore, clock: FixedClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    engine = await BuilderEngine.create(
+        settings(),
+        supply=EngineSupply(
+            store=store,
+            clock=clock,
+            api_keys=None,
+            authenticators=(HeaderAuthenticator(),),
+            discovery_source=StaticDiscoverySource(),
+        ),
+    )
+    with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
+        async with engine:
+            pass
+    (started,) = [r for r in caplog.records if getattr(r, "event", "") == "engine.started"]
+    assert (started.api_keys, started.own_authenticators, started.grant_desk) == ("off", 1, "off")  # type: ignore[attr-defined]

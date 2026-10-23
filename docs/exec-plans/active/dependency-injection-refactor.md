@@ -61,17 +61,17 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 
 ### Step 3: construction as data
 
-- [ ] **Public `EngineParts`**, a frozen dataclass of every replaceable port:
+- [x] **Public `EngineParts`**, a frozen dataclass of every replaceable port:
   - `store`, `clock`, `policy`, `authenticators`, `api_keys`, `discovery_source`, `transport`, `selection`;
   - `allocation_manager`, `grants_manager`, `usage_source`, `secret_store`, `events`, `sessions`.
 
   Tuning values are not parts. `StreamLimits` and `AdmissionLimiter` are built in `assemble` from settings.
-- [ ] **Parts hold ports only; services are built in `assemble`, from the final parts, after `decorate`.** A decorated policy therefore reaches every service, including the key service.
-- [ ] **Layout and exports:** `EngineParts`, `EngineSupply`, `UNSET`, `ApiKeys`, `default_parts` and `assemble` live in `runtime/assembly.py`. The root exports `EngineParts`, `EngineSupply`, `UNSET` and `ApiKeys`; `livepeer_builder.runtime` exports `default_parts` and `assemble`.
-- [ ] **Port-to-port dependencies come from supplied values.** `EncryptedDbSecretStore` (store, clock) and the default `api_keys` (store) are built from what was supplied. A *decorated* port is not seen by ports built before decoration. The extension guide states the rule, with an example: if other parts depend on it, supply it (Replace); decorate only to wrap behaviour at the point of use.
-- [ ] **Supplied parts are borrowed.** The engine never closes a resource it was given; only resources `default_parts` opened go on the stack.
-- [ ] **`decorate` is a plain synchronous function** `(EngineParts) -> EngineParts`. A decoration that needs I/O is a new resource, which the caller opens and supplies.
-- [ ] **One documented construction path, in two stages** (decision 6):
+- [x] **Parts hold ports only; services are built in `assemble`, from the final parts, after `decorate`.** A decorated policy therefore reaches every service, including the key service.
+- [x] **Layout and exports:** `EngineParts`, `EngineSupply`, `UNSET`, `ApiKeys`, `default_parts` and `assemble` live in `runtime/assembly.py`. The root exports `EngineParts`, `EngineSupply`, `UNSET` and `ApiKeys`; `livepeer_builder.runtime` exports `default_parts` and `assemble`.
+- [x] **Port-to-port dependencies come from supplied values.** `EncryptedDbSecretStore` (store, clock) and the default `api_keys` (store) are built from what was supplied. A *decorated* port is not seen by ports built before decoration. The extension guide states the rule, with an example: if other parts depend on it, supply it (Replace); decorate only to wrap behaviour at the point of use.
+- [x] **Supplied parts are borrowed.** The engine never closes a resource it was given; only resources `default_parts` opened go on the stack.
+- [x] **`decorate` is a plain synchronous function** `(EngineParts) -> EngineParts`. A decoration that needs I/O is a new resource, which the caller opens and supplies.
+- [x] **One documented construction path, in two stages** (decision 6):
   - `BuilderEngine.create(settings, *, supply=EngineSupply(...), decorate=fn)`, async. `from_settings` and its keyword overrides are removed.
   - **`settings` is required.** The `settings or EngineSettings.from_env()` fallback goes; `EngineSettings.from_env()` stays an explicit call at the edges (CLI, server root, docs).
   - **Supply (Replace):** `EngineSupply` has every `EngineParts` field, each defaulting to an `UNSET` sentinel. `default_parts(settings, stack, supply)` builds only what was not supplied, in dependency order, and registers resources on `stack`. A supplied part is never built, and dependent defaults (`api_keys`, `EncryptedDbSecretStore`) are built from the supplied store.
@@ -79,24 +79,24 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - **Decorate:** `decorate: Callable[[EngineParts], EngineParts]` receives the finished parts and returns the parts to use, for wrapping defaults or supplied parts.
   - `assemble(settings, parts, resources)` wires the engine and does no I/O. `default_parts` and `assemble` stay public for tests and unusual cases.
   - The default discovery source keeps the signer bearer header.
-- [ ] **`BuilderEngine` supports `async with`:** start on enter, stop on exit. The CLI and scripts use it; web applications keep calling `start`/`stop` from their framework's lifespan.
-- [ ] **API keys are one part** (decision 2, as amended):
+- [x] **`BuilderEngine` supports `async with`:** start on enter, stop on exit. The CLI and scripts use it; web applications keep calling `start`/`stop` from their framework's lifespan.
+- [x] **API keys are one part** (decision 2, as amended):
   - `ApiKeys(store: KeyRepo, realm: str = "livepeer-builder")` describes the capability.
   - `assemble` builds both the `ApiKeyAuthenticator` and the `KeyService` from it, with the final policy and clock, so acceptance and issuance cannot disagree.
   - `api_keys: ApiKeys | None` defaults to keys on, built from the store.
   - `authenticators: tuple[Authenticator, ...]` holds the deployment's own authenticators, default `()`.
   - The chain is `(*authenticators, <key authenticator>)`.
-- [ ] **Keys off** (`api_keys=None`):
+- [x] **Keys off** (`api_keys=None`):
   - `engine.keys` is `None`, and `create_app` registers no key routes, so they are absent from that deployment's OpenAPI;
   - `lpb bootstrap-admin` exits with "API keys are disabled in this deployment";
   - the engine logs its authentication mode once, in `start()` (not in `create()`, so CLI commands that only build an engine stay quiet);
   - the extension guide states that a replacement authenticator must grant admin permissions to operators.
-- [ ] **The grant desk is an optional capability** (decision 7):
+- [x] **The grant desk is an optional capability** (decision 7):
   - `payments.grants: GrantsApi | None` (list and create grants) is present when `LPB_BATTERIES_OPERATOR_TOKEN` is configured or a grants manager is supplied.
   - When it is `None`, the grant routes are absent from the app and its OpenAPI, and startup logs "grant desk disabled".
   - The startup refusal and the allocation-manager fallback are removed.
   - Funding a grant stays on the engine token (`grants.fund`).
-- [ ] **Tests:**
+- [x] **Tests:**
   - replacing one part keeps the others;
   - a supplied store means the configured database is never opened, and `api_keys` and the secret store use the supplied store;
   - a decorated default discovery source still sends the signer header;
@@ -104,10 +104,10 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - an enterprise authenticator runs before the key authenticator;
   - Batteries without the operator token starts, has no grant routes and still funds grants;
   - `async with` starts and stops.
-- [ ] **Callers updated:** the CLI, the Railway entrypoint, `docs/guides/embedded-mode.md`, and `tests/unit/test_extension_examples.py`.
-- [ ] **Private-attribute wiring tests replaced** (moved here from step 1). The tests asserting `engine.discovery._source`, `engine.payments._manager`, `engine.payments._grants`, `engine.costs._worker._source` and `engine.jobs._store` become assertions on the public `EngineParts` that `default_parts` returns, or on behaviour. `test_batteries_without_an_operator_token_does_not_start` is inverted by decision 7.
-- [ ] `docs/design-docs/extending-the-engine.md` "Wiring it" is rewritten around supply and decorate.
-- [ ] **The guide cannot drift from its tested example.** The example region in `tests/unit/test_extension_examples.py` is marked `# docs:start wiring` / `# docs:end wiring`, and `scripts/check_docs.py` fails when the guide's fenced block differs from that region.
+- [x] **Callers updated:** the CLI, the Railway entrypoint, `docs/guides/embedded-mode.md`, and `tests/unit/test_extension_examples.py`.
+- [x] **Private-attribute wiring tests replaced** (moved here from step 1). The tests asserting `engine.discovery._source`, `engine.payments._manager`, `engine.payments._grants`, `engine.costs._worker._source` and `engine.jobs._store` become assertions on the public `EngineParts` that `default_parts` returns, or on behaviour. `test_batteries_without_an_operator_token_does_not_start` is inverted by decision 7.
+- [x] `docs/design-docs/extending-the-engine.md` "Wiring it" is rewritten around supply and decorate.
+- [x] **The guide cannot drift from its tested example.** The example region in `tests/unit/test_extension_examples.py` is marked `# docs:start wiring` / `# docs:end wiring`, and `scripts/check_docs.py` fails when the guide's fenced block differs from that region.
 
 ### Step 4: the facade API
 
@@ -251,7 +251,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] 2026-10-23: Swagger fix landed as its own commit (`fix(http): declare the bearer scheme so Swagger shows Authorize`), on branch `tasks/mz/swagger-bearer`; the refactor branch is rebased on it.
 - [x] 2026-10-23: **step 1 done**: SDK injection (`3e4ad23`), tuning settings (`eb2b9ba`), body limit (`7f9d7ae`), env-read guard. Every commit leaves the CI gate green.
 - [x] 2026-10-23: **step 2 done**: exit stack with logged cleanup, idempotent single-use engine, failing-first partial-failure test (spies on `SqlStore.connect`/`close`), behavioural loop check replacing `engine._tasks`. The close-failure test injects the fault on `SqlStore.close`, since no seam exists for an engine-owned resource.
-- [ ] 2026-10-23: step 3 in progress. Part 1 landed: `runtime/assembly.py` (`EngineParts`, `EngineSupply`, `UNSET`, `ApiKeys`, `default_parts`, `assemble`), `BuilderEngine.create`, `async with`, keys-off and grant-desk capabilities with conditional routes, mode log in `start()`. Each behaviour was shown to fail its test under a deliberate mutation. The spec generator now turns every optional capability on, so `docs/generated/openapi.json` still documents the grant desk. Part 2 landed: every caller (CLI, Railway, the spec generator, tests) uses `create`; `from_settings` and its shim are removed; the private-attribute wiring tests and the post-construction rewiring (`engine.jobs._transport = …`, a monkeypatched `finish_job`) are replaced by supplied parts and assertions on `default_parts`; the unfiltered usage feed is checked through the request it sends. `engine.jobs._open_streams` stays as a test-synchronisation poll.
+- [x] 2026-10-23: **step 3 done**, in three commits. Part 1: `runtime/assembly.py` (`EngineParts`, `EngineSupply`, `UNSET`, `ApiKeys`, `default_parts`, `assemble`), `BuilderEngine.create`, `async with`, keys-off and grant-desk capabilities with conditional routes, mode log in `start()`. Each behaviour was shown to fail its test under a deliberate mutation. The spec generator now turns every optional capability on, so `docs/generated/openapi.json` still documents the grant desk. Part 2 landed: every caller (CLI, Railway, the spec generator, tests) uses `create`; `from_settings` and its shim are removed; the private-attribute wiring tests and the post-construction rewiring (`engine.jobs._transport = …`, a monkeypatched `finish_job`) are replaced by supplied parts and assertions on `default_parts`; the unfiltered usage feed is checked through the request it sends. `engine.jobs._open_streams` stays as a test-synchronisation poll. Part 3: `extending-the-engine.md` rewritten around supply and decorate, with its example kept equal to the tested region by a new `check_docs.py` check (shown to fail on a drifted block); tests for borrowed supplied parts and the start-up mode log.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 
 ## Decision log

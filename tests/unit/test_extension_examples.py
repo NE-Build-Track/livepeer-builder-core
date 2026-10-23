@@ -5,6 +5,7 @@ core patches. The tests wire them into a real BuilderEngine and prove the behavi
 starting point; they are examples, not shipped implementations.
 """
 
+import dataclasses
 import hashlib
 import hmac
 from collections.abc import Mapping, Sequence
@@ -13,7 +14,7 @@ from decimal import Decimal
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
+from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
     ActorContext,
@@ -160,33 +161,52 @@ def priced(url: str, price: str, orchestrator: str = "https://orch.example") -> 
     return runner(url=url, price=price).model_copy(update={"orchestrator_url": orchestrator})
 
 
+# docs:start wiring
+def enterprise_supply() -> EngineSupply:
+    """Replace: parts that substitute a default outright, or that other parts depend on."""
+    return EngineSupply(
+        authenticators=(SignedSsoHeaderAuthenticator(SECRET),),  # tried before the engine's API keys
+        secret_store=AuditedVaultSecretStore(),  # payment keys never touch the engine database
+        selection=CheapestReadyFirst(),
+    )
+
+
+def enterprise_decorations(parts: EngineParts) -> EngineParts:
+    """Decorate: wrap the configured defaults where they are used."""
+    return dataclasses.replace(
+        parts,
+        policy=TeamReadPolicy(DIRECTORY, fallback=parts.policy),
+        discovery_source=ApprovedOrchestratorsOnly(parts.discovery_source, approved={"https://orch.example"}),
+    )
+
+
+# docs:end wiring
+
+
 @pytest.fixture
 async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore[no-untyped-def]
-    vault = AuditedVaultSecretStore()
     transport = ScriptedTransport()
-    discovery = ApprovedOrchestratorsOnly(
-        StaticDiscoverySource(
+    supply = enterprise_supply()
+    vault = supply.secret_store
+    # The test adds what a deployment would configure: an in-memory store, a clock, runners, a transport.
+    under_test = dataclasses.replace(
+        supply,
+        store=store,
+        clock=clock,
+        discovery_source=StaticDiscoverySource(
             [
                 priced("https://expensive", "0.50"),
                 priced("https://cheap", "0.10"),
                 priced("https://unapproved", "0.01", orchestrator="https://rogue.example"),
             ]
         ),
-        approved={"https://orch.example"},
+        transport=transport,
+        allocation_manager=FakeAllocationManager(),
     )
     engine = await BuilderEngine.create(
         EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        supply=EngineSupply(
-            store=store,
-            clock=clock,
-            authenticators=(SignedSsoHeaderAuthenticator(SECRET),),
-            policy=TeamReadPolicy(DIRECTORY),
-            secret_store=vault,
-            selection=CheapestReadyFirst(),
-            discovery_source=discovery,
-            transport=transport,
-            allocation_manager=FakeAllocationManager(),
-        ),
+        supply=under_test,
+        decorate=enterprise_decorations,
     )
     await engine.discovery.refresh()
     yield engine, vault, transport

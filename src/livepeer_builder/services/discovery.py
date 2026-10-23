@@ -29,6 +29,8 @@ class MostCapacityFirst:
 
 
 class DiscoveryService:
+    """Caches the source's last good snapshot and refreshes it once per interval."""
+
     def __init__(
         self,
         source: DiscoverySource,

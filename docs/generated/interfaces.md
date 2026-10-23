@@ -101,6 +101,7 @@ classDiagram
     class DefaultPolicy
     class EncryptedDbSecretStore
     class MostCapacityFirst
+    class OrchestratorListDiscoverySource
     class PaymentsService
     class ReservedEventFeed
     class ReservedSessions
@@ -118,6 +119,7 @@ classDiagram
     SecretStore <|.. RoutingSecretStore
     SecretStore <|.. SettingsSecretStore
     SecretStore <|.. EncryptedDbSecretStore
+    DiscoverySource <|.. OrchestratorListDiscoverySource
     DiscoverySource <|.. SignerDiscoverySource
     DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
@@ -144,6 +146,7 @@ classDiagram
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
+| `DiscoverySource` | `OrchestratorListDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `DiscoverySource` | `SignerDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `DiscoverySource` | `StaticDiscoverySource` | `livepeer_builder.adapters.static` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |

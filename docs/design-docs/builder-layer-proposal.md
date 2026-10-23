@@ -90,7 +90,7 @@ Batteries feed.
 | --- | --- | --- |
 | 1 | Who pays: a credential per request, or per application | **Resolved:** `per_actor` (default) / `per_application` modes; a `CredentialResolver` per actor (D17) |
 | 2 | Cost reporting assumed Batteries; `unavailable` status | Batteries is the payment path; no `unavailable` status (missing = `pending`) |
-| 3 | Capability → app mapping in config; `allowed_orchestrators` | Deferred (T3). In the dev stack, the signer's `Orchestrators` list bounds who is paid |
+| 3 | Capability → app mapping in config; `allowed_orchestrators` | Deferred (T3). The engine's discovery source (`LPB_DISCOVERY_URL` or `LPB_ORCHESTRATOR_LIST`) bounds which runners are selected. The signer's `Orchestrators` list never bounded who is paid (D42) |
 | 4 | Idempotency: join-and-return; release on pre-dispatch decline | Owned by John's PR (D11). Interim: 409 |
 | 5 | BYOC as a second transport | **Excluded:** Live Runner only. `RunnerTransport` stays transport-agnostic |
 | 6 | Admission limits | **Implemented:** `AdmissionLimiter`, 503 + `Retry-After` before payment |

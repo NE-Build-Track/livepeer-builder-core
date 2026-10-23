@@ -36,5 +36,6 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | Ticket | Plan | Owners |
 | --- | --- | --- |
 | Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
+| Engine-owned orchestrator discovery ([#27](https://github.com/NE-Build-Track/livepeer-builder-core/issues/27), [#30](https://github.com/NE-Build-Track/livepeer-builder-core/issues/30)) | [active/orchestrator-discovery.md](exec-plans/active/orchestrator-discovery.md) | John |
 
 Nothing closes without Mike's review. Josh reviews engine code.

@@ -1,4 +1,5 @@
-"""Python gateway SDK adapters: signer discovery and the paid runner call.
+"""Python gateway SDK adapters: discovery (a `/discover-orchestrators` URL, the signer, or a startup probe
+of an orchestrator list) and the paid runner call.
 
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
 comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81, pinned in
@@ -11,12 +12,14 @@ attribution.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
-from decimal import Decimal, InvalidOperation
+import logging
+import ssl
+from collections.abc import AsyncIterator, Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
 import aiohttp
-from livepeer_gateway.discovery import discover_runners
+from livepeer_gateway.discovery import discover_runners, orchestrator_discovery_urls
 from livepeer_gateway.errors import (
     LivepeerGatewayError,
     LivepeerHTTPError,
@@ -32,17 +35,22 @@ from livepeer_gateway.live_runner import (
 )
 from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
 
+from livepeer_builder.adapters.discovery_entries import DiscoveryContractError
+from livepeer_builder.adapters.discovery_entries import runners_from_entries as parse_runners
 from livepeer_builder.contracts import (
     AttemptOutcome,
     JobRequest,
     NetworkRate,
     Runner,
-    RunnerGPU,
     RunnerReply,
 )
 from livepeer_builder.errors import RunnerCallError
 
+_LOG = logging.getLogger(__name__)
 _BODY_LIMIT = 4096
+# Orchestrators probed at once. Each probe is bounded by the SDK's 5 s timeout, so a 28-entry list
+# finishes within two rounds.
+_PROBE_CONCURRENCY = 16
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
 # may succeed. 400 = incomplete/expired params; 481 = price ceiling.
@@ -72,6 +80,148 @@ class SignerDiscoverySource:
             discovery_url=self._discovery_url,
         )
         return tuple(runners_from_entries(entries))
+
+
+class OrchestratorListDiscoverySource:
+    """Probes an engine-owned orchestrator list once, on the first fetch (D42). For development and demos.
+
+    ``LPB_ORCHESTRATOR_LIST`` is addresses inline (comma-separated, or one ``http(s)://`` URL) or a file
+    of go-livepeer ``-orchWebhookUrl`` JSON (``[{"address": "https://...", "score": n}]``). The first
+    fetch calls ``GET /discovery`` on every address with redirects disabled, TLS verified against the
+    process trust store. A later fetch returns that snapshot. An orchestrator that fails, including one
+    whose certificate the process does not trust, is left out and never called. The fetch raises when
+    the list cannot be read or names no orchestrator, or when the merge is empty and any probe failed;
+    that failure is not remembered, so the next discovery interval tries again. An empty merge is kept
+    only when every probe answered and none had runners. Capacity from the probe is stale by the
+    next job, so ``capacity_available`` is unknown; price stays, because the call needs its unit. A live
+    catalog belongs in ``LPB_DISCOVERY_URL``. No credential is sent to orchestrators.
+    """
+
+    def __init__(self, source: str) -> None:
+        self._source = source.strip()
+        self._probed: tuple[Runner, ...] | None = None
+
+    async def fetch(self) -> tuple[Runner, ...]:
+        if self._probed is not None:
+            return self._probed
+        runners = await self._probe()
+        self._probed = runners
+        return runners
+
+    async def _probe(self) -> tuple[Runner, ...]:
+        urls = list(dict.fromkeys(orchestrator_discovery_urls(await self._addresses())))
+        if not urls:
+            raise LivepeerGatewayError(f"orchestrator list {self._source} names no orchestrators")
+        limit = asyncio.Semaphore(_PROBE_CONCURRENCY)
+
+        async def probe(url: str) -> list[dict[str, Any]]:
+            async with limit:
+                return await _fetch_discovery_document(discovery_url=url)
+
+        results = await asyncio.gather(*(probe(url) for url in urls), return_exceptions=True)
+        entries: list[dict[str, Any]] = []
+        failures: list[tuple[str, Exception]] = []
+        for url, result in zip(urls, results, strict=True):
+            if isinstance(result, Exception):
+                failures.append((url, result))
+            elif isinstance(result, BaseException):
+                raise result
+            else:
+                entries.extend(result)
+        runners = tuple(
+            runner.model_copy(update={"capacity_available": None})
+            for runner in _unique_by_url(runners_from_entries(entries))
+        )
+        # An idle orchestrator returns [] and counts as an answer. An empty merge is a success
+        # only when every probe answered; one failure beside those idle answers is still a failure,
+        # and it is not cached, so the next interval probes again.
+        if not runners and failures:
+            raise failures[0][1]
+        for url, error in failures:
+            _log_excluded(url, error)
+        return runners
+
+    async def _addresses(self) -> str | list[str]:
+        if self._source.startswith(("http://", "https://")) or "," in self._source:
+            return self._source  # orchestrator_discovery_urls splits a comma-delimited string
+        try:
+            text = await asyncio.to_thread(Path(self._source).read_text, encoding="utf-8")
+            payload = json.loads(text)
+        except (OSError, ValueError) as error:
+            raise LivepeerGatewayError(f"orchestrator list {self._source}: {error}") from error
+        return _orchestrator_addresses(payload)
+
+
+async def _fetch_discovery_document(*, discovery_url: str) -> list[dict[str, Any]]:
+    """GET one orchestrator's ``/discovery`` and do not follow redirects.
+
+    ``discover_runners`` uses ``get_json``, which leaves aiohttp's redirect default on. A listed
+    orchestrator must not send this process to another host. A 3xx is a failed probe.
+    """
+    timeout = aiohttp.ClientTimeout(total=5.0)
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.get(discovery_url, allow_redirects=False) as response,
+        ):
+            if 300 <= response.status < 400:
+                raise LivepeerGatewayError(f"discovery redirect refused ({response.status}): {discovery_url}")
+            if response.status != 200:
+                raise LivepeerGatewayError(f"discovery HTTP {response.status}: {discovery_url}")
+            payload = await response.json(content_type=None)
+    except LivepeerGatewayError:
+        raise
+    except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as error:
+        raise LivepeerGatewayError(f"discovery failed: {discovery_url}: {error}") from error
+    if not isinstance(payload, list):
+        raise LivepeerGatewayError(
+            f"discovery response must be a JSON list, got {type(payload).__name__}: {discovery_url}"
+        )
+    return payload
+
+
+def _log_excluded(url: str, error: Exception) -> None:
+    reason = "untrusted_certificate" if _untrusted_certificate(error) else "failed"
+    _LOG.warning(
+        "orchestrator excluded from discovery",
+        extra={
+            "event": "discovery.orchestrator_excluded",
+            "orchestrator": url,
+            "reason": reason,
+            "error": str(error),
+        },
+    )
+
+
+def _orchestrator_addresses(payload: object) -> list[str]:
+    """go-livepeer ``deserializeWebhookJSON``: a JSON list; entries without an ``address`` are skipped."""
+    if not isinstance(payload, list):
+        raise LivepeerGatewayError(f"orchestrator list must be a JSON list, got {type(payload).__name__}")
+    return [
+        item["address"]
+        for item in payload
+        if isinstance(item, dict) and isinstance(item.get("address"), str) and item["address"].strip()
+    ]
+
+
+def _untrusted_certificate(error: BaseException) -> bool:
+    """True when a TLS certificate check caused ``error`` (the SDK wraps it, keeping ``cause``)."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (aiohttp.ClientConnectorCertificateError, ssl.SSLCertVerificationError)):
+            return True
+        seen.add(id(current))
+        current = getattr(current, "cause", None) or current.__cause__ or current.__context__
+    return False
+
+
+def _unique_by_url(runners: Iterable[Runner]) -> list[Runner]:
+    """One runner per URL, the first in list order: two orchestrators may advertise the same runner."""
+    unique: dict[str, Runner] = {}
+    for runner in runners:
+        unique.setdefault(runner.url, runner)
+    return list(unique.values())
 
 
 class _SignedSessions:
@@ -275,77 +425,15 @@ def network_kind(error: BaseException) -> AttemptOutcome:
     return "http"
 
 
-def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:
-    runners: list[Runner] = []
-    for entry in entries:
-        orchestrator_url = _text(entry.get("address"))
-        for raw in entry.get("runners") or ():
-            runner = _runner_from_raw(raw, orchestrator_url)
-            if runner is not None:
-                runners.append(runner)
-    return runners
-
-
-def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None:
-    if not isinstance(raw, dict):
-        return None
-    url, app = _text(raw.get("url")), _text(raw.get("app"))
-    if not url or not app:
-        return None
-    capacity = raw.get("capacity") if isinstance(raw.get("capacity"), int) else None
-    sessions = raw.get("session_ids")
-    available = capacity - len(sessions) if capacity is not None and isinstance(sessions, list) else None
-    reported = raw.get("capacity_available")
-    if isinstance(reported, int) and not isinstance(reported, bool):
-        available = reported  # the node reports it directly; session_ids is the older form
-    return Runner(
-        url=url,
-        app=app,
-        runner_id=_text(raw.get("runner_id")),
-        mode=_text(raw.get("mode")),
-        orchestrator_url=orchestrator_url,
-        capacity=capacity,
-        capacity_available=available,
-        rate=_rate(raw.get("price_info")),
-        version=_text(raw.get("version")),
-        metadata=_text(raw.get("metadata")),
-        gpu=_gpu(raw.get("gpu")),
-    )
-
-
-def _gpu(value: object) -> RunnerGPU | None:
-    if not isinstance(value, dict):
-        return None
-    vram = value.get("vram_mb")
-    gpu = RunnerGPU(
-        id=_text(value.get("id")),
-        name=_text(value.get("name")),
-        vram_mb=vram if isinstance(vram, int) and vram > 0 else None,
-    )
-    return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
-
-
-def _rate(value: object) -> NetworkRate | None:
-    if not isinstance(value, dict):
-        return None
+def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
+    """Map a discovery document onto `Runner`. A contract failure stays a gateway error."""
     try:
-        amount = Decimal(str(value.get("price")))
-    except InvalidOperation:
-        return None
-    if not amount.is_finite() or amount < 0:
-        return None
-    return NetworkRate(
-        amount=amount,
-        currency=str(value.get("currency") or "usd").lower(),
-        unit=str(value.get("unit") or "hour").lower(),
-    )
+        return parse_runners(entries)
+    except DiscoveryContractError as error:
+        raise LivepeerGatewayError(str(error)) from error
 
 
 def _price_info(rate: NetworkRate | None) -> LiveRunnerPriceInfo | None:
     if rate is None:
         return None
     return LiveRunnerPriceInfo(price=str(rate.amount), currency=rate.currency, unit=rate.unit)
-
-
-def _text(value: object) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None

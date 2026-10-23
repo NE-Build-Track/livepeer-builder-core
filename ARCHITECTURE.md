@@ -67,7 +67,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `Authenticator` | `ApiKeyAuthenticator` in an `AuthenticatorChain` | use SSO, mTLS, enterprise JWTs |
 | `AccessPolicy` | `DefaultPolicy` (permissions + ownership) | add teams, org admins, RBAC |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | use Vault or a cloud secret manager |
-| `DiscoverySource` | `SignerDiscoverySource` / `StaticDiscoverySource` | read a registry or URL list |
+| `DiscoverySource` | `OrchestratorListDiscoverySource` (`LPB_ORCHESTRATOR_LIST`) / `SignerDiscoverySource` / `StaticDiscoverySource` | read a registry or a cached catalog |
 | `SelectionPolicy` | `MostCapacityFirst` | rank by price or latency |
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |

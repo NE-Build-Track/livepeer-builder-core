@@ -9,7 +9,7 @@ import pytest
 
 from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-from livepeer_builder.adapters.sdk import SignerDiscoverySource
+from livepeer_builder.adapters.sdk import OrchestratorListDiscoverySource, SignerDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.runtime import engine as engine_module
@@ -57,6 +57,48 @@ def test_package_version_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(engine_module, "version", missing)
     assert engine_module.package_version() == "0.0.0+unknown"
+
+
+async def test_orchestrator_list_selects_its_source_and_the_signer_only_pays() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        orchestrator_list="/etc/livepeer-builder/orchestrators.json",
+        signer_url="https://signer.example",
+        log_json=False,
+    )
+    engine = await BuilderEngine.from_settings(settings)
+    try:
+        source = engine.discovery._source
+        assert isinstance(source, OrchestratorListDiscoverySource)
+        assert source._source == "/etc/livepeer-builder/orchestrators.json"
+        assert engine.jobs._transport._signer_url == "https://signer.example"  # type: ignore[attr-defined]
+    finally:
+        await engine.stop()
+
+
+async def test_orchestrator_list_and_discovery_url_do_not_start() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        orchestrator_list="/etc/livepeer-builder/orchestrators.json",
+        discovery_url="https://discovery.example/runners",
+        log_json=False,
+    )
+    with pytest.raises(InvalidRequest, match="LPB_ORCHESTRATOR_LIST and LPB_DISCOVERY_URL"):
+        await BuilderEngine.from_settings(settings)
+
+
+async def test_a_discovery_url_is_re_read_every_interval() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        orchestrator_list="",  # how a deployment clears the list baked into its image
+        discovery_url="https://discovery.example/discover-orchestrators",
+        log_json=False,
+    )
+    engine = await BuilderEngine.from_settings(settings)
+    try:
+        assert isinstance(engine.discovery._source, SignerDiscoverySource)
+    finally:
+        await engine.stop()
 
 
 async def test_batteries_without_an_operator_token_does_not_start() -> None:

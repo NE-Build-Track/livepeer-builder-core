@@ -1,9 +1,15 @@
-"""The Railway Batteries credential must match the dev stack and be able to fund a grant."""
+"""Deployment invariants.
 
+The Railway Batteries credential must match the dev stack and be able to fund a grant. The engine image
+carries the orchestrator list it probes at startup, and no deployment installs extra certificates (D42).
+"""
+
+import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+DEPLOY = ROOT / "deploy"
 ENTRYPOINT = ROOT / "deploy" / "railway" / "batteries" / "entrypoint.py"
 INIT_SECRETS = ROOT / "deploy" / "dev-stack" / "config" / "init-secrets.py"
 
@@ -31,3 +37,50 @@ def test_railway_builder_engine_can_fund_grants() -> None:
         "The Railway builder-engine allow list drifted from "
         "deploy/dev-stack/config/init-secrets.py. Update both together."
     )
+
+
+def test_railway_engine_image_carries_its_orchestrator_list() -> None:
+    dockerfile = (DEPLOY / "railway" / "engine" / "Dockerfile").read_text()
+    assert (
+        "COPY deploy/railway/engine/orchestrators.json /etc/livepeer-builder/orchestrators.json" in dockerfile
+    ), "deploy/railway/engine/Dockerfile must copy engine/orchestrators.json into the image."
+    assert "LPB_ORCHESTRATOR_LIST=/etc/livepeer-builder/orchestrators.json" in dockerfile, (
+        "deploy/railway/engine/Dockerfile must set LPB_ORCHESTRATOR_LIST to the list baked into the image."
+    )
+
+
+def test_dev_stack_mounts_the_orchestrator_list() -> None:
+    compose = (DEPLOY / "dev-stack" / "compose.yaml").read_text()
+    assert "../railway/engine/orchestrators.json:/etc/livepeer-builder/orchestrators.json:ro" in compose, (
+        "deploy/dev-stack/compose.yaml must mount the Railway orchestrator list into the engine."
+    )
+
+
+def test_orchestrator_list_is_orch_webhook_json() -> None:
+    path = DEPLOY / "railway" / "engine" / "orchestrators.json"
+    payload = json.loads(path.read_text())
+    assert isinstance(payload, list) and payload, f"{path.relative_to(ROOT)} must be a non-empty JSON list."
+    for item in payload:
+        assert isinstance(item, dict) and str(item.get("address", "")).startswith("https://"), (
+            f"{path.relative_to(ROOT)}: every entry needs an https address, as "
+            '{"address": "https://host:port"}. A /discover-orchestrators catalog goes in LPB_DISCOVERY_URL.'
+        )
+
+
+def test_no_deployment_installs_extra_certificates() -> None:
+    forbidden = (
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "pinned-certs",
+        "pin-orchestrator-certs",
+    )
+    for path in sorted(DEPLOY.rglob("*")):
+        if not path.is_file() or "secrets" in path.parts or path.name == ".env":
+            continue  # git-ignored local material, never part of a deployment
+        text = path.read_text(errors="replace")
+        found = [name for name in forbidden if name in text]
+        assert not found, (
+            f"{path.relative_to(ROOT)} mentions {found}. Discovery and paid calls verify TLS with the system "
+            "trust store; an orchestrator with an untrusted certificate is left out, not pinned (D42)."
+        )

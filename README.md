@@ -47,6 +47,7 @@ cost = await engine.costs.for_job(actor, result.job.id)  # "pending" until Batte
 ```sh
 export LPB_DATABASE_URL=sqlite+aiosqlite:///./livepeer-builder.db
 export LPB_SIGNER_URL=https://signer.example LPB_BATTERIES_URL=https://batteries.example
+export LPB_ORCHESTRATOR_LIST=deploy/railway/engine/orchestrators.json   # probed once at startup; the signer pays
 export LPB_BATTERIES_TOKEN=... LPB_BATTERIES_OPERATOR_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
 uv run lpb migrate
 uv run lpb bootstrap-admin   # prints the first admin key once

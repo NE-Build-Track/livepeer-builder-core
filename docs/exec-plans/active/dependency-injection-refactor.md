@@ -259,6 +259,13 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - an HTTP test for the 400 a non-streaming transport answers (shown to fail without the guard);
   - the facade Protocols exported from the root.
 
+  Part 2 landed:
+  - `livepeer_builder.testing.make_engine` (a real engine over in-memory parts, as an async context manager, loops not started), which the repository's own `make_engine` fixture now uses;
+  - `FakeEngine` (`JourneyApi`, scripted with `Reply`/`Fails` per `(app, path)`, optional streaming);
+  - a contract test running eight journey cases against both, which caught each of four deliberate breaks in the fake.
+
+  The `testing` layer may now import what `runtime` does, because `make_engine` builds a real engine.
+
   Deviations, recorded here: `api.py` imports `protocols` (it reuses `Authenticator`, `EventFeed` and `SessionManager` for engine members that are those ports), and `streaming` is a plain attribute rather than a property, which keeps `services/jobs.py` under the 500-line limit.
 - [x] 2026-10-23: step 7 design agreed: the public-API definition and fixes (`generate_secret_key`, exported `configure_logging`, a docs-tooling allowlist), the guide's Rule 1 and Rule 11 checks (Rule 5 skipped), field parity, the layer table. **The design of all seven steps is agreed.** The consumers are planned in their own repositories after builder-core.
 

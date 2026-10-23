@@ -21,7 +21,19 @@ ALLOWED: dict[str, set[str]] = {
     "services": {"contracts", "errors", "protocols", "config", "utils"},
     "store": {"contracts", "errors", "protocols", "config", "utils"},
     "adapters": {"contracts", "errors", "protocols", "config", "utils"},
-    "testing": {"contracts", "errors", "protocols", "utils"},
+    # make_engine builds a real engine, so testing may import what runtime does
+    "testing": {
+        "contracts",
+        "errors",
+        "protocols",
+        "api",
+        "utils",
+        "config",
+        "runtime",
+        "store",
+        "adapters",
+        "services",
+    },
     "runtime": {
         "contracts",
         "errors",

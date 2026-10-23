@@ -87,6 +87,20 @@ async def test_orchestrator_list_and_discovery_url_do_not_start() -> None:
         await BuilderEngine.from_settings(settings)
 
 
+async def test_a_discovery_url_is_re_read_every_interval() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY,
+        orchestrator_list="",  # how a deployment clears the list baked into its image
+        discovery_url="https://discovery.example/discover-orchestrators",
+        log_json=False,
+    )
+    engine = await BuilderEngine.from_settings(settings)
+    try:
+        assert isinstance(engine.discovery._source, SignerDiscoverySource)
+    finally:
+        await engine.stop()
+
+
 async def test_batteries_without_an_operator_token_does_not_start() -> None:
     settings = EngineSettings(
         database_url=MEMORY,

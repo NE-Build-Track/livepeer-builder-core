@@ -1,5 +1,11 @@
 # Runtime evidence: engine-owned orchestrator discovery, 21 October 2026
 
+On 22 October the probe became startup-only. The engine now calls `GET /discovery` on each listed
+orchestrator once, when it starts, instead of every interval. `LPB_ORCHESTRATOR_LIST` no longer accepts
+a URL; a live `/discover-orchestrators` document goes in `LPB_DISCOVERY_URL`. This note records the
+21 October run, when the probe repeated every interval. The exclusions and the runners it found are
+what one startup probe sees.
+
 This is the live check for [#27](https://github.com/NE-Build-Track/livepeer-builder-core/issues/27)
 (D42, [plan](../../exec-plans/active/orchestrator-discovery.md)). The engine read its own orchestrator
 list and called `GET /discovery` on every listed orchestrator, with TLS verified against the system

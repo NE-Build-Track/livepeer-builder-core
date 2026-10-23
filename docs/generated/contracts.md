@@ -133,6 +133,32 @@ classDiagram
         +int ready_count
         +datetime observed_at
     }
+    class DiscoveredOrchestrator {
+        +str address
+        +float score
+        +DiscoveredRunner[] runners
+        +datetime? last_seen
+    }
+    class DiscoveredRunner {
+        +str url
+        +str app
+        +str? version
+        +str? metadata
+        +RunnerGPU? gpu
+        +str? mode
+        +int? capacity
+        +int? capacity_used
+        +int? capacity_available
+        +DiscoveredPriceInfo? price_info
+        +str? runner_id
+        +str[]? session_ids
+    }
+    class DiscoveredPriceInfo {
+        +Decimal price
+        +Decimal? price_usd
+        +str currency
+        +str unit
+    }
     class JobCost {
         +UUID job_id
         +enum status
@@ -182,6 +208,9 @@ classDiagram
     Allowance *-- Money : granted
     Allowance *-- Money : spent
     AttemptCost *-- Fees : fees
+    DiscoveredOrchestrator *-- DiscoveredRunner : runners
+    DiscoveredRunner *-- DiscoveredPriceInfo : price_info
+    DiscoveredRunner *-- RunnerGPU : gpu
     Job *-- Attempt : attempts
     Job *-- Failure : failure
     Job *-- MeasuredUsage : usage

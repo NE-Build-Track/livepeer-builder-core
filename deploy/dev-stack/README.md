@@ -8,7 +8,7 @@ the payment side and the engine:
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
 | `signer` | NE-Build-Track/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It pays; the engine does not use it for discovery (D42) |
-| `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It discovers the orchestrators listed in `config/orchestrators.json` |
+| `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. At startup it probes the orchestrators listed in `deploy/railway/engine/orchestrators.json` once |
 
 Upstream sources are built from the M2 baseline commits
 ([upstream-baseline](../../docs/references/upstream-baseline.md)), so the first build takes a while.
@@ -17,8 +17,9 @@ Upstream sources are built from the M2 baseline commits
 
 - A **payer keystore** whose account has a funded TicketBroker deposit and reserve on Arbitrum One.
 - An **Arbitrum One RPC URL**. It may contain an API key; it lives only in `secrets/rpc-url`.
-- The orchestrators to use, listed in `config/orchestrators.json` (`[{"address": "https://…"}]`). The
-  engine discovers only those whose TLS certificate the system trust store accepts (D42).
+- The orchestrators to use, in `deploy/railway/engine/orchestrators.json` (go-livepeer orchWebhook
+  JSON). The engine calls `GET /discovery` on each one once, at startup (D42). Restart the engine to
+  pick up new runners or prices.
 
 ## Start
 
@@ -37,8 +38,7 @@ docker compose up -d --build engine
 
 Check the signer: `docker compose exec clearinghouse curl -s http://127.0.0.1:8938/readyz` (it checks
 chain funds and price policy). Check discovery: `curl -s http://127.0.0.1:8080/readyz` shows
-`discovery_fresh` and any `discovery_error`; the engine log names each orchestrator it leaves out
-(`discovery.orchestrator_excluded`).
+`discovery_fresh` and any `discovery_error`.
 
 ## Use
 
@@ -98,9 +98,9 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   The Railway Batteries image writes the same `builder-engine` list. `tests/structure/test_deploy.py`
   fails when the two lists drift.
 - **No pinned certificates (D42).** The engine and the signer verify TLS with the system trust store,
-  and nothing in this stack installs extra certificates. An orchestrator with a self-signed
-  certificate is left out of discovery and never called. `config/orchestrators.json` lists the
-  orchestrators that served publicly trusted certificates on 21 October 2026. `config/signer.toml`
-  still has `Orchestrators`, but only the signer's own `/discover-orchestrators` reads it.
+  and nothing in this stack installs extra certificates. At startup the engine probes
+  the orchestrators in `deploy/railway/engine/orchestrators.json` and leaves out those whose
+  certificate the trust store rejects. `config/signer.toml` still has
+  `Orchestrators`, but only the signer's own `/discover-orchestrators` reads it.
 - **Docker network error:** if Docker reports "all predefined address pools have been fully
   subnetted", run `docker network prune`.

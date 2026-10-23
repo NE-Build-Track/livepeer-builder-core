@@ -30,6 +30,9 @@ from livepeer_builder.contracts import (
     AttemptCost,
     AuthProvenance,
     AuthRequest,
+    DiscoveredOrchestrator,
+    DiscoveredPriceInfo,
+    DiscoveredRunner,
     Failure,
     Fees,
     Job,
@@ -79,6 +82,7 @@ CONTRACTS: tuple[type[BaseModel], ...] = (
     AuthRequest, ActorContext, AuthProvenance, ResourceRef,
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
     Runner, RunnerGPU, NetworkRate, Offering,
+    DiscoveredOrchestrator, DiscoveredRunner, DiscoveredPriceInfo,
     JobCost, AttemptCost, Fees,
     ProvisionedActor, SecretRef, Allowance, Money,
 )  # fmt: skip

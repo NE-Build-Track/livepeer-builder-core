@@ -22,9 +22,10 @@ class EngineSettings(Contract):
 
     # network
     signer_url: str | None = None  # pays; discovers only when no list or discovery URL is set
-    discovery_url: str | None = None  # one endpoint that already returns runner entries
-    # File path or http(s) URL of go-livepeer orchWebhook JSON ([{"address": "https://..."}]); the engine
-    # probes each orchestrator's /discovery itself (D42).
+    # A livepeer/node GET /discover-orchestrators document, re-read every interval (production).
+    discovery_url: str | None = None
+    # Orchestrator addresses, inline (comma-separated) or a file of go-livepeer orchWebhook JSON
+    # ([{"address": "https://..."}]). The engine probes each GET /discovery once, at startup (D42).
     orchestrator_list: str | None = None
     discovery_interval_s: float = Field(default=15.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)

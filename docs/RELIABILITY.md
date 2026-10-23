@@ -10,8 +10,8 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
 | `LPB_SIGNER_URL` | unset | Payment signer. Also the discovery source when neither of the next two is set; all three unset → empty static discovery |
-| `LPB_ORCHESTRATOR_LIST` | unset | File path or `http(s)://` URL of go-livepeer `-orchWebhookUrl` JSON (`[{"address": "https://…"}]`). The engine re-reads it every interval and calls `GET /discovery` on each orchestrator itself; the signer only pays (D42). Not with `LPB_DISCOVERY_URL` (the engine refuses to start) |
-| `LPB_DISCOVERY_URL` | unset | One endpoint that already returns runner entries, instead of the signer's |
+| `LPB_ORCHESTRATOR_LIST` | unset | Orchestrator addresses for development and demos: inline (comma-separated) or a go-livepeer orchWebhook JSON file. The engine calls `GET /discovery` on each once, at startup, and the signer only pays (D42). Capacity from that probe is unknown and price stays as probed until a restart. Not with `LPB_DISCOVERY_URL` (the engine refuses to start); set it empty to clear an image default |
+| `LPB_DISCOVERY_URL` | unset | Production: a `livepeer/node` `GET /discover-orchestrators` document, re-read every interval, instead of the signer's |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Required when `LPB_BATTERIES_URL` is set |
@@ -60,7 +60,9 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
-| One listed orchestrator fails or presents a certificate the trust store rejects | Left out of that snapshot and never called; `discovery.orchestrator_excluded` is logged once (reason `untrusted_certificate` or `failed`), and `discovery.orchestrator_included` when it answers again. Only when every orchestrator fails is it a discovery failure (D42) |
+| One orchestrator entry, or one runner, does not match the discovery contract | It is skipped and logged (`discovery.orchestrator_invalid` for an orchestrator); the rest of the document is used (D42) |
+| No named orchestrator parses, the list cannot be read, or every startup probe fails | The last good snapshot is kept and `discovery_error` is set. With `LPB_ORCHESTRATOR_LIST` the probe is retried each interval until one succeeds |
+| `LPB_ORCHESTRATOR_LIST` after its startup probe | Not probed again. Later refreshes reuse that snapshot. Restart to pick up new runners or prices |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |

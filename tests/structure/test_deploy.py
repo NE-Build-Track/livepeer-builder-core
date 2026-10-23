@@ -1,7 +1,7 @@
 """Deployment invariants.
 
 The Railway Batteries credential must match the dev stack and be able to fund a grant. The engine image
-carries its own orchestrator list, and no deployment installs extra certificates (D42).
+carries the orchestrator list it probes at startup, and no deployment installs extra certificates (D42).
 """
 
 import json
@@ -49,20 +49,22 @@ def test_railway_engine_image_carries_its_orchestrator_list() -> None:
     )
 
 
-def test_orchestrator_lists_are_orch_webhook_json() -> None:
-    for path in (
-        DEPLOY / "railway" / "engine" / "orchestrators.json",
-        DEPLOY / "dev-stack" / "config" / "orchestrators.json",
-    ):
-        payload = json.loads(path.read_text())
-        assert isinstance(payload, list) and payload, (
-            f"{path.relative_to(ROOT)} must be a non-empty JSON list."
+def test_dev_stack_mounts_the_orchestrator_list() -> None:
+    compose = (DEPLOY / "dev-stack" / "compose.yaml").read_text()
+    assert "../railway/engine/orchestrators.json:/etc/livepeer-builder/orchestrators.json:ro" in compose, (
+        "deploy/dev-stack/compose.yaml must mount the Railway orchestrator list into the engine."
+    )
+
+
+def test_orchestrator_list_is_orch_webhook_json() -> None:
+    path = DEPLOY / "railway" / "engine" / "orchestrators.json"
+    payload = json.loads(path.read_text())
+    assert isinstance(payload, list) and payload, f"{path.relative_to(ROOT)} must be a non-empty JSON list."
+    for item in payload:
+        assert isinstance(item, dict) and str(item.get("address", "")).startswith("https://"), (
+            f"{path.relative_to(ROOT)}: every entry needs an https address, as "
+            '{"address": "https://host:port"}. A /discover-orchestrators catalog goes in LPB_DISCOVERY_URL.'
         )
-        for item in payload:
-            assert isinstance(item, dict) and str(item.get("address", "")).startswith("https://"), (
-                f"{path.relative_to(ROOT)}: every entry needs an https address, as "
-                '{"address": "https://host:port"}.'
-            )
 
 
 def test_no_deployment_installs_extra_certificates() -> None:

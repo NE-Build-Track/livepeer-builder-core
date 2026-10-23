@@ -90,23 +90,30 @@ proxy to Batteries or the signer.
 
 ## Orchestrator list
 
-The engine discovers runners itself (D42). The image carries
-[engine/orchestrators.json](engine/orchestrators.json), go-livepeer `-orchWebhookUrl` JSON
-(`[{"address": "https://..."}]`), at `/etc/livepeer-builder/orchestrators.json`, and the Dockerfile
-sets `LPB_ORCHESTRATOR_LIST` to that path. Every discovery interval the engine re-reads the list and
-calls `GET /discovery` on each address.
+The image carries [orchestrators.json](engine/orchestrators.json), a go-livepeer orchWebhook list of
+orchestrator addresses, at `/etc/livepeer-builder/orchestrators.json`. The Dockerfile sets
+`LPB_ORCHESTRATOR_LIST` to that path.
 
-To use another list without a rebuild, set the engine service variable `LPB_ORCHESTRATOR_LIST` to an
-`http://` or `https://` URL that returns the same JSON (for example a discovery-service webhook). Do
-not also set `LPB_DISCOVERY_URL`: the engine refuses to start with both.
+At startup the engine calls `GET /discovery` on each address once (D42):
 
-Discovery and the paid call verify TLS with the image's system trust store. Nothing installs extra
-certificates. An orchestrator whose certificate that store does not accept, such as a self-signed one,
-is left out of discovery and never called. The engine logs `discovery.orchestrator_excluded` once
-when an orchestrator drops out and `discovery.orchestrator_included` when it comes back. `/readyz`
-reports `discovery_error` only when every orchestrator fails.
+- Orchestrators whose certificate the image's system trust store rejects are left out and logged
+  (`discovery.orchestrator_excluded`).
+- It probes again only if every orchestrator failed.
+- Later refreshes reuse that snapshot. Restart the engine to pick up new runners or prices.
+
+**Production:** use a live `/discover-orchestrators` URL instead.
+
+- Set the engine service variables `LPB_ORCHESTRATOR_LIST=` (empty, which clears the image default)
+  and `LPB_DISCOVERY_URL=<url>`. The engine re-reads the URL every interval.
+- With both set, the engine refuses to start.
+- A Go service that serves this URL is a follow-up outside this repository.
+
+The probe, the discovery URL and the paid call all verify TLS. Nothing installs extra certificates.
+`/readyz` reports `discovery_error` when the list or URL cannot be read, when every probe fails, or
+when no orchestrator entry matches the contract. A single bad entry is skipped and logged
+(`discovery.orchestrator_invalid`).
 
 The signer is not on the discovery path. It keeps its own `orchestrators.txt`, which only its
 `/discover-orchestrators` endpoint reads, and it pays whatever runner the engine selects, within its
-price ceilings and the authorization webhook. Edit `engine/orchestrators.json` to change which
-orchestrators the engine uses.
+price ceilings and the authorization webhook. Edit
+`deploy/railway/engine/orchestrators.json` to change which runners the engine uses.

@@ -1,4 +1,5 @@
-"""Python gateway SDK adapters: discovery (signer or engine-owned list) and the paid runner call.
+"""Python gateway SDK adapters: discovery (a `/discover-orchestrators` URL, the signer, or a startup probe
+of an orchestrator list) and the paid runner call.
 
 The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
 comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81, pinned in
@@ -13,8 +14,7 @@ import asyncio
 import json
 import logging
 import ssl
-from collections.abc import AsyncIterator, Iterable
-from decimal import Decimal, InvalidOperation
+from collections.abc import AsyncIterator, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,6 @@ from livepeer_gateway.errors import (
     SignerRefreshRequired,
     SkipPaymentCycle,
 )
-from livepeer_gateway.http import get_json
 from livepeer_gateway.live_runner import (
     LiveRunnerCallStream,
     LiveRunnerInstance,
@@ -35,9 +34,13 @@ from livepeer_gateway.live_runner import (
     call_runner,
 )
 from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
+from pydantic import ValidationError
 
 from livepeer_builder.contracts import (
     AttemptOutcome,
+    DiscoveredOrchestrator,
+    DiscoveredPriceInfo,
+    DiscoveredRunner,
     JobRequest,
     NetworkRate,
     Runner,
@@ -49,7 +52,7 @@ from livepeer_builder.errors import RunnerCallError
 _LOG = logging.getLogger(__name__)
 _BODY_LIMIT = 4096
 # Orchestrators probed at once. Each probe is bounded by the SDK's 5 s timeout, so a 28-entry list
-# finishes within two rounds, inside the default 15 s discovery interval.
+# finishes within two rounds.
 _PROBE_CONCURRENCY = 16
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
@@ -83,24 +86,32 @@ class SignerDiscoverySource:
 
 
 class OrchestratorListDiscoverySource:
-    """Discovers runners from an engine-owned orchestrator list (D42).
+    """Probes an engine-owned orchestrator list once, on the first fetch (D42). For development and demos.
 
-    The list is go-livepeer ``-orchWebhookUrl`` JSON (``[{"address": "https://...", "score": n}]``),
-    read from a file path or an http(s) URL. Each fetch re-reads it and calls ``GET /discovery`` on
-    every address, with TLS verified against the process trust store. An orchestrator that fails,
-    including one whose certificate the process does not trust, is left out of that snapshot and is
-    never called. The fetch raises when the list cannot be read or names no orchestrator, or when every
-    orchestrator fails, so ``DiscoveryService`` keeps the last good snapshot. No credential is sent to
-    the list or to the orchestrators.
+    ``LPB_ORCHESTRATOR_LIST`` is addresses inline (comma-separated, or one ``http(s)://`` URL) or a file
+    of go-livepeer ``-orchWebhookUrl`` JSON (``[{"address": "https://...", "score": n}]``). The first
+    fetch calls ``GET /discovery`` on every address with ``discover_runners``, TLS verified against the
+    process trust store. A later fetch returns that snapshot. An orchestrator that fails, including one
+    whose certificate the process does not trust, is left out and never called. The fetch raises when
+    the list cannot be read or names no orchestrator, or when every orchestrator fails; that failure is
+    not remembered, so the next discovery interval tries again. Capacity from the probe is stale by the
+    next job, so ``capacity_available`` is unknown; price stays, because the call needs its unit. A live
+    catalog belongs in ``LPB_DISCOVERY_URL``. No credential is sent to orchestrators.
     """
 
     def __init__(self, source: str) -> None:
         self._source = source.strip()
-        self._excluded: dict[str, str] = {}  # discovery URL -> reason; logged only when it changes
+        self._probed: tuple[Runner, ...] | None = None
 
     async def fetch(self) -> tuple[Runner, ...]:
-        addresses = _orchestrator_addresses(await self._load())
-        urls = list(dict.fromkeys(orchestrator_discovery_urls(addresses)))
+        if self._probed is not None:
+            return self._probed
+        runners = await self._probe()
+        self._probed = runners
+        return runners
+
+    async def _probe(self) -> tuple[Runner, ...]:
+        urls = list(dict.fromkeys(orchestrator_discovery_urls(await self._addresses())))
         if not urls:
             raise LivepeerGatewayError(f"orchestrator list {self._source} names no orchestrators")
         limit = asyncio.Semaphore(_PROBE_CONCURRENCY)
@@ -111,8 +122,6 @@ class OrchestratorListDiscoverySource:
                 return found
 
         results = await asyncio.gather(*(probe(url) for url in urls), return_exceptions=True)
-        listed = set(urls)
-        self._excluded = {url: reason for url, reason in self._excluded.items() if url in listed}
         entries: list[dict[str, Any]] = []
         first_error: Exception | None = None
         answered = False
@@ -120,59 +129,50 @@ class OrchestratorListDiscoverySource:
             if isinstance(result, Exception):
                 if first_error is None:
                     first_error = result
-                self._exclude(url, result)
+                _log_excluded(url, result)
             elif isinstance(result, BaseException):
                 raise result
             else:
                 answered = True
-                self._include(url)
                 entries.extend(result)
         if not answered and first_error is not None:
             raise first_error
-        return tuple(_unique_by_url(runners_from_entries(entries)))
+        runners = _unique_by_url(runners_from_entries(entries))
+        return tuple(runner.model_copy(update={"capacity_available": None}) for runner in runners)
 
-    async def _load(self) -> object:
-        if self._source.startswith(("http://", "https://")):
-            return await get_json(self._source)
+    async def _addresses(self) -> str | list[str]:
+        if self._source.startswith(("http://", "https://")) or "," in self._source:
+            return self._source  # orchestrator_discovery_urls splits a comma-delimited string
         try:
             text = await asyncio.to_thread(Path(self._source).read_text, encoding="utf-8")
-            return json.loads(text)
+            payload = json.loads(text)
         except (OSError, ValueError) as error:
             raise LivepeerGatewayError(f"orchestrator list {self._source}: {error}") from error
+        return _orchestrator_addresses(payload)
 
-    def _exclude(self, url: str, error: Exception) -> None:
-        reason = "untrusted_certificate" if _untrusted_certificate(error) else "failed"
-        if self._excluded.get(url) == reason:
-            return
-        self._excluded[url] = reason
-        _LOG.warning(
-            "orchestrator excluded from discovery",
-            extra={
-                "event": "discovery.orchestrator_excluded",
-                "orchestrator": url,
-                "reason": reason,
-                "error": str(error),
-            },
-        )
 
-    def _include(self, url: str) -> None:
-        if self._excluded.pop(url, None) is not None:
-            _LOG.info(
-                "orchestrator back in discovery",
-                extra={"event": "discovery.orchestrator_included", "orchestrator": url},
-            )
+def _log_excluded(url: str, error: Exception) -> None:
+    reason = "untrusted_certificate" if _untrusted_certificate(error) else "failed"
+    _LOG.warning(
+        "orchestrator excluded from discovery",
+        extra={
+            "event": "discovery.orchestrator_excluded",
+            "orchestrator": url,
+            "reason": reason,
+            "error": str(error),
+        },
+    )
 
 
 def _orchestrator_addresses(payload: object) -> list[str]:
     """go-livepeer ``deserializeWebhookJSON``: a JSON list; entries without an ``address`` are skipped."""
     if not isinstance(payload, list):
         raise LivepeerGatewayError(f"orchestrator list must be a JSON list, got {type(payload).__name__}")
-    addresses: list[str] = []
-    for item in payload:
-        address = item.get("address") if isinstance(item, dict) else None
-        if isinstance(address, str) and address.strip():
-            addresses.append(address.strip())
-    return addresses
+    return [
+        item["address"]
+        for item in payload
+        if isinstance(item, dict) and isinstance(item.get("address"), str) and item["address"].strip()
+    ]
 
 
 def _untrusted_certificate(error: BaseException) -> bool:
@@ -396,70 +396,83 @@ def network_kind(error: BaseException) -> AttemptOutcome:
     return "http"
 
 
-def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:
+def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
+    """Map a `/discover-orchestrators` list onto `Runner`, one orchestrator at a time.
+
+    Entries without an address are skipped. An orchestrator that does not match the contract is
+    skipped and logged, and the rest are kept. Raises only when entries name orchestrators and none of
+    them parses, so the caller keeps its last good snapshot.
+    """
     runners: list[Runner] = []
+    named = parsed = 0
+    first_error: ValidationError | None = None
     for entry in entries:
-        orchestrator_url = _text(entry.get("address"))
-        for raw in entry.get("runners") or ():
-            runner = _runner_from_raw(raw, orchestrator_url)
+        if not isinstance(entry, dict):
+            continue
+        address = entry.get("address")
+        if not isinstance(address, str) or not address.strip():
+            continue
+        named += 1
+        try:
+            discovered = DiscoveredOrchestrator.model_validate(entry)
+        except ValidationError as error:
+            first_error = first_error or error
+            _LOG.warning(
+                "orchestrator entry does not match the discovery contract",
+                extra={
+                    "event": "discovery.orchestrator_invalid",
+                    "orchestrator": address.strip(),
+                    "error": str(error),
+                },
+            )
+            continue
+        parsed += 1
+        for raw in discovered.runners:
+            runner = _runner_from_discovered(raw, address.strip())
             if runner is not None:
                 runners.append(runner)
+    if named and not parsed:
+        raise LivepeerGatewayError(f"no orchestrator entry matches the discovery contract: {first_error}")
     return runners
 
 
-def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None:
-    if not isinstance(raw, dict):
-        return None
-    url, app = _text(raw.get("url")), _text(raw.get("app"))
+def _runner_from_discovered(raw: DiscoveredRunner, orchestrator_url: str) -> Runner | None:
+    url, app = _text(raw.url), _text(raw.app)
     if not url or not app:
         return None
-    capacity = raw.get("capacity") if isinstance(raw.get("capacity"), int) else None
-    sessions = raw.get("session_ids")
-    available = capacity - len(sessions) if capacity is not None and isinstance(sessions, list) else None
-    reported = raw.get("capacity_available")
-    if isinstance(reported, int) and not isinstance(reported, bool):
-        available = reported  # the node reports it directly; session_ids is the older form
+    available = raw.capacity_available
+    if available is None and raw.capacity is not None and raw.session_ids is not None:
+        available = raw.capacity - len(raw.session_ids)  # session_ids is the older form
     return Runner(
         url=url,
         app=app,
-        runner_id=_text(raw.get("runner_id")),
-        mode=_text(raw.get("mode")),
+        runner_id=_text(raw.runner_id),
+        mode=_text(raw.mode),
         orchestrator_url=orchestrator_url,
-        capacity=capacity,
+        capacity=raw.capacity,
         capacity_available=available,
-        rate=_rate(raw.get("price_info")),
-        version=_text(raw.get("version")),
-        metadata=_text(raw.get("metadata")),
-        gpu=_gpu(raw.get("gpu")),
+        rate=_rate(raw.price_info),
+        version=_text(raw.version),
+        metadata=_text(raw.metadata),
+        gpu=_gpu(raw.gpu),
     )
 
 
-def _gpu(value: object) -> RunnerGPU | None:
-    if not isinstance(value, dict):
+def _gpu(value: RunnerGPU | None) -> RunnerGPU | None:
+    if value is None:
         return None
-    vram = value.get("vram_mb")
     gpu = RunnerGPU(
-        id=_text(value.get("id")),
-        name=_text(value.get("name")),
-        vram_mb=vram if isinstance(vram, int) and vram > 0 else None,
+        id=_text(value.id),
+        name=_text(value.name),
+        vram_mb=value.vram_mb if isinstance(value.vram_mb, int) and value.vram_mb > 0 else None,
     )
     return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
 
 
-def _rate(value: object) -> NetworkRate | None:
-    if not isinstance(value, dict):
+def _rate(value: DiscoveredPriceInfo | None) -> NetworkRate | None:
+    if value is None:
         return None
-    try:
-        amount = Decimal(str(value.get("price")))
-    except InvalidOperation:
-        return None
-    if not amount.is_finite() or amount < 0:
-        return None
-    return NetworkRate(
-        amount=amount,
-        currency=str(value.get("currency") or "usd").lower(),
-        unit=str(value.get("unit") or "hour").lower(),
-    )
+    return NetworkRate(amount=value.price, currency=value.currency, unit=value.unit)
 
 
 def _price_info(rate: NetworkRate | None) -> LiveRunnerPriceInfo | None:

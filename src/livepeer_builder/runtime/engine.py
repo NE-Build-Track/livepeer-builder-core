@@ -158,7 +158,7 @@ class BuilderEngine:
             closers.append(source)
 
         if discovery_source is None and settings.orchestrator_list:
-            # The engine owns the list; the signer only pays (D42).
+            # A list of orchestrators is probed once, on the first discovery load (D42).
             discovery_source = OrchestratorListDiscoverySource(settings.orchestrator_list)
         elif discovery_source is None:
             discovery_source = (
@@ -170,12 +170,7 @@ class BuilderEngine:
                 if settings.signer_url or settings.discovery_url
                 else StaticDiscoverySource()
             )
-        discovery = DiscoveryService(
-            discovery_source,
-            policy,
-            clock,
-            settings.discovery_interval_s,
-        )
+        discovery = DiscoveryService(discovery_source, policy, clock, settings.discovery_interval_s)
         payments = PaymentsService(
             mode=settings.allocation_mode,
             store=store,

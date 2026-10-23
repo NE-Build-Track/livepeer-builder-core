@@ -10,7 +10,7 @@ AuthWebhookFile = "/run/secrets/webhook-url"
 AuthWebhookHeadersFile = "/run/secrets/webhook-headers"
 # Only the signer's own /discover-orchestrators reads this list; the engine does not call it (D42).
 # It does not limit who is paid: the signer pays TicketParams.Recipient within the price ceilings and
-# the authorization webhook. The engine's list is config/orchestrators.json.
+# the authorization webhook. The engine reads deploy/railway/engine/orchestrators.json.
 Orchestrators = [
   "https://orch-us-central.xodeapp.xyz:18935",
   "https://us-central-metrics.speedybird.xyz:28935",

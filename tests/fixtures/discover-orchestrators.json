@@ -1,0 +1,99 @@
+[
+  {
+    "address": "https://ai1.eliteencoder.net:8936",
+    "score": 1,
+    "runners": [
+      {
+        "url": "https://ai1.eliteencoder.net:8936/apps/runner_hd2stcty/app",
+        "app": "comfystream/fal-flux-schnell",
+        "version": "livepeer.fal.runner-route.v1",
+        "metadata": "{\"deadline_seconds\":180,\"endpoint_id\":\"fal-ai/flux/schnell\",\"provider\":\"fal\",\"schema_url\":\"./schema\",\"transport\":\"queue\"}",
+        "gpu": {
+          "id": "GPU-745244ef-3615-57bd-458f-299fe2289f5a",
+          "name": "NVIDIA GeForce RTX 3090 Ti",
+          "vram_mb": 24564
+        },
+        "mode": "single-shot",
+        "capacity": 4,
+        "capacity_used": 0,
+        "capacity_available": 4,
+        "price_info": {"price": 1258792844887, "currency": "wei", "unit": "fixed"}
+      },
+      {
+        "url": "https://ai1.eliteencoder.net:8936/apps/runner_bprhadtn/session",
+        "app": "comfystream/sd-turbo",
+        "metadata": "{\"pipeline\":\"sd-turbo\",\"streaming\":true,\"compute\":\"cold\"}",
+        "gpu": {
+          "id": "GPU-745244ef-3615-57bd-458f-299fe2289f5a",
+          "name": "NVIDIA GeForce RTX 3090 Ti",
+          "vram_mb": 24564
+        },
+        "mode": "persistent",
+        "capacity": 1,
+        "capacity_used": 0,
+        "capacity_available": 1,
+        "price_info": {"price": 1475, "currency": "wei", "unit": "720p-pixel-seconds"}
+      },
+      {
+        "url": "https://ai1.eliteencoder.net:8936/apps/runner_ks3plb6k/session",
+        "app": "transcode/ffmpeg",
+        "gpu": {
+          "id": "GPU-e2a79bd9-f38b-af53-eb4b-9a7420ed3f1d",
+          "name": "NVIDIA RTX 4000 Ada Generation",
+          "vram_mb": 20475
+        },
+        "mode": "persistent",
+        "capacity": 10,
+        "capacity_used": 0,
+        "capacity_available": 10,
+        "price_info": {"price": 116554893045, "currency": "wei", "unit": "seconds"}
+      }
+    ],
+    "last_seen": "2026-10-22T20:54:05.77649705Z"
+  },
+  {
+    "address": "https://lpt.sundara.tv:8935",
+    "score": 1,
+    "runners": [
+      {
+        "url": "https://lpt.sundara.tv:8935/apps/transcoding-with-captions/session",
+        "app": "transcoding-with-captions/whisper",
+        "version": "0.1.0",
+        "mode": "persistent",
+        "capacity": 1,
+        "capacity_used": 0,
+        "capacity_available": 1,
+        "price_info": {"price": 58277446522, "currency": "wei", "unit": "seconds"}
+      }
+    ],
+    "last_seen": "2026-10-22T20:54:06.344871338Z"
+  },
+  {
+    "address": "https://hky.eliteencoder.net:8936",
+    "score": 1,
+    "runners": [
+      {
+        "url": "https://hky.eliteencoder.net:8936/apps/runner_b3fz2a4o/app",
+        "app": "blueclaw/chat/qwen3.8-27b",
+        "metadata": "{\"blueclaw\":1,\"capability\":\"openai:chat-completions\",\"unit\":\"tokens\",\"model_id\":\"Qwen3.8-27B\",\"name\":\"Qwen 3.8 27B\",\"category\":\"chat\",\"max_context\":131072}",
+        "mode": "single-shot",
+        "capacity": 8,
+        "capacity_used": 0,
+        "capacity_available": 8,
+        "price_info": {"price": 4662195721, "currency": "wei", "unit": "seconds"}
+      },
+      {
+        "url": "https://hky.eliteencoder.net:8936/apps/runner_aak5d5nv/app",
+        "app": "comfystream/ffmpeg-scale-video",
+        "version": "comfystream.ffmpeg.v1",
+        "metadata": "{\"kind\":\"ffmpeg-batch\",\"required\":[\"video_url\"],\"schema_url\":\"./schema\",\"streaming\":false,\"tool\":\"scale-video\"}",
+        "mode": "single-shot",
+        "capacity": 2,
+        "capacity_used": 0,
+        "capacity_available": 2,
+        "price_info": {"price": 419597614, "currency": "wei", "unit": "fixed"}
+      }
+    ],
+    "last_seen": "2026-10-22T20:54:06.473585671Z"
+  }
+]

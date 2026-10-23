@@ -11,16 +11,39 @@ drift. Times are UTC. Money is `Decimal`. Engine IDs are UUIDs.
 ## Discovery
 
 `DiscoveryService` keeps a snapshot of the runners its `DiscoverySource` advertises. It is refreshed
-every `discovery_interval_s` and counts as stale after three missed intervals. The default source
-is the engine's own orchestrator list when `LPB_ORCHESTRATOR_LIST` is set: the engine calls
-`GET /discovery` on every listed orchestrator and merges the ones that answer, and the signer only
-pays (D42). Otherwise it is `LPB_DISCOVERY_URL` or the signer. Discovery and paid calls verify TLS
-with the process trust store. An orchestrator whose certificate that store does not accept is left
-out of the snapshot and is never called; a refresh fails, keeping the last good snapshot, only when
-the list cannot be read or every orchestrator fails.
+every `discovery_interval_s` and counts as stale after three missed intervals. The signer only pays
+(D42). The engine has three default sources:
+
+- **`LPB_DISCOVERY_URL`** (production) is a `GET /discover-orchestrators` document, the JSON list
+  `livepeer/node` returns, parsed as `DiscoveredOrchestrator`. The engine re-reads it every interval.
+- **`LPB_ORCHESTRATOR_LIST`** (development and demos) lists orchestrator addresses, inline
+  (comma-separated) or in a go-livepeer orchWebhook JSON file. The engine calls `GET /discovery` on each
+  address **once, on the first discovery load**, whether the list is inline addresses or a file. A
+  later refresh reuses that snapshot. A load where every orchestrator fails is retried on the next
+  interval.
+  - An orchestrator that fails, including one whose certificate the trust store rejects, is left out
+    and logged.
+  - Restart the engine to pick up new runners or prices. Readiness does not depend on discovery
+    freshness.
+  - Runners from a probe have unknown `capacity_available`. Capacity seen at startup is stale by the
+    next job, and an unknown runner counts as ready.
+  - Price stays as probed.
+- **The signer**, when neither of those is set.
+
+Every source parses runners the same way, after the SDK's `discover_runners` filter:
+
+- An orchestrator entry that does not match the contract is skipped and logged
+  (`discovery.orchestrator_invalid`).
+- A runner that does not parse is skipped, and its orchestrator is kept.
+- Unknown fields are ignored.
+- A refresh fails, keeping the last good snapshot, only when the source cannot be read, when every
+  probe fails, or when no named orchestrator parses.
+
+Every request verifies TLS with the process trust store.
 
 | Model | Meaning |
 | --- | --- |
+| `DiscoveredOrchestrator` | One element of a `/discover-orchestrators` document: `address`, `score`, `runners`, `last_seen`. The wire contract from `livepeer/node` (`signer/service.go`); unknown fields are ignored. Sample: `tests/fixtures/discover-orchestrators.json` |
 | `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
 | `NetworkRate` | Wholesale network rate as advertised (`amount`, `currency`, `unit`). Not a retail price |
 | `Offering` | One runner app: its modes, the cheapest and dearest comparable rate, runner and ready counts, `observed_at` |

@@ -82,6 +82,7 @@ jobs = Table(
     Column("usage", JSON, nullable=True),
     Column("created_at", UTCDateTime, nullable=False),
     Column("completed_at", UTCDateTime, nullable=True),
+    Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # +1 per evidence change
 )
 Index(
     "lpb_jobs_operation_ref",
@@ -190,6 +191,7 @@ cost_projections = Table(
     Column("attempts", JSON, nullable=False, server_default=text("'[]'")),
     Column("first_observed_at", UTCDateTime, nullable=True),
     Column("updated_at", UTCDateTime, nullable=False),
+    Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # the job's, when computed
 )
 
 VERSION_TABLE = "lpb_alembic_version"

@@ -1,13 +1,14 @@
 """The EngineStore contract, identical on SQLite and PostgreSQL (ISS-06)."""
 
 from collections.abc import AsyncIterator
-from datetime import UTC
+from datetime import UTC, timedelta
 from decimal import Decimal
 
 import pytest
 
 from livepeer_builder.contracts import (
     AccessKey,
+    Attempt,
     AttemptCost,
     Failure,
     Fees,
@@ -16,6 +17,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SignedSession,
     SyncCheckpoint,
     UsageRow,
 )
@@ -154,8 +156,8 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
         job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(attempt_cost,),
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_projection(projection)
-    await sql.save_projection(projection.model_copy(update={"status": "corrected"}))
+    await sql.save_projection(projection, evidence_version=0)
+    await sql.save_projection(projection.model_copy(update={"status": "corrected"}), evidence_version=0)
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
     assert loaded.attempts == (attempt_cost,)
@@ -181,7 +183,8 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
             attempts=(),
             first_observed_at=clock.now(),
             updated_at=clock.now(),
-        )
+        ),
+        evidence_version=0,
     )
     await sql.save_projection(
         JobCost(
@@ -191,13 +194,192 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
             attempts=(AttemptCost(attempt_number=1, cost_class="delivered", fees=delivered),),
             first_observed_at=clock.now(),
             updated_at=clock.now(),
-        )
+        ),
+        evidence_version=0,
     )
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
     assert first.id in selected and unprojected.id in selected and latest.id not in selected
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 1)] == [latest.id]
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 5)] == [
-        latest.id,
-        first.id,
+    async with sql.cost_snapshot() as reads:
+        newest = await reads.recent_with_projections("default", None, 1)
+        every = await reads.recent_with_projections(
+            "default", None, 5
+        )  # each recent job, projection if stored
+    assert [(job.id, cost is not None) for job, cost in newest] == [(latest.id, True)]
+    assert [(job.id, cost is not None) for job, cost in every] == [
+        (latest.id, True),
+        (unprojected.id, False),
+        (first.id, True),
     ]
+
+
+async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_jobs(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # #33: a projection of a running job goes stale the moment it pays
+    running = make_job(clock, state="running")
+    await sql.create_job(running, None)
+    covered = make_job(clock)
+    await sql.create_job(covered, None)
+    clock.advance(1)
+    stale = make_job(clock)  # projected, then ended later: its projection predates its end
+    await sql.create_job(stale, None)
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    for job_id, at in ((covered.id, clock.now()), (stale.id, clock.now() - timedelta(seconds=5))):
+        await sql.save_projection(
+            JobCost(
+                job_id=job_id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=at
+            ),
+            evidence_version=0,
+        )
+    assert running.id not in {job.id for job in await sql.jobs_for_projection([running.id])}
+    window = (clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1))
+    async with sql.cost_snapshot() as reads:
+        stored, uncovered = await reads.projections_and_unprojected("default", None, *window)
+        _, none_for_bob = await reads.projections_and_unprojected("default", "bob", *window)
+    assert {job.id for job in uncovered} == {running.id, stale.id}
+    assert {cost.job_id for cost in stored} == {covered.id, stale.id} and none_for_bob == []
+
+
+async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:
+    """A stream writes its sessions at open and at end; a match made in between survives (D39)."""
+    usage = UsageRow(
+        id="u1", event_id=None, status="applied", manifest_id="m1", allocation_id="a1", payment_session_id="s1",
+        request_id=None, pipeline=None, computed_fee_eth=Decimal("1"), computed_fee_usd=None, currency=None,
+        created_at=clock.now(),
+    )  # fmt: skip
+    await sql.apply_usage([usage], SyncCheckpoint(resume_cursor="c1"))
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    await sql.start_attempt(make_attempt(job.id, clock))
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1",), allocation_id="a1"))
+    assert await sql.match_sessions(()) == {job.id}  # cost sync matched it while the stream ran
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1", "m2"), allocation_id="a1"))
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert [(s.manifest_id, s.payment_session_id, s.match) for s in loaded.attempts[0].sessions] == [
+        ("m1", "s1", "matched"),
+        ("m2", None, "unmatched"),
+    ]
+
+
+async def test_a_cost_snapshot_does_not_see_a_write_committed_while_it_is_open(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # a cost read must not mix states while cost sync writes (#43 review)
+    def usage(row_id: str) -> UsageRow:
+        return UsageRow(
+            id=row_id, event_id=None, status="applied", manifest_id=None, allocation_id="a1",
+            payment_session_id=None, request_id=None, pipeline=None, computed_fee_eth=Decimal("1"),
+            computed_fee_usd=None, currency=None, created_at=clock.now(),
+        )  # fmt: skip
+
+    await sql.apply_usage([usage("u1")], SyncCheckpoint(resume_cursor="c1"))
+    async with sql.cost_snapshot() as reads:
+        assert [row.id for row in await reads.unattributed_usage("a1")] == ["u1"]
+        await sql.apply_usage([usage("u2")], SyncCheckpoint(resume_cursor="c2"))  # a sync commits
+        assert [row.id for row in await reads.unattributed_usage("a1")] == ["u1"]  # still the same state
+    assert sorted(row.id for row in await sql.unattributed_usage("a1")) == ["u1", "u2"]
+
+
+async def test_new_evidence_puts_a_projection_out_of_date_until_one_from_that_evidence_is_stored(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # #43 review: sync commits rows and matches before it stores the projection, if it gets there
+    def usage(row_id: str) -> UsageRow:
+        return UsageRow(
+            id=row_id, event_id=None, status="applied", manifest_id="m1", allocation_id="a1",
+            payment_session_id="s1", request_id=None, pipeline=None, computed_fee_eth=Decimal("1"),
+            computed_fee_usd=None, currency=None, created_at=clock.now(),
+        )  # fmt: skip
+
+    async def served() -> JobCost | None:
+        async with sql.cost_snapshot() as reads:
+            found = await reads.job_with_projection(job.id)
+        assert found is not None
+        return found[1]
+
+    async def needs_projection() -> bool:
+        return job.id in {selected.id for selected in await sql.jobs_for_projection([])}
+
+    job = make_job(clock)  # ended
+    await sql.create_job(job, None)
+    await sql.start_attempt(make_attempt(job.id, clock))
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1",), allocation_id="a1"))
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    stored = JobCost(
+        job_id=job.id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=clock.now()
+    )
+
+    async def version() -> int:
+        found = await sql.job_for_projection(job.id)
+        assert found is not None
+        return found[1]
+
+    await sql.save_projection(stored, evidence_version=await version())
+    await sql.apply_usage([usage("u1")], SyncCheckpoint(resume_cursor="c1"))  # its session is not matched yet
+    assert await served() is not None and not await needs_projection()
+    before = await version()
+    assert await sql.match_sessions([usage("u1")]) == {job.id}  # the match changed
+    assert await served() is None and await needs_projection()
+    await sql.save_projection(stored, evidence_version=before)  # a sync that classified before the match
+    assert await served() is None and await needs_projection()  # cannot hide it
+    current = await version()
+    await sql.save_projection(stored, evidence_version=current)
+    assert await served() is not None and not await needs_projection()
+    await sql.save_projection(stored.model_copy(update={"status": "pending"}), evidence_version=before)
+    served_now = await served()
+    assert served_now is not None and served_now.status == "none"  # an older save never replaces a newer one
+    await sql.apply_usage([usage("u2")], SyncCheckpoint(resume_cursor="c2"))  # a new row, matched session
+    assert await served() is None and await needs_projection()
+    assert await version() == current + 1
+    assert await sql.get_projection(job.id) is not None  # sync still reads it (first observed, corrected)
+
+
+async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="a1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await sql.start_attempt(attempt)
+    signed = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),), "payment_sent": True})
+    await sql.record_payment_evidence(signed)  # while the call runs
+    done = signed.model_copy(update={"outcome": "succeeded", "status_code": 200, "ended_at": clock.now()})
+    await sql.finish_attempt(done)
+    late = done.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m1"), SignedSession(manifest_id="m2"))}
+    )
+    await sql.record_payment_evidence(late.model_copy(update={"outcome": "in_flight", "ended_at": None}))
+    stored = await sql.get_job(job.id)
+    assert stored is not None
+    [kept] = stored.attempts
+    assert (kept.outcome, kept.status_code, kept.payment_sent) == ("succeeded", 200, True)  # not reopened
+    assert [session.manifest_id for session in kept.sessions] == ["m1", "m2"]  # appended once each
+
+
+async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of_date(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # a projection stored before the report would serve none for a paid job
+    job = make_job(clock)  # ended
+    await sql.create_job(job, None)
+    attempt = make_attempt(job.id, clock)
+    await sql.start_attempt(attempt)
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    await sql.save_projection(
+        JobCost(
+            job_id=job.id,
+            status="none",
+            fees=none,
+            attempts=(),
+            first_observed_at=None,
+            updated_at=clock.now(),
+        ),
+        evidence_version=0,
+    )
+    late = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),), "payment_sent": True})
+    await sql.record_payment_evidence(late)
+    async with sql.cost_snapshot() as reads:
+        found = await reads.job_with_projection(job.id)
+    assert found is not None and found[1] is None  # computed live: pending, not the stored none
+    assert job.id in {selected.id for selected in await sql.jobs_for_projection([])}

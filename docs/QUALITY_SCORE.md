@@ -9,6 +9,7 @@ Update this file in the same change that moves a grade.
 | Access | B | `test_access.py` (policy, keys, chain, bootstrap) | JWT and trusted backend are C (M4) |
 | Discovery | B | `test_adapters.py`, unit jobs tests | Capability resolution (T3) |
 | Jobs (immediate) | A | `test_jobs.py`: failover, uncertain, write ordering, recovery, admission, idempotency | Idempotency finalized by John (T2) |
+| Jobs (streaming) | B | `test_streaming.py`, `test_stream_lifecycle.py`, `test_stream_deadlines.py`, `test_stream_http.py`; the `FakeEngine` contract (`test_fake_engine_contract.py`) | SDK first-read bound (T14) |
 | Jobs (async), sessions | C | Contracts and 501 tests | M4 |
 | Payments | A | `test_payments.py`: explicit provisioning, idempotency, custody, rotation | Mode B (M4) |
 | Costs | A | `test_costs.py`: classification, corrected, reconciliation, cursor | — |
@@ -45,7 +46,8 @@ How the suite is built:
 - **Properties for money.** Hypothesis checks that fees add up however usage is split, that every
   attributed charge is counted once, that missing usage is `pending` and never zero, and that money
   survives the store exactly.
-- **No sleeps for ordering.** Concurrency tests coordinate with `asyncio.Event`. Background-loop
+- **No sleeps for ordering.** Concurrency tests coordinate with `asyncio.Event`; the stream-cancellation
+  tests use short sleeps only to let a reader task start before they cancel it. Background-loop
   tests use short intervals and assert on outcomes.
 - **Coverage follows async code.** `concurrency = ["greenlet", "thread"]` is set because SQLAlchemy runs
   queries in greenlets.

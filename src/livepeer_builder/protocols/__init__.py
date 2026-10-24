@@ -3,7 +3,8 @@
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
@@ -27,6 +28,7 @@ from livepeer_builder.contracts import (
     Operation,
     PaymentCredential,
     ProvisionedActor,
+    PurgeReport,
     ResourceRef,
     ResultRef,
     Runner,
@@ -92,10 +94,60 @@ class SelectionPolicy(Protocol):
     def order(self, candidates: Sequence[Runner], request: JobRequest) -> Sequence[Runner]: ...
 
 
-class RunnerTransport(Protocol):
-    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``."""
+OnSigned = Callable[[str], Awaitable[None]]
+"""Called with each signed session's ``manifest_id`` (``""`` when the challenge has none)."""
 
-    async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply: ...
+
+class RunnerTransport(Protocol):
+    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``.
+
+    A paying transport awaits ``on_signed(manifest_id)`` for each session the signer signs, before the
+    paid request goes out (D42): the engine stores that evidence there, so a cancel or a crash during
+    the paid request keeps the charge attributed to its job.
+    """
+
+    async def call(
+        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> RunnerReply: ...
+
+
+class RunnerStream(Protocol):
+    """A runner's response as it arrives (docs/contracts/engine.md#streaming).
+
+    ``payment_sent`` and ``manifest_ids`` are known once ``open`` returned, because the signer pays the
+    402 challenge before any byte flows. Iteration raises RunnerCallError when the runner fails
+    mid-stream. ``aclose`` releases the connection and stops any ongoing funding.
+    """
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def content_type(self) -> str: ...
+
+    @property
+    def manifest_ids(self) -> tuple[str, ...]: ...
+
+    @property
+    def payment_sent(self) -> bool: ...
+
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class StreamingRunnerTransport(RunnerTransport, Protocol):
+    """A transport that can also hand the response back unbuffered. ``jobs.streaming`` exists only with one.
+
+    ``open`` returns once the runner answered with its status and headers. It must give up after
+    ``request.first_byte_timeout_s`` and raise ``RunnerCallError("timeout", ...)`` with the payment
+    evidence so far; the engine stops an ``open`` that runs well past that and treats it as paid (D35).
+    """
+
+    async def open(
+        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> RunnerStream: ...
 
 
 # -- payments (docs/contracts/payments.md) ----------------------------------------------------------
@@ -189,7 +241,17 @@ class JobRepo(Protocol):
 
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
-    async def finish_attempt(self, attempt: Attempt) -> None: ...  # updated after the call
+    async def record_payment_evidence(self, attempt: Attempt) -> None:
+        """Mark the attempt paid and add its signed sessions not stored yet, while the call is still
+        going (D42). Leaves its outcome, status and timing alone, so a late report never reopens it."""
+        ...
+
+    async def finish_attempt(self, attempt: Attempt) -> None:
+        """Update the attempt after the call. May run more than once (a stream writes at open and end).
+
+        Signed sessions are append-only: add the manifests not stored yet and leave stored rows as they
+        are, because cost sync owns their match columns (D39).
+        """
 
     async def finish_job(
         self,
@@ -214,21 +276,45 @@ class CostRepo(Protocol):
 
     async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]: ...
 
+    async def job_for_projection(self, job_id: UUID) -> tuple[Job, int] | None:
+        """The job and its evidence version, the version read first (pass it to ``save_projection``)."""
+        ...
+
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
 
     async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]: ...
 
     async def get_projection(self, job_id: UUID) -> JobCost | None: ...
 
-    async def projections_between(
+    def cost_snapshot(self) -> AbstractAsyncContextManager["CostSnapshot"]:
+        """Cost reads that see one consistent state, so a sync committing between two of a read's
+        queries can never make it count a row twice or nowhere."""
+        ...
+
+    async def save_projection(self, cost: JobCost, *, evidence_version: int) -> None:
+        """Store a cost computed from the job at ``evidence_version``; never over one from newer evidence."""
+        ...
+
+
+class CostSnapshot(Protocol):
+    """The reads a cost query makes, all against one consistent state of the store."""
+
+    async def job_with_projection(self, job_id: UUID) -> tuple[Job, JobCost | None] | None: ...
+
+    async def projections_and_unprojected(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[JobCost]: ...
+    ) -> tuple[list[JobCost], list[Job]]:
+        """The stored projections of jobs created in the window, and the jobs no projection covers:
+        running, or ended since their projection was stored."""
+        ...
 
-    async def recent_projections(
+    async def recent_with_projections(
         self, application_id: str, actor_id: str | None, limit: int
-    ) -> list[JobCost]: ...
+    ) -> list[tuple[Job, JobCost | None]]: ...
 
-    async def save_projection(self, cost: JobCost) -> None: ...
+    async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
+
+    async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]: ...
 
 
 class SecretRepo(Protocol):
@@ -239,8 +325,22 @@ class SecretRepo(Protocol):
     async def delete_secret(self, ref: str) -> None: ...
 
 
+class StoreMaintenance(Protocol):
+    """Housekeeping a store may offer: retention purges and its schema revision."""
+
+    async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport: ...
+
+    async def schema_revision(self) -> str | None: ...
+
+
 class EngineStore(ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo, Protocol):
     """Every engine-owned record, behind one interface. SQL implementation: livepeer_builder.store."""
+
+    @property
+    def maintenance(self) -> StoreMaintenance | None:
+        """``None`` when the store has no housekeeping: the engine then purges nothing and reports no
+        schema revision."""
+        ...
 
     async def close(self) -> None: ...
 

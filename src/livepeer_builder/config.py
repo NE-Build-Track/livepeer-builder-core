@@ -1,5 +1,6 @@
 """Config layer: engine settings from ``LPB_*`` environment variables (docs/RELIABILITY.md#configuration)."""
 
+import base64
 import os
 from collections.abc import Mapping
 
@@ -19,6 +20,7 @@ class EngineSettings(Contract):
     auto_migrate: bool = True  # production can set False and run `lpb migrate` explicitly
     retention_jobs_days: int | None = Field(default=None, ge=1)  # None keeps completed jobs forever
     retention_usage_days: int | None = Field(default=None, ge=1)  # None keeps cached usage rows forever
+    retention_interval_s: float = Field(default=6 * 3600, gt=0)  # how often the retention purge runs
 
     # network
     signer_url: str | None = None
@@ -30,6 +32,12 @@ class EngineSettings(Contract):
     max_concurrent_jobs: int | None = Field(default=64, ge=1)
     max_concurrent_jobs_per_app: int | None = Field(default=None, ge=1)
 
+    # streaming (docs/contracts/engine.md#streaming)
+    stream_finalize_timeout_s: float = Field(default=10.0, gt=0)  # the most a stream's closing writes take
+    stream_drain_timeout_s: float = Field(default=30.0, ge=0)  # engine stop waits this long for open streams
+    stream_settle_s: float = Field(default=1.0, ge=0)  # after a disconnect, time for the runner to end
+    stream_open_grace_s: float = Field(default=5.0, gt=0)  # how far past its deadline an open may run
+
     # payments
     allocation_mode: AllocationMode = "per_actor"
     default_currency: Currency = "USD"
@@ -37,6 +45,7 @@ class EngineSettings(Contract):
     batteries_url: str | None = None  # management API and usage feed
     batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
     batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
+    batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
     shared_allocation_id: str | None = None  # per_application: the allocation behind shared_payment_key
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
@@ -56,3 +65,8 @@ class EngineSettings(Contract):
             if raw is not None and raw != "":
                 values[name] = raw
         return cls.model_validate(values)
+
+
+def generate_secret_key() -> str:
+    """A new ``LPB_SECRET_KEY``: 32 random bytes, URL-safe base64 (the Fernet key format)."""
+    return base64.urlsafe_b64encode(os.urandom(32)).decode()

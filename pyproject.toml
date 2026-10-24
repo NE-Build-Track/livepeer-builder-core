@@ -18,14 +18,15 @@ dependencies = [
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "cryptography>=42",
-    # M2 exception (docs/references/upstream-baseline.md): TEMPORARY pin to the head of
-    # livepeer-python-gateway#77 (on_payment_session reports LivePaymentSession.manifest_id).
-    # Re-pin to its merge commit on main once it merges, then to a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4",
+    "aiohttp>=3.9",  # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
+    # Pin to livepeer/livepeer-python-gateway main at 76a1a1c (22 October): Enforce TLS (#76),
+    # streamable runner bodies (#80) and on_payment_session (#81; reports LivePaymentSession.manifest_id).
+    # PyPI 1.0.0 lacks the callback, so this stays a git SHA until a release (tech debt T1).
+    "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@76a1a1c58656ef2ad0c28542ea5f99086b76db69",
 ]
 
 [project.optional-dependencies]
-server = ["fastapi>=0.115", "uvicorn>=0.30"]
+server = ["fastapi>=0.115", "starlette>=0.37.2", "uvicorn>=0.30"]
 postgres = ["asyncpg>=0.29"]
 
 [project.scripts]
@@ -79,7 +80,8 @@ ignore = ["S101"]  # assert is how pytest checks
 [tool.mypy]
 strict = true
 mypy_path = "src"
-packages = ["livepeer_builder"]
+# The package, and the test that proves the engine and FakeEngine satisfy the facade Protocols.
+files = ["src/livepeer_builder", "tests/structure/test_conformance.py"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]

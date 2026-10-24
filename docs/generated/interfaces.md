@@ -34,7 +34,21 @@ classDiagram
     }
     class RunnerTransport {
         <<interface>>
-        +async call(runner, request, credential) RunnerReply
+        +async call(runner, request, credential, on_signed) RunnerReply
+    }
+    class StreamingRunnerTransport {
+        <<interface>>
+        +async call(runner, request, credential, on_signed) RunnerReply
+        +async open(runner, request, credential, on_signed) RunnerStream
+    }
+    class RunnerStream {
+        <<interface>>
+        +content_type str
+        +manifest_ids str[]
+        +payment_sent bool
+        +status_code int
+        +__aiter__() AsyncIterator
+        +async aclose() None
     }
     class CredentialResolver {
         <<interface>>
@@ -65,7 +79,21 @@ classDiagram
     class EngineStore {
         <<interface>>
         +async ...ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo methods() None
+        +maintenance StoreMaintenance?
         +async close() None
+    }
+    class StoreMaintenance {
+        <<interface>>
+        +async purge(now, jobs_days, usage_days) PurgeReport
+        +async schema_revision() str?
+    }
+    class CostSnapshot {
+        <<interface>>
+        +async job_with_projection(job_id) Job[]?
+        +async projections_and_unprojected(application_id, actor_id, start, end) JobCost[][]
+        +async recent_with_projections(application_id, actor_id, limit) Job[][]
+        +async unattributed_usage(allocation_id) UsageRow[]
+        +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
     }
     class Clock {
         <<interface>>
@@ -91,9 +119,12 @@ classDiagram
     class ReservedEventFeed
     class ReservedSessions
     class RoutingSecretStore
+    class SdkRunnerStream
     class SdkRunnerTransport
     class SettingsSecretStore
     class SignerDiscoverySource
+    class SqlCostSnapshot
+    class SqlMaintenance
     class SqlStore
     class StaticDiscoverySource
     class SystemClock
@@ -107,11 +138,15 @@ classDiagram
     DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
+    StreamingRunnerTransport <|.. SdkRunnerTransport
+    RunnerStream <|.. SdkRunnerStream
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
+    StoreMaintenance <|.. SqlMaintenance
+    CostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
     EventFeed <|.. ReservedEventFeed
     SessionManager <|.. ReservedSessions
@@ -131,11 +166,15 @@ classDiagram
 | `DiscoverySource` | `StaticDiscoverySource` | `livepeer_builder.adapters.static` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.sdk` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
+| `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
+| `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |
 | `EventFeed` | `ReservedEventFeed` | `livepeer_builder.services.reserved` |
 | `SessionManager` | `ReservedSessions` | `livepeer_builder.services.reserved` |
@@ -148,6 +187,6 @@ classDiagram
 | --- | --- |
 | `ActorRepo` | `get_actor`, `save_actor`, `list_actors` |
 | `KeyRepo` | `insert_access_key`, `access_key_by_hash`, `revoke_access_key`, `list_access_keys`, `count_active_admin_keys` |
-| `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
-| `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `projections_between`, `recent_projections`, `save_projection` |
+| `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `record_payment_evidence`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
+| `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `job_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `cost_snapshot`, `save_projection` |
 | `SecretRepo` | `put_secret`, `get_secret`, `delete_secret` |

@@ -16,13 +16,36 @@ ALLOWED: dict[str, set[str]] = {
     "contracts": set(),
     "errors": {"contracts"},
     "protocols": {"contracts", "errors"},
+    "api": {"contracts", "errors", "protocols"},
     "config": {"contracts", "errors"},
     "services": {"contracts", "errors", "protocols", "config", "utils"},
     "store": {"contracts", "errors", "protocols", "config", "utils"},
     "adapters": {"contracts", "errors", "protocols", "config", "utils"},
-    "testing": {"contracts", "errors", "protocols", "utils"},
-    "runtime": {"contracts", "errors", "protocols", "config", "utils", "services", "store", "adapters"},
-    "http": {"contracts", "errors", "runtime", "config"},
+    # make_engine builds a real engine, so testing may import what runtime does
+    "testing": {
+        "contracts",
+        "errors",
+        "protocols",
+        "api",
+        "utils",
+        "config",
+        "runtime",
+        "store",
+        "adapters",
+        "services",
+    },
+    "runtime": {
+        "contracts",
+        "errors",
+        "protocols",
+        "api",
+        "config",
+        "utils",
+        "services",
+        "store",
+        "adapters",
+    },
+    "http": {"contracts", "errors", "api", "runtime", "config"},
     "entry": {"*"},
 }
 
@@ -38,8 +61,22 @@ CONFINED: dict[str, tuple[str, ...]] = {
     "aiosqlite": ("store/",),
     "fastapi": ("http/",),
     "starlette": ("http/",),
-    "uvicorn": ("cli.py",),
+    "uvicorn": ("http/server.py",),
 }
+# DI containers are allowed nowhere: the engine is wired by hand in runtime/assembly.py (decision 1 in
+# docs/exec-plans/active/dependency-injection-refactor.md).
+CONTAINERS = (
+    "dishka",
+    "dependency_injector",
+    "wireup",
+    "punq",
+    "lagom",
+    "kink",
+    "svcs",
+    "injector",
+    "that_depends",
+)
+CONFINED.update(dict.fromkeys(CONTAINERS, ()))
 
 REMEDIATION = {
     "services": "Services reach persistence and the network only through protocols in livepeer_builder.protocols.",
@@ -104,6 +141,11 @@ def test_third_party_packages_are_confined(path: Path) -> None:
             continue
         if package == "fastapi" and relative == "cli.py":
             continue
+        if not homes:
+            pytest.fail(
+                f"{relative}:{line} imports {package}, a DI container. The engine is wired by hand: supply "
+                "or decorate parts through EngineSupply and BuilderEngine.create (decision 1)."
+            )
         pytest.fail(
             f"{relative}:{line} imports {package}, which is confined to {homes}. Wrap it behind a protocol "
             f"and implement that protocol in the owning module (ARCHITECTURE.md#third-party-boundaries)."

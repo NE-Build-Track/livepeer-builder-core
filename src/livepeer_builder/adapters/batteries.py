@@ -29,13 +29,18 @@ TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _USAGE_STATUSES = frozenset({"applied", "quarantined", "ignored", "duplicate"})
 
 
+def batteries_http_client(base_url: str, token: str, *, timeout_s: float) -> httpx.AsyncClient:
+    """The HTTP client the Batteries adapters build when none is passed in (they own and close it)."""
+    return httpx.AsyncClient(base_url=base_url.rstrip("/"), headers={TOKEN_HEADER: token}, timeout=timeout_s)
+
+
 class BatteriesClient:
     """AllocationManager over the Batteries management HTTP API."""
 
-    def __init__(self, base_url: str, token: str, client: httpx.AsyncClient | None = None) -> None:
-        self._client = client or httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), headers={TOKEN_HEADER: token}, timeout=30.0
-        )
+    def __init__(
+        self, base_url: str, token: str, client: httpx.AsyncClient | None = None, *, timeout_s: float = 30.0
+    ) -> None:
+        self._client = client or batteries_http_client(base_url, token, timeout_s=timeout_s)
         self._owns_client = client is None
 
     async def aclose(self) -> None:
@@ -134,11 +139,11 @@ class BatteriesUsageSource:
         token: str,
         filters: dict[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
+        *,
+        timeout_s: float = 30.0,
     ) -> None:
         self._filters = dict(filters or {})
-        self._client = client or httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), headers={TOKEN_HEADER: token}, timeout=30.0
-        )
+        self._client = client or batteries_http_client(base_url, token, timeout_s=timeout_s)
         self._owns_client = client is None
 
     async def aclose(self) -> None:

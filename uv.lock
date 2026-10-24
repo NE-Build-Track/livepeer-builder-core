@@ -1136,6 +1136,7 @@ wheels = [
 name = "livepeer-builder"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "aiosqlite" },
     { name = "alembic" },
     { name = "cryptography" },
@@ -1151,6 +1152,7 @@ postgres = [
 ]
 server = [
     { name = "fastapi" },
+    { name = "starlette" },
     { name = "uvicorn" },
 ]
 
@@ -1170,15 +1172,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
     { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "livepeer-gateway", git = "https://github.com/NE-Build-Track/livepeer-python-gateway.git?rev=e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4" },
+    { name = "livepeer-gateway", git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=76a1a1c58656ef2ad0c28542ea5f99086b76db69" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
+    { name = "starlette", marker = "extra == 'server'", specifier = ">=0.37.2" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]
 provides-extras = ["postgres", "server"]
@@ -1200,7 +1204,7 @@ dev = [
 [[package]]
 name = "livepeer-gateway"
 version = "1.0.0"
-source = { git = "https://github.com/NE-Build-Track/livepeer-python-gateway.git?rev=e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4#e6d243b1d8bcbc8c1f0262ddbc3239a9f5b83cf4" }
+source = { git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=76a1a1c58656ef2ad0c28542ea5f99086b76db69#76a1a1c58656ef2ad0c28542ea5f99086b76db69" }
 dependencies = [
     { name = "aiohttp" },
     { name = "av" },

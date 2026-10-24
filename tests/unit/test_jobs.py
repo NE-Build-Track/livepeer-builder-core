@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import ActorContext, Attempt, Job, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import (
     JobFailed,
@@ -132,15 +133,14 @@ async def test_paid_then_unreachable_is_uncertain_never_failed(
 async def test_attempt_is_written_before_the_call(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
     seen_during_call: list[Job] = []
 
     class Observing(ScriptedTransport):
-        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
             seen_during_call.extend(await store.jobs_in_state("running"))
             return ScriptedTransport.ok()
 
-    engine.jobs._transport = Observing()
+    engine = await provisioned(make_engine, admin, "alice", supply=EngineSupply(transport=Observing()))
     await engine.jobs.run(alice, JobRequest(app=APP))
     assert len(seen_during_call) == 1
     assert [a.outcome for a in seen_during_call[0].attempts] == ["in_flight"]
@@ -207,16 +207,17 @@ async def test_no_offering_and_no_capacity(make_engine: EngineFactory, alice: Ac
 async def test_admission_refuses_before_dispatch(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice", max_concurrent_jobs=1)
     release, entered = asyncio.Event(), asyncio.Event()
 
     class Slow(ScriptedTransport):
-        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
             entered.set()  # the first job now holds the only admission slot
             await release.wait()
             return ScriptedTransport.ok()
 
-    engine.jobs._transport = Slow()
+    engine = await provisioned(
+        make_engine, admin, "alice", max_concurrent_jobs=1, supply=EngineSupply(transport=Slow())
+    )
     first = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
     await entered.wait()  # wait for the condition, not a fixed time
     with pytest.raises(NoCapacity):

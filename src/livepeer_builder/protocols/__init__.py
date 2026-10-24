@@ -3,7 +3,7 @@
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -94,10 +94,21 @@ class SelectionPolicy(Protocol):
     def order(self, candidates: Sequence[Runner], request: JobRequest) -> Sequence[Runner]: ...
 
 
-class RunnerTransport(Protocol):
-    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``."""
+OnSigned = Callable[[str], Awaitable[None]]
+"""Called with each signed session's ``manifest_id`` (``""`` when the challenge has none)."""
 
-    async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply: ...
+
+class RunnerTransport(Protocol):
+    """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``.
+
+    A paying transport awaits ``on_signed(manifest_id)`` for each session the signer signs, before the
+    paid request goes out (D42): the engine stores that evidence there, so a cancel or a crash during
+    the paid request keeps the charge attributed to its job.
+    """
+
+    async def call(
+        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> RunnerReply: ...
 
 
 class RunnerStream(Protocol):
@@ -134,7 +145,9 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
     evidence so far; the engine stops an ``open`` that runs well past that and treats it as paid (D35).
     """
 
-    async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerStream: ...
+    async def open(
+        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> RunnerStream: ...
 
 
 # -- payments (docs/contracts/payments.md) ----------------------------------------------------------
@@ -227,6 +240,11 @@ class JobRepo(Protocol):
     ) -> list[Job]: ...
 
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
+
+    async def record_payment_evidence(self, attempt: Attempt) -> None:
+        """Mark the attempt paid and add its signed sessions not stored yet, while the call is still
+        going (D42). Leaves its outcome, status and timing alone, so a late report never reopens it."""
+        ...
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         """Update the attempt after the call. May run more than once (a stream writes at open and end).

@@ -43,6 +43,7 @@ from livepeer_builder.contracts import (
     RunnerReply,
 )
 from livepeer_builder.errors import RunnerCallError
+from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import BODY_LIMIT
 
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
@@ -139,17 +140,21 @@ class _SignedSessions:
     payment and before the paid request is sent to the runner. A reported session means the signer
     charged the allocation and counts as ``payment_sent``, so the engine never fails over (or
     retries) work that was paid for. If signing fails or is cancelled before the callback runs,
-    ``signed`` stays ``False`` (no payment sent).
+    ``signed`` stays ``False`` (no payment sent). Each session is also passed to ``on_signed``, which
+    the SDK awaits before the paid request goes out, so the engine stores the evidence first (D42).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_signed: OnSigned | None = None) -> None:
         self.signed = False
         self.manifest_ids: list[str] = []
+        self._on_signed = on_signed
 
-    def __call__(self, session: LivePaymentSession) -> None:
+    async def __call__(self, session: LivePaymentSession) -> None:
         self.signed = True
         if session.manifest_id:
             self.manifest_ids.append(session.manifest_id)
+        if self._on_signed is not None:
+            await self._on_signed(session.manifest_id or "")
 
 
 class SdkRunnerTransport:
@@ -193,8 +198,10 @@ class SdkRunnerTransport:
         }
         return url, kwargs
 
-    async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply:
-        sessions = _SignedSessions()
+    async def call(
+        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> RunnerReply:
+        sessions = _SignedSessions(on_signed)
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
             result = await self._call(url, **kwargs)
@@ -219,14 +226,16 @@ class SdkRunnerTransport:
             payment_sent=sessions.signed,
         )
 
-    async def open(self, runner: Runner, request: JobRequest, credential: str | None) -> "SdkRunnerStream":
+    async def open(
+        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> "SdkRunnerStream":
         """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here.
 
         The SDK does not bound the wait for the runner's response headers, so this does
         (``first_byte_timeout_s``, D35). A timeout keeps the sessions signed so far for cost sync;
         if it hits before ``on_payment_session`` runs, ``payment_sent`` is ``False``.
         """
-        sessions = _SignedSessions()
+        sessions = _SignedSessions(on_signed)
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):

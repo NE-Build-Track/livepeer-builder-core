@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import and_, delete, event, func, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from livepeer_builder.contracts import (
@@ -203,27 +203,16 @@ class SqlStore:
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
-        session_key = and_(
-            t.payment_sessions.c.job_id == str(attempt.job_id),
-            t.payment_sessions.c.attempt_number == attempt.number,
-        )
         async with self.engine.begin() as conn:
             await conn.execute(update(t.attempts).where(key).values(_attempt_values(attempt)))
-            # Append-only (D39): cost sync owns the match columns, so a row it matched is never rewritten.
-            stored = await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
-            known = [row[0] for row in stored]
-            new = [s for s in attempt.sessions if s.manifest_id not in known]
-            for seq, session in enumerate(new, start=len(known)):
-                await conn.execute(
-                    insert(t.payment_sessions).values(
-                        job_id=str(attempt.job_id),
-                        attempt_number=attempt.number,
-                        seq=seq,
-                        manifest_id=session.manifest_id,
-                        payment_session_id=session.payment_session_id,
-                        match_status=session.match,
-                    )
-                )
+            await _append_sessions(conn, attempt)
+
+    async def record_payment_evidence(self, attempt: Attempt) -> None:
+        key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
+        async with self.engine.begin() as conn:  # outcome, status and timing are left as they are
+            await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
+            await _append_sessions(conn, attempt)
+            await bump_evidence(conn, [str(attempt.job_id)])  # a late report on an ended job changes its cost
 
     async def finish_job(
         self,
@@ -371,6 +360,30 @@ class SqlStore:
 
 
 # -- row mapping --------------------------------------------------------------------------------------
+
+
+async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
+    """Add the attempt's signed sessions not stored yet. Append-only (D39): cost sync owns the match
+    columns, so a row it matched is never rewritten."""
+    session_key = and_(
+        t.payment_sessions.c.job_id == str(attempt.job_id),
+        t.payment_sessions.c.attempt_number == attempt.number,
+    )
+    known = [
+        row[0] for row in await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
+    ]
+    new = [s for s in attempt.sessions if s.manifest_id not in known]
+    for seq, session in enumerate(new, start=len(known)):
+        await conn.execute(
+            insert(t.payment_sessions).values(
+                job_id=str(attempt.job_id),
+                attempt_number=attempt.number,
+                seq=seq,
+                manifest_id=session.manifest_id,
+                payment_session_id=session.payment_session_id,
+                match_status=session.match,
+            )
+        )
 
 
 def _job_values(job: Job) -> dict[str, Any]:

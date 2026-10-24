@@ -269,7 +269,7 @@ async def test_engine_error_mid_call_leaves_the_job_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore
 ) -> None:
     class Crashing(ScriptedTransport):
-        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
             raise KeyError("bug in a transport")
 
     engine = await make_engine(supply=EngineSupply(transport=Crashing()))
@@ -288,7 +288,7 @@ async def test_failure_to_close_a_job_is_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class Crashing(ScriptedTransport):
-        async def call(self, r, request, credential):  # type: ignore[no-untyped-def]
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
             raise KeyError("bug")
 
     class FinishFails(SqlStore):

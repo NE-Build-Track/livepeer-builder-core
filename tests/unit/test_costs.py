@@ -1,7 +1,12 @@
 """ISS-02 / ISS-04: cost sync, classification, projections (corrected), summary and reconciliation."""
 
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -18,8 +23,17 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
+from livepeer_builder.runtime import BuilderEngine
+from livepeer_builder.runtime.assembly import EngineSupply
 from livepeer_builder.services.costs import classify
-from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
+from livepeer_builder.store import SqlStore
+from livepeer_builder.testing import (
+    FakeAllocationManager,
+    FakeUsageSource,
+    FixedClock,
+    ScriptedTransport,
+    StreamScript,
+)
 from tests.conftest import EngineFactory
 
 APP = "example/echo"
@@ -124,7 +138,11 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     assert observed.status == "observed" and observed.fees.fee_eth == Decimal("0.5")
     assert observed.attempts[0].cost_class == "delivered"
 
-    await engine.store.save_projection(observed.model_copy(update={"attempts": ()}))
+    found = await engine.store.job_for_projection(job.id)
+    assert found is not None
+    await engine.store.save_projection(
+        observed.model_copy(update={"attempts": ()}), evidence_version=found[1]
+    )
     assert (await engine.costs.for_job(alice, job.id)).attempts == ()
     rebuilt_sync = await engine.costs.sync_once()  # no new usage; the empty attempt list is stale
     assert rebuilt_sync.rows_new == 0
@@ -282,3 +300,291 @@ async def test_cursor_mismatch_restarts_from_the_beginning(
     await engine.store.apply_usage((), SyncCheckpoint(resume_cursor="not-a-cursor"))  # Batteries answers 400
     report = await engine.costs.sync_once()
     assert (report.rows_seen, report.rows_new) == (1, 0)  # resynced from the start; nothing applied twice
+
+
+async def running_job(
+    store: SqlStore, clock: FixedClock, *, paid: bool = False, allocation: str = "alloc_1"
+) -> tuple[Job, Attempt]:
+    """A job with one attempt still in flight, as the engine stores it before the runner answers."""
+    now = clock.now()
+    job = Job(
+        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
+        created_at=now, completed_at=None,
+    )  # fmt: skip
+    await store.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id=allocation,
+        sessions=(SignedSession(manifest_id="m-run"),) if paid else (), payment_sent=paid,
+        outcome="in_flight", status_code=None, started_at=now, ended_at=None,
+    )  # fmt: skip
+    await store.start_attempt(attempt)
+    return job, attempt
+
+
+async def test_a_sync_during_a_job_never_leaves_a_paid_job_reading_as_none(
+    make_engine: EngineFactory, alice: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:  # #33: the sync stored "none" for a job still signing, and the read served it after payment
+    engine = await make_engine()
+    job, attempt = await running_job(store, clock)  # still signing: nothing paid yet
+    await engine.costs.sync_once()
+    clock.advance(5)
+    paid = attempt.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m-1"),), "payment_sent": True,
+                "outcome": "succeeded", "status_code": 200, "ended_at": clock.now()}
+    )  # fmt: skip
+    await store.finish_attempt(paid)
+    await store.finish_job(job.id, "succeeded", None, None, clock.now())
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # paid, usage not here yet
+
+
+async def test_a_running_job_reads_pending_never_zero(
+    make_engine: EngineFactory, alice: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    job, _ = await running_job(store, clock)  # it may still pay, so its cost is not known to be zero
+    cost = await engine.costs.for_job(alice, job.id)
+    assert cost.status == "pending"
+    await engine.costs.sync_once()
+    assert await store.get_projection(job.id) is None  # only an ended job is projected
+
+
+async def test_a_job_that_ended_since_the_last_sync_counts_in_summary_and_recent(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    clock: FixedClock,
+) -> None:  # fmt: skip
+    engine = await make_engine()
+    await engine.payments.provision(
+        admin,
+        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+                         grant_id="grant_1"),
+    )  # fmt: skip
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-new",))]
+    job = (await engine.jobs.run(alice, JobRequest(app=APP))).job  # no sync since it ended
+    summary = await engine.costs.summary(
+        alice, clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1)
+    )
+    assert summary.jobs_pending == 1
+    assert [cost.job_id for cost in await engine.costs.recent(alice)] == [job.id]
+
+
+async def test_a_none_projection_an_older_release_stored_for_a_running_job_is_not_served(
+    make_engine: EngineFactory, alice: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:  # an upgraded database can hold #33's rows; a read must not trust them
+    engine = await make_engine()
+    job, _ = await running_job(store, clock, paid=True)
+    old = classify(job.model_copy(update={"state": "succeeded"}), ())  # what the old sync stored
+    await store.save_projection(
+        old.model_copy(update={"status": "none", "attempts": (), "updated_at": clock.now()}),
+        evidence_version=0,
+    )
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"
+
+
+def test_a_running_job_keeps_matched_fees_pending_until_it_ends() -> None:
+    running = job_with(("in_flight", ("s1",), True), state="running")
+    cost = classify(running, [row("1", "s1", "0.5")])
+    assert cost.status == "pending" and cost.fees.fee_eth == Decimal("0.5")
+    assert [(a.cost_class, a.fees.fee_eth) for a in cost.attempts] == [("pending", Decimal("0.5"))]
+
+
+class SyncsAfterFirstRead:
+    """The engine's store, except that right after a cost read's first query, ``between`` runs (a
+    concurrent cost sync writing). Reads inside ``cost_snapshot`` count as queries too."""
+
+    def __init__(self, store: SqlStore, between: Callable[[], Awaitable[None]]) -> None:
+        self._store = store
+        self._between: Callable[[], Awaitable[None]] | None = between
+
+    async def _after(self, result: Any) -> Any:
+        between, self._between = self._between, None
+        if between is not None:
+            await between()
+        return result
+
+    def _wrap(self, target: Any) -> Any:
+        owner = self
+
+        class Wrapped:
+            def __getattr__(self, name: str) -> Any:
+                attribute = getattr(target, name)
+                if name == "cost_snapshot":
+                    return owner._snapshot(attribute)
+                if not callable(attribute) or not asyncio.iscoroutinefunction(attribute):
+                    return attribute
+
+                async def read(*args: Any, **kwargs: Any) -> Any:
+                    return await owner._after(await attribute(*args, **kwargs))
+
+                return read
+
+        return Wrapped()
+
+    def _snapshot(self, open_snapshot: Callable[[], Any]) -> Callable[[], Any]:
+        owner = self
+
+        @contextlib.asynccontextmanager
+        async def snapshot() -> AsyncIterator[Any]:
+            async with open_snapshot() as view:
+                yield owner._wrap(view)
+
+        return snapshot
+
+    def store(self) -> Any:
+        return self._wrap(self._store)
+
+
+async def test_a_reconciliation_during_a_sync_counts_every_row_once(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock, usage: FakeUsageSource, tmp_path: Path
+) -> None:  # review of #43: a row matched between two of reconcile's queries was counted nowhere
+    file_store = await SqlStore.connect(f"sqlite+aiosqlite:///{tmp_path}/costs.db")  # a snapshot needs a file
+    try:
+        engine = await make_engine(supply=EngineSupply(store=file_store))
+        actor = await engine.payments.provision(
+            admin,
+            ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+                             grant_id="grant_1"),
+        )  # fmt: skip
+        job, attempt = await running_job(file_store, clock, allocation=actor.allocation_id)
+        usage.rows = [row("u1", "sess-1", "0.5", allocation=actor.allocation_id, manifest="m-1")]
+        await engine.costs.sync_once()  # the row arrives before the session is recorded: unattributed
+
+        async def session_recorded_and_synced() -> None:
+            await ends_and_projects(engine, file_store, job, attempt, clock)
+
+        engine.costs._store = SyncsAfterFirstRead(file_store, session_recorded_and_synced).store()  # type: ignore[assignment]
+        report = await engine.costs.reconcile(admin, "default", "alice")
+        counted = (
+            sum((fees.fee_eth for fees in report.by_class.values()), Decimal(0)) + report.unattributed.fee_eth
+        )
+        assert counted == Decimal("0.5")  # in a class or unattributed, never in neither
+    finally:
+        await file_store.close()
+
+
+async def ends_and_projects(
+    engine: BuilderEngine, store: SqlStore, job: Job, attempt: Attempt, clock: FixedClock
+) -> None:
+    clock.advance(5)
+    paid = attempt.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m-1"),), "payment_sent": True,
+                "outcome": "succeeded", "status_code": 200, "ended_at": clock.now()}
+    )  # fmt: skip
+    await store.finish_attempt(paid)
+    await store.finish_job(job.id, "succeeded", None, None, clock.now())
+    await engine.costs.sync_once()  # matches the waiting row to the session and projects the job
+
+
+async def test_a_running_jobs_matched_fee_is_pending_and_reconciliation_balances(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager,
+) -> None:  # fmt: skip
+    engine = await make_engine()
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+                         grant_id="grant_1"),
+    )  # fmt: skip
+    transport.opens = [StreamScript(events=[b"a", 30.0], manifest_ids=("m-s",))]  # paid at open, then runs on
+    streaming = engine.jobs.streaming
+    assert streaming is not None
+    stream = await streaming.stream(alice, JobRequest(app=APP))
+    usage.rows = [row("u1", "sess-s", "0.25", usd="0.25", allocation=actor.allocation_id, manifest="m-s")]
+    await engine.costs.sync_once()  # the fee arrives and matches while the job runs
+    manager.allocations[actor.allocation_id].spent = Decimal("0.25")  # what Batteries reports spent
+    window = (stream.job.created_at - timedelta(hours=1), stream.job.created_at + timedelta(hours=1))
+    summary = await engine.costs.summary(alice, *window)
+    assert summary.jobs_pending == 1 and summary.by_class["pending"].fee_eth == Decimal("0.25")
+    report = await engine.costs.reconcile(admin, "default", "alice")
+    assert report.by_class["pending"].fee_eth == Decimal("0.25") and report.unattributed.fee_eth == Decimal(
+        "0"
+    )
+    assert report.balanced
+    await stream.aclose()
+
+
+def booked(report: Any) -> Decimal:
+    """Everything a reconciliation counts on the engine side: the classes plus the unattributed rows."""
+    return sum((fees.fee_eth for fees in report.by_class.values()), Decimal(0)) + report.unattributed.fee_eth
+
+
+async def ended_paid_job(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, clock: FixedClock
+) -> tuple[BuilderEngine, Job, str]:
+    """A paid job that ended and was projected, with its session signed for manifest m-1."""
+    engine = await make_engine()
+    actor = await engine.payments.provision(
+        admin,
+        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+                         grant_id="grant_1"),
+    )  # fmt: skip
+    job, attempt = await running_job(store, clock, allocation=actor.allocation_id)
+    await ends_and_projects(engine, store, job, attempt, clock)
+    return engine, job, actor.allocation_id
+
+
+async def test_a_row_on_a_matched_session_counts_before_sync_stores_the_projection(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
+    usage: FakeUsageSource,
+) -> None:  # fmt: skip  # review of #43: sync commits the row, then (later, or never) the projection
+    engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
+    first = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
+    usage.rows = [first]
+    await engine.costs.sync_once()
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.5")
+    clock.advance(5)
+    second = row(
+        "u2", "sess-1", "0.25", allocation=allocation, manifest="m-1"
+    )  # a second charge, same session
+    await store.apply_usage([second], SyncCheckpoint(resume_cursor="c2"))  # sync stops here (crash, error)
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.75")
+    assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.75")
+    usage.rows = [first, second]
+    await engine.costs.sync_once()  # nothing new to copy; the job is projected again all the same
+    stored = await store.get_projection(job.id)
+    assert stored is not None and stored.fees.fee_eth == Decimal("0.75") and stored.status == "corrected"
+    assert (
+        await store.jobs_for_projection([]) == []
+    )  # stored again: no longer stale, not re-projected each sync
+
+
+async def test_a_match_counts_before_sync_stores_the_projection(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
+) -> None:  # fmt: skip  # review of #43: the stored projection is pending (fee 0) and the row just matched
+    engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
+    stored = await store.get_projection(job.id)
+    assert stored is not None and stored.status == "pending"  # paid, no usage yet
+    clock.advance(5)
+    arrived = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
+    await store.apply_usage([arrived], SyncCheckpoint(resume_cursor="c1"))
+    await store.match_sessions([arrived])  # matched: no longer unattributed; the projection is not saved yet
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.5")
+    assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.5")
+
+
+async def test_a_row_committed_while_a_sync_classifies_the_job_is_never_lost(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
+    usage: FakeUsageSource, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip  # #43 review: two syncs at once (the loop and POST /v1/admin/costs/sync)
+    engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
+    first = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
+    usage.rows = [first]
+    await engine.costs.sync_once()
+    second = row("u2", "sess-1", "0.25", allocation=allocation, manifest="m-1")
+    read_usage = store.usage_for_payment_sessions
+
+    async def other_sync_commits_meanwhile(payment_session_ids: Any) -> list[UsageRow]:
+        rows = await read_usage(payment_session_ids)  # this sync has read the job's usage...
+        monkeypatch.setattr(store, "usage_for_payment_sessions", read_usage)
+        await store.apply_usage([second], SyncCheckpoint(resume_cursor="c2"))  # ...the other commits a row
+        return rows
+
+    monkeypatch.setattr(store, "usage_for_payment_sessions", other_sync_commits_meanwhile)
+    clock.advance(5)
+    await engine.costs.refresh_projection(job.id)  # stores the fee it classified before the new row
+    assert (await engine.costs.for_job(alice, job.id)).fees.fee_eth == Decimal("0.75")
+    assert booked(await engine.costs.reconcile(admin, "default", "alice")) == Decimal("0.75")
+    usage.rows = [first, second]
+    await engine.costs.sync_once()  # the next sync stores the job again
+    stored = await store.get_projection(job.id)
+    assert stored is not None and stored.fees.fee_eth == Decimal("0.75")

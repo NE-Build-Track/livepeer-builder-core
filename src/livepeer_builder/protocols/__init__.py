@@ -4,6 +4,7 @@ Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
 from collections.abc import AsyncIterator, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
@@ -257,21 +258,45 @@ class CostRepo(Protocol):
 
     async def jobs_for_projection(self, job_ids: Sequence[UUID]) -> list[Job]: ...
 
+    async def job_for_projection(self, job_id: UUID) -> tuple[Job, int] | None:
+        """The job and its evidence version, the version read first (pass it to ``save_projection``)."""
+        ...
+
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
 
     async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]: ...
 
     async def get_projection(self, job_id: UUID) -> JobCost | None: ...
 
-    async def projections_between(
+    def cost_snapshot(self) -> AbstractAsyncContextManager["CostSnapshot"]:
+        """Cost reads that see one consistent state, so a sync committing between two of a read's
+        queries can never make it count a row twice or nowhere."""
+        ...
+
+    async def save_projection(self, cost: JobCost, *, evidence_version: int) -> None:
+        """Store a cost computed from the job at ``evidence_version``; never over one from newer evidence."""
+        ...
+
+
+class CostSnapshot(Protocol):
+    """The reads a cost query makes, all against one consistent state of the store."""
+
+    async def job_with_projection(self, job_id: UUID) -> tuple[Job, JobCost | None] | None: ...
+
+    async def projections_and_unprojected(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[JobCost]: ...
+    ) -> tuple[list[JobCost], list[Job]]:
+        """The stored projections of jobs created in the window, and the jobs no projection covers:
+        running, or ended since their projection was stored."""
+        ...
 
-    async def recent_projections(
+    async def recent_with_projections(
         self, application_id: str, actor_id: str | None, limit: int
-    ) -> list[JobCost]: ...
+    ) -> list[tuple[Job, JobCost | None]]: ...
 
-    async def save_projection(self, cost: JobCost) -> None: ...
+    async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
+
+    async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]: ...
 
 
 class SecretRepo(Protocol):

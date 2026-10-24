@@ -132,7 +132,9 @@ async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: F
         ),
     )
     await engine.start()
-    await asyncio.sleep(0.05)  # let each loop run at least once
+    async with asyncio.timeout(5):  # wait for each loop's first run, not a fixed time
+        while engine.health().cost_sync_at is None:  # noqa: ASYNC110  # health exposes no event
+            await asyncio.sleep(0.01)
     health = engine.health()
     assert health.ready and health.cost_sync_at is not None
     await engine.stop()

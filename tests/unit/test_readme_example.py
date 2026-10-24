@@ -3,6 +3,8 @@
 The region between the docs markers is the README's example; scripts/check_docs.py keeps them equal.
 """
 
+from pathlib import Path
+
 # docs:start quick-start
 from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, EngineSupply, JobCost, JobRequest
 
@@ -22,15 +24,17 @@ async def quick_start(settings: EngineSettings, supply: EngineSupply | None = No
 # docs:end quick-start
 
 
-async def test_the_quick_start_runs_a_job_and_reads_its_cost() -> None:
+async def test_the_quick_start_runs_a_job_and_reads_its_cost(tmp_path: Path) -> None:
     from livepeer_builder.adapters.static import (
         StaticDiscoverySource,  # here, so the region stays the README's
     )
-    from livepeer_builder.testing import FakeAllocationManager, ScriptedTransport, runner
+    from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
 
     settings = EngineSettings.model_validate(
         {
-            "database_url": "sqlite+aiosqlite:///:memory:",
+            # A file, as a deployment runs it. A started engine on in-memory SQLite shares one connection
+            # between the job and the background loops, which is not safe under concurrent writes.
+            "database_url": f"sqlite+aiosqlite:///{tmp_path}/quick-start.db",
             "allocation_mode": "per_application",
             "shared_payment_key": "lpg_example",
             "shared_allocation_id": "alloc_example",
@@ -41,10 +45,7 @@ async def test_the_quick_start_runs_a_job_and_reads_its_cost() -> None:
         discovery_source=StaticDiscoverySource([runner("livepeer-example/echo")]),
         transport=ScriptedTransport([ScriptedTransport.ok()]),
         allocation_manager=FakeAllocationManager(),
-        # No usage source, so the cost-sync loop that `async with` starts never runs mid-job. Its first
-        # sync could otherwise store a projection of the job while it was still in flight (a known race,
-        # fixed by PR #40), and on in-memory SQLite its writes would share the job's one connection.
-        usage_source=None,
+        usage_source=FakeUsageSource(),  # the cost loop runs: its first sync must not leave this job none (#33)
     )
     cost = await quick_start(settings, offline)
     assert cost.status == "pending"

@@ -5,6 +5,7 @@ Anything else is ambiguous: the entries keep no payment_session_id, and the rows
 """
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, false, func, or_, select, update
@@ -17,20 +18,85 @@ from livepeer_builder.store import schema as t
 _CHUNK = 500
 
 
+ENDED = ("succeeded", "failed", "uncertain")  # a job in one of these states can no longer pay
+
+
+def projection_current() -> ColumnElement[bool]:
+    """The projection was computed from the job's current evidence."""
+    return t.cost_projections.c.evidence_version >= t.jobs.c.evidence_version
+
+
+def projection_out_of_date() -> ColumnElement[bool]:
+    """No projection, one stored before the job ended, or one computed from older evidence."""
+    return or_(
+        t.cost_projections.c.job_id.is_(None),
+        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
+        ~projection_current(),
+    )
+
+
+async def bump_evidence(conn: AsyncConnection, job_ids: Iterable[str]) -> None:
+    """These jobs' evidence changed: their projections no longer stand for them (#43 review).
+
+    Called in the transaction that changes the evidence. A version, not a flag: a sync that classified
+    the job earlier stores the version it read, which is already behind, so no save can hide the change.
+    Reads compute an out-of-date job live; the next sync stores it again."""
+    for chunk in _chunks(sorted(set(job_ids))):
+        await conn.execute(
+            update(t.jobs)
+            .where(t.jobs.c.id.in_(chunk))
+            .values(evidence_version=t.jobs.c.evidence_version + 1)
+        )
+
+
+async def bump_evidence_on_new_rows(conn: AsyncConnection, rows: Sequence[UsageRow]) -> None:
+    """A new applied row on a session that is already matched adds to that job's fee."""
+    sessions = sorted(
+        {row.payment_session_id for row in rows if row.status == "applied" and row.payment_session_id}
+    )
+    for chunk in _chunks(sessions):
+        found = await conn.execute(
+            select(t.payment_sessions.c.job_id).where(
+                t.payment_sessions.c.match_status == "matched",
+                t.payment_sessions.c.payment_session_id.in_(chunk),
+            )
+        )
+        await bump_evidence(conn, found.scalars())
+
+
 def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
-    """Jobs whose projection should be recomputed, including observed rows stored with no attempts."""
+    """Ended jobs whose projection should be recomputed, including observed rows stored with no attempts.
+
+    A running job is never projected: it may still pay, and a projection of it would be stale the
+    moment it did (#33). Reads compute it live instead (``jobs_not_covered``)."""
     touched = t.jobs.c.id.in_(job_ids) if job_ids else false()
     missing_attempts = and_(
         t.cost_projections.c.status.in_(("observed", "corrected")),
         func.json_array_length(t.cost_projections.c.attempts) == 0,
     )
-    return or_(
-        touched,
-        t.cost_projections.c.job_id.is_(None),
-        t.cost_projections.c.status == "pending",
-        t.jobs.c.completed_at > t.cost_projections.c.updated_at,
-        missing_attempts,
+    return and_(
+        t.jobs.c.state.in_(ENDED),
+        or_(touched, projection_out_of_date(), t.cost_projections.c.status == "pending", missing_attempts),
     )
+
+
+def in_window(
+    application_id: str, actor_id: str | None, start: datetime, end: datetime
+) -> list[ColumnElement[bool]]:
+    """Jobs of one application (and actor, when given) created in [start, end)."""
+    clauses = [
+        t.jobs.c.application_id == application_id,
+        t.jobs.c.created_at >= start,
+        t.jobs.c.created_at < end,
+    ]
+    if actor_id is not None:
+        clauses.append(t.jobs.c.actor_id == actor_id)
+    return clauses
+
+
+def jobs_not_covered() -> ColumnElement[bool]:
+    """Jobs a cost read must compute: still running, or ended with no projection since they ended."""
+    return or_(t.jobs.c.state.not_in(ENDED), projection_out_of_date())
 
 
 async def match_payment_sessions(conn: AsyncConnection, rows: Sequence[UsageRow]) -> set[UUID]:

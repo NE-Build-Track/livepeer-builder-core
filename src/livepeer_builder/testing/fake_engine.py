@@ -50,6 +50,7 @@ from livepeer_builder.errors import (
     OperationConflict,
     OperationExists,
 )
+from livepeer_builder.services.costs import classify
 from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
@@ -281,17 +282,27 @@ class FakeJobs:
 
 
 class FakeCosts:
-    def __init__(self, costs: Mapping[UUID, JobCost | Raises], summary: CostSummary | None) -> None:
+    """A scripted cost wins. Otherwise a job the fake ran costs what the engine reports before any usage
+    arrives (``classify`` with no rows): ``pending`` while running or once paid, ``none`` if unpaid."""
+
+    def __init__(
+        self, costs: Mapping[UUID, JobCost | Raises], summary: CostSummary | None, jobs: FakeJobs
+    ) -> None:
         self.costs = dict(costs)
         self._summary = summary
+        self._jobs = jobs
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
         scripted = self.costs.get(job_id)
-        if scripted is None:
-            raise NotFound(f"no cost for job {job_id}")
         if isinstance(scripted, Raises):
             raise scripted.error
-        return scripted
+        if scripted is not None:
+            return scripted
+        try:
+            job = await self._jobs.get(actor, job_id)
+        except NotFound:
+            raise NotFound(f"no cost for job {job_id}") from None
+        return classify(job, ())
 
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
@@ -342,7 +353,7 @@ class FakeEngine:
     ) -> None:
         self.discovery = FakeDiscovery(offerings, runners)
         self.jobs = FakeJobs(replies or {}, streaming, self.discovery)
-        self.costs = FakeCosts(costs or {}, summary)
+        self.costs = FakeCosts(costs or {}, summary, self.jobs)
         self.payments = FakeAllowance(allowance)
         self._health = health or EngineHealth(
             ready=True,

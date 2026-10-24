@@ -98,13 +98,13 @@ Each attempt that opened a payment session is classified:
 | `delivered` | The attempt succeeded | Bill under its retail policy |
 | `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**) | Absorb; don't bill |
 | `uncertain` | The job is `uncertain`, or the attempt never reported back | Hold, then reconcile |
-| `pending` | Payment went out; no applied usage row yet | Wait. **Never zero** |
+| `pending` | The job is still running (its fees so far are not final), or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
+`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
 mode it balances exactly per user.
 
 **Network cost is the expected value at signing.** Tickets the orchestrator rejects after signing are
@@ -114,9 +114,25 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 
 ### Job cost status
 
-`none` (no payment), `pending` (some paid attempt lacks rows), `observed`, `corrected` (the total
-changed after it was first observed, for example a metered session that signed again). Projections
-are persisted in `lpb_cost_projections` and updated by each cost sync.
+`none` (the job ended and no attempt was paid), `pending` (the job is still running, or some paid
+attempt lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
+example a metered session that signed again).
+
+Only cost sync stores projections (`lpb_cost_projections`), and only for jobs that have ended: a
+running job may still pay, so a projection of it would go stale (#33). Every read (`for_job`,
+`recent`, `summary`, reconciliation) computes live any job no projection covers yet, running or ended
+since its projection was stored, from its matched usage rows. A paid job therefore never reads as
+`none`, even between syncs. Each read uses one consistent snapshot of the store, so a sync committing
+meanwhile can never make it count a usage row twice or nowhere.
+
+Sync commits usage rows, then session matches, then projections, one transaction each, and two syncs
+can run at once (the loop and `POST /v1/admin/costs/sync`). Each job has an evidence version: a new
+usage row on a matched session, a changed match or a late session report increments it in the same
+transaction. A projection records the version it was computed from, read before the job's evidence,
+and stands for the job only while that version is current; a save never replaces a projection computed
+from newer evidence. Reads compute an out-of-date job live, and the next sync stores it again, even
+when a sync stopped (a crash, an error) before it reached that job, or a concurrent sync saved an older
+classification. A state between two of sync's commits therefore still counts every row once.
 
 ## Allowance
 

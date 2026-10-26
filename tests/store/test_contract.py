@@ -102,10 +102,34 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
     assert await sql.revoke_access_key("k", clock.now()) is True
     assert await sql.revoke_access_key("k", clock.now()) is False
 
+    assert await sql.get_access_key("k") == key.model_copy(update={"revoked_at": clock.now()})
+    assert await sql.get_access_key("missing") is None
+
     await sql.put_secret("db:x", "ciphertext", clock.now())
     assert await sql.get_secret("db:x") == "ciphertext"
     await sql.delete_secret("db:x")
     assert await sql.get_secret("db:x") is None
+
+
+async def test_rotating_a_key_revokes_it_and_inserts_its_replacement_together(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    def key(key_id: str) -> AccessKey:
+        return AccessKey(
+            key_id=key_id, kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
+            label="", created_at=clock.now(), revoked_at=None,
+        )  # fmt: skip
+
+    await sql.insert_access_key(key("old"), "old-hash")
+    assert await sql.rotate_access_key("old", key("new"), "new-hash", clock.now()) is True
+    old = await sql.get_access_key("old")
+    assert old is not None and old.revoked_at == clock.now()
+    assert await sql.access_key_by_hash("new-hash") == key("new")
+
+    # a revoked or unknown key is not rotated, and its replacement is not inserted
+    assert await sql.rotate_access_key("old", key("again"), "again-hash", clock.now()) is False
+    assert await sql.rotate_access_key("missing", key("other"), "other-hash", clock.now()) is False
+    assert await sql.get_access_key("again") is None and await sql.get_access_key("other") is None
 
 
 async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock: FixedClock) -> None:

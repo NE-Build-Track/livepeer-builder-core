@@ -1,14 +1,27 @@
-"""ISS-03: DefaultPolicy, engine-issued keys, the API-key authenticator and the chain."""
+"""ISS-03 and ISS-08: DefaultPolicy, engine-issued keys (issue, inspect, rotate, revoke, audit log), the
+API-key authenticator and the chain."""
+
+import logging
+from decimal import Decimal
 
 import pytest
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
-from livepeer_builder.contracts import ActorContext, AuthRequest, Operation, ResourceRef
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotAuthenticated
+from livepeer_builder.contracts import (
+    ActorContext,
+    AuthRequest,
+    Money,
+    Operation,
+    ProvisionRequest,
+    ResourceRef,
+)
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotAuthenticated, NotFound
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
+from livepeer_builder.utils import token_hash
+from tests.conftest import EngineFactory
 
 
 def bearer(token: str) -> AuthRequest:
@@ -109,3 +122,117 @@ async def test_request_fields_cannot_establish_identity(store: SqlStore) -> None
         method="POST", path="/v1/jobs", headers={"x-actor-id": "admin", "livepeer-actor": "admin"}
     )
     assert await ApiKeyAuthenticator(store).authenticate(request) is None
+
+
+async def test_a_key_is_inspected_without_its_secret(
+    store: SqlStore, clock: FixedClock, admin: ActorContext, alice: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    issued = await keys.issue(admin, kind="actor", actor_id="alice", label="laptop")
+    shown = await keys.get(admin, issued.key.key_id)
+    assert shown == issued.key
+    assert issued.token not in shown.model_dump_json()
+    with pytest.raises(NotFound):
+        await keys.get(admin, "key_unknown")
+    with pytest.raises(AccessDenied):
+        await keys.get(alice, issued.key.key_id)  # inspecting keys is admin work
+
+
+async def test_rotation_replaces_a_key_at_once_with_the_same_identity(
+    store: SqlStore, clock: FixedClock, admin: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    authenticator = ApiKeyAuthenticator(store)
+    old = await keys.issue(
+        admin, kind="actor", actor_id="alice", application_id="app-1", permissions=["jobs.run"], label="ci"
+    )
+    new = await keys.rotate(admin, old.key.key_id)
+    assert new.token != old.token and new.key.key_id != old.key.key_id
+    assert (new.key.kind, new.key.actor_id, new.key.application_id, new.key.permissions, new.key.label) == (
+        "actor", "alice", "app-1", ("jobs.run",), "ci",
+    )  # fmt: skip
+    actor = await authenticator.authenticate(bearer(new.token))
+    assert actor is not None and (actor.actor_id, actor.application_id) == ("alice", "app-1")
+    with pytest.raises(NotAuthenticated):
+        await authenticator.authenticate(bearer(old.token))  # no overlap window (D44)
+    relabelled = await keys.rotate(admin, new.key.key_id, label="ci-2")
+    assert relabelled.key.label == "ci-2"
+
+
+async def test_only_an_admin_rotates_and_only_an_active_key(
+    store: SqlStore, clock: FixedClock, admin: ActorContext, alice: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    issued = await keys.issue(admin, kind="actor", actor_id="alice")
+    with pytest.raises(AccessDenied):
+        await keys.rotate(alice, issued.key.key_id)
+    await keys.revoke(admin, issued.key.key_id)
+    with pytest.raises(InvalidRequest, match="no active key"):
+        await keys.rotate(admin, issued.key.key_id)
+    with pytest.raises(InvalidRequest, match="no active key"):
+        await keys.rotate(admin, "key_unknown")
+
+
+async def test_key_changes_are_logged_with_who_acted_and_never_the_secret(
+    store: SqlStore, clock: FixedClock, admin: ActorContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    with caplog.at_level(logging.DEBUG):
+        first = await keys.bootstrap_admin()
+        issued = await keys.issue(admin, kind="actor", actor_id="alice", application_id="app-1")
+        rotated = await keys.rotate(admin, issued.key.key_id)
+        await keys.revoke(admin, rotated.key.key_id)
+    events = {
+        getattr(r, "event", ""): r for r in caplog.records if getattr(r, "event", "").startswith("keys.")
+    }
+    assert list(events) == ["keys.bootstrapped", "keys.issued", "keys.rotated", "keys.revoked"]
+    assert (events["keys.bootstrapped"].key_id, events["keys.bootstrapped"].by) == (first.key.key_id, "cli")
+    issued_event = events["keys.issued"]
+    assert (issued_event.key_id, issued_event.kind, issued_event.actor_id, issued_event.application_id) == (
+        issued.key.key_id, "actor", "alice", "app-1",
+    )  # fmt: skip
+    assert issued_event.by == admin.actor_id
+    assert (events["keys.rotated"].key_id, events["keys.rotated"].replaced_key_id) == (
+        rotated.key.key_id, issued.key.key_id,
+    )  # fmt: skip
+    assert (events["keys.revoked"].key_id, events["keys.revoked"].by) == (rotated.key.key_id, admin.actor_id)
+
+
+async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Engine keys and payment keys, issued, used, rotated and revoked, with every logger at DEBUG.
+
+    A raw secret never appears anywhere. A token hash is not a credential (authentication hashes what is
+    presented), but the engine never logs one either; only a database driver's own DEBUG output, which
+    the engine's logging never enables, echoes the stored parameters.
+    """
+    engine = await make_engine()
+    assert engine.keys is not None
+    with caplog.at_level(logging.DEBUG):
+        first = await engine.keys.bootstrap_admin()
+        issued = await engine.keys.issue(admin, kind="actor", actor_id="alice")
+        assert await ApiKeyAuthenticator(engine.store).authenticate(bearer(issued.token)) is not None
+        rotated = await engine.keys.rotate(admin, issued.key.key_id)
+        await engine.keys.revoke(admin, rotated.key.key_id)
+        await engine.payments.provision(
+            admin,
+            ProvisionRequest(
+                application_id="default", actor_id="alice", amount=Money(amount=Decimal("1"), currency="USD"),
+                grant_id="g-1",
+            ),
+        )  # fmt: skip
+        payment_keys = [(await engine.payments.credential(alice)).token]
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        payment_keys.append((await engine.payments.credential(alice)).token)
+        await engine.payments.revoke(admin, "default", "alice")
+    tokens = [first.token, issued.token, rotated.token]
+    secrets = [*tokens, *(key for key in payment_keys if key)]
+    assert len(secrets) == 5 and all(s.startswith(("lpk_", "lpg_")) for s in secrets)
+    for record in caplog.records:
+        text = f"{record.getMessage()} {record.__dict__}"
+        assert not [s for s in secrets if s in text], f"a secret reached the log: {record.name}"
+        if record.name.startswith("livepeer_builder") or record.levelno >= logging.INFO:
+            assert not [t for t in tokens if token_hash(t) in text], (
+                f"a token hash reached the log: {record.name}"
+            )

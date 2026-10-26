@@ -237,3 +237,25 @@ async def test_keys_are_inspected_and_rotated_over_rest(api) -> None:  # type: i
     assert again.status_code == 201 and again.json()["key"]["label"] == "ci"
     stale = await client.post(f"/v1/admin/keys/{actor_key['key_id']}/rotate", headers=admin)
     assert stale.status_code == 400  # already rotated, so revoked
+
+
+async def test_a_missing_permission_is_403_and_another_actors_job_404_over_rest(  # type: ignore[no-untyped-def]
+    api, transport: ScriptedTransport
+) -> None:
+    client, engine, admin, alice = api
+    await client.post(
+        ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"}, headers=admin
+    )
+    transport.steps = [ScriptedTransport.ok()]
+    job_id = (await client.post("/v1/jobs", json={"app": APP}, headers=alice)).headers["livepeer-job-id"]
+    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    bob = await engine.keys.issue(operator, kind="actor", actor_id="bob")
+    runner_only = await engine.keys.issue(operator, kind="actor", actor_id="alice", permissions=["jobs.run"])
+    as_bob = {"Authorization": f"Bearer {bob.token}"}
+    as_runner = {"Authorization": f"Bearer {runner_only.token}"}
+    for path in (f"/v1/jobs/{job_id}", f"/v1/jobs/{job_id}/result", f"/v1/jobs/{job_id}/cost"):
+        assert (await client.get(path, headers=as_runner)).status_code == 403, path
+        assert (await client.get(path, headers=as_bob)).status_code == 404, path
+    usage = {"quantities": {"tokens": 1}}
+    assert (await client.post(f"/v1/jobs/{job_id}/usage", json=usage, headers=as_bob)).status_code == 404
+    assert (await client.post(f"/v1/jobs/{job_id}/usage", json=usage, headers=as_runner)).status_code == 200

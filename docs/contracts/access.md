@@ -1,8 +1,8 @@
 # Access contract
 
-**Ticket:** ISS-03 · **Design accepted:** 12 October 2026 (decisions D12–D16) · **Code:**
-`contracts/access.py`, `protocols/`, `services/policy.py`, `services/keys.py`, `adapters/auth.py`,
-`adapters/secrets.py`
+**Tickets:** ISS-03, ISS-08 · **Design accepted:** 12 October 2026 (decisions D12–D16); ISS-08 on
+26 October (D44) · **Code:** `contracts/access.py`, `protocols/`, `services/policy.py`,
+`services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/secrets.py`
 
 The core never authenticates anyone. It consumes a validated `ActorContext` and asks an
 `AccessPolicy` whether an operation is allowed. Everything about *how* identity is established lives
@@ -56,7 +56,29 @@ class AccessPolicy(Protocol):
 - **An admin credential** may act on any application's records.
 - **Everyone else** needs the operation's permission, and may touch only resources owned by their own
   `(application_id, actor_id)`.
-- **Reads of other actors' records** return 404, never 403, so their existence isn't revealed.
+- **Another actor's record** reads as missing (404), never 403, so its existence isn't revealed. A
+  missing permission is 403. The order of the two checks is in [Answers](#answers).
+
+## Answers
+
+Every route on a job or its cost answers the same way (D44, `services/ownership.py`):
+
+1. **The permission first, before any lookup.** A caller without the operation's permission gets
+   `AccessDenied` (403), whether or not the job exists, so the answer says nothing about any job.
+2. **Then ownership.** Another actor's or application's job, and a job that does not exist, are both
+   `NotFound` (404).
+
+| Route | Permission |
+| --- | --- |
+| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
+| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin lists every actor's jobs in its application |
+| `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
+| `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
+| `GET /v1/jobs/{id}/cost` | `costs.read` |
+| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's projections and summary cover every actor in its application; summary and allowance take `?actor_id=` to name one |
+
+`GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
+come first.
 
 Enterprises replace the policy for teams, organization admins or RBAC by implementing `AccessPolicy`.
 
@@ -108,7 +130,7 @@ Both are generic: no enterprise logic lives in the engine.
 
 | Credential | Issued by | Held by | Rotated / revoked by |
 | --- | --- | --- | --- |
-| Caller API key (`lpk_`) | Engine admin (`POST /v1/admin/keys`) | Client or enterprise backend | Engine admin |
+| Caller API key (`lpk_`) | Engine admin (`POST /v1/admin/keys`) | Client or enterprise backend | Engine admin: `rotate` (instant) / `revoke`, see the [example flow](#example-standalone-flow) |
 | Caller JWT | Enterprise identity provider | Client | Identity provider (expiry) |
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
 | Engine admin credential | `lpb bootstrap-admin`, then an admin | Operator | Engine admin |
@@ -116,6 +138,38 @@ Both are generic: no enterprise logic lives in the engine.
 | Batteries operator credential (grant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_OPERATOR_TOKEN`), optional; without it the grant desk is off | Batteries operator |
 | Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-key` / `revoke` |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
+
+## Example standalone flow
+
+A deployment with no identity provider of its own: engine API keys, an operator, and one end user. The
+same steps run on the dev stack.
+
+| Step | Call | Answer |
+| --- | --- | --- |
+| 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
+| 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read` |
+| 3. Fund the user (`per_actor` mode) | `POST /v1/admin/applications/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "..."}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
+| 5. Inspect the key | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all) | `AccessKey`: kind, actor, application, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate`, optionally `{"label": "..."}` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
+| 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
+
+**Audit log.** Each change is one INFO line: `keys.bootstrapped`, `keys.issued`, `keys.rotated` (with
+`replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `application_id` and
+`by` (the acting admin's `actor_id`, or `cli`). No log line carries a token, a token hash or a payment
+key (`tests/unit/test_access.py`). A database driver's own DEBUG output echoes the parameters it
+stores, token hashes among them; the engine's logging never turns that on, and a hash is not a
+credential.
+
+**Replacing enrollment.** Nothing above is required:
+- **Your own identity:** an enterprise supplies its own authenticators
+  (`EngineSupply(authenticators=(...))`, tried before API keys) or turns engine keys off
+  (`EngineSupply(api_keys=None)`: the key routes and `lpb bootstrap-admin` disappear).
+- **Your own rules:** it can wrap the policy with `decorate`.
+- **Imported mode:** the application builds `ActorContext` itself.
+
+The answer rule and the policy apply the same way in every case
+([extending-the-engine.md](../design-docs/extending-the-engine.md)).
 
 ## Appendix: authorization-server guidance (non-normative)
 

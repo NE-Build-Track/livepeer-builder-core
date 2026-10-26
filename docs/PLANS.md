@@ -37,5 +37,6 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | --- | --- | --- |
 | Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
 | Dependency-injection refactor (internal, before ISS-32) | [active/dependency-injection-refactor.md](exec-plans/active/dependency-injection-refactor.md) | Mike |
+| ISS-08 Standalone credentials and ownership controls | [active/iss-08-standalone-credentials.md](exec-plans/active/iss-08-standalone-credentials.md) | Mike (John reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.

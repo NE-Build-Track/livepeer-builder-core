@@ -1,5 +1,5 @@
-"""``eth_call`` over JSON-RPC (``abi.EthCall``). Errors never include the RPC URL: providers put the
-API key in it."""
+"""``eth_call`` over JSON-RPC (``abi.EthCall``). Errors never include the RPC URL, where providers put the
+API key, nor the provider's error text, which can echo it: a ``ChainError`` reaches ``/readyz``."""
 
 import itertools
 
@@ -29,8 +29,12 @@ class JsonRpcChain:
             raise ChainError("RPC returned a body that is not JSON") from None
         if not isinstance(reply, dict) or "error" in reply or not isinstance(reply.get("result"), str):
             error = reply.get("error") if isinstance(reply, dict) else None
-            message = error.get("message") if isinstance(error, dict) else "no result"
-            raise ChainError(f"RPC call failed: {message}")
+            code = error.get("code") if isinstance(error, dict) else None
+            raise ChainError(
+                f"RPC call failed: JSON-RPC error {code}"
+                if isinstance(code, int)
+                else "RPC call failed: no result"
+            )
         return str(reply["result"])
 
     async def aclose(self) -> None:

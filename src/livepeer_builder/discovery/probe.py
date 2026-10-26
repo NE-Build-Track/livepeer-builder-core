@@ -85,6 +85,7 @@ class Prober:
         concurrency: int = 16,
         resolve: Resolve = _resolve,
         address_allowed: Callable[[str], bool] = public_address,
+        next_address_after_s: float = 1.0,
     ) -> None:
         # the deployment's trust store: system roots plus SSL_CERT_FILE / SSL_CERT_DIR (pinned certificates)
         self._verify = ssl_context or ssl.create_default_context()
@@ -93,6 +94,7 @@ class Prober:
         self._concurrency = concurrency
         self._resolve = resolve
         self._allowed = address_allowed
+        self._next_address_after_s = next_address_after_s  # happy eyeballs: a silent address is given up
 
     async def probe_all(self, orchestrators: Sequence[Orchestrator]) -> list[Probe]:
         """Every orchestrator, at most ``concurrency`` at a time; results in the same order."""
@@ -126,11 +128,16 @@ class Prober:
 
     async def _fetch(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> list[dict[str, Any]]:
         """Each target in order until one connects: a dead first address (often an AAAA) must not fail an
-        orchestrator whose next one works. An untrusted certificate is an answer, not a dead address."""
+        orchestrator whose next one works, whether it refuses or stays silent. Each address but the last gets
+        ``next_address_after_s`` to connect (TLS included), so a silent one cannot use up the probe (#46
+        review). An untrusted certificate is an answer, not a dead address."""
         targets = await self._targets(orchestrator)
+        quick = httpx.Timeout(self._timeout_s, connect=self._next_address_after_s)
         for url, headers, extensions in targets[:-1]:
             try:
-                return await self._runners(client, url, headers, extensions)
+                return await self._runners(client, url, headers, extensions, limits=quick)
+            except httpx.ConnectTimeout:
+                continue  # not a ConnectError in httpx: a silent address
             except httpx.ConnectError as exc:
                 if _untrusted(exc):
                     raise
@@ -158,10 +165,20 @@ class Prober:
         return targets
 
     async def _runners(
-        self, client: httpx.AsyncClient, url: str, headers: dict[str, str], extensions: dict[str, Any]
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        extensions: dict[str, Any],
+        *,
+        limits: httpx.Timeout | None = None,
     ) -> list[dict[str, Any]]:
         request = client.build_request(
-            "GET", url, headers={"Accept": "application/json", **headers}, extensions=extensions
+            "GET",
+            url,
+            headers={"Accept": "application/json", **headers},
+            extensions=extensions,
+            timeout=client.timeout if limits is None else limits,
         )
         response = await client.send(request, stream=True)
         async with contextlib.aclosing(response):

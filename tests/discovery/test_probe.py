@@ -216,3 +216,28 @@ async def test_one_non_public_address_refuses_the_name_even_beside_public_ones(t
         Orchestrator(url="https://orch.test", public_only=True)
     )
     assert probe.failure == "private_address"
+
+
+async def test_a_silent_first_address_does_not_use_up_the_probe(serve: Serve, tls: Tls) -> None:
+    """A dead AAAA usually drops packets rather than refusing. The next checked address must still be
+    tried within the probe's time (#46 review)."""
+    url = await serve(answering([{"runners": [RUNNER]}]), tls.named)
+    port = int(url.rsplit(":", 1)[1])
+
+    async def hold(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await asyncio.sleep(30)  # accepts, then never answers the TLS handshake
+
+    silent = await asyncio.start_server(hold, "127.0.0.3", port)
+
+    async def resolve(host: str, port: int) -> list[str]:
+        return ["127.0.0.3", "127.0.0.1"]
+
+    prober = Prober(
+        ssl_context=tls.client, timeout_s=3, resolve=resolve, address_allowed=lambda address: True
+    )
+    try:
+        async with asyncio.timeout(10):
+            probe = await prober.probe(Orchestrator(url=f"https://orch.test:{port}", public_only=True))
+    finally:
+        silent.close()
+    assert probe.failure is None

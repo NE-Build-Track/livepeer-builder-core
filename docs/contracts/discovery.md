@@ -84,8 +84,10 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
   reserved, multicast or IPv4-compatible. An IPv4 address carried in IPv6 (mapped, NAT64 `64:ff9b::/96`,
   6to4) is judged as that IPv4 address. The checked addresses are tried in order, with TLS still verified
   against the name, and no other address is ever dialled. So a registration cannot reach the service's
-  own network or a metadata endpoint, nor rebind between the check and the connection, and a dead first
-  address does not fail an orchestrator whose next one works. Otherwise `reason="private_address"`;
+  own network or a metadata endpoint, nor rebind between the check and the connection. A dead first
+  address does not fail an orchestrator whose next one works, whether it refuses or stays silent: each
+  address but the last has 1 s to connect (TLS included) before the next is tried. Otherwise
+  `reason="private_address"`;
 - an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
   an empty inventory that replaces the last good one. `null` means no runners;
 - any other failure, of any kind, is `reason="failed"` for that orchestrator alone: it never ends the

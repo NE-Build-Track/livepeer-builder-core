@@ -20,9 +20,9 @@ Today the engine reads the remote signer's `GET /discover-orchestrators`. In liv
 
 ## Acceptance
 
-- [ ] `OrchestratorDirectory`, `Orchestrator`, `StaticDirectory`, `OnChainDirectory` (with a JSON-RPC client), `Prober`, `Catalog`, the server, `DiscoverySettings`, the `lpb discovery` command.
-- [ ] The engine has `HttpDiscoverySource`; `SignerDiscoverySource` and the signer fallback are removed.
-- [ ] Tests, all written first:
+- [x] `OrchestratorDirectory`, `Orchestrator`, `StaticDirectory`, `OnChainDirectory` (with a JSON-RPC client), `Prober`, `Catalog`, the server, `DiscoverySettings`, the `lpb discovery` command.
+- [x] The engine has `HttpDiscoverySource`; `SignerDiscoverySource` and the signer fallback are removed.
+- [x] Tests, all written first (each rule also checked by a mutation that the tests catch):
   - static parsing and deduplication;
   - the on-chain pool walk with active and registered filters, the pool-size cap, and RPC errors;
   - ABI encoding and decoding, and selectors checked against Keccak-256;
@@ -31,21 +31,21 @@ Today the engine reads the remote signer's `GET /discover-orchestrators`. In liv
   - server routes and readiness;
   - settings;
   - engine source and assembly.
-- [ ] Live check of `OnChainDirectory` against Arbitrum mainnet, using a public RPC by hand (not in CI).
-- [ ] Docs:
+- [x] Live check of `OnChainDirectory` against Arbitrum mainnet, using a public RPC by hand (not in CI): a pool of 100, 53 active and registered, in 5.5 s.
+- [x] Docs:
   - `docs/contracts/engine.md` (discovery);
   - `docs/RELIABILITY.md` (settings and failure modes);
   - the extension guide (writing a directory, both implementations as examples, or replacing the service);
   - `ARCHITECTURE.md` and the diagrams;
   - D43;
   - generated docs.
-- [ ] Deploy:
+- [ ] Deploy (all in the branch except the last item, which waits for the owner):
   - the dev stack and Railway run the discovery service on the static list;
   - the engine's `LPB_DISCOVERY_URL` points at it;
   - the signer configs lose `Orchestrators` and pinned certificates;
   - the deploy workflow learns the `discovery` service;
   - the Railway service itself is created by the owner.
-- [ ] ChatLPT and the console are re-pinned. Their stacks run the discovery service on the static list, and their live tests pass.
+- [x] ChatLPT, the console and inference-gateway are pinned to the branch. Their stacks run the discovery service on the static list, and their live tests pass (re-pin to the merge on `releases/m3`).
 
 ## Design
 
@@ -168,6 +168,21 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
 ## Progress
 
 - 26 October: issue #45 opened, plan written, and branch started.
+- 26 October: the discovery service, both directories, the engine change, docs and deploy are on the
+  branch (`985f23d`). Local CI is green, and the store suite passes on PostgreSQL 16.
+- 26 October: live on all three consumers.
+  - **Console:** discovery serves the two trusted orchestrators and excludes three self-signed ones. The
+    endpoint sweep (42/42), the console API test (33/33), the cost probe (7/7) and the disconnect test pass,
+    and the REST spec is unchanged.
+  - **ChatLPT:** 23/23.
+  - **inference-gateway:** with its `runner-trust` mounted, discovery also keeps the pinned open-pool. The
+    paid provider test passed 11/11 on its later runs.
+  - **Gateway failures in its first runs:**
+    - two signer timeouts at `/generate-live-payment`, both before payment;
+    - one stream end that missed the 10 s finalize limit;
+    - one SQLite `OperationalError` at job creation.
+  - None involved discovery, and a 16-worker stress run on a SQLite file (1,103 buffered and streamed jobs,
+    cost reads, usage reports, cost sync) reproduced none of them.
 
 ## Decision log
 

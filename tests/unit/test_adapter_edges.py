@@ -17,8 +17,8 @@ from livepeer_builder.adapters.batteries import (
     usage_row_from_item,
 )
 from livepeer_builder.adapters.sdk import (
+    HttpDiscoverySource,
     SdkRunnerTransport,
-    SignerDiscoverySource,
     call_error,
     network_kind,
     runners_from_entries,
@@ -128,9 +128,9 @@ def test_wire_format_edges() -> None:
 # -- SDK -----------------------------------------------------------------------------------------------
 
 
-async def test_signer_discovery_parses_entries() -> None:
+async def test_http_discovery_reads_only_the_discovery_url_and_parses_entries() -> None:
     async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
-        assert kwargs["signer_headers"] == {"Authorization": "Bearer k"}
+        assert kwargs == {"discovery_url": "http://discovery:8939/discovery"}  # no signer, no credentials
         return [
             {
                 "address": "https://o",
@@ -138,9 +138,7 @@ async def test_signer_discovery_parses_entries() -> None:
             }
         ]
 
-    source = SignerDiscoverySource(
-        signer_url="https://s", signer_headers={"Authorization": "Bearer k"}, discover=fake_discover
-    )
+    source = HttpDiscoverySource("http://discovery:8939/discovery", discover=fake_discover)
     (runner,) = await source.fetch()
     assert runner.rate is None and runner.orchestrator_url == "https://o"
 

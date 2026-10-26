@@ -33,6 +33,7 @@ PUBLIC_MODULES = (
     "livepeer_builder.protocols",
     "livepeer_builder.runtime",
     "livepeer_builder.http",
+    "livepeer_builder.discovery",
     "livepeer_builder.store",
     "livepeer_builder.testing",
 )

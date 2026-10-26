@@ -32,7 +32,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/livepeer-signer /usr/local/bin/livepeer-signer
 COPY entrypoint.py /usr/local/bin/entrypoint.py
-COPY orchestrators.txt /etc/orchestrators.txt
 RUN chmod 0755 /usr/local/bin/entrypoint.py
 EXPOSE 8937
 ENTRYPOINT ["python3", "-u", "/usr/local/bin/entrypoint.py"]

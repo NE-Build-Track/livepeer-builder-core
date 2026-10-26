@@ -97,17 +97,21 @@ async def test_a_supplied_store_is_used_and_the_configured_database_is_never_ope
     )  # written to the supplied store
 
 
-async def test_a_decorated_default_discovery_source_keeps_the_signer_header() -> None:
+async def test_a_decorated_default_discovery_source_is_the_configured_one() -> None:
     seen: list[str | None] = []
 
-    async def discover(request: web.Request) -> web.Response:
+    async def inventory(request: web.Request) -> web.Response:
         seen.append(request.headers.get("Authorization"))
         return web.json_response([])
 
     app = web.Application()
-    app.router.add_get("/discover-orchestrators", discover)
-    async with TestServer(app) as signer:
-        configured = settings(signer_url=str(signer.make_url("/")), shared_payment_key="lpg_shared")
+    app.router.add_get("/discovery", inventory)
+    async with TestServer(app) as discovery:
+        configured = settings(
+            discovery_url=str(discovery.make_url("/discovery")),
+            signer_url="http://signer",
+            shared_payment_key="lpg_k",
+        )
         recording: list[Recording] = []
 
         def decorate(parts: EngineParts) -> EngineParts:
@@ -120,7 +124,7 @@ async def test_a_decorated_default_discovery_source_keeps_the_signer_header() ->
         finally:
             await engine.stop()
     assert recording[0].fetches == 1
-    assert seen == ["Bearer lpg_shared"]  # the configured default, wrapped, not re-created
+    assert seen == [None]  # the configured default, wrapped, not re-created; and no credential is sent (#45)
 
 
 async def test_own_authenticators_run_before_api_keys(store: SqlStore) -> None:

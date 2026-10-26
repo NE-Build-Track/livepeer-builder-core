@@ -15,7 +15,7 @@ from livepeer_builder import protocols
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.adapters.sdk import SdkRunnerStream, SdkRunnerTransport, SignerDiscoverySource
+from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerStream, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
@@ -55,7 +55,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain),
     "AccessPolicy": (DefaultPolicy,),
     "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
-    "DiscoverySource": (SignerDiscoverySource, StaticDiscoverySource),
+    "DiscoverySource": (HttpDiscoverySource, StaticDiscoverySource),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),

@@ -227,6 +227,9 @@ def test_review_defaults_are_strict() -> None:
         ({"jwt_admin_scope": "jobs.run"}, "admin"),
         ({"jwt_admin_scope": "openid"}, "admin"),
         ({"jwt_token_types": ""}, "token_types"),
+        ({"jwt_admin_read_scope": "jobs.read"}, "admin_read"),
+        ({"jwt_admin_read_scope": "profile"}, "admin_read"),
+        ({"jwt_admin_scope": "ops", "jwt_admin_read_scope": "ops"}, "admin_read"),
     ],
     ids=[
         "http issuer",
@@ -234,6 +237,9 @@ def test_review_defaults_are_strict() -> None:
         "admin scope is an operation",
         "admin scope is openid",
         "no token type",
+        "read scope is an operation",
+        "read scope is profile",
+        "read scope is the admin scope",
     ],
 )
 def test_risky_jwt_settings_fail_at_startup(values: dict[str, Any], complaint: str) -> None:

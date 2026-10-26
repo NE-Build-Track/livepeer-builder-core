@@ -131,6 +131,9 @@ mode, with no code:
   OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`). The admin scope makes an
   engine-wide admin that skips permission and ownership checks in every application, so it must be a scope
   the provider issues to operators alone;
+- an `LPB_JWT_ADMIN_READ_SCOPE` that ordinary tokens carry, or that equals the admin scope (D46): the read
+  scope marks a read-only admin across the application, so it too must be issued to operators and dashboards
+  alone;
 - an empty `LPB_JWT_TOKEN_TYPES`.
 
 **Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):

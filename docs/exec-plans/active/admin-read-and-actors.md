@@ -33,6 +33,8 @@ An engine running with `LPB_AUTH=jwt` has no engine keys. An admin console must 
   allowance), an auditor sees every actor in its application.
 - [x] **Issuing one:** engine keys can be issued with `kind="auditor"`; a JWT carrying
   `LPB_JWT_ADMIN_READ_SCOPE` is an auditor. `LPB_JWT_ADMIN_SCOPE` still wins when both are present.
+  Startup refuses a read scope that is an operation, a standard OpenID scope, or the admin scope itself,
+  the same rule D47 gives the admin scope.
 - [x] **`FakeEngine`:** follows the same rule, checked by the shared contract test.
 - [x] **Docs:** `access.md` (the auditor, the actor routes, why `sub` is the identity default),
   `RELIABILITY.md`, D46, generated docs.

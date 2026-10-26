@@ -5,8 +5,8 @@
 - **Owner:** Mike builds it; John reviews. John wrote the gap analysis and plan.
 - **Ticket:** ISS-08, [Network-Engineering-SPE#21](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/21) (M3).
 - **Branch:** `tasks/mz/iss-08-credentials`, off `releases/m3` at `629f1ab`.
-- **Progress:** decisions locked 26 October (D44); engine work done and in review. The console PR is
-  next.
+- **Progress:** decisions locked 26 October (D44); built, shown live, and in review (this PR, and console
+  #6).
 - **Plan source:** [John's 20 October plan](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/21#issuecomment-6303045369),
   checked again against `629f1ab` on 26 October. Every gap it names was still open.
 - **Decision:** D44.
@@ -36,8 +36,8 @@ From the ticket, and the "Done when" of 21 October:
   bootstrap, issue, authenticate, provision, inspect, rotate, revoke. Enterprise enrollment is shown as
   replaceable.
 - [x] `FakeEngine` follows the same rules, checked by the shared contract test.
-- [ ] The console gets **Inspect key** and **Rotate key** operator actions, in a console PR pinned to
-  this branch.
+- [x] The console gets **Inspect key** and **Rotate key** operator actions, in a console PR pinned to
+  this branch ([builder-core-mgmt-ui#6](https://github.com/NE-Build-Track/builder-core-mgmt-ui/pull/6), at `d057935`).
 - [x] Generated docs regenerated; local CI green: tests, coverage floors, ruff, mypy, `check_docs`,
   `gen-docs --check`, `lpb smoke`; the store suite also on PostgreSQL 16.
 
@@ -110,6 +110,15 @@ the merge.
   - **Found while testing:** at DEBUG, the SQLite driver echoes SQL parameters, token hashes among
     them. The engine never enables DEBUG, and a hash is not a credential. The test pins what the engine
     controls; the contract says so.
+
+- 26 October: the console's Rotate action and key inspection
+  ([builder-core-mgmt-ui#6](https://github.com/NE-Build-Track/builder-core-mgmt-ui/pull/6)). Shown live on
+  the console stack with the engine built at `d057935`:
+  - console API test 33/33;
+  - an engine probe 22/22: inspect, rotate, the old token 401 at once, 403/404 on job, cost and result, an
+    admin listing every actor, the `keys.*` lines in the engine log, and no token in it;
+  - the Rotate flow in headless Chrome 15/15.
+  - ChatLPT `main` (583) and inference-gateway `main` (132) pass on this branch's code, unchanged.
 
 ## Decision log
 

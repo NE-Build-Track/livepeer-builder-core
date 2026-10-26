@@ -6,9 +6,19 @@ discovered by writing an ``OrchestratorDirectory``; ``StaticDirectory`` and ``On
 the two this package ships.
 """
 
+from livepeer_builder.discovery.catalog import Catalog, CatalogStatus
 from livepeer_builder.discovery.directory import Orchestrator, OrchestratorDirectory
 from livepeer_builder.discovery.onchain import OnChainDirectory
 from livepeer_builder.discovery.probe import Probe, Prober
 from livepeer_builder.discovery.static import StaticDirectory
 
-__all__ = ["OnChainDirectory", "Orchestrator", "OrchestratorDirectory", "Probe", "Prober", "StaticDirectory"]
+__all__ = [
+    "Catalog",
+    "CatalogStatus",
+    "OnChainDirectory",
+    "Orchestrator",
+    "OrchestratorDirectory",
+    "Probe",
+    "Prober",
+    "StaticDirectory",
+]

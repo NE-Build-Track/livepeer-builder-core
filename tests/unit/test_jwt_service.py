@@ -84,8 +84,10 @@ def test_jwt_settings_come_from_the_environment() -> None:
             "LPB_JWT_AUDIENCE": AUDIENCE,
             "LPB_JWT_ALGORITHMS": "RS256,PS256",
             "LPB_JWT_ADMIN_SCOPE": "livepeer:admin",
+            "LPB_JWT_ADMIN_READ_SCOPE": "livepeer:read",
         }
     )
+    assert (settings.jwt_admin_scope, settings.jwt_admin_read_scope) == ("livepeer:admin", "livepeer:read")
     assert settings.auth == ("jwt", "api_keys")
     assert settings.jwt_algorithms == ("RS256", "PS256")
     assert (settings.jwt_actor_claim, settings.jwt_scope_claim, settings.jwt_leeway_s) == (

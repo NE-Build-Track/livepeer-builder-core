@@ -476,3 +476,12 @@ async def test_a_key_url_that_worked_and_then_fails_is_discovered_again(
     clock.now += 6
     assert await authenticator.authenticate(bearer(provider.token())) is not None
     assert provider.requests[-2:] == [DISCOVERY, JWKS_URL_2]
+
+
+async def test_the_admin_read_scope_makes_an_auditor_and_admin_wins(make: Make, provider: Provider) -> None:
+    """A dashboard's service account gets a read-only credential (#52, D46)."""
+    authenticator = make(admin_scope="livepeer:admin", admin_read_scope="livepeer:read")
+    reader = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read")))
+    assert reader is not None and reader.credential_kind == "auditor"
+    both = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read livepeer:admin")))
+    assert both is not None and both.credential_kind == "admin"

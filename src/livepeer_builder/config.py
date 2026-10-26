@@ -68,6 +68,7 @@ class EngineSettings(Contract):
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential
+    jwt_admin_read_scope: str | None = None  # an auditor: a read-only admin (D46); the admin scope wins
     jwt_leeway_s: float = Field(default=30.0, ge=0)
 
     # operations

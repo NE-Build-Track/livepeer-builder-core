@@ -88,10 +88,12 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
         application_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:x"), currency="USD", status="active", created_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_actor(actor)
-    await sql.save_actor(actor.model_copy(update={"status": "paused"}))
+    await sql.save_actor(actor.model_copy(update={"label": "Alice Smith"}))
+    await sql.save_actor(actor.model_copy(update={"status": "paused", "label": "Alice Smith"}))
     loaded = await sql.get_actor("default", "alice")
     assert loaded is not None and loaded.status == "paused" and loaded.secret_ref.ref == "db:x"
+    assert loaded.label == "Alice Smith"  # the readable name beside an opaque actor_id (D46)
+    assert [a.label for a in await sql.list_actors("default")] == ["Alice Smith"]
 
     key = AccessKey(
         key_id="k", kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),

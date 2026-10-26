@@ -55,6 +55,7 @@ class ProvisionedActor(Contract):
     status: AllocationStatus
     created_at: datetime
     updated_at: datetime
+    label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
 
 
 class FundRequest(Contract):

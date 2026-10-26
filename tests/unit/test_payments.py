@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, NotProvisioned
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
@@ -19,13 +19,19 @@ def usd(amount: str) -> Money:
 
 
 def provision_request(
-    actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1"
+    actor_id: str = "alice",
+    amount: str = "5",
+    grant_id: str = "grant_1",
+    *,
+    application_id: str = "default",
+    label: str = "",
 ) -> ProvisionRequest:
     return ProvisionRequest(
-        application_id="default",
+        application_id=application_id,
         actor_id=actor_id,
         amount=usd(amount),
         grant_id=grant_id,
+        label=label,
     )
 
 
@@ -218,3 +224,52 @@ async def test_allowance_is_read_from_the_provider(
     assert allowance.granted == usd("5") and allowance.available == usd("5")
     with pytest.raises(AccessDenied):
         await engine.payments.allowance(bob, "alice")
+
+
+# -- the actor collection (#52, D46) ------------------------------------------------------------------------
+
+
+async def test_provisioning_stores_the_label_and_admins_list_the_actors(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+) -> None:
+    engine = await make_engine()
+    opaque = "4f6c2a1e-9b3d-4c8e-a1f0-7d2e5b9c3a10"  # an identity provider's sub
+    await engine.payments.provision(admin, provision_request(actor_id=opaque, label="Alice Smith"))
+    await engine.payments.provision(admin, provision_request(actor_id="bob", application_id="app-2"))
+    listed = await engine.payments.list_actors(admin)
+    assert [(a.application_id, a.actor_id, a.label) for a in listed] == [
+        ("app-2", "bob", ""), ("default", opaque, "Alice Smith"),
+    ]  # fmt: skip
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, application_id="app-2")] == ["bob"]
+    assert (await engine.payments.get_actor(admin, "default", opaque)).label == "Alice Smith"
+    with pytest.raises(NotFound):
+        await engine.payments.get_actor(admin, "default", "nobody")
+    with pytest.raises(AccessDenied):
+        await engine.payments.list_actors(alice)  # admin reads need an admin or auditor credential
+
+
+async def test_the_actor_list_filters_by_status_and_limits(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await make_engine()
+    for name in ("a", "b", "c"):
+        await engine.payments.provision(admin, provision_request(actor_id=name))
+    await engine.payments.set_status(admin, "default", "b", "paused")
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, status="paused")] == ["b"]
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, limit=2)] == ["a", "b"]
+
+
+async def test_an_auditor_lists_only_its_applications_actors(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await make_engine()
+    await engine.payments.provision(admin, provision_request(actor_id="alice"))
+    await engine.payments.provision(admin, provision_request(actor_id="bob", application_id="app-2"))
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # application "default"
+    assert [a.actor_id for a in await engine.payments.list_actors(auditor)] == ["alice"]
+    with pytest.raises(AccessDenied, match="another application"):
+        await engine.payments.list_actors(auditor, application_id="app-2")
+    with pytest.raises(AccessDenied, match="another application"):
+        await engine.payments.get_actor(auditor, "app-2", "bob")
+    with pytest.raises(AccessDenied):
+        await engine.payments.provision(auditor, provision_request(actor_id="carol"))

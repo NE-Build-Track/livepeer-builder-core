@@ -259,3 +259,33 @@ async def test_a_missing_permission_is_403_and_another_actors_job_404_over_rest(
     usage = {"quantities": {"tokens": 1}}
     assert (await client.post(f"/v1/jobs/{job_id}/usage", json=usage, headers=as_bob)).status_code == 404
     assert (await client.post(f"/v1/jobs/{job_id}/usage", json=usage, headers=as_runner)).status_code == 200
+
+
+async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignore[no-untyped-def]
+    client, engine, admin, alice = api
+    provisioned = await client.post(
+        ALLOCATION,
+        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "label": "Alice Smith"},
+        headers=admin,
+    )
+    assert provisioned.status_code == 201 and provisioned.json()["label"] == "Alice Smith"
+    listed = await client.get("/v1/admin/actors", headers=admin)
+    assert listed.status_code == 200
+    assert [(a["actor_id"], a["label"], a["status"]) for a in listed.json()] == [
+        ("alice", "Alice Smith", "active")
+    ]
+    assert (await client.get("/v1/admin/actors?status=paused", headers=admin)).json() == []
+    one = await client.get(ALLOCATION, headers=admin)
+    assert one.status_code == 200 and one.json()["actor_id"] == "alice"
+    assert (await client.get(ALLOCATION.replace("alice", "nobody"), headers=admin)).status_code == 404
+    assert (await client.get("/v1/admin/actors", headers=alice)).status_code == 403
+    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    auditor = await engine.keys.issue(operator, kind="auditor", actor_id="dashboard")
+    as_auditor = {"Authorization": f"Bearer {auditor.token}"}
+    assert (await client.get("/v1/admin/actors", headers=as_auditor)).status_code == 200
+    funded = await client.post(
+        ALLOCATION + "/fund",
+        json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
+        headers=as_auditor,
+    )
+    assert funded.status_code == 403  # an auditor reads; it never moves money

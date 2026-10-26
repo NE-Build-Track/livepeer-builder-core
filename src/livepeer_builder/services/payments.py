@@ -162,9 +162,36 @@ class PaymentsService:
             status="exhausted" if request.amount.amount == 0 else "active",
             created_at=now,
             updated_at=now,
+            label=request.label,
         )
         await self._store.save_actor(provisioned)
         return provisioned
+
+    # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------
+
+    async def list_actors(
+        self,
+        admin: ActorContext,
+        *,
+        application_id: str | None = None,
+        status: AllocationStatus | None = None,
+        limit: int = 500,
+    ) -> list[ProvisionedActor]:
+        """The provisioned actors: every application's for an admin unless it names one, an auditor's own.
+        The engine's own records, so an admin console never derives them from keys (gap G2)."""
+        scope = application_id or (None if admin.credential_kind == "admin" else admin.application_id)
+        resource = None if scope is None else ResourceRef(kind="actor", application_id=scope)
+        self._policy.check(admin, Operation.ADMIN_READ, resource)
+        actors = await self._store.list_actors(scope)
+        return [actor for actor in actors if status is None or actor.status == status][:limit]
+
+    async def get_actor(self, admin: ActorContext, application_id: str, actor_id: str) -> ProvisionedActor:
+        resource = ResourceRef(kind="actor", application_id=application_id, owner_actor_id=actor_id)
+        self._policy.check(admin, Operation.ADMIN_READ, resource)  # before the lookup (D44)
+        actor = await self._store.get_actor(application_id, actor_id)
+        if actor is None:
+            raise NotFound(f"actor {actor_id!r} is not provisioned")
+        return actor
 
     async def fund(
         self, admin: ActorContext, application_id: str, actor_id: str, request: FundRequest

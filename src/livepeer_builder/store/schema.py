@@ -142,6 +142,7 @@ actors = Table(
     Column("status", String(16), nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
+    Column("label", String(ID), nullable=False, server_default=""),  # readable beside an opaque actor_id
 )
 
 secrets = Table(

@@ -29,6 +29,7 @@ erDiagram
         string status
         datetime created_at
         datetime updated_at
+        string label
     }
     lpb_attempts {
         string job_id PK
@@ -144,6 +145,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `status` | VARCHAR(16) | no |  |
 | `created_at` | DATETIME | no |  |
 | `updated_at` | DATETIME | no |  |
+| `label` | VARCHAR(200) | no |  |
 
 ## `lpb_attempts`
 

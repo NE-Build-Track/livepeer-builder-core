@@ -162,6 +162,7 @@ classDiagram
         +enum status
         +datetime created_at
         +datetime updated_at
+        +str label
     }
     class SecretRef {
         +str ref

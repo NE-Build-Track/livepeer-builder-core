@@ -33,6 +33,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms, asymmetric only |
 | `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_APPLICATION_CLAIM`, `LPB_JWT_APPLICATION_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `application_id` |
 | `LPB_JWT_SCOPE_CLAIM`, `LPB_JWT_SCOPE_PREFIX`, `LPB_JWT_ADMIN_SCOPE` | `scope`, empty, unset | Scopes named after operations become permissions; the admin scope makes an admin credential |
+| `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging |
 

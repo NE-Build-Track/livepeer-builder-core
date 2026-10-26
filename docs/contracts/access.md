@@ -16,12 +16,14 @@ in adapters.
 | `actor_id` | Opaque to the engine; the owner of jobs, costs and allocations |
 | `application_id` | Tenant isolation; defaults to `default` |
 | `permissions` | `Operation` values (see below) |
-| `credential_kind` | `actor`, `admin` or `service` |
+| `credential_kind` | `actor`, `admin`, `auditor` (a read-only admin, D46) or `service` |
 | `attributes` | Non-secret labels copied onto records. **Never secrets** |
 | `auth` | Provenance (method, issuer, credential id), for audit only |
 
 **Operations:** `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`, `admin.keys`,
-`admin.allocations`, `admin.costs`, `actors.assert`.
+`admin.allocations`, `admin.costs`, `admin.read`, `actors.assert`. `admin.read` is every admin read: the
+key list and key inspection, the grant list, the actor list and one actor's allocation, and
+reconciliation. The other `admin.*` operations are the writes.
 
 ## Protocols
 
@@ -55,6 +57,10 @@ class AccessPolicy(Protocol):
 - **Admin operations** (`admin.*`) need an **admin credential kind**. A permission string on an actor
   key is not enough.
 - **An admin credential** may act on any application's records.
+- **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
+  `events.read`, across every actor of its own application. Every write is `AccessDenied`, and so is any
+  record of another application. It is for a dashboard or an audit reader that must not move money. An
+  engine key can be issued as `auditor`, and a JWT is one with `LPB_JWT_ADMIN_READ_SCOPE`.
 - **Everyone else** needs the operation's permission, and may touch only resources owned by their own
   `(application_id, actor_id)`.
 - **Another actor's record** reads as missing (404), never 403, so its existence isn't revealed. A
@@ -72,11 +78,12 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
-| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin lists every actor's jobs in its application |
+| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
-| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's projections and summary cover every actor in its application; summary and allowance take `?actor_id=` to name one |
+| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its application; summary and allowance take `?actor_id=` to name one |
+| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `admin.read`. The provisioned actors, with status, allocation and `label`; filter by `application_id`, `status` and `limit`. An admin lists every application unless it names one; an auditor lists its own |
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -150,10 +157,10 @@ mode, with no code:
 
 | Field | From |
 | --- | --- |
-| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`) |
+| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at provisioning (D46) |
 | `application_id` | `LPB_JWT_APPLICATION_CLAIM` when set, otherwise `LPB_JWT_APPLICATION_ID` (`default`) |
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
-| `credential_kind` | `admin` only when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `actor` |
+| `credential_kind` | `admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
 
 **Revocation.** A JWT cannot be revoked before it expires; an `lpk_` key can. Issue short-lived access
@@ -227,7 +234,7 @@ same steps run on the dev stack.
 | 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read` |
 | 3. Fund the user (`per_actor` mode) | `POST /v1/admin/applications/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "..."}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
-| 5. Inspect the key | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all) | `AccessKey`: kind, actor, application, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 5. Inspect the key, and who is provisioned | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the provisioned actors | `AccessKey`: kind, actor, application, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
 | 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate`, optionally `{"label": "..."}` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
 | 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
 

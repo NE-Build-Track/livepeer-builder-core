@@ -5,7 +5,8 @@
 - **Owner:** Mike builds it; John reviews. John wrote the gap analysis and plan.
 - **Ticket:** ISS-08, [Network-Engineering-SPE#21](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/21) (M3).
 - **Branch:** `tasks/mz/iss-08-credentials`, off `releases/m3` at `629f1ab`.
-- **Progress:** decisions locked 26 October (D44); in progress.
+- **Progress:** decisions locked 26 October (D44); engine work done and in review. The console PR is
+  next.
 - **Plan source:** [John's 20 October plan](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/21#issuecomment-6303045369),
   checked again against `629f1ab` on 26 October. Every gap it names was still open.
 - **Decision:** D44.
@@ -24,20 +25,21 @@ Finish the standalone access path that ISS-03 started:
 
 From the ticket, and the "Done when" of 21 October:
 
-- [ ] Keys can be inspected (`GET /v1/admin/keys/{key_id}`) and rotated
+- [x] Keys can be inspected (`GET /v1/admin/keys/{key_id}`) and rotated
   (`POST /v1/admin/keys/{key_id}/rotate`) without disclosing a secret.
-- [ ] A missing permission answers 403 and another actor's job answers 404, on every job and cost route:
+- [x] A missing permission answers 403 and another actor's job answers 404, on every job and cost route:
   - get, list, result, usage report and submit;
   - cost, projections, summary and allowance.
-- [ ] Key lifecycle events (bootstrapped, issued, rotated, revoked) are logged, with no secret in any
+- [x] Key lifecycle events (bootstrapped, issued, rotated, revoked) are logged, with no secret in any
   log record, and that is tested across the full lifecycle, `lpg_` included.
-- [ ] An example standalone flow is documented in `docs/contracts/access.md`:
+- [x] An example standalone flow is documented in `docs/contracts/access.md`:
   bootstrap, issue, authenticate, provision, inspect, rotate, revoke. Enterprise enrollment is shown as
   replaceable.
-- [ ] `FakeEngine` follows the same rules, checked by the shared contract test.
+- [x] `FakeEngine` follows the same rules, checked by the shared contract test.
 - [ ] The console gets **Inspect key** and **Rotate key** operator actions, in a console PR pinned to
   this branch.
-- [ ] Generated docs regenerated; local CI green.
+- [x] Generated docs regenerated; local CI green: tests, coverage floors, ruff, mypy, `check_docs`,
+  `gen-docs --check`, `lpb smoke`; the store suite also on PostgreSQL 16.
 
 ## Design
 
@@ -95,6 +97,19 @@ the merge.
 ## Progress
 
 - 26 October: gaps re-checked against `629f1ab`; decisions locked with Mike (D44); branch started.
+- 26 October: built test-first. Every new test was seen failing first, and the no-secrets test was also
+  checked by two mutations, logging a token and logging its hash.
+  - **Keys:** `KeyRepo.get_access_key` and an atomic `rotate_access_key`; `KeyService.get` and
+    `rotate`; the `keys.*` audit events; `KeysApi`; the two REST routes.
+  - **Answers:** the answer rule in `services/ownership.py`, used by jobs and costs; `FakeEngine` follows
+    it, checked by the shared contract test.
+  - **Docs:** the example flow in `access.md`.
+  - **One existing test changed:** `test_reserved_execution_modes_fail_loudly` now expects 404 for
+    `result()` on an unknown job, because the checks run before the 501.
+  - **Results:** 736 passed locally, and the store suite on PostgreSQL 16 (48).
+  - **Found while testing:** at DEBUG, the SQLite driver echoes SQL parameters, token hashes among
+    them. The engine never enables DEBUG, and a hash is not a credential. The test pins what the engine
+    controls; the contract says so.
 
 ## Decision log
 

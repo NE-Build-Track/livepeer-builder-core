@@ -258,7 +258,7 @@ The service ships two directories, and each is a complete example:
 | Directory | Who is eligible | Reads |
 | --- | --- | --- |
 | `StaticDirectory` | A list you configure (`LPD_ORCHESTRATORS`) | Nothing: the list is the answer |
-| `OnChainDirectory` | Orchestrators active in the current round and registered in the `AIServiceRegistry` | Arbitrum through `LPD_ARBITRUM_RPC_URL` (plain `eth_call`) |
+| `OnChainDirectory` | Orchestrators active in the current round and registered in the AI Service Registry (`LPD_SERVICE_REGISTRY`; `controller` for the protocol's) | Arbitrum through `LPD_ARBITRUM_RPC_URL` (plain `eth_call`): the `Controller`, then the `BondingManager` and the registry |
 
 Your own directory follows the same shape. This one narrows whichever directory is configured to the
 hosts your organization approved, so you can use the protocol's answer and still vet who you pay:

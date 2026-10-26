@@ -123,7 +123,7 @@ The service's settings use the `LPD_` prefix, so they never collide with the eng
 | `LPD_DIRECTORY` | `static` | `static` or `onchain` |
 | `LPD_ORCHESTRATORS` | unset | Static: comma-separated base URLs, or a path to a file with one per line |
 | `LPD_ARBITRUM_RPC_URL` | unset | On-chain: required |
-| `LPD_BONDING_MANAGER`, `LPD_AI_SERVICE_REGISTRY` | Arbitrum mainnet addresses | On-chain contracts. The `BondingManager` proxy survives upgrades; a redeployed registry is a settings change |
+| `LPD_CONTROLLER`, `LPD_SERVICE_REGISTRY` | the Arbitrum `Controller`; the AI Service Registry | The `BondingManager` is looked up in the `Controller`. The registry is an override of the Controller's `ServiceRegistry` (`controller` reads that one). Replaced `LPD_BONDING_MANAGER` and `LPD_AI_SERVICE_REGISTRY` after the PR #46 review |
 | `LPD_DIRECTORY_INTERVAL_S` | `3600` | Directory reload; the active set changes per round |
 | `LPD_PROBE_INTERVAL_S` | `30` | Inventory refresh |
 | `LPD_MAX_FAILED_REFRESHES` | `6` | Consecutive failed probes before eviction (`0` evicts at once) |
@@ -184,6 +184,22 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
   - None involved discovery, and a 16-worker stress run on a SQLite file (1,103 buffered and streamed jobs,
     cost reads, usage reports, cost sync) reproduced none of them.
 
+- 26 October: PR #46 review (Cursor's five threads and John's comment), each fixed test-first:
+  - **One orchestrator never breaks the pass:** a non-list `runners` is that orchestrator's failure, and
+    so is any unexpected error. It never raises through the pass, and never reads as an empty inventory.
+  - **The refresh loop:** logs a failed pass and keeps ticking; a directory load is time-limited; `/readyz`
+    fails once the loop has stopped.
+  - **Secrets:** the RPC key stays out of the log (`httpx` at WARNING) and out of `/readyz`
+    (`directory_error` is a stable reason; JSON-RPC errors are reported by code).
+  - **On-chain loads:** one unreadable orchestrator is skipped, not the whole load.
+  - **Registrations are untrusted:** https only; resolved, checked public, and pinned by the prober; the
+    walk is capped at 1000.
+  - **John's comment:** contracts come through the `Controller`, with the AI Service Registry as the
+    default override (checked on Arbitrum: the Controller resolves `ServiceRegistry` and `BondingManager`;
+    `AIServiceRegistry` is unregistered).
+  - **Proof:** I reproduced the probe, refresh-loop and log-leak defects on `00ed0f4` first, and the new
+    tests were also checked by mutations.
+
 ## Decision log
 
 - **26 October.**
@@ -199,3 +215,11 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
   discovery container and those orchestrators stay discoverable. "Untrusted" means untrusted by the
   deployment's store. Pinned by `test_the_default_trust_store_is_the_deployments_so_pinned_certificates_count`.
 - **26 October, Railway list.** Railway's signer list moves to the discovery service unchanged (`deploy/railway/discovery/orchestrators.txt`). The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry.
+- **26 October, PR #46 review (Mike).**
+  - **Fixes:** all five of Cursor's threads.
+  - **Registry:** the on-chain contracts come through the protocol's `Controller`, and
+    `LPD_SERVICE_REGISTRY` defaults to the AI Service Registry as an override of the Controller's
+    `ServiceRegistry`. The Controller does not know the AI registry. This keeps the 26 October rule
+    (active, and registered for AI), and an operator can read the protocol registry with `controller`.
+  - **Exposure:** the service is public on Railway (John, `00ed0f4`), so `/readyz` carries only stable
+    reasons.

@@ -653,9 +653,11 @@ classDiagram
     }
     class OnChainDirectory {
         -chain EthCall
-        -bonding_manager str
-        -registry str
-        pool walk, isActiveTranscoder, getServiceURI
+        -controller str
+        -registry str? AI registry by default
+        -max_pool int
+        Controller lookups, pool walk, isActiveTranscoder, getServiceURI
+        https only, marks public_only, skips unreadable
     }
     class EthCall {
         <<interface>>
@@ -674,11 +676,12 @@ classDiagram
     class Prober {
         16 at a time, 5 s, 1 MiB
         deployment trust store
+        public_only: resolve, check, pin the address
     }
     class Probe {
         +orchestrator Orchestrator
         +entry map?
-        +failure untrusted_certificate or failed
+        +failure untrusted_certificate, private_address or failed
     }
     class Catalog {
         +async load_directory() None
@@ -704,25 +707,28 @@ sequenceDiagram
     autonumber
     participant Cat as Catalog.run
     participant Dir as OnChainDirectory
+    participant Ctl as Controller (eth_call)
     participant BM as BondingManager (eth_call)
-    participant Reg as AIServiceRegistry (eth_call)
+    participant Reg as AIServiceRegistry, the override (eth_call)
     participant Pr as Prober
     participant O as Orchestrator GET /discovery
     participant DS as DiscoveryService (engine)
     participant H as HttpDiscoverySource
     participant Svc as GET /discovery (this service)
-    Cat->>Dir: orchestrators() (every LPD_DIRECTORY_INTERVAL_S)
+    Cat->>Dir: orchestrators() (every LPD_DIRECTORY_INTERVAL_S, within LPD_DIRECTORY_TIMEOUT_S)
+    Dir->>Ctl: getContract(BondingManager), and ServiceRegistry only with LPD_SERVICE_REGISTRY=controller
     Dir->>BM: getTranscoderPoolSize, getFirstTranscoderInPool
-    loop at most pool size
+    loop at most pool size, never past 1000
         Dir->>BM: getNextTranscoderInPool(address)
     end
     par each pool member
         Dir->>BM: isActiveTranscoder(address)
-        Dir->>Reg: getServiceURI(address) (empty, invalid or a manifest: skipped)
+        Dir->>Reg: getServiceURI(address) (empty, not https, a manifest, or unreadable: skipped)
     end
-    Dir-->>Cat: Orchestrator[] (a failed load keeps the previous directory)
-    loop every LPD_PROBE_INTERVAL_S
+    Dir-->>Cat: Orchestrator[] marked public_only (a failed load keeps the previous directory)
+    loop every LPD_PROBE_INTERVAL_S (a failed pass is logged, the loop goes on)
         Cat->>Pr: probe_all(orchestrators)
+        Note over Pr: public_only: resolve once, refuse a non-public address, connect to the one checked
         Pr->>O: GET base URL /discovery (verified TLS, no redirects)
         O-->>Pr: runners, or an error
         Pr-->>Cat: Probe[] (entry, or failure)
@@ -1063,8 +1069,9 @@ classDiagram
         +directory static or onchain
         +orchestrators str?
         +arbitrum_rpc_url SecretStr?
-        +bonding_manager, ai_service_registry
-        +directory_interval_s, probe_interval_s, probe_timeout_s
+        +controller, service_registry
+        +directory_interval_s, directory_timeout_s
+        +probe_interval_s, probe_timeout_s
         +max_failed_refreshes
         +http_host, http_port
         +from_env(env)$ DiscoverySettings

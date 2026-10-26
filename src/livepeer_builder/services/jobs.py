@@ -65,7 +65,7 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
-from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
@@ -193,7 +193,7 @@ class JobService:
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
         """The caller's own jobs; an admin's are every actor's in its application, as the cost reads (D44)."""
-        target = None if actor.credential_kind == "admin" else actor.actor_id
+        target = None if sees_every_actor(actor) else actor.actor_id
         self._policy.check(
             actor,
             Operation.JOBS_READ,

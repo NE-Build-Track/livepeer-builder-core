@@ -53,7 +53,7 @@ class GrantDesk:
         self._currency = currency
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(admin, Operation.ADMIN_READ)
         return await self._manager.list_grants()
 
     async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:

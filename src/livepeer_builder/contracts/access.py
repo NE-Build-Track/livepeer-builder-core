@@ -20,6 +20,7 @@ class Operation(StrEnum):
     ADMIN_KEYS = "admin.keys"
     ADMIN_ALLOCATIONS = "admin.allocations"
     ADMIN_COSTS = "admin.costs"
+    ADMIN_READ = "admin.read"  # every admin read: keys, grants, actors, reconciliation (D46)
     ACTORS_ASSERT = "actors.assert"
 
 
@@ -27,7 +28,7 @@ DEFAULT_ACTOR_PERMISSIONS: frozenset[str] = frozenset(
     {Operation.DISCOVER, Operation.JOBS_RUN, Operation.JOBS_READ, Operation.COSTS_READ}
 )
 
-CredentialKind = Literal["actor", "admin", "service"]
+CredentialKind = Literal["actor", "admin", "auditor", "service"]  # auditor: a read-only admin (D46)
 
 
 class AuthProvenance(Contract):

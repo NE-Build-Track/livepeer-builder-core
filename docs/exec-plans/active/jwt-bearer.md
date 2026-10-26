@@ -113,6 +113,19 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
     - With `jwt,api_keys`: both credentials work, and the challenge is announced once.
     - No token in the engine log.
 
+- 26 October: PR #50 review (Cursor), each item fixed test-first:
+  - **Refused:** a sender-constrained token (`cnf`).
+  - **Key URLs:** a discovered key URL is kept only after it served usable keys, so it is discovered again
+    when it fails or moves. A `jwks_uri` must be http(s).
+  - **Refetches:** only a refetch that worked uses up the minute. A failed fetch pauses the provider for
+    5 s, answering 503.
+  - **The 503 body** is a fixed message; the URL and client error are logged (`auth.jwks_unavailable`).
+  - **Signing keys only:** `use: enc`, or `key_ops` without `verify`, is skipped.
+  - **Algorithms** (found while checking): a key's published `alg` must match the token's.
+  - **Mutations,** each caught: cnf accepted, a bad discovered URL kept, no refetch limit, encryption keys
+    allowed, a key's `alg` ignored, no pause after a failure. The first version of the URL test missed one,
+    so a test for a URL that worked and then moved was added.
+
 ## Decision log
 
 - **26 October (Mike, D45, from his recommendation):**

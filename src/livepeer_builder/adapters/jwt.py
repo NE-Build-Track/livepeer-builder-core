@@ -10,10 +10,12 @@ When the provider's keys cannot be read, nobody can be authenticated by token: `
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
@@ -22,6 +24,8 @@ from livepeer_builder.adapters.auth import bearer_token
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import ActorContext, AuthProvenance, AuthRequest, Operation
 from livepeer_builder.errors import NotAuthenticated, ProviderUnavailable
+
+_LOG = logging.getLogger(__name__)
 
 # What a token's scopes may grant. Admin is a credential kind (LPB_JWT_ADMIN_SCOPE), never a scope string,
 # and actors.assert belongs to the trusted-backend credential alone (D14).
@@ -45,9 +49,26 @@ class JwtSettings:
     realm: str = "livepeer-builder"
 
 
+UNAVAILABLE = "the identity provider's signing keys cannot be read"  # the 503 body: no URL, no client error
+
+
+@dataclass(frozen=True)
+class SigningKey:
+    """A published verification key, and the algorithm it was published for, if it names one."""
+
+    key: jwt.PyJWK
+    algorithm: str | None
+
+
 class JwksCache:
     """The issuer's signing keys: found through its discovery document (unless ``jwks_url`` is given),
-    kept for ``max_age_s``, and fetched again for an unknown ``kid`` at most once per ``refetch_after_s``."""
+    kept for ``max_age_s``, and fetched again for an unknown ``kid`` at most once per ``refetch_after_s``.
+
+    Only keys for signatures count: ``use: enc``, or ``key_ops`` without ``verify``, is skipped. A discovered
+    key URL is kept only once it has served a usable key set, so a bad first one is discovered again. After a
+    failed fetch the provider is left alone for ``pause_after_failure_s``, and the request is answered 503
+    meanwhile (#50 review). Reasons go to the log (``auth.jwks_unavailable``), never to the response.
+    """
 
     def __init__(
         self,
@@ -57,20 +78,24 @@ class JwksCache:
         *,
         max_age_s: float = 3600.0,
         refetch_after_s: float = 60.0,
+        pause_after_failure_s: float = 5.0,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = client
         self._issuer = issuer
-        self._jwks_url = jwks_url
+        self._configured_url = jwks_url  # the operator's: never replaced by discovery
+        self._discovered_url: str | None = None  # kept only after it served a usable key set
         self._max_age_s = max_age_s
         self._refetch_after_s = refetch_after_s
+        self._pause_s = pause_after_failure_s
         self._monotonic = monotonic
-        self._keys: list[jwt.PyJWK] = []
+        self._keys: list[SigningKey] = []
         self._fetched_at: float | None = None
-        self._refetched_at: float | None = None  # the last fetch an unknown kid caused
+        self._refetched_at: float | None = None  # the last successful fetch an unknown kid caused
+        self._failed_at: float | None = None
         self._lock = asyncio.Lock()
 
-    async def key(self, kid: str | None) -> jwt.PyJWK | None:
+    async def key(self, kid: str | None) -> SigningKey | None:
         """The key for ``kid``; with no ``kid``, the only key. ``None`` when the provider has no such key."""
         async with self._lock:
             now = self._monotonic()
@@ -78,8 +103,8 @@ class JwksCache:
                 await self._fetch(now)
             found = self._find(kid)
             if found is None and kid is not None and self._may_refetch(now):
-                self._refetched_at = now
                 await self._fetch(now)
+                self._refetched_at = now  # only a fetch that worked uses up the minute
                 found = self._find(kid)
             return found
 
@@ -89,25 +114,46 @@ class JwksCache:
     def _may_refetch(self, now: float) -> bool:
         return self._refetched_at is None or now - self._refetched_at >= self._refetch_after_s
 
-    def _find(self, kid: str | None) -> jwt.PyJWK | None:
+    def _find(self, kid: str | None) -> SigningKey | None:
         if kid is None:
             return self._keys[0] if len(self._keys) == 1 else None
-        return next((key for key in self._keys if key.key_id == kid), None)
+        return next((signing for signing in self._keys if signing.key.key_id == kid), None)
 
     async def _fetch(self, now: float) -> None:
-        if self._jwks_url is None:
-            document = await self._json(self._issuer.rstrip("/") + "/.well-known/openid-configuration")
-            if document.get("issuer") != self._issuer:
-                raise ProviderUnavailable("the identity provider's discovery document names another issuer")
-            uri = document.get("jwks_uri")
-            if not isinstance(uri, str) or not uri:
-                raise ProviderUnavailable("the identity provider's discovery document has no jwks_uri")
-            self._jwks_url = uri
+        if self._failed_at is not None and now - self._failed_at < self._pause_s:
+            raise ProviderUnavailable(UNAVAILABLE)  # a fetch just failed: leave the provider alone a moment
         try:
-            keys = jwt.PyJWKSet.from_dict(await self._json(self._jwks_url)).keys
-        except jwt.PyJWKSetError as exc:
-            raise ProviderUnavailable(f"the identity provider published no usable keys: {exc}") from exc
-        self._keys, self._fetched_at = list(keys), now
+            url = self._configured_url or self._discovered_url or await self._discover()
+            keys = _signing_keys(await self._json(url))
+            if not keys:
+                raise _Unreadable("the key set has no usable signing keys", url)
+        except _Unreadable as exc:
+            self._failed_at, self._discovered_url = now, None  # discovered again next time
+            _LOG.warning(
+                "the identity provider's keys cannot be read",
+                extra={
+                    "event": "auth.jwks_unavailable",
+                    "reason": exc.reason,
+                    "url": exc.url,
+                    "error": exc.error,
+                },
+            )
+            raise ProviderUnavailable(UNAVAILABLE) from None
+        if self._configured_url is None:
+            self._discovered_url = url
+        self._keys, self._fetched_at, self._failed_at = keys, now, None
+
+    async def _discover(self) -> str:
+        where = self._issuer.rstrip("/") + "/.well-known/openid-configuration"
+        document = await self._json(where)
+        if document.get("issuer") != self._issuer:
+            raise _Unreadable("the discovery document names another issuer", where)
+        uri = document.get("jwks_uri")
+        if not isinstance(uri, str) or not uri:
+            raise _Unreadable("the discovery document has no jwks_uri", where)
+        if urlsplit(uri).scheme not in ("http", "https"):
+            raise _Unreadable("the jwks_uri scheme is not http or https", where)
+        return uri
 
     async def _json(self, url: str) -> dict[str, Any]:
         try:
@@ -115,10 +161,38 @@ class JwksCache:
             response.raise_for_status()
             body = response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise ProviderUnavailable(f"cannot read the identity provider's keys from {url}: {exc}") from exc
+            raise _Unreadable("the request failed", url, f"{type(exc).__name__}: {exc}"[:300]) from None
         if not isinstance(body, dict):
-            raise ProviderUnavailable(f"{url} did not answer a JSON object")
+            raise _Unreadable("the answer is not a JSON object", url)
         return body
+
+
+class _Unreadable(Exception):
+    """Why the keys could not be read: for the log only."""
+
+    def __init__(self, reason: str, url: str, error: str = "") -> None:
+        super().__init__(reason)
+        self.reason, self.url, self.error = reason, url, error
+
+
+def _signing_keys(document: dict[str, Any]) -> list[SigningKey]:
+    """The keys that may verify a signature: not ``use: enc``, and ``key_ops`` (when given) with ``verify``.
+    A key PyJWT cannot load is skipped, as PyJWKSet does."""
+    entries = document.get("keys")
+    keys: list[SigningKey] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or entry.get("use", "sig") != "sig":
+            continue
+        operations = entry.get("key_ops")
+        if operations is not None and (not isinstance(operations, list) or "verify" not in operations):
+            continue
+        try:
+            key = jwt.PyJWK(entry)
+        except jwt.PyJWTError:
+            continue
+        declared = entry.get("alg")
+        keys.append(SigningKey(key=key, algorithm=declared if isinstance(declared, str) else None))
+    return keys
 
 
 class JwtBearerAuthenticator:
@@ -152,15 +226,19 @@ class JwtBearerAuthenticator:
         if algorithm not in settings.algorithms:
             raise NotAuthenticated(f"the token's algorithm {algorithm!r} is not allowed")
         kid = header.get("kid")
-        key = await self._keys.key(kid)
-        if key is None:
+        signing = await self._keys.key(kid)
+        if signing is None:
             if kid is None:
                 raise NotAuthenticated("the token has no kid and the identity provider has several keys")
             raise NotAuthenticated(f"unknown signing key {kid!r}")
+        if signing.algorithm is not None and signing.algorithm != algorithm:  # RFC 8725 3.1
+            raise NotAuthenticated(
+                f"the token's algorithm {algorithm!r} is not the one its key was published for"
+            )
         try:
-            return jwt.decode(
+            claims = jwt.decode(
                 token,
-                key.key,
+                signing.key.key,
                 algorithms=[algorithm],
                 audience=settings.audience,
                 issuer=settings.issuer,
@@ -179,6 +257,9 @@ class JwtBearerAuthenticator:
             raise NotAuthenticated("the token's signature does not verify") from exc
         except jwt.PyJWTError as exc:
             raise NotAuthenticated(f"invalid token: {type(exc).__name__}") from exc
+        if "cnf" in claims:  # bound to a certificate (RFC 8705) or a DPoP key (RFC 9449): fail closed
+            raise NotAuthenticated("the token is sender-constrained (cnf), which this engine cannot verify")
+        return claims
 
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
         settings = self._settings

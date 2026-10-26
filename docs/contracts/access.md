@@ -119,18 +119,32 @@ mode, with no code:
 **Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):
 - **Algorithms:** only `LPB_JWT_ALGORITHMS`, which takes asymmetric algorithms only (`RS256,ES256` by
   default). `none` and `HS*` are refused, so the published key can never be used as a shared secret.
-- **Signature:** checked against the issuer's JWKS. The keys are kept for an hour and fetched again, at
-  most once a minute, when a token names an unknown `kid`. A token without `kid` is accepted only when the
-  provider publishes exactly one key.
+- **Signature:** checked against the issuer's JWKS.
+  - **Which keys:** only keys for signatures count. A key with `use: enc`, or with `key_ops` that lack
+    `verify`, is skipped; a key that omits `use` counts. A key published with an `alg` verifies only that
+    algorithm (RFC 8725).
+  - **Caching:** the keys are kept for an hour and fetched again, at most once a minute, when a token
+    names an unknown `kid`. Only a refetch that worked uses up that minute.
+  - **No `kid`:** a token without `kid` is accepted only when the provider publishes exactly one signing key.
 - **Claims:** `iss`, `aud` and `exp` are required, and `exp` and `nbf` are checked with
   `LPB_JWT_LEEWAY_S` (30 s).
+- **Sender-constrained tokens are refused.** A token with `cnf` is bound to a client certificate
+  (RFC 8705) or a DPoP key (RFC 9449). This engine verifies neither, so it refuses the token rather than
+  accept it as a plain bearer token.
+- **Reading the keys:** the keys URL comes from the issuer's discovery document, which must name the
+  configured issuer and an http(s) `jwks_uri`.
+  - **A bad URL is retried:** a discovered URL is kept only once it has served a usable key set, so a bad
+    one, or one the issuer has moved, is discovered again.
+  - **After a failed fetch,** the provider is left alone for 5 s, and token requests answer 503 meanwhile.
+  - **Logging:** the reason, the URL and the client's error are logged as `auth.jwks_unavailable`. The 503
+    body is a fixed message and never carries them.
 - **Answers:**
 
 | The credential | Answer |
 | --- | --- |
 | Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
 | From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, unknown key, missing claim |
-| The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503), because no token can be checked |
+| The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503) with a fixed message, because no token can be checked. The details are logged |
 
 **Claims become an `ActorContext`:**
 
@@ -144,6 +158,13 @@ mode, with no code:
 
 **Revocation.** A JWT cannot be revoked before it expires; an `lpk_` key can. Issue short-lived access
 tokens (5 to 15 minutes) and let the provider refresh them.
+
+**What the engine does not check (D45):**
+- **Token lifetime:** the engine honours a token until its `exp`, however far away. Short lifetimes are
+  the provider's setting.
+- **ID tokens:** an ID token is told apart from an access token only by its audience, so set
+  `LPB_JWT_AUDIENCE` to this engine's resource identifier, never to a client ID. Checking
+  `typ: at+jwt` (RFC 9068) would refuse providers that do not set it.
 
 **OpenAPI.** With keys off, the service declares a JWT bearer scheme, so Swagger UI's Authorize sends a
 token.

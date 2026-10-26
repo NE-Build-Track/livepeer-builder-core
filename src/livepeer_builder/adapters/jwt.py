@@ -58,6 +58,7 @@ class JwtSettings:
     realm: str = "livepeer-builder"
     token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")  # lower case; "jwt" is the opt-out
     max_lifetime_s: float = 3600.0  # exp - iat
+    name_claim: str | None = "preferred_username"  # the display name for the operator's actor list (D48)
 
     @property
     def strict(self) -> bool:
@@ -357,6 +358,7 @@ class JwtBearerAuthenticator:
         admin = settings.admin_scope is not None and settings.admin_scope in scopes
         auditor = settings.admin_read_scope is not None and settings.admin_read_scope in scopes
         jti = claims.get("jti")
+        name = claims.get(settings.name_claim) if settings.name_claim else None
         return ActorContext(
             actor_id=actor_id,
             application_id=application_id,
@@ -365,6 +367,7 @@ class JwtBearerAuthenticator:
             auth=AuthProvenance(
                 method="jwt", issuer=settings.issuer, credential_id=jti if isinstance(jti, str) else None
             ),
+            display_name=name[:200] if isinstance(name, str) and name else None,
         )
 
 
@@ -388,6 +391,7 @@ def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 3.0) -> Jw
         leeway_s=settings.jwt_leeway_s,
         token_types=settings.jwt_token_types,
         max_lifetime_s=settings.jwt_max_lifetime_s,
+        name_claim=settings.jwt_name_claim,
     )
     client = httpx.AsyncClient(timeout=timeout_s, follow_redirects=False)
     keys = JwksCache(client, settings.jwt_issuer, settings.jwt_jwks_url, allow_http=settings.jwt_allow_http)

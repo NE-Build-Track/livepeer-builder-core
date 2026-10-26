@@ -36,6 +36,7 @@ from livepeer_builder.contracts import (
     JobCost,
     JobRequest,
     JobResult,
+    KnownActor,
     Money,
     Offering,
     ProvisionedActor,
@@ -158,8 +159,9 @@ class PaymentsAdminApi(Protocol):
         *,
         application_id: str | None = None,
         status: AllocationStatus | None = None,
+        provisioned: bool | None = None,
         limit: int = 500,
-    ) -> list[ProvisionedActor]: ...
+    ) -> list[KnownActor]: ...
     async def get_actor(
         self, admin: ActorContext, application_id: str, actor_id: str
     ) -> ProvisionedActor: ...

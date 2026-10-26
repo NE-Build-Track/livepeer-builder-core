@@ -23,6 +23,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SeenActor,
     SyncCheckpoint,
     UsageRow,
 )
@@ -100,6 +101,41 @@ class SqlStore:
             query = query.where(t.actors.c.application_id == application_id)
         async with self.engine.connect() as conn:
             return [_actor(row) for row in (await conn.execute(query)).mappings()]
+
+    async def save_sighting(self, seen: SeenActor) -> None:
+        key = and_(
+            t.actor_sightings.c.application_id == seen.application_id,
+            t.actor_sightings.c.actor_id == seen.actor_id,
+        )
+        # the first sighting's time is kept; an empty name (the claim switched off) keeps the last one
+        changes: dict[str, Any] = {"last_seen_at": seen.last_seen_at} | (
+            {"name": seen.name} if seen.name else {}
+        )
+        async with self.engine.begin() as conn:
+            changed = await conn.execute(update(t.actor_sightings).where(key).values(changes))
+            if changed.rowcount == 0:
+                try:
+                    async with conn.begin_nested():
+                        await conn.execute(insert(t.actor_sightings).values(seen.model_dump()))
+                except IntegrityError:  # another request recorded the first sighting just now
+                    await conn.execute(update(t.actor_sightings).where(key).values(changes))
+
+    async def get_sighting(self, application_id: str, actor_id: str) -> SeenActor | None:
+        query = select(t.actor_sightings).where(
+            t.actor_sightings.c.application_id == application_id, t.actor_sightings.c.actor_id == actor_id
+        )
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(query)).mappings().first()
+        return SeenActor.model_validate(dict(row)) if row else None
+
+    async def list_sightings(self, application_id: str | None = None) -> list[SeenActor]:
+        query = select(t.actor_sightings).order_by(
+            t.actor_sightings.c.application_id, t.actor_sightings.c.actor_id
+        )
+        if application_id is not None:
+            query = query.where(t.actor_sightings.c.application_id == application_id)
+        async with self.engine.connect() as conn:
+            return [SeenActor.model_validate(dict(row)) for row in (await conn.execute(query)).mappings()]
 
     # -- access keys --------------------------------------------------------------------------------
 

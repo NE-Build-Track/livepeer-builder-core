@@ -48,6 +48,9 @@ class ActorContext(Contract):
     credential_kind: CredentialKind = "actor"
     attributes: dict[str, str] = Field(default_factory=dict)  # copied onto records; never secrets
     auth: AuthProvenance | None = None
+    # The name the identity provider gives this person (LPB_JWT_NAME_CLAIM, D48), for the operator's actor
+    # list only: never copied onto records, never an identity (the actor is actor_id).
+    display_name: str | None = None
 
 
 class AuthRequest(Contract):

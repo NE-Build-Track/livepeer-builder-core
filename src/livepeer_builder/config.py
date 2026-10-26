@@ -78,6 +78,8 @@ class EngineSettings(Contract):
     # RFC 9068 access tokens only; add "jwt" for a provider that cannot send at+jwt (weaker, D47)
     jwt_token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")
     jwt_max_lifetime_s: float = Field(default=3600.0, gt=0)  # exp - iat; longer tokens are refused (D47)
+    # The person's display name, for the operator's actor list (D48); empty turns it off
+    jwt_name_claim: str | None = "preferred_username"
     jwt_allow_http: bool = False  # dev only: an http issuer or key URL, such as a local Keycloak (D47)
 
     # operations

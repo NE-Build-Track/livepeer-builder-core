@@ -35,6 +35,11 @@ An engine running with `LPB_AUTH=jwt` has no engine keys. An admin console must 
   `LPB_JWT_ADMIN_READ_SCOPE` is an auditor. `LPB_JWT_ADMIN_SCOPE` still wins when both are present.
   Startup refuses a read scope that is an operation, a standard OpenID scope, or the admin scope itself,
   the same rule D47 gives the admin scope.
+- [x] **Registration on first sign-in (D48):** a builder's token records their actor
+  (`lpb_actor_sightings`, migration `0007`) with the `LPB_JWT_NAME_CLAIM` name. `GET /v1/admin/actors` returns
+  `KnownActor` rows, provisioned or not (`provisioned` filter), and provisioning takes the seen name as
+  the label. `SightingRecorder` wraps the authenticator chain; it writes once per person, then hourly or
+  on a rename, and never fails a request.
 - [x] **`FakeEngine`:** follows the same rule, checked by the shared contract test.
 - [x] **Docs:** `access.md` (the auditor, the actor routes, why `sub` is the identity default),
   `RELIABILITY.md`, D46, generated docs.
@@ -64,6 +69,9 @@ take over an actor's money or history.
 
 - 26 October: issue #52 opened; decisions locked (D46); branch started.
 - 26 October: built test-first.
+- 26 October: the Keycloak console test showed that an operator cannot provision a person by name
+  (actor ids are opaque `sub`s), so D48 added registration on first sign-in, test-first: 15 mutations,
+  each caught, and an end-to-end test that fails without the recorder.
   - **Mutations,** each caught: an auditor that writes, crosses applications, or is not treated as seeing
     every actor; unscoped key lists and reconciliation.
   - **A gap the new contract case found:** `FakeEngine` never checked `jobs.run` before a job; it does now.
@@ -80,3 +88,9 @@ take over an actor's money or history.
   - **Why:** best practice for a resource server behind an identity provider. The identity provider
     lists people; the engine lists its own records, and actors are engine records. A credential is not a
     principal, so a key list is no actor list. A service identity should hold least privilege.
+- **26 October (Mike, D48).** Registration on first sign-in:
+  1. **Who:** builders only (actor credentials from an identity provider).
+  2. **Listing:** the same actor list, each row with `provisioned`; a breaking change to #53's response.
+  3. **Name:** `LPB_JWT_NAME_CLAIM` (`preferred_username`), kept fresh; the operator's label is separate and
+     defaults to it.
+  4. **Where:** on #53.

@@ -5,12 +5,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest, SeenActor
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, NotProvisioned
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
-from livepeer_builder.testing import FakeAllocationManager
+from livepeer_builder.testing import FakeAllocationManager, FixedClock
 from tests.conftest import EngineFactory
 
 
@@ -257,6 +257,48 @@ async def test_the_actor_list_filters_by_status_and_limits(
     await engine.payments.set_status(admin, "default", "b", "paused")
     assert [a.actor_id for a in await engine.payments.list_actors(admin, status="paused")] == ["b"]
     assert [a.actor_id for a in await engine.payments.list_actors(admin, limit=2)] == ["a", "b"]
+
+
+async def test_people_who_signed_in_are_listed_before_provisioning_and_by_name_after(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:
+    """Registration on first sign-in (D48): the operator provisions people it can name."""
+    engine = await make_engine()
+    alice_sub, bob_sub = "3c446b40-7123-45f1", "14a5c7ce-7de4-44a0"
+    for sub, name in ((alice_sub, "alice"), (bob_sub, "bob")):
+        await store.save_sighting(
+            SeenActor(application_id="default", actor_id=sub, name=name, first_seen_at=clock.now(), last_seen_at=clock.now())
+        )  # fmt: skip
+    await engine.payments.provision(admin, provision_request(actor_id=bob_sub, label="Bob B."))
+    await engine.payments.provision(
+        admin, provision_request(actor_id="carol")
+    )  # provisioned, never signed in
+    listed = {a.actor_id: a for a in await engine.payments.list_actors(admin)}
+    alice, bob, carol = listed[alice_sub], listed[bob_sub], listed["carol"]
+    assert (alice.provisioned, alice.allocation, alice.name, alice.label) == (False, None, "alice", "alice")
+    assert alice.first_seen_at == clock.now()
+    assert (bob.provisioned, bob.name, bob.label) == (True, "bob", "Bob B.")  # the operator's label wins
+    assert bob.allocation is not None and bob.allocation.status == "active"
+    assert (carol.provisioned, carol.name, carol.first_seen_at) == (True, None, None)
+    unprovisioned = await engine.payments.list_actors(admin, provisioned=False)
+    assert [a.actor_id for a in unprovisioned] == [alice_sub]
+    assert alice_sub not in [a.actor_id for a in await engine.payments.list_actors(admin, status="active")]
+
+
+async def test_provisioning_a_person_takes_their_name_as_the_label(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    seen = SeenActor(
+        application_id="default",
+        actor_id="3c446b40",
+        name="alice",
+        first_seen_at=clock.now(),
+        last_seen_at=clock.now(),
+    )
+    await store.save_sighting(seen)
+    provisioned = await engine.payments.provision(admin, provision_request(actor_id="3c446b40"))
+    assert provisioned.label == "alice"  # unless the operator gives one
 
 
 async def test_an_auditor_lists_only_its_applications_actors(

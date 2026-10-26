@@ -17,6 +17,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SeenActor,
     SignedSession,
     SyncCheckpoint,
     UsageRow,
@@ -409,3 +410,29 @@ async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of
         found = await reads.job_with_projection(job.id)
     assert found is not None and found[1] is None  # computed live: pending, not the stored none
     assert job.id in {selected.id for selected in await sql.jobs_for_projection([])}
+
+
+async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, clock: FixedClock) -> None:
+    """A person the identity provider signed in, before any allocation (D48)."""
+    first = clock.now()
+    seen = SeenActor(
+        application_id="default", actor_id="4f6c2a1e", name="alice", first_seen_at=first, last_seen_at=first
+    )
+    await sql.save_sighting(seen)
+    later = first + timedelta(hours=2)
+    await sql.save_sighting(
+        seen.model_copy(update={"name": "alice.smith", "first_seen_at": later, "last_seen_at": later})
+    )
+    await sql.save_sighting(
+        SeenActor(application_id="app-2", actor_id="b", name="bob", first_seen_at=first, last_seen_at=first)
+    )
+    nameless = later + timedelta(hours=1)  # the name claim switched off: the name is kept, the time moves
+    await sql.save_sighting(
+        seen.model_copy(update={"name": "", "first_seen_at": nameless, "last_seen_at": nameless})
+    )
+    later = nameless
+    [kept] = await sql.list_sightings("default")
+    assert (kept.name, kept.first_seen_at, kept.last_seen_at) == ("alice.smith", first, later)
+    assert await sql.get_sighting("default", "4f6c2a1e") == kept
+    assert await sql.get_sighting("default", "nobody") is None
+    assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by application, then actor

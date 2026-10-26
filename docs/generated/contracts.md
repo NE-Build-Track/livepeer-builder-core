@@ -19,6 +19,7 @@ classDiagram
         +enum credential_kind
         +map attributes
         +AuthProvenance? auth
+        +str? display_name
     }
     class AuthProvenance {
         +str method

@@ -271,9 +271,12 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
     assert provisioned.status_code == 201 and provisioned.json()["label"] == "Alice Smith"
     listed = await client.get("/v1/admin/actors", headers=admin)
     assert listed.status_code == 200
-    assert [(a["actor_id"], a["label"], a["status"]) for a in listed.json()] == [
-        ("alice", "Alice Smith", "active")
-    ]
+    assert [
+        (a["actor_id"], a["label"], a["provisioned"], a["allocation"]["status"]) for a in listed.json()
+    ] == [
+        ("alice", "Alice Smith", True, "active")
+    ]  # D48: each row says whether it is provisioned; the allocation is nested
+    assert (await client.get("/v1/admin/actors?provisioned=false", headers=admin)).json() == []
     assert (await client.get("/v1/admin/actors?status=paused", headers=admin)).json() == []
     one = await client.get(ALLOCATION, headers=admin)
     assert one.status_code == 200 and one.json()["actor_id"] == "alice"

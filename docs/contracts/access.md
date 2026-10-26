@@ -83,7 +83,7 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its application; summary and allowance take `?actor_id=` to name one |
-| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `admin.read`. The provisioned actors, with status, allocation and `label`; filter by `application_id`, `status` and `limit`. An admin lists every application unless it names one; an auditor lists its own |
+| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the provisioned ones and the people an identity provider signed in (D48), each with `provisioned`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `application_id`, `status` (allocations only), `provisioned` and `limit`. An admin lists every application unless it names one; an auditor lists its own. The single read returns the allocation (`ProvisionedActor`) |
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -196,6 +196,19 @@ mode, with no code:
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
 | `credential_kind` | `admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
+| `display_name` | `LPB_JWT_NAME_CLAIM` (`preferred_username`), when it is text. Only for the operator's actor list (D48): never an identity, never copied onto records |
+
+**Registration on first sign-in (D48).** An actor is the provider's `sub`, which an operator cannot
+guess. So the first time a builder's token reaches the engine, the engine records that actor in
+`lpb_actor_sightings`, with the provider's display name. The operator's actor list then shows them
+before any allocation (`provisioned: false`), and provisioning them takes that name as the label
+unless the operator gives one. The allocation still belongs to the `sub`: a renamed person keeps
+their actor, and a reused name never inherits one.
+- **Who:** actor credentials only. Operators (admin), auditors and engine-key actors are not recorded;
+  the key list already shows key holders.
+- **Cost:** one write per person per process, then one an hour to move `last_seen_at`, and one at once
+  when the name changes. A failed write is logged (`actors.sighting_failed`) and never fails the request.
+- **Retention:** sightings are kept until removed by hand, like actors.
 
 **Revocation.** A JWT cannot be revoked before it expires; an `lpk_` key can. Issue short-lived access
 tokens (5 to 15 minutes) and let the provider refresh them. The engine enforces the ceiling: no token

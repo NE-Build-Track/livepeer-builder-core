@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, computed_field
 
 from livepeer_builder.contracts.common import Contract, Currency, Money
 
@@ -56,6 +56,37 @@ class ProvisionedActor(Contract):
     created_at: datetime
     updated_at: datetime
     label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
+
+
+class SeenActor(Contract):
+    """A person the identity provider signed in as an actor (#52, D48), known before any allocation.
+
+    ``name`` is the provider's latest display name (``LPB_JWT_NAME_CLAIM``); the actor itself is the
+    immutable ``sub``, so a renamed person keeps their actor and a reused name never inherits one.
+    """
+
+    application_id: str
+    actor_id: str
+    name: str = Field(default="", max_length=200)
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+class KnownActor(Contract):
+    """One row of the operator's actor list (D46, D48): provisioned, signed in, or both."""
+
+    application_id: str
+    actor_id: str
+    label: str  # the operator's label, else the name the provider gave, else ""
+    name: str | None  # the provider's latest name; None until the person signs in with a token
+    allocation: ProvisionedActor | None  # None until an operator provisions the actor
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def provisioned(self) -> bool:
+        return self.allocation is not None
 
 
 class FundRequest(Contract):

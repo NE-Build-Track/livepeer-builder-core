@@ -33,6 +33,7 @@ from livepeer_builder.contracts import (
     Job,
     JobCost,
     JobRequest,
+    KnownActor,
     Money,
     Offering,
     ProvisionedActor,
@@ -311,15 +312,17 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
             await keys.revoke(actor, key_id)
             return Response(status_code=204)
 
-    @app.get("/v1/admin/actors", response_model=list[ProvisionedActor])
+    @app.get("/v1/admin/actors", response_model=list[KnownActor])
     async def list_actors(
         actor: Actor,
         application_id: str | None = None,
         status: AllocationStatus | None = None,
+        provisioned: bool | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 500,
-    ) -> list[ProvisionedActor]:
+    ) -> list[KnownActor]:
+        """Provisioned actors and people an identity provider signed in (D46, D48)."""
         return await engine.payments.list_actors(
-            actor, application_id=application_id, status=status, limit=limit
+            actor, application_id=application_id, status=status, provisioned=provisioned, limit=limit
         )
 
     base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"

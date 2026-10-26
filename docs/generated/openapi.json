@@ -1078,6 +1078,86 @@
         "title": "JobRequest",
         "type": "object"
       },
+      "KnownActor": {
+        "additionalProperties": false,
+        "description": "One row of the operator's actor list (D46, D48): provisioned, signed in, or both.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvisionedActor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "provisioned": {
+            "readOnly": true,
+            "title": "Provisioned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "application_id",
+          "actor_id",
+          "label",
+          "name",
+          "allocation",
+          "first_seen_at",
+          "last_seen_at",
+          "provisioned"
+        ],
+        "title": "KnownActor",
+        "type": "object"
+      },
       "MeasuredUsage": {
         "additionalProperties": false,
         "description": "Work done, in units the capability defines. Retains its source and is never equated with cost.",
@@ -1973,6 +2053,7 @@
     },
     "/v1/admin/actors": {
       "get": {
+        "description": "Provisioned actors and people an identity provider signed in (D46, D48).",
         "operationId": "list_actors_v1_admin_actors_get",
         "parameters": [
           {
@@ -2015,6 +2096,22 @@
           },
           {
             "in": "query",
+            "name": "provisioned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provisioned"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -2032,7 +2129,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ProvisionedActor"
+                    "$ref": "#/components/schemas/KnownActor"
                   },
                   "title": "Response List Actors V1 Admin Actors Get",
                   "type": "array"

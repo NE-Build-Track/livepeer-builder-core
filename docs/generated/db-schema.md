@@ -18,6 +18,13 @@ erDiagram
         datetime created_at
         datetime revoked_at
     }
+    lpb_actor_sightings {
+        string application_id PK
+        string actor_id PK
+        string name
+        datetime first_seen_at
+        datetime last_seen_at
+    }
     lpb_actors {
         string application_id PK
         string actor_id PK
@@ -130,6 +137,16 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `label` | VARCHAR(200) | no |  |
 | `created_at` | DATETIME | no |  |
 | `revoked_at` | DATETIME | yes |  |
+
+## `lpb_actor_sightings`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `application_id` | VARCHAR(200) | no | PK |
+| `actor_id` | VARCHAR(200) | no | PK |
+| `name` | VARCHAR(200) | no |  |
+| `first_seen_at` | DATETIME | no |  |
+| `last_seen_at` | DATETIME | no |  |
 
 ## `lpb_actors`
 

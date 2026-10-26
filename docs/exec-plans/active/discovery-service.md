@@ -199,6 +199,18 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     `AIServiceRegistry` is unregistered).
   - **Proof:** I reproduced the probe, refresh-loop and log-leak defects on `00ed0f4` first, and the new
     tests were also checked by mutations.
+- 26 October: live checks of `lpb discovery` after the review fixes.
+  - **On-chain, through a free public RPC:** 19 of 56 orchestrators were lost to HTTP 429 under the first
+    per-address skip. That led to the transient-error rule: retry, then fail the whole load and keep the
+    previous directory. Re-run on the same RPC, the persistent 429s now failed the load cleanly:
+    `directory_error` showed `ChainError: RPC returned HTTP 429`, and `/readyz` answered 503.
+  - **On-chain, through a keyed provider:** ready in 28 s, with 47 orchestrators and no failed reads. Six
+    network-modules manifests and one unusable URI were skipped. Neither the URL nor its key appeared in
+    the log.
+  - **Probes:** of those 47, one answers `/discovery`, with no runners. 41 fail and 5 have untrusted
+    certificates. On-chain AI orchestrators mostly don't run livepeer-node's `/discovery` yet, which is
+    why the rollout is static first.
+  - **Static, Railway's list:** 28 orchestrators, 5 serving 89 runners; 19 untrusted, 4 failed.
 
 ## Decision log
 

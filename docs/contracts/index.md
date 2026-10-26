@@ -10,5 +10,6 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [payments.md](payments.md): allocation modes, provisioning, units, cost classification | ISS-04 | Implemented; Mode B defined as a gap (M4) |
 | [events.md](events.md): versioned event feed | ISS-02 | Defined (M3) |
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
+| [discovery.md](discovery.md): the discovery service, orchestrator directories (static, on-chain), `GET /discovery` | ISS-09, #45 | Implemented (its own process, `lpb discovery`) |
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).

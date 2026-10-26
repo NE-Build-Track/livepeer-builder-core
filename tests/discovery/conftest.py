@@ -56,6 +56,7 @@ class Tls:
     trusted: ssl.SSLContext  # server side: a certificate from the test CA
     self_signed: ssl.SSLContext  # server side: no CA vouches for it
     client: ssl.SSLContext  # what the prober uses: trusts only the test CA
+    ca_file: Path  # the test CA, for a deployment that extends its trust store (SSL_CERT_FILE)
 
 
 @pytest.fixture(scope="session")
@@ -75,6 +76,7 @@ def tls(tmp_path_factory: pytest.TempPathFactory) -> Tls:
         trusted=server(leaf, leaf_key, "trusted"),
         self_signed=server(own, own_key, "self-signed"),
         client=ssl.create_default_context(cafile=str(ca_path)),
+        ca_file=ca_path,
     )
 
 

@@ -178,4 +178,9 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
   - livepeer-node stays at `v1.0.2`.
   - No backwards compatibility for signer discovery.
 - **26 October, TLS.** I checked every orchestrator on the current lists against the system trust store: 8 trusted, 21 self-signed, 2 unreachable. ChatLPT and the console already depend only on trusted hosts. Chat runs on `hky.eliteencoder.net` and images on `ai1.eliteencoder.net`, because the SDK verifies TLS and calls to self-signed hosts already fail before payment. Excluding them changes nothing that works today.
+- **26 October, pinned certificates.** inference-gateway trusts pinned orchestrator certificates in its
+  engine container (`SSL_CERT_DIR`, `runner-trust`). The prober's default context is OpenSSL's default,
+  which honours `SSL_CERT_FILE` / `SSL_CERT_DIR`, so such a deployment mounts the same pins in the
+  discovery container and those orchestrators stay discoverable. "Untrusted" means untrusted by the
+  deployment's store. Pinned by `test_the_default_trust_store_is_the_deployments_so_pinned_certificates_count`.
 - **26 October, Railway list.** Railway's signer list moves to the discovery service unchanged (`deploy/railway/discovery/orchestrators.txt`). The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry.

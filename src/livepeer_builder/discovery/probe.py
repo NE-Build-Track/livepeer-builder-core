@@ -1,7 +1,9 @@
 """Reading each orchestrator's ``GET /discovery``, the inventory a livepeer-node orchestrator serves.
 
-Only orchestrators whose certificate the system trust store accepts are kept: the engine calls their
-runners over verified TLS, so one that is not trusted could never be used. Each answer becomes one
+Only orchestrators whose certificate the deployment's trust store accepts are kept: the engine calls
+their runners over verified TLS, so one that is not trusted could never be used. That store is the
+system's, as OpenSSL loads it, so ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` extend it: a deployment that pins
+orchestrator certificates for its engine mounts the same pins here. Each answer becomes one
 entry under the address we probed (an orchestrator cannot claim another's), with its runner records
 passed on untouched for the engine to parse.
 """
@@ -42,7 +44,8 @@ class Prober:
         max_bytes: int = 1 << 20,
         concurrency: int = 16,
     ) -> None:
-        self._verify = ssl_context or ssl.create_default_context()  # the system trust store
+        # the deployment's trust store: system roots plus SSL_CERT_FILE / SSL_CERT_DIR (pinned certificates)
+        self._verify = ssl_context or ssl.create_default_context()
         self._timeout_s = timeout_s
         self._max_bytes = max_bytes
         self._concurrency = concurrency

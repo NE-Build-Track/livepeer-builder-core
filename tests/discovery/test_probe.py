@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import pytest
 from aiohttp import web
 
 from livepeer_builder.discovery import Orchestrator, Prober
@@ -72,3 +73,14 @@ async def test_unreachable_is_a_failure_and_probing_many_keeps_their_order(serve
     down = Orchestrator(url="https://127.0.0.1:9")  # nothing listens on the discard port
     probes = await Prober(ssl_context=tls.client, timeout_s=1).probe_all([down, Orchestrator(url=good)])
     assert [(p.orchestrator.url, p.failure) for p in probes] == [(down.url, "failed"), (good, None)]
+
+
+async def test_the_default_trust_store_is_the_deployments_so_pinned_certificates_count(
+    serve: Serve, tls: Tls, monkeypatch: pytest.MonkeyPatch
+) -> None:  # a deployment that pins orchestrator certificates (SSL_CERT_FILE / SSL_CERT_DIR) keeps them
+    url = await serve(answering([{"runners": [RUNNER]}]), tls.trusted)
+    assert (
+        await Prober().probe(Orchestrator(url=url))
+    ).failure == "untrusted_certificate"  # system roots only
+    monkeypatch.setenv("SSL_CERT_FILE", str(tls.ca_file))
+    assert (await Prober().probe(Orchestrator(url=url))).failure is None

@@ -54,10 +54,12 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
 
 **Probes.** Each orchestrator's `GET <base URL>/discovery` is read every `LPD_PROBE_INTERVAL_S`:
 - at most 16 at a time, with an `LPD_PROBE_TIMEOUT_S` timeout and a 1 MiB limit, and no redirects;
-- TLS is verified against the system trust store;
-- an orchestrator with an untrusted or self-signed certificate is left out, logged as
+- TLS is verified against the deployment's trust store: the system roots, as OpenSSL loads them, which
+  `SSL_CERT_FILE` and `SSL_CERT_DIR` extend. A deployment that pins orchestrator certificates for its
+  engine (inference-gateway's `runner-trust`) mounts the same pins and sets the same variable here;
+- an orchestrator whose certificate that store does not accept is left out, logged as
   `discovery.orchestrator_excluded` with `reason="untrusted_certificate"`. The engine calls runners
-  over verified TLS, so it could never use one;
+  over verified TLS with the same kind of store, so it could never use one;
 - any other failure is `reason="failed"`;
 - an empty inventory counts as a success.
 

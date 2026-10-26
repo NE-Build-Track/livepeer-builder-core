@@ -178,4 +178,4 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
   - livepeer-node stays at `v1.0.2`.
   - No backwards compatibility for signer discovery.
 - **26 October, TLS.** I checked every orchestrator on the current lists against the system trust store: 8 trusted, 21 self-signed, 2 unreachable. ChatLPT and the console already depend only on trusted hosts. Chat runs on `hky.eliteencoder.net` and images on `ai1.eliteencoder.net`, because the SDK verifies TLS and calls to self-signed hosts already fail before payment. Excluding them changes nothing that works today.
-- **26 October, Railway list.** `signer.pymthouse.com/discover-orchestrators` in Railway's signer list is another signer's discovery endpoint, not an orchestrator. It is left out of the static directory.
+- **26 October, Railway list.** Railway's signer list moves to the discovery service unchanged (`deploy/railway/discovery/orchestrators.txt`). The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry.

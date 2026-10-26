@@ -1,4 +1,4 @@
-# Production-shaped stack: Batteries, the signer, and the engine.
+# Production-shaped stack: Batteries, the signer, the discovery service and the engine.
 # CI checks this file with `docker compose config`. It does not start the stack.
 # Tokens are the same five the Railway Batteries service already has.
 # KAFKA_BIND defaults to all interfaces so compose does not need a unique-local address.
@@ -37,6 +37,13 @@ services:
     volumes:
       - signer-data:/data
 
+  discovery:
+    build:
+      context: ../..
+      dockerfile: deploy/railway/discovery/Dockerfile
+    environment:
+      LPD_HTTP_HOST: 0.0.0.0
+
   engine:
     build:
       context: ../..
@@ -47,6 +54,7 @@ services:
       LPB_BATTERIES_TOKEN: ${ENGINE_TOKEN:-}
       LPB_BATTERIES_OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
       LPB_SIGNER_URL: http://signer:8937
+      LPB_DISCOVERY_URL: http://discovery:8939/discovery
       LPB_SECRET_KEY: ${LPB_SECRET_KEY:-}
     ports:
       - "127.0.0.1:8080:8080"
@@ -55,6 +63,7 @@ services:
     depends_on:
       - batteries
       - signer
+      - discovery
 
 volumes:
   batteries-data:

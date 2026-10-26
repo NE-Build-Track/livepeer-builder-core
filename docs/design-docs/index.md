@@ -8,6 +8,7 @@
 | [m2-review-2026-10-12.md](m2-review-2026-10-12.md) | Record of the 12 October review: findings, prototype defects and their guards | Yes |
 | [extending-the-engine.md](extending-the-engine.md) | How enterprises replace the defaults through the interfaces: class diagrams, wiring, rules, runnable examples | Yes. Examples run in `tests/unit/test_extension_examples.py` and `test_service_mode_example.py` |
 | [architecture-diagrams.md](architecture-diagrams.md) | Context, components, integration modes, key sequences, state machines (Mermaid) | Yes. Names match the code; the ER diagram is generated |
+| [interfaces-and-http-servers.md](interfaces-and-http-servers.md) | Class and sequence diagrams of the interfaces (the facade, the ports, composition, the discovery directory) and of the REST and discovery HTTP servers, with questions for review | Yes, against the discovery-service branch (`dfdd647`) |
 | [builder-layer-proposal.md](builder-layer-proposal.md) | The 1 October proposal: each idea and its disposition here | Yes |
 | [di-review-2026-10-23.md](di-review-2026-10-23.md) | Dependency-injection review of the package and reference server: container verdict, findings, fixes | Yes, at `6c5c689`; two read-only probes |
 | [di-consumers-and-plan-2026-10-23.md](di-consumers-and-plan-2026-10-23.md) | The DI findings checked against ChatLPT, the builder console and the Build Track plan; proposed change order | Yes, at the consumers' pin `ad6bba9` |

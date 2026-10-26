@@ -6,7 +6,7 @@
 - **Ticket:** [#49](https://github.com/NE-Build-Track/livepeer-builder-core/issues/49), part of ISS-33 (M4). The mode
   was defined in M2 (D13, D14; [access.md#modes](../../contracts/access.md#modes)).
 - **Branch:** `tasks/mz/jwt-bearer`, on top of the ISS-08 branch (`tasks/mz/iss-08-credentials`, #48) at `a2d115d`.
-- **Progress:** decisions locked 26 October (D45); in progress.
+- **Progress:** decisions locked 26 October (D45); built, shown live, and in review.
 - **Source:** Mike's recommendation of 26 October (`2026-10-26-builder-core-oauth-recommendation.md`).
 - **Decision:** D45.
 
@@ -19,7 +19,7 @@ never runs a login.
 
 ## Acceptance
 
-- [ ] `JwtBearerAuthenticator` (`adapters/jwt.py`):
+- [x] `JwtBearerAuthenticator` (`adapters/jwt.py`):
   - verifies the signature against the issuer's JWKS, cached, and fetched again (rate-limited) for an
     unknown `kid`;
   - allows only the configured asymmetric algorithms; never `none` or `HS*`;
@@ -28,27 +28,27 @@ never runs a login.
   - follows the chain rule: `None` for a token that is not a JWT or comes from another issuer;
     `NotAuthenticated` for an invalid token from this issuer; the provider's keys unreachable is
     `ProviderUnavailable` (503).
-- [ ] Claims map to `ActorContext`:
+- [x] Claims map to `ActorContext`:
   - `actor_id` from the actor claim (`sub`);
   - `application_id` from a claim or a fixed value;
   - permissions from scopes named after operations (with an optional prefix), never `actors.assert`;
   - `credential_kind="admin"` only with the configured admin scope;
   - `auth` set to `AuthProvenance(method="jwt", issuer, credential_id=jti)`;
   - the token itself is never kept or logged.
-- [ ] Settings: `LPB_AUTH` (`api_keys`, `jwt`, or `jwt,api_keys`) and `LPB_JWT_*`, validated at
+- [x] Settings: `LPB_AUTH` (`api_keys`, `jwt`, or `jwt,api_keys`) and `LPB_JWT_*`, validated at
   startup. `default_parts` builds the authenticator and owns its HTTP client. `jwt` alone sets
   `api_keys=None`, so the key routes and `lpb bootstrap-admin` disappear. A supplied
   `EngineSupply.authenticators` still wins.
-- [ ] OpenAPI declares a bearer scheme when JWT is on without API keys, so Swagger can send a token.
-- [ ] Tests, written first: tokens signed in the test with a local RSA key, the JWKS served by an
+- [x] OpenAPI declares a bearer scheme when JWT is on without API keys, so Swagger can send a token.
+- [x] Tests, written first: tokens signed in the test with a local RSA key, the JWKS served by an
   injected HTTP transport, and no network.
-- [ ] Docs:
+- [x] Docs:
   - `access.md`: the mode is implemented; settings, claim mapping, revocation guidance;
   - `RELIABILITY.md` settings;
   - the extension guide;
   - D45;
   - generated docs.
-- [ ] Live: `lpb serve` with `LPB_AUTH=jwt`, and with `jwt,api_keys`, against a local stand-in identity
+- [x] Live: `lpb serve` with `LPB_AUTH=jwt`, and with `jwt,api_keys`, against a local stand-in identity
   provider (a JWKS and discovery document served from the test machine).
 
 ## Design
@@ -57,7 +57,7 @@ never runs a login.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `LPB_AUTH` | `api_keys` | `api_keys`, `jwt`, or `jwt,api_keys` (the order JWTs and keys are tried) |
+| `LPB_AUTH` | `api_keys` | `api_keys`, `jwt`, or `jwt,api_keys`. Order does not matter: each authenticator recognizes only its own credential |
 | `LPB_JWT_ISSUER` | unset | Required for `jwt`. Matched exactly against `iss`; its `/.well-known/openid-configuration` gives the JWKS URL |
 | `LPB_JWT_JWKS_URL` | unset | Overrides discovery |
 | `LPB_JWT_AUDIENCE` | unset | Required for `jwt`. Must be in `aud` (RFC 8707 resource) |
@@ -99,6 +99,19 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
 ## Progress
 
 - 26 October: issue #49 opened; plan written; decisions locked (D45); branch started.
+- 26 October: built test-first.
+  - **Tests:** `tests/unit/test_jwt.py` (the authenticator, 33) and `test_jwt_service.py` (settings,
+    wiring and REST against a local aiohttp identity provider, 19).
+  - **Mutations,** each caught: no algorithm allow-list, no issuer check, no refetch rate limit, and
+    granting every operation.
+  - **Local CI:** 789 passed; coverage floors, ruff, mypy, `check_docs`, `gen-docs --check` and
+    `lpb smoke` are clean.
+  - **Live, 14/14:** `lpb serve` against a stand-in identity provider on the test machine.
+    - With `LPB_AUTH=jwt`: tokens accepted; expired and wrong-audience tokens 401; a missing scope 403;
+      the admin scope reaches admin routes; the key routes gone; OpenAPI declares a JWT bearer scheme;
+      `lpb bootstrap-admin` refused.
+    - With `jwt,api_keys`: both credentials work, and the challenge is announced once.
+    - No token in the engine log.
 
 ## Decision log
 

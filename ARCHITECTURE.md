@@ -15,6 +15,7 @@ flowchart TB
         AD["adapters: SDK, Batteries, auth, secrets"]
         ST["store: SQLite / PostgreSQL"]
     end
+    Disc["discovery service (lpb discovery, its own process)"]
     SDK["livepeer-python-gateway (pinned 76a1a1c)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
@@ -26,6 +27,7 @@ flowchart TB
     ST -.implements.-> PROV
     AD --> SDK --> Signer -->|"webhook"| Bat
     SDK --> Orch
+    AD -->|"LPB_DISCOVERY_URL: GET /discovery"| Disc -->|"GET /discovery, trusted TLS"| Orch
     AD -->|"management API, /v1/usage"| Bat
 ```
 
@@ -53,6 +55,7 @@ edge and prints how to fix a violation.
 | App wiring | `runtime/` (`assembly.py` builds the parts, `engine.py` runs them) | everything above |
 | Test doubles | `testing/` (`make_engine` builds a real engine) | everything `runtime/` may, plus runtime |
 | UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn) | runtime, api, contracts, errors, config |
+| Discovery service | `discovery/` (its own process, `lpb discovery`; [contract](docs/contracts/discovery.md)) | utils only: it shares nothing with the engine |
 | Entry points | `cli.py`, `docs_gen.py`, `docs_diagrams.py`, `__init__.py` | anything |
 
 Services never touch a database, SDK or HTTP client directly: they receive protocol implementations
@@ -74,7 +77,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `Authenticator` | `ApiKeyAuthenticator` in an `AuthenticatorChain` | use SSO, mTLS, enterprise JWTs |
 | `AccessPolicy` | `DefaultPolicy` (permissions + ownership) | add teams, org admins, RBAC |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | use Vault or a cloud secret manager |
-| `DiscoverySource` | `SignerDiscoverySource` / `StaticDiscoverySource` | read a registry or URL list |
+| `DiscoverySource` | `HttpDiscoverySource` (`LPB_DISCOVERY_URL`) / `StaticDiscoverySource` | read another source in-process; or write an `OrchestratorDirectory` for the discovery service ([contract](docs/contracts/discovery.md)) |
 | `SelectionPolicy` | `MostCapacityFirst` | rank by price or latency |
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |
@@ -92,11 +95,11 @@ Each third-party package is confined to one module so a dependency change has on
 | Package | Only in |
 | --- | --- |
 | `livepeer_gateway`, `aiohttp` | `adapters/sdk.py` |
-| `httpx` | `adapters/batteries.py` |
+| `httpx` | `adapters/batteries.py`, `discovery/` |
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |
-| `fastapi`, `starlette` | `http/` |
-| `uvicorn` | `http/server.py` |
+| `fastapi`, `starlette` | `http/` (`starlette` also in `discovery/server.py`) |
+| `uvicorn` | `http/server.py`, `discovery/server.py` |
 | DI containers (`dishka`, `dependency_injector`, `injector`, …) | nowhere (decision 1) |
 
 ## Domains

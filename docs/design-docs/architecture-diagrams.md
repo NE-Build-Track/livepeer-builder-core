@@ -33,14 +33,18 @@ flowchart LR
     subgraph Network["Livepeer network"]
         Orch["Orchestrators"]
         Runner["Live Runners<br/>(runner apps)"]
-        Chain[("Arbitrum One<br/>TicketBroker, BondingManager")]
+        Chain[("Arbitrum One<br/>TicketBroker, BondingManager,<br/>AIServiceRegistry")]
     end
+    DiscSvc["Discovery service<br/>(lpb discovery, its own process)"]
     User --> App
     App -->|"imported (in-process)"| Core
     App -->|"or REST + engine key / JWT"| API --> Core
     IdP -.->|"tokens (M4)"| App
     Core --- DB
-    Core -->|"discover, sign (SDK)"| Signer
+    Core -->|"sign (SDK)"| Signer
+    Core -->|"LPB_DISCOVERY_URL: GET /discovery"| DiscSvc
+    DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
+    DiscSvc -.->|"active set + AI service URIs (on-chain directory)"| Chain
     Core -->|"provision, fund, /v1/usage"| Bat
     Core -->|"paid call (SDK call_runner)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat
@@ -85,7 +89,7 @@ flowchart TB
         direction LR
         AAuth["ApiKeyAuthenticator<br/>AuthenticatorChain"]
         ASec["RoutingSecretStore<br/>(settings + Fernet DB)"]
-        ASdk["SignerDiscoverySource<br/>SdkRunnerTransport"]
+        ASdk["HttpDiscoverySource<br/>SdkRunnerTransport"]
         ABat["BatteriesClient<br/>BatteriesUsageSource"]
         SQL["SqlStore + Alembic<br/>backup · retention"]
     end

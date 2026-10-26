@@ -39,12 +39,24 @@ class _PrivateAddress(Exception):
     """A public-only URL resolved to an address inside some network."""
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")  # RFC 6052: the last 32 bits are an IPv4 address
+_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")  # deprecated, and never a public address
+
+
 def public_address(address: str) -> bool:
-    """True for an address on the public internet: not private, loopback, link-local, shared (CGNAT),
-    reserved, unspecified or multicast, including an IPv4 address mapped into IPv6."""
-    ip = ipaddress.ip_address(address.split("%", 1)[0])
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    """True for an address on the public internet: not private, loopback, link-local, site-local, shared
+    (CGNAT), reserved, unspecified or multicast. An IPv4 address carried in IPv6 (mapped, NAT64, 6to4) is
+    judged as that IPv4 address, so 64:ff9b::a9fe:a9fe is the metadata address it is (#46 review)."""
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(address.split("%", 1)[0])
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        elif ip.sixtofour is not None:
+            ip = ip.sixtofour
+        elif ip in _IPV4_COMPATIBLE or ip.is_site_local:
+            return False
     return ip.is_global and not ip.is_multicast
 
 
@@ -103,7 +115,7 @@ class Prober:
     async def _probe(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> Probe:
         try:
             async with asyncio.timeout(self._timeout_s):
-                runners = await self._runners(client, *await self._target(orchestrator))
+                runners = await self._fetch(client, orchestrator)
         except httpx.ConnectError as exc:
             return self._excluded(orchestrator, "untrusted_certificate" if _untrusted(exc) else "failed", exc)
         except _PrivateAddress as exc:
@@ -112,11 +124,24 @@ class Prober:
             return self._excluded(orchestrator, "failed", exc)
         return Probe(orchestrator=orchestrator, entry={"address": orchestrator.url, "runners": runners})
 
-    async def _target(self, orchestrator: Orchestrator) -> tuple[str, dict[str, str], dict[str, Any]]:
-        """The URL to fetch, with the headers and request extensions that go with it."""
+    async def _fetch(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> list[dict[str, Any]]:
+        """Each target in order until one connects: a dead first address (often an AAAA) must not fail an
+        orchestrator whose next one works. An untrusted certificate is an answer, not a dead address."""
+        targets = await self._targets(orchestrator)
+        for url, headers, extensions in targets[:-1]:
+            try:
+                return await self._runners(client, url, headers, extensions)
+            except httpx.ConnectError as exc:
+                if _untrusted(exc):
+                    raise
+        return await self._runners(client, *targets[-1])
+
+    async def _targets(self, orchestrator: Orchestrator) -> list[tuple[str, dict[str, str], dict[str, Any]]]:
+        """The URLs to try, with the headers and request extensions that go with them. A public-only URL is
+        resolved once; every address must be public, and only those addresses are tried."""
         url = orchestrator.url + "/discovery"
         if not orchestrator.public_only:
-            return url, {}, {}
+            return [(url, {}, {})]
         parts = urlsplit(url)
         host, port = parts.hostname or "", parts.port or (443 if parts.scheme == "https" else 80)
         addresses = await self._resolve(host, port)
@@ -125,9 +150,12 @@ class Prober:
         refused = [address for address in addresses if not self._allowed(address)]
         if refused:
             raise _PrivateAddress(f"{host} resolves to a non-public address")
-        literal = f"[{addresses[0]}]" if ":" in addresses[0] else addresses[0]
-        pinned = parts._replace(netloc=f"{literal}:{port}").geturl()
-        return pinned, {"Host": parts.netloc}, {"sni_hostname": host}  # TLS still verifies the name
+        targets = []
+        for address in addresses:
+            literal = f"[{address}]" if ":" in address else address
+            pinned = parts._replace(netloc=f"{literal}:{port}").geturl()
+            targets.append((pinned, {"Host": parts.netloc}, {"sni_hostname": host}))  # TLS verifies the name
+        return targets
 
     async def _runners(
         self, client: httpx.AsyncClient, url: str, headers: dict[str, str], extensions: dict[str, Any]

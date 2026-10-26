@@ -251,3 +251,33 @@ async def test_a_read_still_rate_limited_after_retries_fails_the_load_so_the_las
     chain.limited = {B: 3}
     with pytest.raises(abi.ChainError, match="429"):
         await directory(chain).orchestrators()
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "0x",
+        "0x" + "00" * 32,
+        "0x" + (32).to_bytes(32, "big").hex(),
+        "0x" + (4096).to_bytes(32, "big").hex() + "00" * 32,
+    ],
+    ids=["empty", "one zero word", "offset, no length word", "offset past the end"],
+)
+def test_a_result_that_is_not_an_abi_string_is_a_transient_chain_error(result: str) -> None:
+    """The RPC answered wrongly: never read as "not registered", which would drop the orchestrator quietly."""
+    with pytest.raises(abi.ChainError) as raised:
+        abi.decode_string(result)
+    assert raised.value.transient
+
+
+def test_a_well_formed_empty_string_is_empty_and_bad_utf8_is_about_the_orchestrator() -> None:
+    assert abi.decode_string("0x" + (32).to_bytes(32, "big").hex() + "00" * 32) == ""
+    with pytest.raises(abi.ChainError) as raised:
+        abi.decode_string(string_result("x").replace(b"x".hex(), "ff", 1))
+    assert not raised.value.transient
+
+
+async def test_an_empty_eth_call_result_fails_the_load_instead_of_shrinking_it() -> None:
+    chain = Chain([A, B], active={A, B}, uris={A: "https://a.example", B: "0x"})  # the node answered 0x
+    with pytest.raises(abi.ChainError):
+        await directory(chain).orchestrators()

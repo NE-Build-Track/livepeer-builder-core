@@ -64,16 +64,21 @@ def decode_uint(result: str) -> int:
 
 
 def decode_string(result: str) -> str:
+    """An ABI ``string``. A result that is not one (``0x``, a short buffer, an offset or length past the
+    end) is the RPC answering wrongly, so transient: never read as an empty string, which means "not
+    registered" and would drop the orchestrator quietly (#46 review). Bytes that are not UTF-8 are the
+    orchestrator's own record."""
     raw = bytes.fromhex(_hex(result))
+    offset = int.from_bytes(raw[0:32], "big") if len(raw) >= 32 else None
+    if offset is None or offset < 32 or offset + 32 > len(raw):  # the data follows the one-word head
+        raise ChainError(f"not an ABI string: {result[:80]}", transient=True)
+    length = int.from_bytes(raw[offset : offset + 32], "big")
+    if offset + 32 + length > len(raw):
+        raise ChainError(f"truncated ABI string: {result[:80]}", transient=True)
     try:
-        offset = int.from_bytes(raw[0:32], "big")
-        length = int.from_bytes(raw[offset : offset + 32], "big")
-        data = raw[offset + 32 : offset + 32 + length]
-        if len(data) != length:
-            raise ValueError("truncated")
-        return data.decode()
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise ChainError(f"not an ABI string: {result[:80]}") from exc
+        return raw[offset + 32 : offset + 32 + length].decode()
+    except UnicodeDecodeError as exc:
+        raise ChainError(f"a string that is not UTF-8: {result[:80]}") from exc
 
 
 def _address_word(address: str) -> str:
@@ -86,12 +91,12 @@ def _address_word(address: str) -> str:
 def _hex(result: str) -> str:
     body = result.removeprefix("0x")
     if len(body) % 64 or any(c not in "0123456789abcdefABCDEF" for c in body):
-        raise ChainError(f"not ABI-encoded words: {result[:80]}")
+        raise ChainError(f"not ABI-encoded words: {result[:80]}", transient=True)
     return body
 
 
 def _words(result: str, count: int) -> list[str]:
     body = _hex(result)
     if len(body) < 64 * count:
-        raise ChainError(f"expected {count} word(s): {result[:80]}")
+        raise ChainError(f"expected {count} word(s): {result[:80]}", transient=True)
     return [body[i * 64 : (i + 1) * 64] for i in range(count)]

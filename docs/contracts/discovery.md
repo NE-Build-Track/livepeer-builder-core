@@ -49,7 +49,9 @@ treats each one as untrusted:
 - the URI must be an `https` base URL;
 - the orchestrator is marked `public_only` for the prober (see [Probing](#probing-and-caching));
 - an orchestrator whose own record cannot be read (a revert, a URI that is not UTF-8) is skipped and
-  logged as `discovery.orchestrator_unreadable`, and the rest are returned;
+  logged as `discovery.orchestrator_unreadable`, and the rest are returned. A result that is not
+  well-formed ABI (`0x`, a short buffer, an offset or length past the end) is the RPC answering wrongly,
+  so it is treated like an RPC failure below, never as "not registered";
 - a failure of the RPC itself (HTTP 429 or 5xx, a JSON-RPC limit or internal error, the network) is
   retried after 0.5 s and 2 s. If it persists, the whole load fails and the previous complete directory is
   kept, rather than one that is quietly smaller until the next reload;
@@ -78,10 +80,12 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
   `discovery.orchestrator_excluded` with `reason="untrusted_certificate"`. The engine calls runners
   over verified TLS with the same kind of store, so it could never use one;
 - **a URL the operator did not write** (`public_only`, from the chain) is resolved once and contacted
-  only if every address is public: not private, loopback, link-local, shared (CGNAT), reserved or
-  multicast. The checked address is the one connected to, with TLS still verified against the name, so
-  a registration cannot reach the service's own network or a metadata endpoint, nor rebind between the
-  check and the connection. Otherwise `reason="private_address"`;
+  only if every address is public: not private, loopback, link-local, site-local, shared (CGNAT),
+  reserved, multicast or IPv4-compatible. An IPv4 address carried in IPv6 (mapped, NAT64 `64:ff9b::/96`,
+  6to4) is judged as that IPv4 address. The checked addresses are tried in order, with TLS still verified
+  against the name, and no other address is ever dialled. So a registration cannot reach the service's
+  own network or a metadata endpoint, nor rebind between the check and the connection, and a dead first
+  address does not fail an orchestrator whose next one works. Otherwise `reason="private_address"`;
 - an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
   an empty inventory that replaces the last good one. `null` means no runners;
 - any other failure, of any kind, is `reason="failed"` for that orchestrator alone: it never ends the

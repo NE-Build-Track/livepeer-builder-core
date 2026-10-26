@@ -135,6 +135,9 @@ async def test_one_orchestrators_unexpected_error_never_aborts_the_pass(
         ("10.0.0.1", False), ("172.16.0.1", False), ("192.168.1.1", False), ("127.0.0.1", False),
         ("169.254.169.254", False), ("100.64.0.1", False), ("0.0.0.0", False), ("224.0.0.1", False),  # noqa: S104 - data, not a bind
         ("::1", False), ("fd12:3456::1", False), ("fe80::1", False), ("::ffff:10.0.0.1", False),
+        ("64:ff9b::a9fe:a9fe", False), ("64:ff9b::7f00:1", False), ("64:ff9b::808:808", True),  # NAT64
+        ("2002:a9fe:a9fe::1", False), ("2002:808:808::1", True),  # 6to4
+        ("fec0::1", False), ("::7f00:1", False),  # site-local, IPv4-compatible
     ],
 )  # fmt: skip
 def test_only_public_addresses_are_probed_for_untrusted_sources(address: str, public: bool) -> None:
@@ -164,7 +167,7 @@ async def test_an_on_chain_uri_is_fetched_from_the_address_that_was_checked(serv
         hosts.append(request.headers["Host"])
         return web.json_response([{"runners": [RUNNER]}])
 
-    port = (await serve(seen, tls.trusted)).rsplit(":", 1)[1]
+    port = (await serve(seen, tls.named)).rsplit(":", 1)[1]  # its certificate names orch.test, no address
     looked_up: list[str] = []
 
     async def resolve(host: str, port: int) -> list[str]:
@@ -186,3 +189,30 @@ async def test_a_name_that_does_not_resolve_fails(tls: Tls) -> None:
         Orchestrator(url="https://gone.example", public_only=True)
     )
     assert probe.failure == "failed"
+
+
+@pytest.mark.parametrize(
+    "addresses", [["127.0.0.2", "127.0.0.1"], ["127.0.0.1", "127.0.0.2"]], ids=["dead first", "dead last"]
+)
+async def test_each_checked_address_is_tried_in_order_and_no_other(
+    serve: Serve, tls: Tls, addresses: list[str]
+) -> None:
+    """A dead address (often an AAAA listed first) must not fail an orchestrator another address serves."""
+    port = (await serve(answering([{"runners": [RUNNER]}]), tls.named)).rsplit(":", 1)[1]
+
+    async def resolve(host: str, port: int) -> list[str]:
+        return addresses  # nothing listens on .2, so it refuses at once
+
+    prober = Prober(ssl_context=tls.client, resolve=resolve, address_allowed=lambda address: True)
+    probe = await prober.probe(Orchestrator(url=f"https://orch.test:{port}", public_only=True))
+    assert probe.failure is None
+
+
+async def test_one_non_public_address_refuses_the_name_even_beside_public_ones(tls: Tls) -> None:
+    async def resolve(host: str, port: int) -> list[str]:
+        return ["8.8.8.8", "169.254.169.254"]
+
+    probe = await Prober(ssl_context=tls.client, resolve=resolve).probe(
+        Orchestrator(url="https://orch.test", public_only=True)
+    )
+    assert probe.failure == "private_address"

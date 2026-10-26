@@ -18,7 +18,12 @@ from cryptography.x509.oid import NameOID
 
 
 def _certificate(
-    subject: str, issuer_key: Any, issuer: x509.Name | None, *, ca: bool
+    subject: str,
+    issuer_key: Any,
+    issuer: x509.Name | None,
+    *,
+    ca: bool,
+    names: list[x509.GeneralName] | None = None,
 ) -> tuple[Any, x509.Certificate]:
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)])
@@ -36,11 +41,7 @@ def _certificate(
     if not ca:
         builder = builder.add_extension(
             x509.SubjectAlternativeName(
-                [
-                    x509.DNSName("localhost"),
-                    x509.DNSName("orch.test"),
-                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-                ]
+                names or [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
             ),
             critical=False,
         )
@@ -59,6 +60,7 @@ def _write(tmp: Path, stem: str, key: Any, cert: x509.Certificate) -> tuple[Path
 class Tls:
     trusted: ssl.SSLContext  # server side: a certificate from the test CA
     self_signed: ssl.SSLContext  # server side: no CA vouches for it
+    named: ssl.SSLContext  # server side: from the test CA, naming only orch.test (no IP address)
     client: ssl.SSLContext  # what the prober uses: trusts only the test CA
     ca_file: Path  # the test CA, for a deployment that extends its trust store (SSL_CERT_FILE)
 
@@ -70,6 +72,9 @@ def tls(tmp_path_factory: pytest.TempPathFactory) -> Tls:
     ca_path, _ = _write(tmp, "ca", ca_key, ca_cert)
     leaf_key, leaf = _certificate("localhost", ca_key, ca_cert.subject, ca=False)
     own_key, own = _certificate("localhost", None, None, ca=False)
+    named_key, named = _certificate(
+        "orch.test", ca_key, ca_cert.subject, ca=False, names=[x509.DNSName("orch.test")]
+    )
 
     def server(cert: x509.Certificate, key: Any, stem: str) -> ssl.SSLContext:
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -79,6 +84,7 @@ def tls(tmp_path_factory: pytest.TempPathFactory) -> Tls:
     return Tls(
         trusted=server(leaf, leaf_key, "trusted"),
         self_signed=server(own, own_key, "self-signed"),
+        named=server(named, named_key, "named"),
         client=ssl.create_default_context(cafile=str(ca_path)),
         ca_file=ca_path,
     )

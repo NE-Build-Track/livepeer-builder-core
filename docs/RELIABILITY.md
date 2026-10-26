@@ -9,7 +9,8 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | --- | --- | --- |
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
-| `LPB_SIGNER_URL`, `LPB_DISCOVERY_URL` | unset | Signer (discovery and payment), optional discovery override. Both unset → empty static discovery |
+| `LPB_SIGNER_URL` | unset | The remote signer, for payments only |
+| `LPB_DISCOVERY_URL` | unset | A livepeer-node `/discovery` inventory to read runners from: the discovery service (`lpb discovery`, [contract](contracts/discovery.md)), livepeer-node's own, or one orchestrator. Unset → empty static discovery. No credential is sent |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
@@ -63,6 +64,7 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
+| The discovery service loses an orchestrator | Its last inventory is served until `LPD_MAX_FAILED_REFRESHES` consecutive failed probes, then evicted. A failed directory load (an RPC outage, for the on-chain directory) keeps the previous directory ([contract](contracts/discovery.md#probing-and-caching)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |

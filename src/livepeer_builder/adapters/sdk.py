@@ -59,8 +59,6 @@ class DiscoverRunners(Protocol):
     async def __call__(
         self,
         *,
-        signer_url: str | None,
-        signer_headers: dict[str, str] | None,
         discovery_url: str | None,
     ) -> list[dict[str, Any]]: ...
 
@@ -107,29 +105,17 @@ class CallRunner(Protocol):
     ) -> LiveRunnerCallStream: ...
 
 
-class SignerDiscoverySource:
-    """Reads the signer's discovery endpoint, or a discovery URL that overrides it."""
+class HttpDiscoverySource:
+    """Reads livepeer-node's ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
+    (``lpb discovery``, docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
+    credentials; the signer is not involved in discovery (#45)."""
 
-    def __init__(
-        self,
-        *,
-        signer_url: str | None = None,
-        discovery_url: str | None = None,
-        signer_headers: dict[str, str] | None = None,
-        discover: DiscoverRunners = discover_runners,
-    ) -> None:
-        self._signer_url = signer_url
+    def __init__(self, discovery_url: str, *, discover: DiscoverRunners = discover_runners) -> None:
         self._discovery_url = discovery_url
-        self._signer_headers = signer_headers
         self._discover = discover
 
     async def fetch(self) -> tuple[Runner, ...]:
-        # The signer bearer goes to the signer only, never to a separate discovery URL.
-        entries = await self._discover(
-            signer_url=self._signer_url,
-            signer_headers=self._signer_headers,
-            discovery_url=self._discovery_url,
-        )
+        entries = await self._discover(discovery_url=self._discovery_url)
         return tuple(runners_from_entries(entries))
 
 

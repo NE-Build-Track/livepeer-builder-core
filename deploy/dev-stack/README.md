@@ -1,14 +1,15 @@
 # Dev stack
 
 An optional local stack for driving the engine against real Livepeer payment components. It is not
-part of CI. **Orchestrators and runners are assumed to exist on the network**, so the stack runs only
-the payment side and the engine:
+part of CI. **Orchestrators and runners are assumed to exist on the network**, so the stack runs the
+payment side, the discovery service and the engine:
 
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | NE-Build-Track/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It discovers and pays the orchestrators listed in `config/signer.toml` |
-| `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080` |
+| `signer` | NE-Build-Track/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It only signs payments |
+| `discovery` | This repository's discovery service (`lpb discovery`, the engine image) on `127.0.0.1:8939`, with the static directory `config/orchestrators.txt` ([contract](../../docs/contracts/discovery.md)) |
+| `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from the discovery service (`LPB_DISCOVERY_URL`) |
 
 Upstream sources are built from the M2 baseline commits
 ([upstream-baseline](../../docs/references/upstream-baseline.md)), so the first build takes a while.
@@ -17,7 +18,8 @@ Upstream sources are built from the M2 baseline commits
 
 - A **payer keystore** whose account has a funded TicketBroker deposit and reserve on Arbitrum One.
 - An **Arbitrum One RPC URL**. It may contain an API key; it lives only in `secrets/rpc-url`.
-- The orchestrators to use, listed in `config/signer.toml` (`Orchestrators`).
+- The orchestrators to use, listed in `config/orchestrators.txt`. Ones whose TLS certificate the system
+  trust store rejects are left out by the discovery service, because the engine could not call them.
 
 ## Start
 
@@ -25,7 +27,6 @@ Upstream sources are built from the M2 baseline commits
 cd deploy/dev-stack
 python3 config/init-secrets.py            # Batteries creds, engine token, webhook, Kafka users
 # add (mode 0600; no trailing newline): secrets/rpc-url, secrets/keystore.json, secrets/keystore-password
-python3 config/pin-orchestrator-certs.py  # pin the listed orchestrators' (often self-signed) TLS certs
 docker compose up -d --build clearinghouse signer
 docker compose exec clearinghouse clearinghouse --db-path /data/clearinghouse.db \
   grant create --name Dev --sponsor Dev --amount-usd 5 --status active      # note the grant id
@@ -33,11 +34,12 @@ cp .env.example .env && chmod 600 .env     # fill LPB_BATTERIES_TOKEN (secrets/e
                                            # LPB_BATTERIES_OPERATOR_TOKEN (secrets/grant-desk-token;
                                            #   optional, turns on the grant desk),
                                            # LPB_SECRET_KEY
-docker compose up -d --build engine
+docker compose up -d --build engine discovery
 ```
 
 Check the signer: `docker compose exec clearinghouse curl -s http://127.0.0.1:8938/readyz` (it checks
-chain funds and price policy) and `…:8937/discover-orchestrators` (the runners it can pay).
+chain funds and price policy). Check discovery: `curl -s http://127.0.0.1:8939/readyz` (orchestrators
+listed and serving) and `curl -s http://127.0.0.1:8939/discovery` (the runners the engine sees).
 
 ## Use
 
@@ -77,8 +79,7 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
 
 ## Notes
 
-- **`secrets/`, `.env` and `config/pinned-certs/` are git-ignored.** Keep the RPC URL and keys only
-  there.
+- **`secrets/` and `.env` are git-ignored.** Keep the RPC URL and keys only there.
 - **Image registry:** `IMAGE_REGISTRY` in `.env` prefixes the images this stack builds
   (`<registry>/livepeer-builder-dev/{clearinghouse,node,engine}`). This environment uses
   `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
@@ -98,9 +99,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   list or create grants.
   The Railway Batteries image writes the same `builder-engine` list. `tests/structure/test_deploy.py`
   fails when the two lists drift.
-- **Pinned certificates** are trust-on-first-use and **temporary** (T12). Orchestrators are to serve
-  CA-signed certificates (D27); once the ones listed do, drop the script and the `pinned-certs` mount.
-  Until then, re-run `config/pin-orchestrator-certs.py` when an orchestrator rotates its certificate,
-  and only list orchestrators you intend to pay.
+- **No pinned certificates.** The signer no longer discovers, so it needs no orchestrator certificates
+  (T12 closed by D43). The discovery service verifies TLS against the system trust store and leaves out
+  orchestrators that are not trusted, which the engine could not call anyway.
 - **Docker network error:** if Docker reports "all predefined address pools have been fully
   subnetted", run `docker network prune`.

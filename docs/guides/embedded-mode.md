@@ -52,7 +52,8 @@ await engine.start()
 ```
 
 `create` wires the defaults: SQLite or PostgreSQL store, `DefaultPolicy`, engine API keys (present
-but unused on this path), signer discovery, SDK transport, Batteries, and the encrypted secret store.
+but unused on this path), discovery from `LPB_DISCOVERY_URL`, SDK transport, Batteries, and the encrypted
+secret store.
 Settings are always passed in: read the environment with `EngineSettings.from_env()` at your edge, or
 build `EngineSettings(...)` in code. To change a part, **supply** it (`supply=EngineSupply(store=...)`)
 when other parts depend on it, or **decorate** the configured default

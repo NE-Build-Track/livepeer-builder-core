@@ -151,7 +151,7 @@ async def default_parts(
     package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
     """
     from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-    from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
     from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
     from livepeer_builder.store import SqlStore
 
@@ -169,7 +169,6 @@ async def default_parts(
 
     api_keys = ApiKeys(store) if isinstance(supply.api_keys, _Unset) else supply.api_keys
 
-    shared_key = settings.shared_payment_key.get_secret_value() if settings.shared_payment_key else None
     secret_store: SecretStore
     if isinstance(supply.secret_store, _Unset):
         database = (
@@ -218,12 +217,8 @@ async def default_parts(
     discovery_source: DiscoverySource
     if not isinstance(supply.discovery_source, _Unset):
         discovery_source = supply.discovery_source
-    elif settings.signer_url or settings.discovery_url:
-        discovery_source = SignerDiscoverySource(
-            signer_url=settings.signer_url,
-            discovery_url=settings.discovery_url,
-            signer_headers={"Authorization": f"Bearer {shared_key}"} if shared_key else None,
-        )
+    elif settings.discovery_url:  # the signer only signs; it is not a discovery source (#45)
+        discovery_source = HttpDiscoverySource(settings.discovery_url)
     else:
         discovery_source = StaticDiscoverySource()
 

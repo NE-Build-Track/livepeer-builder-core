@@ -1039,6 +1039,7 @@ def extend(app: FastAPI, engine: EngineApi) -> None:
     async def me(actor: Actor) -> dict[str, str]:
         return {"actor_id": actor.actor_id}
 
+
 asyncio.run(serve(EngineSettings.from_env(), supply=..., decorate=..., extend=extend))
 ```
 

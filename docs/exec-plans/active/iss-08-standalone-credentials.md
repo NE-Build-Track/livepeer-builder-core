@@ -120,6 +120,16 @@ the merge.
   - the Rotate flow in headless Chrome 15/15.
   - ChatLPT `main` (583) and inference-gateway `main` (132) pass on this branch's code, unchanged.
 
+- 26 October: PR #48 review (Cursor, two passes), each item fixed test-first and seen red first:
+  - **`keys.revoked`:** now goes through `_audit` with `kind`, `actor_id` and `application_id` like the
+    other key events. The key is read before it is revoked.
+  - **`FakeEngine` costs:** `costs.summary` and `payments.allowance` check `costs.read` before any
+    lookup, as the engine does.
+  - **`FakeEngine` discovery** (found while checking, same class): `discovery.offerings` and `runners`
+    check `discover`.
+  - **Tests:** the shared fake/real contract test covers all four.
+  - **Consumers:** ChatLPT `main` (583) and inference-gateway `main` (132) pass unchanged on the result.
+
 ## Decision log
 
 - **26 October (Mike, D44), one decision for each suggestion in John's plan:**

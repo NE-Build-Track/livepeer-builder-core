@@ -195,7 +195,10 @@ async def test_key_changes_are_logged_with_who_acted_and_never_the_secret(
     assert (events["keys.rotated"].key_id, events["keys.rotated"].replaced_key_id) == (
         rotated.key.key_id, issued.key.key_id,
     )  # fmt: skip
-    assert (events["keys.revoked"].key_id, events["keys.revoked"].by) == (rotated.key.key_id, admin.actor_id)
+    revoked = events["keys.revoked"]  # the line an operator reads alone, once the issue event has rolled off
+    assert (revoked.key_id, revoked.kind, revoked.actor_id, revoked.application_id, revoked.by) == (
+        rotated.key.key_id, "actor", "alice", "app-1", admin.actor_id,
+    )  # fmt: skip
 
 
 async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(

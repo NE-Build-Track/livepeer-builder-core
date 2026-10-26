@@ -8,6 +8,7 @@ the two this package ships.
 
 from livepeer_builder.discovery.directory import Orchestrator, OrchestratorDirectory
 from livepeer_builder.discovery.onchain import OnChainDirectory
+from livepeer_builder.discovery.probe import Probe, Prober
 from livepeer_builder.discovery.static import StaticDirectory
 
-__all__ = ["OnChainDirectory", "Orchestrator", "OrchestratorDirectory", "StaticDirectory"]
+__all__ = ["OnChainDirectory", "Orchestrator", "OrchestratorDirectory", "Probe", "Prober", "StaticDirectory"]

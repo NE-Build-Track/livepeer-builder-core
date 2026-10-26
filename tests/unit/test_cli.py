@@ -109,6 +109,30 @@ def test_serve_runs_the_rest_app(db: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert served and type(served[0]).__name__ == "FastAPI"
 
 
+def test_discovery_runs_the_discovery_service_from_lpd_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    import uvicorn
+
+    served: list[object] = []
+
+    async def fake_serve(self: uvicorn.Server) -> None:
+        served.append((self.config.app, self.config.port))
+
+    monkeypatch.setattr(uvicorn.Server, "serve", fake_serve)
+    monkeypatch.setenv("LPD_ORCHESTRATORS", "https://a.example")
+    monkeypatch.setenv("LPD_HTTP_PORT", "18939")
+    assert run("discovery") == 0
+    assert served and type(served[0][0]).__name__ == "Starlette" and served[0][1] == 18939
+
+
+def test_discovery_refuses_settings_it_cannot_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("LPD_ORCHESTRATORS", raising=False)
+    monkeypatch.setenv("LPD_DIRECTORY", "static")
+    assert run("discovery") == 2
+    assert "LPD_ORCHESTRATORS" in capsys.readouterr().err
+
+
 def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exited:
         run("--version")

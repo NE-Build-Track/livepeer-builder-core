@@ -28,7 +28,7 @@ DISTRIBUTIONS = {
     "uvicorn": "uvicorn",
 }
 # Package directory -> the extra its imports may also come from.
-EXTRAS = {"http": "server"}
+EXTRAS = {"http": "server", "discovery": "server"}
 
 
 def distribution(requirement: str) -> str:

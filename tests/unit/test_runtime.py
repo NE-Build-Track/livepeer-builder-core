@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply, PurgeReport
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-from livepeer_builder.adapters.sdk import SignerDiscoverySource
+from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.http import create_app
 from livepeer_builder.runtime import engine as engine_module
@@ -95,9 +95,18 @@ async def test_default_adapters_follow_settings() -> None:
     )
     async with contextlib.AsyncExitStack() as stack:  # closes the owned clients and store
         parts = await default_parts(settings, stack)
-        assert isinstance(parts.discovery_source, SignerDiscoverySource)
+        assert isinstance(parts.discovery_source, StaticDiscoverySource)  # the signer only signs (#45)
         assert isinstance(parts.allocation_manager, BatteriesClient)
         assert isinstance(parts.usage_source, BatteriesUsageSource)  # unfiltered by design (iss-04)
+
+
+async def test_a_discovery_url_reads_the_discovery_service() -> None:
+    settings = EngineSettings(
+        database_url=MEMORY, discovery_url="http://discovery:8939/discovery", log_json=False
+    )
+    async with contextlib.AsyncExitStack() as stack:
+        parts = await default_parts(settings, stack)
+        assert isinstance(parts.discovery_source, HttpDiscoverySource)
 
 
 async def test_operator_token_wires_a_separate_grants_client() -> None:

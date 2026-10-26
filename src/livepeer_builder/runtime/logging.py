@@ -35,3 +35,7 @@ def configure_logging(*, json_lines: bool = True, level: int = logging.INFO) -> 
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # httpx logs every request at INFO with its URL, and an RPC provider's URL carries its key (#46 review).
+    # The engine's and the discovery service's own events say what an operator needs.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(max(level, logging.WARNING))

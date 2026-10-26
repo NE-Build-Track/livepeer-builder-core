@@ -114,6 +114,7 @@ classDiagram
     class BatteriesUsageSource
     class DefaultPolicy
     class EncryptedDbSecretStore
+    class HttpDiscoverySource
     class JwtBearerAuthenticator
     class MostCapacityFirst
     class PaymentsService
@@ -123,7 +124,6 @@ classDiagram
     class SdkRunnerStream
     class SdkRunnerTransport
     class SettingsSecretStore
-    class SignerDiscoverySource
     class SqlCostSnapshot
     class SqlMaintenance
     class SqlStore
@@ -136,7 +136,7 @@ classDiagram
     SecretStore <|.. RoutingSecretStore
     SecretStore <|.. SettingsSecretStore
     SecretStore <|.. EncryptedDbSecretStore
-    DiscoverySource <|.. SignerDiscoverySource
+    DiscoverySource <|.. HttpDiscoverySource
     DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
@@ -165,7 +165,7 @@ classDiagram
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
-| `DiscoverySource` | `SignerDiscoverySource` | `livepeer_builder.adapters.sdk` |
+| `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `DiscoverySource` | `StaticDiscoverySource` | `livepeer_builder.adapters.static` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |

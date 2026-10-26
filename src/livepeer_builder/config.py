@@ -30,7 +30,7 @@ class EngineSettings(Contract):
 
     # network
     signer_url: str | None = None
-    discovery_url: str | None = None  # overrides the signer's discovery endpoint
+    discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
     discovery_interval_s: float = Field(default=15.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)
 

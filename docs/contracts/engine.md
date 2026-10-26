@@ -10,8 +10,12 @@ drift. Times are UTC. Money is `Decimal`. Engine IDs are UUIDs.
 
 ## Discovery
 
-`DiscoveryService` keeps a snapshot of the runners the signer advertises (`DiscoverySource`). It is
-refreshed every `discovery_interval_s` and counts as stale after three missed intervals.
+`DiscoveryService` keeps a snapshot of advertised runners from its `DiscoverySource`. It is refreshed every
+`discovery_interval_s` and counts as stale after three missed intervals. The default source,
+`HttpDiscoverySource`, reads a livepeer-node `/discovery` inventory from `LPB_DISCOVERY_URL`: normally the
+discovery service ([discovery.md](discovery.md)), which finds orchestrators on-chain or from a static list.
+The signer only signs; it is not a discovery source (D43). With no `LPB_DISCOVERY_URL` the snapshot is
+empty unless an embedder supplies a source.
 
 | Model | Meaning |
 | --- | --- |

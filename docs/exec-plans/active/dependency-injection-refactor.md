@@ -78,7 +78,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - **`None` is a value, not a missing one.** It means "off" where a part is optional (`api_keys=None` turns keys off).
   - **Decorate:** `decorate: Callable[[EngineParts], EngineParts]` receives the finished parts and returns the parts to use, for wrapping defaults or supplied parts.
   - `assemble(settings, parts, resources)` wires the engine and does no I/O. `default_parts` and `assemble` stay public for tests and unusual cases.
-  - The default discovery source keeps the signer bearer header.
+  - The default discovery source keeps the signer bearer header. (Since D43, #45, discovery reads `LPB_DISCOVERY_URL` with no credential; the signer is not a discovery source.)
 - [x] **`BuilderEngine` supports `async with`:** start on enter, stop on exit. The CLI and scripts use it; web applications keep calling `start`/`stop` from their framework's lifespan.
 - [x] **API keys are one part** (decision 2, as amended):
   - `ApiKeys(store: KeyRepo, realm: str = "livepeer-builder")` describes the capability.
@@ -99,7 +99,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
 - [x] **Tests:**
   - replacing one part keeps the others;
   - a supplied store means the configured database is never opened, and `api_keys` and the secret store use the supplied store;
-  - a decorated default discovery source still sends the signer header;
+  - a decorated default discovery source still sends the signer header (since D43: is the configured one, and sends no credential);
   - keys off hides the key routes, makes `bootstrap-admin` refuse, and rejects an `lpk_` token;
   - an enterprise authenticator runs before the key authenticator;
   - Batteries without the operator token starts, has no grant routes and still funds grants;

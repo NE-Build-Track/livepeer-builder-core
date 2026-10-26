@@ -13,7 +13,7 @@ from typing import Any
 from livepeer_gateway.discovery import discover_runners
 from livepeer_gateway.live_runner import call_runner
 
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
+from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
 from livepeer_builder.contracts import JobRequest
 from livepeer_builder.testing import runner as make_runner
 
@@ -53,5 +53,5 @@ async def test_call_runner_accepts_every_keyword_the_transport_passes() -> None:
 
 async def test_discover_runners_accepts_every_keyword_the_source_passes() -> None:
     recorder = _Recorder([])
-    await SignerDiscoverySource(signer_url="https://signer.example", discover=recorder).fetch()
+    await HttpDiscoverySource("http://discovery.example/discovery", discover=recorder).fetch()
     assert _unaccepted(discover_runners, recorder.keywords[0]) == set()

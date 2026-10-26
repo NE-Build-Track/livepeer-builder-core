@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from livepeer_builder import EngineError, EngineSettings, generate_secret_key
-from livepeer_builder.runtime import BuilderEngine, package_version
+from livepeer_builder.runtime import BuilderEngine, configure_logging, package_version
 from livepeer_builder.store import SqlStore, backup, current_revision, head_revision, restore, upgrade, verify
 
 
@@ -60,6 +60,7 @@ def _parser() -> argparse.ArgumentParser:
     command("gen-secret-key", _gen_secret_key, "print a new LPB_SECRET_KEY")
     command("smoke", _smoke, "import/start/health/stop check")
     command("serve", _serve, "run the REST service")
+    command("discovery", _discovery, "run the discovery service (LPD_* settings)")
     docs = command("gen-docs", _gen_docs, "regenerate docs/generated")
     docs.add_argument("--out", type=Path, default=Path("docs/generated"))
     docs.add_argument("--check", action="store_true", help="fail if the committed files are stale")
@@ -150,6 +151,24 @@ async def _serve(_: argparse.Namespace) -> None:
         print("the REST service needs: pip install 'livepeer-builder[server]'", file=sys.stderr)
         raise SystemExit(2) from None
     await serve(EngineSettings.from_env())
+
+
+async def _discovery(_: argparse.Namespace) -> int:
+    """The discovery service, its own process with LPD_* settings (docs/contracts/discovery.md)."""
+    try:
+        from livepeer_builder.discovery import DiscoverySettings
+        from livepeer_builder.discovery import serve as serve_discovery
+    except ImportError:
+        print("the discovery service needs: pip install 'livepeer-builder[server]'", file=sys.stderr)
+        return 2
+    try:
+        settings = DiscoverySettings.from_env()
+    except ValueError as exc:
+        print(f"discovery settings: {exc}", file=sys.stderr)
+        return 2
+    configure_logging(json_lines=settings.log_json)
+    await serve_discovery(settings)
+    return 0
 
 
 async def _gen_docs(args: argparse.Namespace) -> int:

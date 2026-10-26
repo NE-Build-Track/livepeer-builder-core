@@ -90,7 +90,7 @@ named `discovery`, created once by the project owner, with:
 | Healthcheck path | `/readyz` (port `8939`) |
 | Healthcheck timeout | `120` seconds (ready after the first probe pass) |
 | Restart policy | always, 10 retries |
-| Public networking | none; the engine reaches it on the private network |
+| Public networking | a Railway domain on port `8939` (`GET /discovery`, `/healthz`, `/readyz`). The engine still uses the private URL |
 
 It runs the static directory, [discovery/orchestrators.txt](discovery/orchestrators.txt). To use the
 chain instead, set `LPD_DIRECTORY=onchain` and `LPD_ARBITRUM_RPC_URL` (a provider URL; it often carries

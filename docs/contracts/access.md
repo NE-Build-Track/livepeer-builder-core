@@ -1,8 +1,9 @@
 # Access contract
 
-**Tickets:** ISS-03, ISS-08 · **Design accepted:** 12 October 2026 (decisions D12–D16); ISS-08 on
-26 October (D44) · **Code:** `contracts/access.py`, `protocols/`, `services/policy.py`,
-`services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/secrets.py`
+**Tickets:** ISS-03, ISS-08, #49 (ISS-33) · **Design accepted:** 12 October 2026 (decisions D12–D16);
+ISS-08 on 26 October (D44); JWT bearer on 26 October (D45) · **Code:** `contracts/access.py`, `protocols/`,
+`services/policy.py`, `services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/jwt.py`,
+`adapters/secrets.py`
 
 The core never authenticates anyone. It consumes a validated `ActorContext` and asks an
 `AccessPolicy` whether an operation is allowed. Everything about *how* identity is established lives
@@ -90,12 +91,67 @@ enterprise identity provider's concern.
 | Mode | Where it lives | Status |
 | --- | --- | --- |
 | Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/admin/keys` routes are absent and OpenAPI declares no bearer scheme |
-| JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | Defined, M4 |
+| JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | **Implemented** (D45): `LPB_AUTH=jwt` or `jwt,api_keys`. See [JWT bearer](#jwt-bearer) |
 | MCP OAuth (PKCE public clients) | Enterprise authorization server issues; engine verifies with JWT bearer and publishes RFC 9728 protected-resource metadata | Defined, with MCP (M3/M4) |
 | Trusted backend (see [service mode](#service-mode)) | `ServiceCredentialAuthenticator` | Defined, M4 |
 | CIMD and client catalog, device flow, token exchange | Enterprise authorization server or client (appendix) | Not engine work |
 | HTTP Basic for end users | An enterprise-supplied `Authenticator` | Example only |
 | Local gateway (payment key leaves the server) | Per-device allocations | Out of scope |
+
+## JWT bearer
+
+The REST service accepts OAuth 2.0 access tokens from the enterprise's identity provider (D45). The
+engine is the **resource server**: it verifies tokens and never runs a login. Configuration chooses the
+mode, with no code:
+
+| `LPB_AUTH` | Accepted | Engine API keys |
+| --- | --- | --- |
+| `api_keys` (default) | `lpk_` keys | On |
+| `jwt` | The provider's tokens | **Off**: `engine.keys` is `None`, so the key routes and `lpb bootstrap-admin` disappear |
+| `jwt,api_keys` | Both. The order does not matter, because each authenticator recognizes only its own credential | On. The migration mode, for example while the console still signs in with an `lpk_` admin key |
+
+**Setup:**
+- set `LPB_JWT_ISSUER` (matched exactly against `iss`) and `LPB_JWT_AUDIENCE` (must be in `aud`);
+- the keys come from the issuer's `/.well-known/openid-configuration`, or from `LPB_JWT_JWKS_URL`;
+- the other `LPB_JWT_*` settings are in [RELIABILITY.md](../RELIABILITY.md#configuration).
+- A supplied `EngineSupply.authenticators` still replaces the configured ones.
+
+**Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):
+- **Algorithms:** only `LPB_JWT_ALGORITHMS`, which takes asymmetric algorithms only (`RS256,ES256` by
+  default). `none` and `HS*` are refused, so the published key can never be used as a shared secret.
+- **Signature:** checked against the issuer's JWKS. The keys are kept for an hour and fetched again, at
+  most once a minute, when a token names an unknown `kid`. A token without `kid` is accepted only when the
+  provider publishes exactly one key.
+- **Claims:** `iss`, `aud` and `exp` are required, and `exp` and `nbf` are checked with
+  `LPB_JWT_LEEWAY_S` (30 s).
+- **Answers:**
+
+| The credential | Answer |
+| --- | --- |
+| Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
+| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, unknown key, missing claim |
+| The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503), because no token can be checked |
+
+**Claims become an `ActorContext`:**
+
+| Field | From |
+| --- | --- |
+| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`) |
+| `application_id` | `LPB_JWT_APPLICATION_CLAIM` when set, otherwise `LPB_JWT_APPLICATION_ID` (`default`) |
+| `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
+| `credential_kind` | `admin` only when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `actor` |
+| `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
+
+**Revocation.** A JWT cannot be revoked before it expires; an `lpk_` key can. Issue short-lived access
+tokens (5 to 15 minutes) and let the provider refresh them.
+
+**OpenAPI.** With keys off, the service declares a JWT bearer scheme, so Swagger UI's Authorize sends a
+token.
+
+**Not here:**
+- opaque tokens (RFC 7662 introspection);
+- RFC 9728 protected-resource metadata for MCP clients (phase 2);
+- the trusted backend, below.
 
 ## Service mode
 

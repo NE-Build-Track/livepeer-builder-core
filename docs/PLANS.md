@@ -40,5 +40,6 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | Discovery service, [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45) (ISS-09) | [active/discovery-service.md](exec-plans/active/discovery-service.md) | Mike |
 | ISS-08 Standalone credentials and ownership controls | [active/iss-08-standalone-credentials.md](exec-plans/active/iss-08-standalone-credentials.md) | Mike (John reviews) |
 | JWT bearer, chosen by `LPB_AUTH` (#49, ISS-33 in M4) | [active/jwt-bearer.md](exec-plans/active/jwt-bearer.md) | Mike |
+| Actor collection and read-only admin (#52) | [active/admin-read-and-actors.md](exec-plans/active/admin-read-and-actors.md) | Mike |
 
 Nothing closes without Mike's review. Josh reviews engine code.

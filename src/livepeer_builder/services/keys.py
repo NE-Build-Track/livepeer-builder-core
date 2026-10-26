@@ -83,9 +83,10 @@ class KeyService:
 
     async def revoke(self, admin: ActorContext, key_id: str) -> None:
         self._policy.check(admin, Operation.ADMIN_KEYS)
-        if not await self._store.revoke_access_key(key_id, self._clock.now()):
+        key = await self._store.get_access_key(key_id)  # whose key it was, for the audit line (#48 review)
+        if key is None or not await self._store.revoke_access_key(key_id, self._clock.now()):
             raise InvalidRequest(f"no active key {key_id!r}")
-        _LOG.info("key revoked", extra={"event": "keys.revoked", "key_id": key_id, "by": admin.actor_id})
+        _audit("keys.revoked", key, by=admin.actor_id)
 
     async def list_keys(self, admin: ActorContext, application_id: str | None = None) -> list[AccessKey]:
         self._policy.check(admin, Operation.ADMIN_KEYS)

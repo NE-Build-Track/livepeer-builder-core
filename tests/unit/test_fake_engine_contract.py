@@ -10,6 +10,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -161,6 +162,24 @@ async def test_a_missing_permission_is_access_denied_before_any_lookup(side: Sid
                 await engine.costs.for_job(without("costs.read"), job_id)
         with pytest.raises(AccessDenied):
             await engine.jobs.list_jobs(without("jobs.read"))
+
+
+async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) -> None:
+    """Summary, allowance, offerings and runners answer AccessDenied without the permission, on both sides,
+    before anything is looked up (#48 review)."""
+    no_costs = ALICE.model_copy(update={"permissions": ALICE.permissions - {"costs.read"}})
+    no_discover = ALICE.model_copy(update={"permissions": ALICE.permissions - {"discover"}})
+    async with side() as engine:
+        with pytest.raises(AccessDenied):
+            await engine.costs.summary(
+                no_costs, datetime(2026, 1, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)
+            )
+        with pytest.raises(AccessDenied):
+            await engine.payments.allowance(no_costs)
+        with pytest.raises(AccessDenied):
+            engine.discovery.offerings(no_discover)
+        with pytest.raises(AccessDenied):
+            engine.discovery.runners(no_discover, APP)
 
 
 async def test_another_actors_job_is_not_found(side: Side) -> None:

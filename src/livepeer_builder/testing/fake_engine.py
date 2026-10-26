@@ -52,6 +52,7 @@ from livepeer_builder.errors import (
     OperationConflict,
     OperationExists,
 )
+from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
 from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.services.ownership import check_owner, job_resource
@@ -326,19 +327,27 @@ class FakeCosts:
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
     ) -> CostSummary:
+        target = actor_id or (None if actor.credential_kind == "admin" else actor.actor_id)
+        owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
+        self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._summary is None:
             raise NotFound("no cost summary scripted")
         return self._summary
 
 
 class FakeDiscovery:
-    def __init__(self, offerings: Iterable[Offering], runners: Iterable[Runner]) -> None:
+    def __init__(
+        self, offerings: Iterable[Offering], runners: Iterable[Runner], policy: AccessPolicy | None = None
+    ) -> None:
         self._offerings, self._runners = list(offerings), list(runners)
+        self._policy = policy or DefaultPolicy()
 
     def offerings(self, actor: ActorContext, *, app: str | None = None) -> list[Offering]:
+        self._policy.check(actor, Operation.DISCOVER)
         return [offering for offering in self._offerings if app is None or offering.app == app]
 
     def runners(self, actor: ActorContext, app: str) -> list[Runner]:
+        self._policy.check(actor, Operation.DISCOVER)
         return self.candidates(app)
 
     def candidates(self, app: str) -> list[Runner]:
@@ -346,10 +355,14 @@ class FakeDiscovery:
 
 
 class FakeAllowance:
-    def __init__(self, allowance: Allowance | None) -> None:
+    def __init__(self, allowance: Allowance | None, policy: AccessPolicy | None = None) -> None:
         self._allowance = allowance
+        self._policy = policy or DefaultPolicy()
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
+        target = actor_id or actor.actor_id
+        owner = ResourceRef(kind="allocation", application_id=actor.application_id, owner_actor_id=target)
+        self._policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._allowance is None:
             raise NotProvisioned("no allowance scripted")
         return self._allowance
@@ -373,7 +386,7 @@ class FakeEngine:
         self.discovery = FakeDiscovery(offerings, runners)
         self.jobs = FakeJobs(replies or {}, streaming, self.discovery)
         self.costs = FakeCosts(costs or {}, summary, self.jobs)
-        self.payments = FakeAllowance(allowance)
+        self.payments = FakeAllowance(allowance, self.jobs.policy)
         self._health = health or EngineHealth(
             ready=True,
             discovery_fresh=True,

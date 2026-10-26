@@ -5,12 +5,13 @@ own ``LPB_DISCOVERY_URL`` and ``LPB_DISCOVERY_INTERVAL_S`` would otherwise colli
 """
 
 import os
+import re
 from collections.abc import Mapping
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationInfo, field_validator, model_validator
 
-from livepeer_builder.discovery.onchain import ARBITRUM_AI_SERVICE_REGISTRY, ARBITRUM_BONDING_MANAGER
+from livepeer_builder.discovery.onchain import ARBITRUM_AI_SERVICE_REGISTRY, ARBITRUM_CONTROLLER
 
 ENV_PREFIX = "LPD_"
 
@@ -21,8 +22,8 @@ class DiscoverySettings(BaseModel):
     directory: Literal["static", "onchain"] = "static"
     orchestrators: str | None = None  # static: comma-separated base URLs, or a file with one per line
     arbitrum_rpc_url: SecretStr | None = None  # onchain: usually carries the provider's key
-    bonding_manager: str = ARBITRUM_BONDING_MANAGER
-    ai_service_registry: str = ARBITRUM_AI_SERVICE_REGISTRY
+    controller: str = ARBITRUM_CONTROLLER  # the protocol's Controller: BondingManager and ServiceRegistry
+    service_registry: str = ARBITRUM_AI_SERVICE_REGISTRY  # override; "controller" reads the Controller's
     directory_interval_s: float = Field(default=3600.0, gt=0)  # the active set changes per round
     directory_timeout_s: float = Field(default=300.0, gt=0)  # a stuck load gives up; probing goes on
     probe_interval_s: float = Field(default=30.0, gt=0)
@@ -31,6 +32,16 @@ class DiscoverySettings(BaseModel):
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8939, ge=1, le=65535)  # livepeer-node discovery's port
     log_json: bool = True
+
+    @field_validator("controller", "service_registry")
+    @classmethod
+    def _address(cls, value: str, info: ValidationInfo) -> str:
+        value = value.strip().lower()
+        if info.field_name == "service_registry" and value == "controller":
+            return value
+        if not re.fullmatch(r"0x[0-9a-f]{40}", value):
+            raise ValueError(f"{info.field_name} must be a contract address (0x and 40 hex digits)")
+        return value
 
     @model_validator(mode="after")
     def _directory_inputs(self) -> Self:

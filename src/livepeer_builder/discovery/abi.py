@@ -1,4 +1,4 @@
-"""Just enough of the Ethereum ABI to read the Livepeer protocol: four view calls over ``eth_call``.
+"""Just enough of the Ethereum ABI to read the Livepeer protocol: a few view calls over ``eth_call``.
 
 Selectors are the first four bytes of the Keccak-256 of each signature, written out here so there is
 no web3 dependency; tests/discovery/test_onchain.py recomputes them. Contracts and signatures are from
@@ -13,7 +13,13 @@ GET_TRANSCODER_POOL_SIZE = "0x2a4e0d55"  # BondingManager.getTranscoderPoolSize(
 GET_FIRST_TRANSCODER_IN_POOL = "0x88a6c749"  # BondingManager.getFirstTranscoderInPool() -> address
 GET_NEXT_TRANSCODER_IN_POOL = "0x235c9603"  # BondingManager.getNextTranscoderInPool(address) -> address
 IS_ACTIVE_TRANSCODER = "0x08802374"  # BondingManager.isActiveTranscoder(address) -> bool, current round
-GET_SERVICE_URI = "0x214c2a4b"  # AIServiceRegistry.getServiceURI(address) -> string
+GET_SERVICE_URI = "0x214c2a4b"  # ServiceRegistry.getServiceURI(address) -> string (both registries)
+GET_CONTRACT = "0xe16c7d98"  # Controller.getContract(bytes32 id) -> address
+
+# Controller ids: keccak256 of the contract's name. The AI Service Registry has none: it was deployed
+# beside the Controller (livepeer/protocol deploy/deploy_ai_service_registry.ts), never registered in it.
+BONDING_MANAGER_ID = "0x2517d59a36a86548e38734e8ab416f42afff4bca78706a66ad65750dae7f9e37"
+SERVICE_REGISTRY_ID = "0x79c5d2a4a07754f4bacb0ffba18ac516030ee589ebc89db8627680c4d4cdb230"
 
 
 class ChainError(Exception):
@@ -28,6 +34,14 @@ class EthCall(Protocol):
 
 def encode_call(selector: str, *addresses: str) -> str:
     return selector + "".join(_address_word(address) for address in addresses)
+
+
+def encode_id_call(selector: str, contract_id: str) -> str:
+    """A call taking one ``bytes32``, such as ``Controller.getContract``."""
+    body = contract_id.lower().removeprefix("0x")
+    if len(body) != 64 or any(c not in "0123456789abcdef" for c in body):
+        raise ValueError(f"not a bytes32: {contract_id!r}")
+    return selector + body
 
 
 def decode_address(result: str) -> str:

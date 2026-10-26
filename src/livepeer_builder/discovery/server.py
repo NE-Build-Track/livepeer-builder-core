@@ -55,8 +55,8 @@ def directory_from(settings: DiscoverySettings) -> OrchestratorDirectory:
         assert settings.arbitrum_rpc_url is not None  # checked by the settings
         return OnChainDirectory(
             JsonRpcChain(settings.arbitrum_rpc_url.get_secret_value()),
-            bonding_manager=settings.bonding_manager,
-            ai_service_registry=settings.ai_service_registry,
+            controller=settings.controller,
+            service_registry=None if settings.service_registry == "controller" else settings.service_registry,
         )
     assert settings.orchestrators is not None  # checked by the settings
     return StaticDirectory.parse(settings.orchestrators)

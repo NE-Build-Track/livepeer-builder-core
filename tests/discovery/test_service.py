@@ -44,6 +44,29 @@ def test_the_rpc_url_is_secret() -> None:
     assert "key" not in repr(settings)
 
 
+def test_the_on_chain_contracts_default_to_the_controller_and_the_ai_registry() -> None:
+    settings = DiscoverySettings(directory="onchain", arbitrum_rpc_url="https://arb.example")
+    assert settings.controller == "0xd8e8328501e9645d16cf49539efc04f734606ee4"
+    assert (
+        settings.service_registry == "0x04c0b249740175999e5bf5c9ac1da92431ef34c5"
+    )  # the AI registry override
+    moved = DiscoverySettings.from_env(
+        {"LPD_DIRECTORY": "onchain", "LPD_ARBITRUM_RPC_URL": "https://arb", "LPD_SERVICE_REGISTRY": "controller",
+         "LPD_CONTROLLER": "0xD8E8328501E9645d16Cf49539efC04f734606ee4"}
+    )  # fmt: skip
+    assert (moved.controller, moved.service_registry) == (
+        "0xd8e8328501e9645d16cf49539efc04f734606ee4",
+        "controller",
+    )
+    for bad in (
+        {"controller": "controller"},
+        {"service_registry": "0x123"},
+        {"controller": "not an address"},
+    ):
+        with pytest.raises(ValueError, match="address"):
+            DiscoverySettings(directory="onchain", arbitrum_rpc_url="https://arb", **bad)
+
+
 def test_the_settings_choose_the_directory(tmp_path: Path) -> None:
     assert isinstance(directory_from(DiscoverySettings(orchestrators="https://a.example")), StaticDirectory)
     onchain = DiscoverySettings(directory="onchain", arbitrum_rpc_url="https://arb.example")

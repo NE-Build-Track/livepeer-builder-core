@@ -6,9 +6,11 @@ the AI Service Registry by default: the Controller does not know it (it was depl
 not registered in it), so it is an override of the Controller's ``ServiceRegistry``, the one the protocol
 uses for transcoding. ``service_registry=None`` reads the Controller's.
 
-A registration is not operator input. Each URI must be https, is marked ``public_only`` for the prober,
-and one orchestrator whose reads fail is skipped, never the whole directory (#46 review). The walk is
-capped at ``max_pool`` whatever size the pool reports.
+A registration is not operator input. Each URI must be https and is marked ``public_only`` for the
+prober. An orchestrator whose own record cannot be read (a revert, a URI that is not UTF-8) is skipped,
+never the whole directory (#46 review). A failure of the RPC itself (a rate limit, a 5xx) is retried and,
+if it persists, fails the load, so the previous complete directory is kept rather than a quietly smaller
+one. The walk is capped at ``max_pool`` whatever size the pool reports.
 
 An ``OrchestratorDirectory``, and a worked example of one that reads an external system of record.
 """
@@ -38,11 +40,13 @@ class OnChainDirectory:
         controller: str = ARBITRUM_CONTROLLER,
         service_registry: str | None = ARBITRUM_AI_SERVICE_REGISTRY,
         max_pool: int = MAX_POOL,
+        retry_delays_s: tuple[float, ...] = (0.5, 2.0),
     ) -> None:
         self._chain = chain
         self._controller = controller.lower()
         self._registry = service_registry.lower() if service_registry else None
         self._max_pool = max_pool
+        self._retry_delays_s = retry_delays_s
 
     async def orchestrators(self) -> tuple[Orchestrator, ...]:
         """Raises ``ChainError`` only when the contracts or the pool cannot be read."""
@@ -55,7 +59,9 @@ class OnChainDirectory:
             async with reads:
                 try:
                     return await self._eligible(bonding_manager, registry, address)
-                except abi.ChainError as exc:  # this orchestrator's reads; the rest still count
+                except abi.ChainError as exc:
+                    if exc.transient:
+                        raise  # the RPC failed, not this orchestrator: the whole load fails
                     _LOG.warning(
                         "orchestrator left out: its on-chain record could not be read",
                         extra={
@@ -66,7 +72,15 @@ class OnChainDirectory:
                     )
                     return None
 
-        found = await asyncio.gather(*(eligible(address) for address in pool))
+        try:
+            async with asyncio.TaskGroup() as group:  # a persistent RPC failure stops the other reads too
+                tasks = [group.create_task(eligible(address)) for address in pool]
+        except ExceptionGroup as failed:
+            first = next((e for e in failed.exceptions if isinstance(e, abi.ChainError)), None)
+            if first is None:
+                raise
+            raise first from None
+        found = [task.result() for task in tasks]
         return unique([orchestrator for orchestrator in found if orchestrator is not None])
 
     async def _contract(self, contract_id: str, name: str) -> str:
@@ -119,4 +133,12 @@ class OnChainDirectory:
         return Orchestrator(url=url, address=address, public_only=True)
 
     async def _read(self, to: str, data: str) -> str:
+        """One ``eth_call``, retried after each of ``retry_delays_s`` while the RPC fails transiently."""
+        for delay in self._retry_delays_s:
+            try:
+                return await self._chain.call(to, data)
+            except abi.ChainError as exc:
+                if not exc.transient:
+                    raise
+                await asyncio.sleep(delay)
         return await self._chain.call(to, data)

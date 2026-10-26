@@ -23,7 +23,14 @@ SERVICE_REGISTRY_ID = "0x79c5d2a4a07754f4bacb0ffba18ac516030ee589ebc89db8627680c
 
 
 class ChainError(Exception):
-    """A chain read failed (transport, JSON-RPC error, or a result that does not decode)."""
+    """A chain read failed (transport, JSON-RPC error, or a result that does not decode).
+
+    ``transient`` marks a failure of the RPC rather than an answer about the chain (a rate limit, a 5xx,
+    the network): worth retrying, and never a reason to drop an orchestrator."""
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 class EthCall(Protocol):

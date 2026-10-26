@@ -86,6 +86,7 @@ class Chain:
         self.contracts = {abi.BONDING_MANAGER_ID: BM, abi.SERVICE_REGISTRY_ID: PROTOCOL_REGISTRY} | (
             contracts or {}
         )
+        self.limited: dict[str, int] = {}  # address -> how many reads the RPC rate-limits first
         self.calls = 0
 
     async def call(self, to: str, data: str) -> str:
@@ -95,7 +96,10 @@ class Chain:
         if to == CONTROLLER and selector == abi.GET_CONTRACT:
             return word(self.contracts.get("0x" + data[10:], abi.ZERO_ADDRESS))
         if argument in self.failing and selector in (abi.IS_ACTIVE_TRANSCODER, abi.GET_SERVICE_URI):
-            raise abi.ChainError("RPC call failed: JSON-RPC error -32000")
+            raise abi.ChainError("RPC call failed: JSON-RPC error -32000")  # a revert: about this address
+        if self.limited.get(argument, 0) > 0 and selector == abi.IS_ACTIVE_TRANSCODER:
+            self.limited[argument] -= 1
+            raise abi.ChainError("RPC returned HTTP 429", transient=True)  # about the RPC, not the address
         if to == BM and selector == abi.GET_TRANSCODER_POOL_SIZE:
             return word(self.size)
         if to == BM and selector == abi.GET_FIRST_TRANSCODER_IN_POOL:
@@ -116,7 +120,8 @@ class Chain:
 
 
 def directory(chain: Chain, **options: Any) -> OnChainDirectory:
-    return OnChainDirectory(chain, **({"controller": CONTROLLER, "service_registry": REGISTRY} | options))
+    defaults = {"controller": CONTROLLER, "service_registry": REGISTRY, "retry_delays_s": (0, 0)}
+    return OnChainDirectory(chain, **(defaults | options))
 
 
 async def test_active_registered_orchestrators_in_pool_order() -> None:
@@ -231,3 +236,18 @@ async def test_the_walk_has_a_hard_cap_below_any_reported_size(caplog: pytest.Lo
         found = await directory(chain, max_pool=3).orchestrators()
     assert [o.address for o in found] == [A, B, C]
     assert "discovery.pool_truncated" in {getattr(r, "event", None) for r in caplog.records}
+
+
+async def test_a_rate_limited_read_is_retried() -> None:
+    chain = Chain([A, B], active={A, B}, uris={A: "https://a.example", B: "https://b.example"})
+    chain.limited = {B: 2}  # two 429s, then it answers
+    assert [o.address for o in await directory(chain).orchestrators()] == [A, B]
+
+
+async def test_a_read_still_rate_limited_after_retries_fails_the_load_so_the_last_directory_is_kept() -> None:
+    """A 429 says nothing about the orchestrator: dropping it would quietly shrink the directory for an
+    hour, so the whole load fails instead (the live check on 26 October lost 19 of 56 this way)."""
+    chain = Chain([A, B], active={A, B}, uris={A: "https://a.example", B: "https://b.example"})
+    chain.limited = {B: 3}
+    with pytest.raises(abi.ChainError, match="429"):
+        await directory(chain).orchestrators()

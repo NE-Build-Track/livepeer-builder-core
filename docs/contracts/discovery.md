@@ -48,9 +48,11 @@ shared: probing, TLS, caching and serving.
 treats each one as untrusted:
 - the URI must be an `https` base URL;
 - the orchestrator is marked `public_only` for the prober (see [Probing](#probing-and-caching));
-- one orchestrator whose reads fail (an RPC error, a revert, a URI that is not UTF-8) is skipped and
-  logged as `discovery.orchestrator_unreadable`, and the rest are returned. Only the Controller lookups
-  or the pool itself failing fail the load;
+- an orchestrator whose own record cannot be read (a revert, a URI that is not UTF-8) is skipped and
+  logged as `discovery.orchestrator_unreadable`, and the rest are returned;
+- a failure of the RPC itself (HTTP 429 or 5xx, a JSON-RPC limit or internal error, the network) is
+  retried after 0.5 s and 2 s. If it persists, the whole load fails and the previous complete directory is
+  kept, rather than one that is quietly smaller until the next reload;
 - the pool walk reads no further than the pool's reported size and never more than 1000 (logged as
   `discovery.pool_truncated`), so a bad linked list or a bad size cannot stall it.
 

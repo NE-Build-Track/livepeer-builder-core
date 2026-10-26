@@ -7,6 +7,9 @@ import httpx
 
 from livepeer_builder.discovery.abi import ChainError
 
+# JSON-RPC codes that mean the provider, not the chain, failed: limit exceeded, internal error.
+_TRANSIENT_CODES = frozenset({-32005, -32603})
+
 
 class JsonRpcChain:
     def __init__(self, url: str, *, client: httpx.AsyncClient | None = None, timeout_s: float = 10.0) -> None:
@@ -20,9 +23,10 @@ class JsonRpcChain:
         try:
             response = await self._client.post(self._url, json=body)
         except httpx.HTTPError as exc:
-            raise ChainError(f"RPC request failed: {type(exc).__name__}") from None
+            raise ChainError(f"RPC request failed: {type(exc).__name__}", transient=True) from None
         if response.status_code != 200:
-            raise ChainError(f"RPC returned HTTP {response.status_code}")
+            transient = response.status_code == 429 or response.status_code >= 500
+            raise ChainError(f"RPC returned HTTP {response.status_code}", transient=transient)
         try:
             reply = response.json()
         except ValueError:
@@ -30,11 +34,9 @@ class JsonRpcChain:
         if not isinstance(reply, dict) or "error" in reply or not isinstance(reply.get("result"), str):
             error = reply.get("error") if isinstance(reply, dict) else None
             code = error.get("code") if isinstance(error, dict) else None
-            raise ChainError(
-                f"RPC call failed: JSON-RPC error {code}"
-                if isinstance(code, int)
-                else "RPC call failed: no result"
-            )
+            if not isinstance(code, int):
+                raise ChainError("RPC call failed: no result")
+            raise ChainError(f"RPC call failed: JSON-RPC error {code}", transient=code in _TRANSIENT_CODES)
         return str(reply["result"])
 
     async def aclose(self) -> None:

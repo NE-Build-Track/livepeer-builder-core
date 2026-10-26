@@ -79,3 +79,39 @@ async def test_the_rpc_url_never_reaches_the_log(capsys: pytest.CaptureFixture[s
         assert "key" not in capsys.readouterr().err
     finally:
         logging.getLogger().handlers.clear()
+
+
+@pytest.mark.parametrize(
+    ("response", "transient"),
+    [
+        (httpx.Response(429, text="rate limited"), True),
+        (httpx.Response(503, text="busy"), True),
+        (
+            httpx.Response(
+                200, json={"jsonrpc": "2.0", "id": 1, "error": {"code": -32005, "message": "limit exceeded"}}
+            ),
+            True,
+        ),
+        (
+            httpx.Response(
+                200, json={"jsonrpc": "2.0", "id": 1, "error": {"code": 3, "message": "execution reverted"}}
+            ),
+            False,
+        ),
+        (httpx.Response(200, text="not json"), False),
+    ],
+    ids=["429", "503", "json-rpc limit", "revert", "not json"],
+)
+async def test_errors_about_the_rpc_are_transient(response: httpx.Response, transient: bool) -> None:
+    with pytest.raises(ChainError) as raised:
+        await chain(lambda request: response).call("0xabc", "0x00")
+    assert raised.value.transient is transient
+
+
+async def test_a_transport_failure_is_transient() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(ChainError) as raised:
+        await chain(handler).call("0xabc", "0x00")
+    assert raised.value.transient

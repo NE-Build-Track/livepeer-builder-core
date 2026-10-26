@@ -99,6 +99,10 @@ class StatusBody(BaseModel):
     status: AllocationStatus
 
 
+class RotateKeyBody(BaseModel):
+    label: str | None = None  # keep the key's label unless given
+
+
 class RotateBody(BaseModel):
     operation_ref: str = Field(min_length=1, max_length=200)
 
@@ -286,6 +290,14 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         @app.get("/v1/admin/keys", response_model=list[AccessKey])
         async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
             return await keys.list_keys(actor, application_id)
+
+        @app.get("/v1/admin/keys/{key_id}", response_model=AccessKey)
+        async def get_key(actor: Actor, key_id: str) -> AccessKey:
+            return await keys.get(actor, key_id)
+
+        @app.post("/v1/admin/keys/{key_id}/rotate", response_model=IssuedKey, status_code=201)
+        async def rotate_key(actor: Actor, key_id: str, body: RotateKeyBody | None = None) -> IssuedKey:
+            return await keys.rotate(actor, key_id, label=body.label if body else None)
 
         @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
         async def revoke_key(actor: Actor, key_id: str) -> Response:

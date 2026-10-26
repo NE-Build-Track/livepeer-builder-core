@@ -123,17 +123,19 @@ class KeyService:
 
 def _audit(event: str, key: AccessKey, *, by: str, replaced_key_id: str | None = None) -> None:
     """One key change, with who made it. Never the token or its hash."""
-    fields = {
-        "event": event,
-        "key_id": key.key_id,
-        "kind": key.kind,
-        "actor_id": key.actor_id,
-        "application_id": key.application_id,
-        "by": by,
-    }
-    if replaced_key_id is not None:
-        fields["replaced_key_id"] = replaced_key_id
-    _LOG.info(event.replace("keys.", "key "), extra=fields)
+    replaced = {} if replaced_key_id is None else {"replaced_key_id": replaced_key_id}
+    _LOG.info(
+        event.replace("keys.", "key "),
+        extra={
+            "event": event,
+            "key_id": key.key_id,
+            "kind": key.kind,
+            "actor_id": key.actor_id,
+            "application_id": key.application_id,
+            "by": by,
+            **replaced,
+        },
+    )
 
 
 def _validated_permissions(kind: CredentialKind, permissions: Iterable[str] | None) -> set[str]:

@@ -203,3 +203,37 @@ async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFacto
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         assert (await client.get("/readyz")).status_code == 503
     await engine.stop()
+
+
+async def test_keys_are_inspected_and_rotated_over_rest(api) -> None:  # type: ignore[no-untyped-def]
+    client, _engine, admin, alice = api
+    actor_key = next(
+        k for k in (await client.get("/v1/admin/keys", headers=admin)).json() if k["kind"] == "actor"
+    )
+    alice_token = alice["Authorization"].removeprefix("Bearer ")
+
+    shown = await client.get(f"/v1/admin/keys/{actor_key['key_id']}", headers=admin)
+    assert shown.status_code == 200 and shown.json() == actor_key
+    assert alice_token not in shown.text and "token" not in shown.json()  # inspection never shows a secret
+    assert (await client.get("/v1/admin/keys/key_unknown", headers=admin)).status_code == 404
+    assert (await client.get(f"/v1/admin/keys/{actor_key['key_id']}", headers=alice)).status_code == 403
+
+    rotated = await client.post(
+        f"/v1/admin/keys/{actor_key['key_id']}/rotate", json={"label": "ci"}, headers=admin
+    )
+    assert rotated.status_code == 201
+    new = rotated.json()
+    assert new["token"].startswith("lpk_") and new["key"]["label"] == "ci"
+    assert (new["key"]["actor_id"], new["key"]["permissions"]) == (
+        actor_key["actor_id"],
+        actor_key["permissions"],
+    )
+    assert (await client.get("/v1/jobs", headers=alice)).status_code == 401  # the old token, at once
+    assert (
+        await client.get("/v1/jobs", headers={"Authorization": f"Bearer {new['token']}"})
+    ).status_code == 200
+
+    again = await client.post(f"/v1/admin/keys/{new['key']['key_id']}/rotate", headers=admin)  # no body
+    assert again.status_code == 201 and again.json()["key"]["label"] == "ci"
+    stale = await client.post(f"/v1/admin/keys/{actor_key['key_id']}/rotate", headers=admin)
+    assert stale.status_code == 400  # already rotated, so revoked

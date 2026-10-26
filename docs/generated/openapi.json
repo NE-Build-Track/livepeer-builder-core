@@ -1477,6 +1477,23 @@
         "title": "RotateBody",
         "type": "object"
       },
+      "RotateKeyBody": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "title": "RotateKeyBody",
+        "type": "object"
+      },
       "Runner": {
         "additionalProperties": false,
         "properties": {
@@ -2474,6 +2491,50 @@
         "summary": "Issue Key"
       }
     },
+    "/v1/admin/keys/{key_id}": {
+      "get": {
+        "operationId": "get_key_v1_admin_keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Key"
+      }
+    },
     "/v1/admin/keys/{key_id}/revoke": {
       "post": {
         "operationId": "revoke_key_v1_admin_keys__key_id__revoke_post",
@@ -2509,6 +2570,67 @@
           }
         ],
         "summary": "Revoke Key"
+      }
+    },
+    "/v1/admin/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_key_v1_admin_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RotateKeyBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Key"
       }
     },
     "/v1/admin/reconciliation": {

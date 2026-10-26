@@ -43,7 +43,6 @@ from livepeer_builder.contracts import (
     RunnerReply,
 )
 from livepeer_builder.errors import (
-    AccessDenied,
     InvalidRequest,
     JobFailed,
     NotFound,
@@ -66,6 +65,7 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
+from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
@@ -178,33 +178,33 @@ class JobService:
             await asyncio.gather(*(stream.abandon(message) for stream in left), *finishing)
 
     async def submit(self, actor: ActorContext, request: JobRequest) -> Job:
-        del actor, request
+        del request
+        self._policy.check(actor, Operation.JOBS_RUN)
         raise NotImplementedInMilestone("async jobs", "M4", "ISS-26")
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
-        del actor, job_id
+        await self._owned(actor, Operation.JOBS_READ, job_id)
         raise NotImplementedInMilestone("stored job results", "M4", "ISS-26")
 
     async def get(self, actor: ActorContext, job_id: UUID) -> Job:
-        job = await self._store.get_job(job_id)
-        if job is None:
-            raise NotFound(f"job {job_id} not found")
-        try:
-            self._policy.check(actor, Operation.JOBS_READ, _job_resource(job))
-        except AccessDenied as exc:
-            raise NotFound(f"job {job_id} not found") from exc  # never reveal other actors' jobs
-        return job
+        return await self._owned(actor, Operation.JOBS_READ, job_id)
 
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
-        self._policy.check(actor, Operation.JOBS_READ)
-        return await self._store.list_jobs(actor.application_id, actor.actor_id, limit=limit, before=before)
+        """The caller's own jobs; an admin's are every actor's in its application, as the cost reads (D44)."""
+        target = None if actor.credential_kind == "admin" else actor.actor_id
+        self._policy.check(
+            actor,
+            Operation.JOBS_READ,
+            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+        )
+        return await self._store.list_jobs(actor.application_id, target, limit=limit, before=before)
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
-        """The application measured the work and reports it once (service-mode default)."""
-        job = await self.get(actor, job_id)
-        self._policy.check(actor, Operation.JOBS_RUN, _job_resource(job))
+        """The application measured the work and reports it once (service-mode default). Running the job
+        is the permission it needs, not reading it (D44)."""
+        job = await self._owned(actor, Operation.JOBS_RUN, job_id)
         if job.usage is not None:
             raise InvalidRequest("usage was already reported for this job")
         if job.state != "succeeded":
@@ -236,6 +236,15 @@ class JobService:
         return recovered
 
     # -- shared steps -------------------------------------------------------------------------------
+
+    async def _owned(self, actor: ActorContext, operation: Operation, job_id: UUID) -> Job:
+        """Permission (403), then the job, then ownership (404): the answer rule (services/ownership.py)."""
+        self._policy.check(actor, operation)
+        job = await self._store.get_job(job_id)
+        if job is None:
+            raise NotFound(f"job {job_id} not found")
+        check_owner(self._policy, actor, operation, job_resource(job), f"job {job_id} not found")
+        return job
 
     async def _admit_request(self, actor: ActorContext, request: JobRequest) -> str:
         """Policy, mode, path and idempotency checks that run before anything is written."""
@@ -468,12 +477,6 @@ def request_fingerprint(request: JobRequest) -> str:
     )
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def _job_resource(job: Job) -> ResourceRef:
-    return ResourceRef(
-        kind="job", application_id=job.application_id, owner_actor_id=job.actor_id, id=str(job.id)
-    )
 
 
 def _result_ref(reply: RunnerReply) -> ResultRef:

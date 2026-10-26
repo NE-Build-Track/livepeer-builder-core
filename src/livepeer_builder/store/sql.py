@@ -123,6 +123,30 @@ class SqlStore:
         async with self.engine.begin() as conn:
             return (await conn.execute(query)).rowcount > 0
 
+    async def get_access_key(self, key_id: str) -> AccessKey | None:
+        query = select(t.access_keys).where(t.access_keys.c.key_id == key_id)
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(query)).mappings().first()
+        return _access_key(row) if row else None
+
+    async def rotate_access_key(
+        self, old_key_id: str, new_key: AccessKey, new_token_hash: str, revoked_at: datetime
+    ) -> bool:
+        revoke = (
+            update(t.access_keys)
+            .where(t.access_keys.c.key_id == old_key_id, t.access_keys.c.revoked_at.is_(None))
+            .values(revoked_at=revoked_at)
+        )
+        values = new_key.model_dump() | {
+            "permissions": list(new_key.permissions),
+            "token_hash": new_token_hash,
+        }
+        async with self.engine.begin() as conn:
+            if (await conn.execute(revoke)).rowcount == 0:
+                return False
+            await conn.execute(insert(t.access_keys).values(values))
+        return True
+
     async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]:
         query = select(t.access_keys).order_by(t.access_keys.c.created_at)
         if application_id is not None:

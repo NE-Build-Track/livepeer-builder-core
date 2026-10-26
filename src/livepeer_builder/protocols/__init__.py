@@ -217,6 +217,15 @@ class KeyRepo(Protocol):
 
     async def revoke_access_key(self, key_id: str, revoked_at: datetime) -> bool: ...
 
+    async def get_access_key(self, key_id: str) -> AccessKey | None: ...  # never the token hash
+
+    async def rotate_access_key(
+        self, old_key_id: str, new_key: AccessKey, new_token_hash: str, revoked_at: datetime
+    ) -> bool:
+        """In one transaction: revoke ``old_key_id`` if it is active and insert ``new_key``. ``False``, and
+        nothing written, when the old key is unknown or already revoked."""
+        ...
+
     async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]: ...
 
     async def count_active_admin_keys(self) -> int: ...

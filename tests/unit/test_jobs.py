@@ -230,8 +230,8 @@ async def test_reserved_execution_modes_fail_loudly(make_engine: EngineFactory, 
     engine = await make_engine()
     with pytest.raises(NotImplementedInMilestone, match="M4"):
         await engine.jobs.run(alice, JobRequest(app=APP, mode="async"))
-    with pytest.raises(NotImplementedInMilestone):
-        await engine.jobs.result(alice, uuid4())
+    with pytest.raises(NotFound):  # D44: permission and ownership come before the 501; the owner's 501 is
+        await engine.jobs.result(alice, uuid4())  # in test_ownership.py
 
 
 async def test_other_actors_jobs_are_invisible(

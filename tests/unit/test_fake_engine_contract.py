@@ -10,6 +10,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,7 +30,7 @@ from livepeer_builder import (
     OperationExists,
 )
 from livepeer_builder.contracts import AttemptOutcome, FailureKind, ProvisionRequest
-from livepeer_builder.errors import NotFound, RunnerCallError
+from livepeer_builder.errors import AccessDenied, NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
     FakeEngine,
@@ -46,6 +47,7 @@ ALICE = ActorContext(
     actor_id="alice", permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 )
 ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
+BOB = ALICE.model_copy(update={"actor_id": "bob"})
 RUNNERS = (runner(APP, url="https://r1"), runner(OTHER, url="https://r2"))
 
 Side = Callable[..., AbstractAsyncContextManager[ActorApi]]
@@ -143,6 +145,61 @@ async def test_get_and_list_return_the_job(side: Side) -> None:
         assert [listed.id for listed in await engine.jobs.list_jobs(ALICE)] == [job.id]
         with pytest.raises(NotFound):
             await engine.jobs.get(ALICE, uuid4())
+
+
+async def test_a_missing_permission_is_access_denied_before_any_lookup(side: Side) -> None:
+    def without(permission: str) -> ActorContext:
+        return ALICE.model_copy(update={"permissions": ALICE.permissions - {permission}})
+
+    async with side() as engine:
+        job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        for job_id in (job.id, uuid4()):  # D44: the same answer whether or not the job exists
+            with pytest.raises(AccessDenied):
+                await engine.jobs.get(without("jobs.read"), job_id)
+            with pytest.raises(AccessDenied):
+                await engine.jobs.report_usage(without("jobs.run"), job_id, {"tokens": 1})
+            with pytest.raises(AccessDenied):
+                await engine.costs.for_job(without("costs.read"), job_id)
+        with pytest.raises(AccessDenied):
+            await engine.jobs.list_jobs(without("jobs.read"))
+
+
+async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) -> None:
+    """Summary, allowance, offerings and runners answer AccessDenied without the permission, on both sides,
+    before anything is looked up (#48 review)."""
+    no_costs = ALICE.model_copy(update={"permissions": ALICE.permissions - {"costs.read"}})
+    no_discover = ALICE.model_copy(update={"permissions": ALICE.permissions - {"discover"}})
+    async with side() as engine:
+        with pytest.raises(AccessDenied):
+            await engine.costs.summary(
+                no_costs, datetime(2026, 1, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)
+            )
+        with pytest.raises(AccessDenied):
+            await engine.payments.allowance(no_costs)
+        with pytest.raises(AccessDenied):
+            engine.discovery.offerings(no_discover)
+        with pytest.raises(AccessDenied):
+            engine.discovery.runners(no_discover, APP)
+
+
+async def test_another_actors_job_is_not_found(side: Side) -> None:
+    async with side() as engine:
+        job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        with pytest.raises(NotFound):
+            await engine.jobs.get(BOB, job.id)
+        with pytest.raises(NotFound):
+            await engine.jobs.report_usage(BOB, job.id, {"tokens": 1})
+        with pytest.raises(NotFound):
+            await engine.costs.for_job(BOB, job.id)
+        assert await engine.jobs.list_jobs(BOB) == []
+
+
+async def test_a_usage_report_needs_jobs_run_only_and_an_admin_lists_every_actor(side: Side) -> None:
+    async with side() as engine:
+        job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        runner_only = ALICE.model_copy(update={"permissions": frozenset({"jobs.run"})})
+        await engine.jobs.report_usage(runner_only, job.id, {"tokens": 1})
+        assert [listed.id for listed in await engine.jobs.list_jobs(ADMIN)] == [job.id]
 
 
 async def test_cost_of_an_unknown_job_is_not_found(side: Side) -> None:

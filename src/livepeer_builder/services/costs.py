@@ -39,7 +39,7 @@ from livepeer_builder.contracts import (
     SyncReport,
     UsageRow,
 )
-from livepeer_builder.errors import AccessDenied, CursorMismatch, NotFound, ProviderUnavailable
+from livepeer_builder.errors import CursorMismatch, NotFound, ProviderUnavailable
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllowanceReader,
@@ -49,6 +49,7 @@ from livepeer_builder.protocols import (
     JobRepo,
     UsageSource,
 )
+from livepeer_builder.services.ownership import check_owner
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -175,15 +176,14 @@ class CostService:
         return projection
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
+        self._policy.check(actor, Operation.COSTS_READ)  # before any lookup: 403, then ownership 404 (D44)
         async with self._store.cost_snapshot() as reads:
             found = await reads.job_with_projection(job_id)
             if found is None:
                 raise NotFound(f"job {job_id} not found")
             job, projection = found
-            try:
-                self._policy.check(actor, Operation.COSTS_READ, _resource(job.application_id, job.actor_id))
-            except AccessDenied as exc:
-                raise NotFound(f"job {job_id} not found") from exc
+            owner = _resource(job.application_id, job.actor_id)
+            check_owner(self._policy, actor, Operation.COSTS_READ, owner, f"job {job_id} not found")
             if projection is not None and _covered(projection, job):
                 return projection
             return (await _compute_all([job], reads))[0]  # running, or ended since sync stored it (#33)

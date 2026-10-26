@@ -39,6 +39,8 @@ from livepeer_builder.contracts import (
     JobResult,
     JobState,
     Offering,
+    Operation,
+    ResourceRef,
     ResultRef,
     Runner,
 )
@@ -50,8 +52,11 @@ from livepeer_builder.errors import (
     OperationConflict,
     OperationExists,
 )
+from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
 from livepeer_builder.services.jobs import request_fingerprint
+from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
@@ -84,6 +89,7 @@ class FakeJobs:
         self.usage_reports: list[tuple[UUID, dict[str, int]]] = []
         self.streaming: FakeStreaming | None = FakeStreaming(self) if streaming else None
         self._discovery = discovery
+        self.policy = DefaultPolicy()  # the engine's default policy and answer rule (D44)
         self._jobs: dict[UUID, Job] = {}
         self._results: dict[UUID, JobResult] = {}
         self._operations: dict[tuple[str, str, str], tuple[str, UUID]] = {}
@@ -249,30 +255,43 @@ class FakeJobs:
         return result
 
     async def get(self, actor: ActorContext, job_id: UUID) -> Job:
+        return self.owned(actor, Operation.JOBS_READ, job_id)
+
+    def owned(self, actor: ActorContext, operation: Operation, job_id: UUID) -> Job:
+        """The engine's answer rule (D44): permission (403), then ownership (404)."""
+        self.policy.check(actor, operation)
         job = self._jobs.get(job_id)
-        if job is None or (job.actor_id, job.application_id) != (actor.actor_id, actor.application_id):
+        if job is None:
             raise NotFound(f"job {job_id} not found")
+        check_owner(self.policy, actor, operation, job_resource(job), f"job {job_id} not found")
         return job
 
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
+        target = None if actor.credential_kind == "admin" else actor.actor_id
+        self.policy.check(
+            actor,
+            Operation.JOBS_READ,
+            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+        )
         mine = [
             job
             for job in self._jobs.values()
-            if (job.actor_id, job.application_id) == (actor.actor_id, actor.application_id)
+            if job.application_id == actor.application_id
+            and target in (None, job.actor_id)
             and (before is None or job.created_at < before)
         ]
         return sorted(mine, key=lambda job: job.created_at, reverse=True)[:limit]
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
-        await self.get(actor, job_id)
+        self.owned(actor, Operation.JOBS_READ, job_id)
         if job_id not in self._results:
             raise NotFound(f"job {job_id} has no result")
         return self._results[job_id]
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
-        job = await self.get(actor, job_id)
+        job = self.owned(actor, Operation.JOBS_RUN, job_id)
         if job.state != "succeeded":
             raise InvalidRequest("usage can only be reported for a succeeded job")
         if any(value < 0 for value in quantities.values()):
@@ -293,13 +312,14 @@ class FakeCosts:
         self._jobs = jobs
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
+        self._jobs.policy.check(actor, Operation.COSTS_READ)  # before any lookup, as the engine (D44)
         scripted = self.costs.get(job_id)
         if isinstance(scripted, Raises):
             raise scripted.error
         if scripted is not None:
             return scripted
         try:
-            job = await self._jobs.get(actor, job_id)
+            job = self._jobs.owned(actor, Operation.COSTS_READ, job_id)
         except NotFound:
             raise NotFound(f"no cost for job {job_id}") from None
         return classify(job, ())
@@ -307,19 +327,27 @@ class FakeCosts:
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
     ) -> CostSummary:
+        target = actor_id or (None if actor.credential_kind == "admin" else actor.actor_id)
+        owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
+        self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._summary is None:
             raise NotFound("no cost summary scripted")
         return self._summary
 
 
 class FakeDiscovery:
-    def __init__(self, offerings: Iterable[Offering], runners: Iterable[Runner]) -> None:
+    def __init__(
+        self, offerings: Iterable[Offering], runners: Iterable[Runner], policy: AccessPolicy | None = None
+    ) -> None:
         self._offerings, self._runners = list(offerings), list(runners)
+        self._policy = policy or DefaultPolicy()
 
     def offerings(self, actor: ActorContext, *, app: str | None = None) -> list[Offering]:
+        self._policy.check(actor, Operation.DISCOVER)
         return [offering for offering in self._offerings if app is None or offering.app == app]
 
     def runners(self, actor: ActorContext, app: str) -> list[Runner]:
+        self._policy.check(actor, Operation.DISCOVER)
         return self.candidates(app)
 
     def candidates(self, app: str) -> list[Runner]:
@@ -327,10 +355,14 @@ class FakeDiscovery:
 
 
 class FakeAllowance:
-    def __init__(self, allowance: Allowance | None) -> None:
+    def __init__(self, allowance: Allowance | None, policy: AccessPolicy | None = None) -> None:
         self._allowance = allowance
+        self._policy = policy or DefaultPolicy()
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
+        target = actor_id or actor.actor_id
+        owner = ResourceRef(kind="allocation", application_id=actor.application_id, owner_actor_id=target)
+        self._policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._allowance is None:
             raise NotProvisioned("no allowance scripted")
         return self._allowance
@@ -354,7 +386,7 @@ class FakeEngine:
         self.discovery = FakeDiscovery(offerings, runners)
         self.jobs = FakeJobs(replies or {}, streaming, self.discovery)
         self.costs = FakeCosts(costs or {}, summary, self.jobs)
-        self.payments = FakeAllowance(allowance)
+        self.payments = FakeAllowance(allowance, self.jobs.policy)
         self._health = health or EngineHealth(
             ready=True,
             discovery_fresh=True,

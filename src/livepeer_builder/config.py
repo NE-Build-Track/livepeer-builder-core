@@ -3,13 +3,19 @@
 import base64
 import os
 from collections.abc import Mapping
+from typing import Any, Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from livepeer_builder.contracts import AllocationMode, Contract, Currency
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
+AuthMode = Literal["api_keys", "jwt"]
+# JWT signatures the engine accepts: asymmetric only, so a verification key can never sign (D45).
+ASYMMETRIC_ALGORITHMS = frozenset(
+    {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
+)
 
 
 class EngineSettings(Contract):
@@ -50,10 +56,58 @@ class EngineSettings(Contract):
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
 
+    # access (docs/contracts/access.md#jwt-bearer, D45)
+    auth: tuple[AuthMode, ...] = ("api_keys",)  # LPB_AUTH=api_keys | jwt | jwt,api_keys
+    jwt_issuer: str | None = None  # matched exactly against iss; its discovery document gives the JWKS
+    jwt_jwks_url: str | None = None  # overrides discovery
+    jwt_audience: str | None = None  # must be in aud: this engine
+    jwt_algorithms: tuple[str, ...] = ("RS256", "ES256")
+    jwt_actor_claim: str = Field(default="sub", min_length=1)
+    jwt_application_claim: str | None = None  # None: every token is in jwt_application_id
+    jwt_application_id: str = Field(default="default", min_length=1)
+    jwt_scope_claim: str = Field(default="scope", min_length=1)
+    jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
+    jwt_admin_scope: str | None = None  # None: no token is an admin credential
+    jwt_leeway_s: float = Field(default=30.0, ge=0)
+
     # operations
     log_json: bool = True
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8080, ge=1, le=65535)
+
+    @field_validator("auth", "jwt_algorithms", mode="before")
+    @classmethod
+    def _comma_separated(cls, value: Any) -> Any:
+        return (
+            tuple(part.strip() for part in value.split(",") if part.strip())
+            if isinstance(value, str)
+            else value
+        )
+
+    @field_validator("auth")
+    @classmethod
+    def _one_of_each(cls, value: tuple[AuthMode, ...]) -> tuple[AuthMode, ...]:
+        if not value:
+            raise ValueError("auth needs at least one mode: api_keys, jwt, or jwt,api_keys")
+        if len(set(value)) != len(value):
+            raise ValueError("auth names a mode twice")
+        return value
+
+    @field_validator("jwt_algorithms")
+    @classmethod
+    def _asymmetric(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        refused = sorted(set(value) - ASYMMETRIC_ALGORITHMS)
+        if not value or refused:
+            raise ValueError(f"jwt_algorithms takes asymmetric algorithms only; refused {refused}")
+        return value
+
+    @model_validator(mode="after")
+    def _jwt_is_configured(self) -> "EngineSettings":
+        if "jwt" in self.auth:
+            for name in ("jwt_issuer", "jwt_audience"):
+                if not getattr(self, name):
+                    raise ValueError(f"LPB_{name.upper()} is required when LPB_AUTH includes jwt")
+        return self
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "EngineSettings":

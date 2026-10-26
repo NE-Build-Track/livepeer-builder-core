@@ -19,6 +19,7 @@ HEAVY = (
     "asyncpg",
     "httpx",
     "cryptography",
+    "jwt",
     "livepeer_gateway",
     "aiohttp",
     "fastapi",

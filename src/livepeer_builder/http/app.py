@@ -118,18 +118,25 @@ def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, Act
     authenticate like the built-in routes: ``Annotated[ActorContext, Depends(actor_dependency(engine))]``.
 
     When the engine accepts API keys, it also declares the ``lpk_`` bearer scheme in OpenAPI, so Swagger
-    UI shows Authorize. With keys off it declares none: the engine cannot know what a supplied
-    authenticator expects, so a service that wants Swagger to send its credential declares it in ``extend``.
+    UI shows Authorize. With keys off it declares a JWT bearer scheme when the authenticator chain announces
+    a ``Bearer`` challenge (``LPB_AUTH=jwt``, D45), and otherwise none: the engine cannot know what another
+    authenticator expects, so a service that wants Swagger to send it declares it in ``extend``.
     """
-    if engine.keys is None:
+    # Declares the scheme only; authentication itself stays with engine.authenticator (raw headers).
+    if engine.keys is not None:
+        bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
+    elif "bearer" in (engine.authenticator.challenge() or "").lower():  # JWT bearer (D45), keys off
+        bearer = HTTPBearer(
+            auto_error=False,
+            bearerFormat="JWT",
+            description="An access token from the engine's identity provider",
+        )
+    else:
 
         async def actor_from(request: Request) -> ActorContext:
             return await _authenticated(engine, request)
 
         return actor_from
-
-    # Declares the scheme only; authentication itself stays with engine.authenticator (raw headers).
-    bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
 
     async def actor_from_key(
         request: Request,

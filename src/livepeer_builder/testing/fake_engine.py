@@ -39,6 +39,8 @@ from livepeer_builder.contracts import (
     JobResult,
     JobState,
     Offering,
+    Operation,
+    ResourceRef,
     ResultRef,
     Runner,
 )
@@ -52,6 +54,8 @@ from livepeer_builder.errors import (
 )
 from livepeer_builder.services.costs import classify
 from livepeer_builder.services.jobs import request_fingerprint
+from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
@@ -84,6 +88,7 @@ class FakeJobs:
         self.usage_reports: list[tuple[UUID, dict[str, int]]] = []
         self.streaming: FakeStreaming | None = FakeStreaming(self) if streaming else None
         self._discovery = discovery
+        self.policy = DefaultPolicy()  # the engine's default policy and answer rule (D44)
         self._jobs: dict[UUID, Job] = {}
         self._results: dict[UUID, JobResult] = {}
         self._operations: dict[tuple[str, str, str], tuple[str, UUID]] = {}
@@ -249,30 +254,43 @@ class FakeJobs:
         return result
 
     async def get(self, actor: ActorContext, job_id: UUID) -> Job:
+        return self.owned(actor, Operation.JOBS_READ, job_id)
+
+    def owned(self, actor: ActorContext, operation: Operation, job_id: UUID) -> Job:
+        """The engine's answer rule (D44): permission (403), then ownership (404)."""
+        self.policy.check(actor, operation)
         job = self._jobs.get(job_id)
-        if job is None or (job.actor_id, job.application_id) != (actor.actor_id, actor.application_id):
+        if job is None:
             raise NotFound(f"job {job_id} not found")
+        check_owner(self.policy, actor, operation, job_resource(job), f"job {job_id} not found")
         return job
 
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
+        target = None if actor.credential_kind == "admin" else actor.actor_id
+        self.policy.check(
+            actor,
+            Operation.JOBS_READ,
+            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+        )
         mine = [
             job
             for job in self._jobs.values()
-            if (job.actor_id, job.application_id) == (actor.actor_id, actor.application_id)
+            if job.application_id == actor.application_id
+            and target in (None, job.actor_id)
             and (before is None or job.created_at < before)
         ]
         return sorted(mine, key=lambda job: job.created_at, reverse=True)[:limit]
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
-        await self.get(actor, job_id)
+        self.owned(actor, Operation.JOBS_READ, job_id)
         if job_id not in self._results:
             raise NotFound(f"job {job_id} has no result")
         return self._results[job_id]
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
-        job = await self.get(actor, job_id)
+        job = self.owned(actor, Operation.JOBS_RUN, job_id)
         if job.state != "succeeded":
             raise InvalidRequest("usage can only be reported for a succeeded job")
         if any(value < 0 for value in quantities.values()):
@@ -293,13 +311,14 @@ class FakeCosts:
         self._jobs = jobs
 
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost:
+        self._jobs.policy.check(actor, Operation.COSTS_READ)  # before any lookup, as the engine (D44)
         scripted = self.costs.get(job_id)
         if isinstance(scripted, Raises):
             raise scripted.error
         if scripted is not None:
             return scripted
         try:
-            job = await self._jobs.get(actor, job_id)
+            job = self._jobs.owned(actor, Operation.COSTS_READ, job_id)
         except NotFound:
             raise NotFound(f"no cost for job {job_id}") from None
         return classify(job, ())

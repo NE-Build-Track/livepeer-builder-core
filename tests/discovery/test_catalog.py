@@ -95,7 +95,7 @@ async def test_a_failed_directory_load_keeps_the_previous_directory() -> None:
     await catalog.load_directory()
     await catalog.probe()
     assert set(rounds(catalog)) == {A.url, B.url}
-    assert catalog.status().directory_error == "RuntimeError: rpc down"
+    assert catalog.status().directory_error == "RuntimeError"  # its text is logged, not shown on /readyz
 
 
 async def test_an_orchestrator_that_leaves_the_directory_drops_out_at_once() -> None:
@@ -141,3 +141,67 @@ async def test_an_orchestrator_that_rejoins_does_not_bring_back_an_old_inventory
     answers.down = {B.url}
     await catalog.probe()
     assert set(rounds(catalog)) == {A.url}  # B is back in the directory but has not answered since
+
+
+# -- PR #46 review ---------------------------------------------------------------------------------------
+
+
+async def test_an_error_in_a_pass_is_logged_and_the_loop_keeps_ticking(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Flaky(Answers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.broken = True
+
+        async def probe_all(self, orchestrators: Sequence[Orchestrator]) -> list[Probe]:
+            if self.broken:
+                self.broken = False
+                raise RuntimeError("a bug in a probe")
+            return await super().probe_all(orchestrators)
+
+    answers = Flaky()
+    catalog = Catalog(Listed(A), answers)
+    stop = asyncio.Event()
+    task = asyncio.create_task(catalog.run(stop, directory_interval_s=3600, probe_interval_s=0.01))
+    async with asyncio.timeout(2):
+        while not catalog.status().ready:  # noqa: ASYNC110 - polls the catalog, which has no event to await
+            await asyncio.sleep(0.01)
+    stop.set()
+    await asyncio.wait_for(task, 1)
+    assert not task.cancelled() and task.exception() is None
+    assert "discovery.refresh_failed" in {getattr(r, "event", None) for r in caplog.records}
+
+
+async def test_a_directory_that_never_answers_times_out_and_probing_goes_on() -> None:
+    class Stuck:
+        async def orchestrators(self) -> tuple[Orchestrator, ...]:
+            await asyncio.sleep(3600)
+            return ()
+
+    catalog = Catalog(Listed(A), Answers(), directory_timeout_s=0.05)
+    await catalog.load_directory()
+    catalog._directory = Stuck()  # the directory hangs from now on
+    async with asyncio.timeout(2):
+        await catalog.load_directory()
+    assert catalog.status().directory_error == "TimeoutError" and catalog.status().orchestrators == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "shown"),
+    [
+        (RuntimeError("https://rpc.example/v2/SECRET refused"), "RuntimeError"),
+        (
+            ValueError("not an orchestrator base URL: 'ftp://x'"),
+            "ValueError: not an orchestrator base URL: 'ftp://x'",
+        ),
+    ],
+    ids=["unknown error: its type only", "our own message"],
+)
+async def test_the_directory_error_shown_on_readyz_is_a_stable_reason(error: Exception, shown: str) -> None:
+    """/readyz is unauthenticated (and public on Railway): no provider text, which may echo a key."""
+    directory = Listed(A)
+    directory.orchestrators_now = error
+    catalog = Catalog(directory, Answers())
+    await catalog.load_directory()
+    assert catalog.status().directory_error == shown

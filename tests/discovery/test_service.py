@@ -116,3 +116,27 @@ async def test_serve_runs_the_catalog_and_the_listener_until_cancelled() -> None
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+async def test_readiness_fails_once_the_refresh_task_has_stopped() -> None:
+    """A stopped refresh would serve a frozen inventory while /readyz said 200 (#46 review)."""
+    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed({"url": "u", "app": "a"}))
+    await catalog.load_directory()
+    await catalog.probe()
+
+    async def crashes() -> None:
+        raise RuntimeError("the loop died")
+
+    refresh = asyncio.create_task(crashes())
+    await asyncio.sleep(0)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(catalog, refresh=refresh)), base_url="http://discovery"
+    ) as http:
+        answer = await http.get("/readyz")
+    assert answer.status_code == 503 and answer.json()["refreshing"] is False
+    assert (await http_status(catalog)) == 200  # without a refresh task to watch, the catalog decides
+
+
+async def http_status(catalog: Catalog) -> int:
+    async with client(catalog) as http:
+        return (await http.get("/readyz")).status_code

@@ -24,6 +24,7 @@ class DiscoverySettings(BaseModel):
     bonding_manager: str = ARBITRUM_BONDING_MANAGER
     ai_service_registry: str = ARBITRUM_AI_SERVICE_REGISTRY
     directory_interval_s: float = Field(default=3600.0, gt=0)  # the active set changes per round
+    directory_timeout_s: float = Field(default=300.0, gt=0)  # a stuck load gives up; probing goes on
     probe_interval_s: float = Field(default=30.0, gt=0)
     probe_timeout_s: float = Field(default=5.0, gt=0)
     max_failed_refreshes: int = Field(default=6, ge=0)  # 0 evicts on the first failed probe

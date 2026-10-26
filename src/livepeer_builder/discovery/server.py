@@ -6,6 +6,7 @@ directory=...)``; logging is the caller's (the CLI configures it).
 """
 
 import asyncio
+import logging
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -20,8 +21,13 @@ from livepeer_builder.discovery.rpc import JsonRpcChain
 from livepeer_builder.discovery.settings import DiscoverySettings
 from livepeer_builder.discovery.static import StaticDirectory
 
+_LOG = logging.getLogger(__name__)
 
-def create_app(catalog: Catalog) -> Starlette:
+
+def create_app(catalog: Catalog, *, refresh: "asyncio.Task[None] | None" = None) -> Starlette:
+    """The HTTP surface. With ``refresh``, readiness also needs that task alive: a stopped refresh would
+    serve a frozen inventory, so it must not look ready (#46 review)."""
+
     async def discovery(_: Request) -> JSONResponse:
         return JSONResponse(catalog.inventory())
 
@@ -30,7 +36,10 @@ def create_app(catalog: Catalog) -> Starlette:
 
     async def readyz(_: Request) -> JSONResponse:
         status = catalog.status()
-        return JSONResponse(status.model_dump(mode="json"), status_code=200 if status.ready else 503)
+        refreshing = refresh is None or not refresh.done()
+        ready = status.ready and refreshing
+        body = status.model_dump(mode="json") | {"ready": ready, "refreshing": refreshing}
+        return JSONResponse(body, status_code=200 if ready else 503)
 
     return Starlette(
         routes=[
@@ -66,6 +75,7 @@ async def serve(
         directory or directory_from(settings),
         prober or Prober(timeout_s=settings.probe_timeout_s),
         max_failed_refreshes=settings.max_failed_refreshes,
+        directory_timeout_s=settings.directory_timeout_s,
     )
     stop = asyncio.Event()
     refresh = asyncio.create_task(
@@ -76,8 +86,12 @@ async def serve(
         ),
         name="lpd-refresh",
     )
+    refresh.add_done_callback(_stopped)
     config = uvicorn.Config(
-        create_app(catalog), host=settings.http_host, port=settings.http_port, log_config=None
+        create_app(catalog, refresh=refresh),
+        host=settings.http_host,
+        port=settings.http_port,
+        log_config=None,
     )
     try:
         await uvicorn.Server(config).serve()
@@ -85,3 +99,11 @@ async def serve(
         stop.set()
         refresh.cancel()
         await asyncio.gather(refresh, return_exceptions=True)
+
+
+def _stopped(task: "asyncio.Task[None]") -> None:
+    if not task.cancelled() and task.exception() is not None:
+        _LOG.error(
+            "the discovery refresh stopped; /readyz now fails",
+            extra={"event": "discovery.refresh_stopped", "error": type(task.exception()).__name__},
+        )

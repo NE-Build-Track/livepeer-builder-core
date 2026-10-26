@@ -3,9 +3,14 @@
 Retention follows livepeer-node's discovery: a failed probe keeps an orchestrator's last inventory
 until ``max_failed_refreshes`` consecutive failures (``0`` evicts on the first). A failed directory
 load keeps the previous directory; an orchestrator that leaves the directory drops out at once.
+
+The refresh loop survives its own errors: a failed pass is logged and the next tick runs (#46 review). A
+directory load has ``directory_timeout_s``, so a stuck one cannot stop probing. The directory error shown on
+the unauthenticated ``/readyz`` is a stable reason, never another system's text.
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -13,8 +18,12 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from livepeer_builder.discovery.abi import ChainError
 from livepeer_builder.discovery.directory import Orchestrator, OrchestratorDirectory
 from livepeer_builder.discovery.probe import Probe
+
+_LOG = logging.getLogger(__name__)
+_OWN_MESSAGES = (ValueError, ChainError)  # written by this package, so safe to show
 
 
 class Probes(Protocol):
@@ -37,6 +46,7 @@ class Catalog:
         prober: Probes,
         *,
         max_failed_refreshes: int = 6,
+        directory_timeout_s: float = 300.0,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if max_failed_refreshes < 0:
@@ -44,6 +54,7 @@ class Catalog:
         self._directory = directory
         self._prober = prober
         self._evict_after = max(max_failed_refreshes, 1)
+        self._directory_timeout_s = directory_timeout_s
         self._now = now
         self._orchestrators: tuple[Orchestrator, ...] | None = None
         self._inventory: dict[str, dict[str, Any]] = {}
@@ -54,9 +65,14 @@ class Catalog:
 
     async def load_directory(self) -> None:
         try:
-            orchestrators = await self._directory.orchestrators()
+            async with asyncio.timeout(self._directory_timeout_s):
+                orchestrators = await self._directory.orchestrators()
         except Exception as exc:  # keep the directory we had; report the error
-            self._directory_error = f"{type(exc).__name__}: {exc}"
+            self._directory_error = _reason(exc)
+            _LOG.warning(
+                "directory load failed; keeping the previous directory",
+                extra={"event": "discovery.directory_failed", "error": f"{type(exc).__name__}: {exc}"[:300]},
+            )
             return
         self._orchestrators = orchestrators
         listed = {o.url for o in orchestrators}
@@ -96,12 +112,24 @@ class Catalog:
         probe every ``probe_interval_s``, until ``stop`` is set."""
         next_load = 0.0
         while not stop.is_set():
-            if time.monotonic() >= next_load:
-                await self.load_directory()
-                if self._orchestrators is not None:
-                    next_load = time.monotonic() + directory_interval_s
-            await self.probe()
+            try:
+                if time.monotonic() >= next_load:
+                    await self.load_directory()
+                    if self._orchestrators is not None:
+                        next_load = time.monotonic() + directory_interval_s
+                await self.probe()
+            except Exception:
+                _LOG.exception(
+                    "discovery refresh failed; trying again next tick",
+                    extra={"event": "discovery.refresh_failed"},
+                )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=probe_interval_s)
             except TimeoutError:
                 continue
+
+
+def _reason(exc: BaseException) -> str:
+    """For /readyz: the error's type, and its message only when this package wrote it."""
+    message = str(exc) if isinstance(exc, _OWN_MESSAGES) else ""
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__

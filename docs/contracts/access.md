@@ -119,27 +119,58 @@ mode, with no code:
 
 **Setup:**
 - set `LPB_JWT_ISSUER` (matched exactly against `iss`) and `LPB_JWT_AUDIENCE` (must be in `aud`);
-- the keys come from the issuer's `/.well-known/openid-configuration`, or from `LPB_JWT_JWKS_URL`;
+- the keys come from the issuer's metadata (OpenID Discovery, then RFC 8414), or from `LPB_JWT_JWKS_URL`;
+- the issuer and the key URL must be `https`. `LPB_JWT_ALLOW_HTTP=true` allows `http`, for local
+  development only (a Keycloak in a compose stack);
 - the other `LPB_JWT_*` settings are in [RELIABILITY.md](../RELIABILITY.md#configuration).
 - A supplied `EngineSupply.authenticators` still replaces the configured ones.
+
+**Startup refuses risky settings (D47):**
+- an `http` issuer or key URL without the development override;
+- an `LPB_JWT_ADMIN_SCOPE` that ordinary tokens carry: an operation name (`jobs.run`, ...) or a standard
+  OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`). The admin scope makes an
+  engine-wide admin that skips permission and ownership checks in every application, so it must be a scope
+  the provider issues to operators alone;
+- an empty `LPB_JWT_TOKEN_TYPES`.
 
 **Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):
 - **Algorithms:** only `LPB_JWT_ALGORITHMS`, which takes asymmetric algorithms only (`RS256,ES256` by
   default). `none` and `HS*` are refused, so the published key can never be used as a shared secret.
+- **Token type (RFC 9068, D47):** the header's `typ` must be in `LPB_JWT_TOKEN_TYPES`, compared without
+  case (`at+jwt,application/at+jwt` by default). An ID token (`typ: JWT`) or a logout token with the right
+  audience is refused, as is a token with no `typ`.
+  - **The opt-out:** add `jwt` for a provider that cannot send `at+jwt`. It accepts `typ: JWT` and a missing
+    `typ`, and drops the `client_id` and `jti` requirements. It is weaker: only the audience then tells an
+    access token from an ID token, so `LPB_JWT_AUDIENCE` must be this engine's resource identifier, never a
+    client ID.
 - **Signature:** checked against the issuer's JWKS.
-  - **Which keys:** only keys for signatures count. A key with `use: enc`, or with `key_ops` that lack
-    `verify`, is skipped; a key that omits `use` counts. A key published with an `alg` verifies only that
-    algorithm (RFC 8725).
-  - **Caching:** the keys are kept for an hour and fetched again, at most once a minute, when a token
-    names an unknown `kid`. Only a refetch that worked uses up that minute.
+  - **Which keys:** only asymmetric keys for signatures count (`kty` `RSA`, `EC` or `OKP`). A shared-secret
+    key (`kty: oct`), a key with `use: enc`, or one with `key_ops` that lack `verify`, is skipped; a key
+    that omits `use` counts. A key published with an `alg` verifies only that algorithm (RFC 8725).
+  - **Caching (D47):** keys older than 10 minutes are refreshed in the background while requests keep
+    using them, so a slow provider never stalls a request, and a key the provider withdrew stops verifying
+    within about 10 minutes. Keys older than an hour are not served: the request waits for a fetch. A token
+    that names an unknown `kid` causes a fetch at most once a minute; only a refetch that worked uses up
+    that minute.
   - **No `kid`:** a token without `kid` is accepted only when the provider publishes exactly one signing key.
-- **Claims:** `iss`, `aud` and `exp` are required, and `exp` and `nbf` are checked with
-  `LPB_JWT_LEEWAY_S` (30 s).
+- **Claims:** `iss`, `aud`, `exp` and `iat` are required, plus `client_id` and `jti` unless the opt-out is
+  on (RFC 9068 2.2). `exp`, `nbf` and `iat` are checked with `LPB_JWT_LEEWAY_S` (30 s). `aud` may be a
+  list that contains the engine.
+- **Lifetime (D47):** a token whose `exp - iat` exceeds `LPB_JWT_MAX_LIFETIME_S` (an hour) is refused,
+  however valid its signature. This is what makes the short-lifetime revocation guidance enforceable.
 - **Sender-constrained tokens are refused.** A token with `cnf` is bound to a client certificate
   (RFC 8705) or a DPoP key (RFC 9449). This engine verifies neither, so it refuses the token rather than
   accept it as a plain bearer token.
-- **Reading the keys:** the keys URL comes from the issuer's discovery document, which must name the
-  configured issuer and an http(s) `jwks_uri`.
+- **Reading the keys:** the keys URL comes from the issuer's metadata, which must name the configured issuer
+  and an `https` `jwks_uri` (`http` too with the development override).
+  - **Two metadata URLs (D47):** OpenID Discovery first (`<issuer>/.well-known/openid-configuration`); if
+    that request fails, RFC 8414 (`https://host/.well-known/oauth-authorization-server/<issuer path>`). A
+    document that answers but is wrong is not retried at the other URL.
+  - **Bounded:** each request has a 3 s timeout and a 1 MiB body cap, and redirects are not followed.
+    The token's own `jku` and `x5u` headers are ignored, so a token cannot choose where its keys come from.
+  - **No host block:** the metadata comes from the operator's configured issuer over `https`, and a
+    provider in the same cluster (a Keycloak) legitimately sits on a private address, so private and
+    loopback hosts are allowed.
   - **A bad URL is retried:** a discovered URL is kept only once it has served a usable key set, so a bad
     one, or one the issuer has moved, is discovered again.
   - **After a failed fetch,** the provider is left alone for 5 s, and token requests answer 503 meanwhile.
@@ -150,7 +181,7 @@ mode, with no code:
 | The credential | Answer |
 | --- | --- |
 | Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
-| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, unknown key, missing claim |
+| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
 | The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503) with a fixed message, because no token can be checked. The details are logged |
 
 **Claims become an `ActorContext`:**
@@ -164,14 +195,9 @@ mode, with no code:
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
 
 **Revocation.** A JWT cannot be revoked before it expires; an `lpk_` key can. Issue short-lived access
-tokens (5 to 15 minutes) and let the provider refresh them.
-
-**What the engine does not check (D45):**
-- **Token lifetime:** the engine honours a token until its `exp`, however far away. Short lifetimes are
-  the provider's setting.
-- **ID tokens:** an ID token is told apart from an access token only by its audience, so set
-  `LPB_JWT_AUDIENCE` to this engine's resource identifier, never to a client ID. Checking
-  `typ: at+jwt` (RFC 9068) would refuse providers that do not set it.
+tokens (5 to 15 minutes) and let the provider refresh them. The engine enforces the ceiling: no token
+lives longer than `LPB_JWT_MAX_LIFETIME_S`, and a withdrawn signing key stops verifying within about
+10 minutes (D47).
 
 **OpenAPI.** With keys off, the service declares a JWT bearer scheme, so Swagger UI's Authorize sends a
 token.

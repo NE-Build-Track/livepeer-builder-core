@@ -4,6 +4,7 @@ Tokens are signed here with locally generated keys; the provider's discovery doc
 by an httpx mock transport, so nothing touches the network.
 """
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
@@ -40,6 +41,8 @@ class Provider:
         self.jwks_down = False  # only the key set fails, not discovery
         self.jwks_uri = JWKS_URL
         self.extra: dict[str, dict[str, Any]] = {}  # per-kid JWK fields: use, key_ops, alg
+        self.raw_keys: list[dict[str, Any]] = []  # published as they are, beside the RSA keys
+        self.padding = 0  # bytes of filler in the key set, to test the size cap
 
     def add_key(self, kid: str, *, publish: bool = True) -> None:
         self.keys[kid] = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -52,29 +55,37 @@ class Provider:
             return httpx.Response(503)
         if str(request.url) == DISCOVERY:
             return httpx.Response(200, json={"issuer": self.issuer, "jwks_uri": self.jwks_uri})
-        if str(request.url) in (JWKS_URL, JWKS_URL_2):
+        if str(request.url) in (JWKS_URL, JWKS_URL_2, self.jwks_uri):
             if self.jwks_down or str(request.url) != self.jwks_uri:  # keys only where discovery says
                 return httpx.Response(500)
             keys = []
             for kid in self.published:
                 public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(self.keys[kid].public_key()))
                 keys.append(public | {"kid": kid, "use": "sig", "alg": "RS256"} | self.extra.get(kid, {}))
-            return httpx.Response(
-                200, json={"keys": [{k: v for k, v in key.items() if v is not None} for key in keys]}
+            published = [{k: v for k, v in key.items() if v is not None} for key in keys] + self.raw_keys
+            body: dict[str, Any] = {"keys": published} | (
+                {"filler": "x" * self.padding} if self.padding else {}
             )
+            return httpx.Response(200, json=body)
         return httpx.Response(404)
 
     def token(
-        self, kid: str | None = "k1", *, alg: str = "RS256", drop: tuple[str, ...] = (), **claims: Any
+        self,
+        kid: str | None = "k1",
+        *,
+        alg: str = "RS256",
+        typ: str = "at+jwt",
+        drop: tuple[str, ...] = (),
+        **claims: Any,
     ) -> str:
         now = int(time.time())
         body: dict[str, Any] = {
             "iss": ISSUER, "aud": AUDIENCE, "sub": "alice", "iat": now, "exp": now + 300, "jti": "t-1",
-            "scope": "jobs.run jobs.read",
+            "client_id": "console", "scope": "jobs.run jobs.read",
         } | claims  # fmt: skip
         for name in drop:
             body.pop(name, None)
-        headers = {} if kid is None else {"kid": kid}
+        headers = {"typ": typ} | ({} if kid is None else {"kid": kid})  # an RFC 9068 access token by default
         return jwt.encode(body, self.keys[kid or "k1"], algorithm=alg, headers=headers)
 
 
@@ -231,7 +242,7 @@ async def test_a_forged_signature_is_refused(make: Make, provider: Provider) -> 
         {"iss": ISSUER, "aud": AUDIENCE, "sub": "alice", "exp": int(time.time()) + 300},
         provider.keys["forger"],
         algorithm="RS256",
-        headers={"kid": "k1"},  # claims the provider's key id, signed with another key
+        headers={"kid": "k1", "typ": "at+jwt"},  # claims the provider's key id, signed with another key
     )
     with pytest.raises(NotAuthenticated, match="signature"):
         await make().authenticate(bearer(forged))
@@ -485,3 +496,238 @@ async def test_the_admin_read_scope_makes_an_auditor_and_admin_wins(make: Make, 
     assert reader is not None and reader.credential_kind == "auditor"
     both = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read livepeer:admin")))
     assert both is not None and both.credential_kind == "admin"
+
+
+# -- PR #50, John's review (D47) ---------------------------------------------------------------------------
+
+
+def hand_signed(provider: Provider, header: dict[str, Any]) -> str:
+    """A valid token signed with k1 under a header PyJWT's encoder would not write."""
+    claims = jwt.decode(provider.token(), options={"verify_signature": False})
+    signing_input = b".".join(
+        jwt.utils.base64url_encode(json.dumps(part).encode()) for part in (header, claims)
+    )
+    rsa_sha256 = jwt.algorithms.RSAAlgorithm(jwt.algorithms.RSAAlgorithm.SHA256)
+    signature = rsa_sha256.sign(signing_input, provider.keys["k1"])
+    return b".".join([signing_input, jwt.utils.base64url_encode(signature)]).decode()
+
+
+@pytest.mark.parametrize("typ", ["at+jwt", "application/at+jwt", "AT+JWT"])
+async def test_an_rfc_9068_access_token_type_is_accepted(make: Make, provider: Provider, typ: str) -> None:
+    assert await make().authenticate(bearer(provider.token(typ=typ))) is not None
+
+
+@pytest.mark.parametrize(
+    "typ", ["JWT", "logout+jwt", None], ids=["JWT (an ID token)", "logout token", "no typ"]
+)
+async def test_any_other_token_type_is_refused_by_default(
+    make: Make, provider: Provider, typ: str | None
+) -> None:
+    """An ID token or a logout token with the right audience is not an API credential (RFC 9068 4)."""
+    no_typ = {"alg": "RS256", "kid": "k1"}  # PyJWT always writes typ
+    token = hand_signed(provider, no_typ) if typ is None else provider.token(typ=typ)
+    with pytest.raises(NotAuthenticated, match="type"):
+        await make().authenticate(bearer(token))
+
+
+@pytest.mark.parametrize("claim", ["client_id", "jti", "iat"])
+async def test_a_strict_access_token_needs_its_rfc_9068_claims(
+    make: Make, provider: Provider, claim: str
+) -> None:
+    with pytest.raises(NotAuthenticated, match=claim):
+        await make().authenticate(bearer(provider.token(drop=(claim,))))
+
+
+async def test_the_opt_out_accepts_a_plain_jwt_and_still_needs_iat(make: Make, provider: Provider) -> None:
+    """For a provider that cannot send at+jwt: weaker (only the audience tells it from an ID token)."""
+    lenient = make(token_types=("at+jwt", "application/at+jwt", "jwt"))
+    assert (
+        await lenient.authenticate(bearer(provider.token(typ="JWT", drop=("client_id", "jti")))) is not None
+    )
+    with pytest.raises(NotAuthenticated, match="iat"):  # the lifetime cap needs it in every mode
+        await lenient.authenticate(bearer(provider.token(typ="JWT", drop=("iat",))))
+
+
+async def test_a_token_that_lives_too_long_is_refused(make: Make, provider: Provider) -> None:
+    now = int(time.time())
+    with pytest.raises(NotAuthenticated, match="lifetime"):
+        await make().authenticate(bearer(provider.token(iat=now, exp=now + 86400)))  # a day
+    assert await make(max_lifetime_s=86400).authenticate(bearer(provider.token(iat=now, exp=now + 86400)))
+
+
+async def test_an_audience_list_that_contains_the_engine_is_accepted(make: Make, provider: Provider) -> None:
+    assert (
+        await make().authenticate(bearer(provider.token(aud=["https://other.example", AUDIENCE]))) is not None
+    )
+
+
+async def test_a_symmetric_key_is_never_a_signing_key(make: Make, provider: Provider) -> None:
+    provider.raw_keys = [
+        {"kty": "oct", "k": "c2VjcmV0", "kid": "shared"}
+    ]  # with k1 the only real signing key
+    assert await make().authenticate(bearer(provider.token(kid=None))) is not None
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"crit": ["urn:example:unknown"], "urn:example:unknown": True}, {"kid": 5}],
+    ids=["unknown crit", "kid not a string"],
+)
+async def test_a_bad_header_on_our_issuers_token_is_401(
+    make: Make, provider: Provider, headers: dict[str, Any]
+) -> None:
+    """Our issuer's token with a header PyJWT will not read is ours and invalid, not someone else's."""
+    token = hand_signed(provider, {"alg": "RS256", "kid": "k1", "typ": "at+jwt"} | headers)
+    with pytest.raises(NotAuthenticated):
+        await make().authenticate(bearer(token))
+
+
+async def test_an_http_key_url_needs_the_dev_override(
+    provider: Provider, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider.jwks_uri = "http://idp.example.com/keys"  # served, so only the scheme decides
+
+    def build(**options: Any) -> JwtBearerAuthenticator:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(provider.handler))
+        keys = JwksCache(client, ISSUER, monotonic=clock, **options)
+        return JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+
+    with pytest.raises(ProviderUnavailable):
+        await build().authenticate(bearer(provider.token()))
+    assert "scheme" in unavailable_reason(caplog)
+    assert await build(allow_http=True).authenticate(bearer(provider.token())) is not None
+
+
+async def test_an_rfc_8414_issuer_with_a_path_is_discovered(clock: Clock) -> None:
+    """An issuer that publishes only RFC 8414 metadata, which inserts the well-known segment before the path."""
+    issuer = "https://idp.example.com/realms/app"
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://idp.example.com/.well-known/oauth-authorization-server/realms/app":
+            return httpx.Response(
+                200, json={"issuer": issuer, "jwks_uri": "https://idp.example.com/realms/app/keys"}
+            )
+        if str(request.url) == "https://idp.example.com/realms/app/keys":
+            public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+            return httpx.Response(200, json={"keys": [public | {"kid": "k1"}]})
+        return httpx.Response(404)  # no OpenID configuration
+
+    keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), issuer, monotonic=clock)
+    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=issuer, audience=AUDIENCE), keys)
+    now = int(time.time())
+    claims = {
+        "iss": issuer,
+        "aud": AUDIENCE,
+        "sub": "alice",
+        "iat": now,
+        "exp": now + 300,
+        "jti": "j",
+        "client_id": "c",
+    }
+    token = jwt.encode(claims, key, algorithm="RS256", headers={"kid": "k1", "typ": "at+jwt"})
+    assert await authenticator.authenticate(bearer(token)) is not None
+
+
+async def test_a_key_set_larger_than_the_cap_is_unavailable(make: Make, provider: Provider) -> None:
+    provider.padding = 2 * 1024 * 1024
+    with pytest.raises(ProviderUnavailable):
+        await make().authenticate(bearer(provider.token()))
+
+
+async def test_a_due_refresh_runs_beside_requests_and_a_removed_key_stops_within_minutes(
+    make: Make, provider: Provider, clock: Clock
+) -> None:
+    """Keys are refreshed after 10 minutes in the background: requests keep using the cached keys, so a
+    slow provider never stalls them, and a key the provider removed stops verifying once that refresh
+    lands. Past an hour, the cache is too old to serve and requests wait for a fetch (#50 review)."""
+    authenticator = make()
+    assert await authenticator.authenticate(bearer(provider.token())) is not None
+    provider.add_key("k2")
+    provider.published = ["k2"]  # k1 is withdrawn
+    clock.now += 601
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # served from the cache
+    for _ in range(20):  # let the background refresh land
+        await asyncio.sleep(0)
+    with pytest.raises(NotAuthenticated, match="unknown signing key"):
+        await authenticator.authenticate(bearer(provider.token()))
+    provider.down = True
+    clock.now += 3601
+    with pytest.raises(ProviderUnavailable):  # too old to serve: the request waits for a fetch, which fails
+        await authenticator.authenticate(bearer(provider.token(kid="k2")))
+
+
+async def test_the_opt_out_accepts_a_token_with_no_type(make: Make, provider: Provider) -> None:
+    lenient = make(token_types=("at+jwt", "jwt"))
+    assert (
+        await lenient.authenticate(bearer(hand_signed(provider, {"alg": "RS256", "kid": "k1"}))) is not None
+    )
+
+
+async def test_rfc_8414_is_tried_only_when_the_openid_document_cannot_be_fetched(
+    provider: Provider, clock: Clock
+) -> None:
+    """A document that answers but is wrong is the provider's mistake, not a missing document."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        provider.requests.append(str(request.url))
+        return httpx.Response(200, json=["not", "an", "object"])
+
+    keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
+    with pytest.raises(ProviderUnavailable):
+        await JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys).authenticate(
+            bearer(provider.token())
+        )
+    assert provider.requests == [DISCOVERY]
+
+
+async def test_one_background_refresh_at_a_time(make: Make, provider: Provider, clock: Clock) -> None:
+    authenticator = make()
+    assert await authenticator.authenticate(bearer(provider.token())) is not None
+    clock.now += 601
+    for _ in range(3):  # three requests while the refresh is still running
+        assert await authenticator.authenticate(bearer(provider.token())) is not None
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert provider.requests == [DISCOVERY, JWKS_URL, JWKS_URL]
+    await authenticator.aclose()
+
+
+async def test_a_failed_background_refresh_keeps_the_cached_keys_and_pauses(
+    make: Make, provider: Provider, clock: Clock
+) -> None:
+    authenticator = make()
+    assert await authenticator.authenticate(bearer(provider.token())) is not None
+    provider.jwks_down = True
+    clock.now += 601
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # starts the refresh
+    for _ in range(20):
+        await asyncio.sleep(0)
+    clock.now += 1  # within the pause: no new refresh
+    assert await authenticator.authenticate(bearer(provider.token())) is not None
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert provider.requests == [DISCOVERY, JWKS_URL, JWKS_URL]
+
+
+async def test_closing_cancels_a_refresh_the_provider_never_answers(provider: Provider, clock: Clock) -> None:
+    hang = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if hang.is_set():
+            await asyncio.Event().wait()  # never answers
+        return provider.handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    keys = JwksCache(client, ISSUER, monotonic=clock)
+    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    assert await authenticator.authenticate(bearer(provider.token())) is not None
+    hang.set()
+    clock.now += 601
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # the refresh hangs
+    await asyncio.wait_for(authenticator.aclose(), timeout=2)
+
+
+async def test_a_key_that_cannot_be_loaded_is_skipped(make: Make, provider: Provider) -> None:
+    provider.raw_keys = [{"kty": "RSA", "kid": "broken", "n": "!", "e": "AQAB"}]
+    assert await make().authenticate(bearer(provider.token(kid=None))) is not None

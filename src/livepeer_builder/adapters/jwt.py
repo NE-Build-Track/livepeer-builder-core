@@ -7,9 +7,17 @@ The engine is a resource server. It verifies a token's signature against the iss
 The chain rule (docs/design-docs/extending-the-engine.md): a credential that is not a JWT, or a JWT from
 another issuer, is not ours (``None``); a token from our issuer that fails a check is ``NotAuthenticated``.
 When the provider's keys cannot be read, nobody can be authenticated by token: ``ProviderUnavailable``.
+
+Only RFC 9068 access tokens are accepted by default (``typ: at+jwt``, with ``client_id``, ``jti`` and
+``iat``), so an ID token or a logout token with the right audience is not an API credential. A token may live
+at most ``max_lifetime_s`` (D47, #50 review).
 """
 
 import asyncio
+import base64
+import binascii
+import contextlib
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -48,9 +56,18 @@ class JwtSettings:
     admin_read_scope: str | None = None  # an auditor, a read-only admin (D46); admin_scope wins
     leeway_s: float = 30.0
     realm: str = "livepeer-builder"
+    token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")  # lower case; "jwt" is the opt-out
+    max_lifetime_s: float = 3600.0  # exp - iat
+
+    @property
+    def strict(self) -> bool:
+        """RFC 9068 only: a plain JWT is refused, and client_id and jti are required."""
+        return "jwt" not in self.token_types
 
 
 UNAVAILABLE = "the identity provider's signing keys cannot be read"  # the 503 body: no URL, no client error
+MAX_DOCUMENT_BYTES = 1024 * 1024  # a discovery document or key set larger than this is refused
+SIGNATURE_KEY_TYPES = frozenset({"RSA", "EC", "OKP"})  # never "oct": a shared secret is not a published key
 
 
 @dataclass(frozen=True)
@@ -62,13 +79,19 @@ class SigningKey:
 
 
 class JwksCache:
-    """The issuer's signing keys: found through its discovery document (unless ``jwks_url`` is given),
-    kept for ``max_age_s``, and fetched again for an unknown ``kid`` at most once per ``refetch_after_s``.
+    """The issuer's signing keys: found through its discovery document (OpenID, then RFC 8414) unless
+    ``jwks_url`` is given, and fetched again for an unknown ``kid`` at most once per ``refetch_after_s``.
 
-    Only keys for signatures count: ``use: enc``, or ``key_ops`` without ``verify``, is skipped. A discovered
-    key URL is kept only once it has served a usable key set, so a bad first one is discovered again. After a
-    failed fetch the provider is left alone for ``pause_after_failure_s``, and the request is answered 503
-    meanwhile (#50 review). Reasons go to the log (``auth.jwks_unavailable``), never to the response.
+    Keys older than ``max_age_s`` are refreshed in the background while requests keep using them, so a key
+    the provider withdrew stops verifying within minutes and a slow provider never stalls a request. Keys
+    older than ``stale_limit_s`` are not served: the request waits for a fetch (D47, #50 review).
+
+    Only asymmetric keys for signatures count: ``kty: oct``, ``use: enc``, or ``key_ops`` without ``verify``,
+    is skipped. A discovered key URL is kept only once it has served a usable key set, so a bad first one is
+    discovered again; it must be https unless ``allow_http``. A document over ``MAX_DOCUMENT_BYTES`` is
+    refused.
+    After a failed fetch the provider is left alone for ``pause_after_failure_s``, and the request is answered
+    503 meanwhile. Reasons go to the log (``auth.jwks_unavailable``), never to the response.
     """
 
     def __init__(
@@ -77,9 +100,11 @@ class JwksCache:
         issuer: str,
         jwks_url: str | None = None,
         *,
-        max_age_s: float = 3600.0,
+        max_age_s: float = 600.0,
+        stale_limit_s: float = 3600.0,
         refetch_after_s: float = 60.0,
         pause_after_failure_s: float = 5.0,
+        allow_http: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = client
@@ -87,6 +112,8 @@ class JwksCache:
         self._configured_url = jwks_url  # the operator's: never replaced by discovery
         self._discovered_url: str | None = None  # kept only after it served a usable key set
         self._max_age_s = max_age_s
+        self._stale_limit_s = stale_limit_s
+        self._allow_http = allow_http
         self._refetch_after_s = refetch_after_s
         self._pause_s = pause_after_failure_s
         self._monotonic = monotonic
@@ -95,13 +122,16 @@ class JwksCache:
         self._refetched_at: float | None = None  # the last successful fetch an unknown kid caused
         self._failed_at: float | None = None
         self._lock = asyncio.Lock()
+        self._refresh: asyncio.Task[None] | None = None
 
     async def key(self, kid: str | None) -> SigningKey | None:
         """The key for ``kid``; with no ``kid``, the only key. ``None`` when the provider has no such key."""
         async with self._lock:
             now = self._monotonic()
-            if self._fetched_at is None or now - self._fetched_at >= self._max_age_s:
+            if self._fetched_at is None or now - self._fetched_at >= self._stale_limit_s:
                 await self._fetch(now)
+            elif now - self._fetched_at >= self._max_age_s:
+                self._refresh_in_background(now)
             found = self._find(kid)
             if found is None and kid is not None and self._may_refetch(now):
                 await self._fetch(now)
@@ -110,7 +140,20 @@ class JwksCache:
             return found
 
     async def aclose(self) -> None:
+        if self._refresh is not None:
+            self._refresh.cancel()
+            await asyncio.gather(self._refresh, return_exceptions=True)
         await self._client.aclose()
+
+    def _refresh_in_background(self, now: float) -> None:
+        if self._refresh is not None and not self._refresh.done():
+            return  # one refresh at a time; during a pause after a failure, _fetch refuses without a request
+        self._refresh = asyncio.create_task(self._quiet_fetch(now))
+
+    async def _quiet_fetch(self, now: float) -> None:
+        """A background refresh: a failure is logged by ``_fetch`` and the cached keys stay in use."""
+        with contextlib.suppress(ProviderUnavailable):
+            await self._fetch(now)
 
     def _may_refetch(self, now: float) -> bool:
         return self._refetched_at is None or now - self._refetched_at >= self._refetch_after_s
@@ -145,22 +188,41 @@ class JwksCache:
         self._keys, self._fetched_at, self._failed_at = keys, now, None
 
     async def _discover(self) -> str:
-        where = self._issuer.rstrip("/") + "/.well-known/openid-configuration"
-        document = await self._json(where)
+        """The ``jwks_uri`` from the OpenID configuration, or else from RFC 8414 metadata."""
+        openid = self._issuer.rstrip("/") + "/.well-known/openid-configuration"
+        parts = urlsplit(self._issuer)
+        rfc8414 = (
+            f"{parts.scheme}://{parts.netloc}/.well-known/oauth-authorization-server{parts.path.rstrip('/')}"
+        )
+        try:
+            where, document = openid, await self._json(openid)
+        except _Unreadable as missing:
+            if missing.reason != "the request failed":
+                raise
+            try:
+                where, document = rfc8414, await self._json(rfc8414)
+            except _Unreadable:
+                raise missing from None  # neither answered: report the OpenID one, the usual
         if document.get("issuer") != self._issuer:
             raise _Unreadable("the discovery document names another issuer", where)
         uri = document.get("jwks_uri")
         if not isinstance(uri, str) or not uri:
             raise _Unreadable("the discovery document has no jwks_uri", where)
-        if urlsplit(uri).scheme not in ("http", "https"):
-            raise _Unreadable("the jwks_uri scheme is not http or https", where)
+        allowed = ("http", "https") if self._allow_http else ("https",)
+        if urlsplit(uri).scheme not in allowed:
+            raise _Unreadable(f"the jwks_uri scheme is not {' or '.join(allowed)}", where)
         return uri
 
     async def _json(self, url: str) -> dict[str, Any]:
         try:
-            response = await self._client.get(url)
-            response.raise_for_status()
-            body = response.json()
+            async with self._client.stream("GET", url) as response:
+                response.raise_for_status()
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content += chunk
+                    if len(content) > MAX_DOCUMENT_BYTES:
+                        raise _Unreadable(f"the answer is larger than {MAX_DOCUMENT_BYTES} bytes", url)
+            body = json.loads(content)
         except (httpx.HTTPError, ValueError) as exc:
             raise _Unreadable("the request failed", url, f"{type(exc).__name__}: {exc}"[:300]) from None
         if not isinstance(body, dict):
@@ -177,12 +239,14 @@ class _Unreadable(Exception):
 
 
 def _signing_keys(document: dict[str, Any]) -> list[SigningKey]:
-    """The keys that may verify a signature: not ``use: enc``, and ``key_ops`` (when given) with ``verify``.
-    A key PyJWT cannot load is skipped, as PyJWKSet does."""
+    """The keys that may verify a signature: asymmetric, not ``use: enc``, and ``key_ops`` (when given) with
+    ``verify``. A key PyJWT cannot load is skipped, as PyJWKSet does."""
     entries = document.get("keys")
     keys: list[SigningKey] = []
     for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, dict) or entry.get("use", "sig") != "sig":
+            continue
+        if entry.get("kty") not in SIGNATURE_KEY_TYPES:
             continue
         operations = entry.get("key_ops")
         if operations is not None and (not isinstance(operations, list) or "verify" not in operations):
@@ -205,13 +269,12 @@ class JwtBearerAuthenticator:
         token = bearer_token(request)
         if token is None or token.count(".") != 2:
             return None
-        try:
+        if _unverified_issuer(token) != self._settings.issuer:
+            return None  # not a JWT, or another issuer's: another authenticator's credential
+        try:  # ours from here: a header PyJWT refuses (an unknown crit, a kid that is not text) is a 401
             header = jwt.get_unverified_header(token)
-            unverified = jwt.decode(token, options={"verify_signature": False})
-        except jwt.PyJWTError:
-            return None  # not a JWT: another authenticator's credential
-        if unverified.get("iss") != self._settings.issuer:
-            return None
+        except jwt.PyJWTError as exc:
+            raise NotAuthenticated(f"the token's header is invalid: {type(exc).__name__}") from exc
         claims = await self._verified(token, header)
         return self._actor(claims)
 
@@ -221,11 +284,21 @@ class JwtBearerAuthenticator:
     async def aclose(self) -> None:
         await self._keys.aclose()
 
+    def _check_type(self, header: dict[str, Any]) -> None:
+        """RFC 9068 4: an access token says ``at+jwt``; anything else (an ID token says ``JWT``) is refused
+        unless the operator opted in to plain JWTs, which may also omit ``typ``."""
+        kind = header.get("typ")
+        if kind is None and not self._settings.strict:
+            return
+        if not isinstance(kind, str) or kind.lower() not in self._settings.token_types:
+            raise NotAuthenticated(f"the token type {kind!r} is not an access token (at+jwt)")
+
     async def _verified(self, token: str, header: dict[str, Any]) -> dict[str, Any]:
         settings = self._settings
         algorithm = header.get("alg")
         if algorithm not in settings.algorithms:
             raise NotAuthenticated(f"the token's algorithm {algorithm!r} is not allowed")
+        self._check_type(header)
         kid = header.get("kid")
         signing = await self._keys.key(kid)
         if signing is None:
@@ -244,7 +317,7 @@ class JwtBearerAuthenticator:
                 audience=settings.audience,
                 issuer=settings.issuer,
                 leeway=settings.leeway_s,
-                options={"require": ["exp", "iss", "aud"]},
+                options={"require": _required(settings)},
             )
         except jwt.ExpiredSignatureError as exc:
             raise NotAuthenticated("the token has expired") from exc
@@ -260,6 +333,11 @@ class JwtBearerAuthenticator:
             raise NotAuthenticated(f"invalid token: {type(exc).__name__}") from exc
         if "cnf" in claims:  # bound to a certificate (RFC 8705) or a DPoP key (RFC 9449): fail closed
             raise NotAuthenticated("the token is sender-constrained (cnf), which this engine cannot verify")
+        lifetime = claims["exp"] - claims["iat"]
+        if lifetime > settings.max_lifetime_s:
+            raise NotAuthenticated(
+                f"the token's lifetime of {lifetime:.0f}s is longer than {settings.max_lifetime_s:.0f}s"
+            )
         return claims
 
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
@@ -290,7 +368,7 @@ class JwtBearerAuthenticator:
         )
 
 
-def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 10.0) -> JwtBearerAuthenticator:
+def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 3.0) -> JwtBearerAuthenticator:
     """The authenticator ``LPB_AUTH=jwt`` builds from ``LPB_JWT_*``; the caller closes it (``aclose``)."""
     if settings.jwt_issuer is None or settings.jwt_audience is None:
         raise ValueError(
@@ -308,9 +386,29 @@ def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 10.0) -> J
         admin_scope=settings.jwt_admin_scope,
         admin_read_scope=settings.jwt_admin_read_scope,
         leeway_s=settings.jwt_leeway_s,
+        token_types=settings.jwt_token_types,
+        max_lifetime_s=settings.jwt_max_lifetime_s,
     )
     client = httpx.AsyncClient(timeout=timeout_s, follow_redirects=False)
-    return JwtBearerAuthenticator(config, JwksCache(client, settings.jwt_issuer, settings.jwt_jwks_url))
+    keys = JwksCache(client, settings.jwt_issuer, settings.jwt_jwks_url, allow_http=settings.jwt_allow_http)
+    return JwtBearerAuthenticator(config, keys)
+
+
+def _required(settings: JwtSettings) -> list[str]:
+    """Claims a token must carry: ``iat`` always (the lifetime cap needs it), and RFC 9068's when strict."""
+    common = ["exp", "iss", "aud", "iat"]
+    return [*common, "client_id", "jti"] if settings.strict else common
+
+
+def _unverified_issuer(token: str) -> object:
+    """The payload's ``iss`` before anything is verified, or ``None`` when the payload is not a JSON object.
+    Read without PyJWT so a header it refuses cannot make our token look like someone else's."""
+    payload = token.split(".")[1]
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (binascii.Error, ValueError):
+        return None
+    return claims.get("iss") if isinstance(claims, dict) else None
 
 
 def _text(claims: dict[str, Any], name: str) -> str:

@@ -7,11 +7,16 @@ from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 
-from livepeer_builder.contracts import AllocationMode, Contract, Currency
+from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
+# Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
+RESERVED_SCOPES = frozenset(
+    {"openid", "profile", "email", "address", "phone", "offline_access"}
+    | {operation.value for operation in Operation}
+)
 # JWT signatures the engine accepts: asymmetric only, so a verification key can never sign (D45).
 ASYMMETRIC_ALGORITHMS = frozenset(
     {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
@@ -70,13 +75,17 @@ class EngineSettings(Contract):
     jwt_admin_scope: str | None = None  # None: no token is an admin credential
     jwt_admin_read_scope: str | None = None  # an auditor: a read-only admin (D46); the admin scope wins
     jwt_leeway_s: float = Field(default=30.0, ge=0)
+    # RFC 9068 access tokens only; add "jwt" for a provider that cannot send at+jwt (weaker, D47)
+    jwt_token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")
+    jwt_max_lifetime_s: float = Field(default=3600.0, gt=0)  # exp - iat; longer tokens are refused (D47)
+    jwt_allow_http: bool = False  # dev only: an http issuer or key URL, such as a local Keycloak (D47)
 
     # operations
     log_json: bool = True
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8080, ge=1, le=65535)
 
-    @field_validator("auth", "jwt_algorithms", mode="before")
+    @field_validator("auth", "jwt_algorithms", "jwt_token_types", mode="before")
     @classmethod
     def _comma_separated(cls, value: Any) -> Any:
         return (
@@ -102,12 +111,31 @@ class EngineSettings(Contract):
             raise ValueError(f"jwt_algorithms takes asymmetric algorithms only; refused {refused}")
         return value
 
+    @field_validator("jwt_token_types")
+    @classmethod
+    def _token_types(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            raise ValueError("jwt_token_types needs at least one token type, such as at+jwt")
+        return tuple(kind.lower() for kind in value)
+
     @model_validator(mode="after")
     def _jwt_is_configured(self) -> "EngineSettings":
         if "jwt" in self.auth:
             for name in ("jwt_issuer", "jwt_audience"):
                 if not getattr(self, name):
                     raise ValueError(f"LPB_{name.upper()} is required when LPB_AUTH includes jwt")
+        if not self.jwt_allow_http:
+            for name in ("jwt_issuer", "jwt_jwks_url"):
+                value = getattr(self, name)
+                if value and not value.startswith("https://"):
+                    raise ValueError(
+                        f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
+                    )
+        if self.jwt_admin_scope is not None and self.jwt_admin_scope in RESERVED_SCOPES:
+            raise ValueError(
+                f"jwt_admin_scope {self.jwt_admin_scope!r} is a scope ordinary tokens carry, "
+                "so every user would be an admin"
+            )
         return self
 
     @classmethod

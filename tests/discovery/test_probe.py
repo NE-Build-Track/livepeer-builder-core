@@ -7,6 +7,7 @@ import pytest
 from aiohttp import web
 
 from livepeer_builder.discovery import Orchestrator, Prober
+from livepeer_builder.discovery.probe import public_address
 from tests.discovery.conftest import Handler, Serve, Tls
 
 RUNNER = {
@@ -84,3 +85,104 @@ async def test_the_default_trust_store_is_the_deployments_so_pinned_certificates
     ).failure == "untrusted_certificate"  # system roots only
     monkeypatch.setenv("SSL_CERT_FILE", str(tls.ca_file))
     assert (await Prober().probe(Orchestrator(url=url))).failure is None
+
+
+# -- PR #46 review ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "runners", [1, True, False, "abc", {"url": "u"}], ids=["int", "true", "false", "string", "object"]
+)
+async def test_a_runners_value_that_is_not_a_list_fails_the_probe(
+    serve: Serve, tls: Tls, runners: object
+) -> None:
+    """It must not abort the pass (an int raised TypeError), nor read as an empty inventory that replaces the
+    orchestrator's last good one (a string or false did)."""
+    url = await serve(answering([{"address": "x", "runners": runners}]), tls.trusted)
+    probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
+    assert (probe.entry, probe.failure) == (None, "failed")
+
+
+async def test_null_runners_is_an_orchestrator_with_none(serve: Serve, tls: Tls) -> None:
+    url = await serve(
+        answering([{"address": "x", "runners": None}]), tls.trusted
+    )  # Go marshals a nil slice as null
+    probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
+    assert probe.failure is None and probe.entry == {"address": url, "runners": []}
+
+
+async def test_one_orchestrators_unexpected_error_never_aborts_the_pass(
+    serve: Serve, tls: Tls, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good = await serve(answering([{"runners": [RUNNER]}]), tls.trusted)
+    bad = await serve(answering([{"runners": [RUNNER]}]), tls.trusted)
+    real = Prober._runners
+
+    async def broken(self: Prober, client, url: str, *rest):  # type: ignore[no-untyped-def]
+        if url.startswith(bad):
+            raise RuntimeError("something nobody expected")
+        return await real(self, client, url, *rest)
+
+    monkeypatch.setattr(Prober, "_runners", broken)
+    probes = await Prober(ssl_context=tls.client).probe_all([Orchestrator(url=bad), Orchestrator(url=good)])
+    assert [p.failure for p in probes] == ["failed", None]
+
+
+@pytest.mark.parametrize(
+    ("address", "public"),
+    [
+        ("8.8.8.8", True), ("2606:4700:4700::1111", True),
+        ("10.0.0.1", False), ("172.16.0.1", False), ("192.168.1.1", False), ("127.0.0.1", False),
+        ("169.254.169.254", False), ("100.64.0.1", False), ("0.0.0.0", False), ("224.0.0.1", False),  # noqa: S104 - data, not a bind
+        ("::1", False), ("fd12:3456::1", False), ("fe80::1", False), ("::ffff:10.0.0.1", False),
+    ],
+)  # fmt: skip
+def test_only_public_addresses_are_probed_for_untrusted_sources(address: str, public: bool) -> None:
+    assert public_address(address) is public
+
+
+async def test_an_on_chain_uri_resolving_to_a_private_address_is_never_contacted(
+    serve: Serve, tls: Tls
+) -> None:
+    hits: list[str] = []
+
+    async def counted(request: web.Request) -> web.StreamResponse:
+        hits.append(request.path)
+        return web.json_response([{"runners": [RUNNER]}])
+
+    url = await serve(counted, tls.trusted)  # https://127.0.0.1:port, a private address
+    probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url, public_only=True))
+    assert (probe.entry, probe.failure, hits) == (None, "private_address", [])
+
+
+async def test_an_on_chain_uri_is_fetched_from_the_address_that_was_checked(serve: Serve, tls: Tls) -> None:
+    """The name is resolved once, checked, and that address is the one connected to (no second lookup to
+    rebind), with TLS still verified against the name."""
+    hosts: list[str] = []
+
+    async def seen(request: web.Request) -> web.StreamResponse:
+        hosts.append(request.headers["Host"])
+        return web.json_response([{"runners": [RUNNER]}])
+
+    port = (await serve(seen, tls.trusted)).rsplit(":", 1)[1]
+    looked_up: list[str] = []
+
+    async def resolve(host: str, port: int) -> list[str]:
+        looked_up.append(host)
+        return ["127.0.0.1"]  # orch.test exists only here; the certificate names it
+
+    prober = Prober(ssl_context=tls.client, resolve=resolve, address_allowed=lambda address: True)
+    url = f"https://orch.test:{port}"
+    probe = await prober.probe(Orchestrator(url=url, public_only=True))
+    assert probe.failure is None and probe.entry == {"address": url, "runners": [RUNNER]}
+    assert looked_up == ["orch.test"] and hosts == [f"orch.test:{port}"]
+
+
+async def test_a_name_that_does_not_resolve_fails(tls: Tls) -> None:
+    async def nothing(host: str, port: int) -> list[str]:
+        raise OSError("no such host")
+
+    probe = await Prober(ssl_context=tls.client, resolve=nothing).probe(
+        Orchestrator(url="https://gone.example", public_only=True)
+    )
+    assert probe.failure == "failed"

@@ -8,12 +8,16 @@ from pydantic import BaseModel, ConfigDict
 
 
 class Orchestrator(BaseModel):
-    """An orchestrator's HTTP(S) base URL, and its Ethereum address when the directory knows it."""
+    """An orchestrator's HTTP(S) base URL, and its Ethereum address when the directory knows it.
+
+    ``public_only`` marks a URL the operator did not write (an on-chain registration): the prober then
+    contacts it only at a public address, checked once and pinned (#46 review)."""
 
     model_config = ConfigDict(frozen=True)
 
     url: str
     address: str | None = None
+    public_only: bool = False
 
 
 class OrchestratorDirectory(Protocol):

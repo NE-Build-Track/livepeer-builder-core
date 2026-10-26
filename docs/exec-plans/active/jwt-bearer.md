@@ -8,7 +8,7 @@
 - **Branch:** `tasks/mz/jwt-bearer`, on top of the ISS-08 branch (`tasks/mz/iss-08-credentials`, #48) at `a2d115d`.
 - **Progress:** decisions locked 26 October (D45); built, shown live, and in review.
 - **Source:** Mike's recommendation of 26 October (`2026-10-26-builder-core-oauth-recommendation.md`).
-- **Decision:** D45.
+- **Decision:** D45; the review hardening is D47.
 
 ## Goal
 
@@ -58,7 +58,7 @@ never runs a login.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `LPB_AUTH` | `api_keys` | `api_keys`, `jwt`, or `jwt,api_keys`. Order does not matter: each authenticator recognizes only its own credential |
-| `LPB_JWT_ISSUER` | unset | Required for `jwt`. Matched exactly against `iss`; its `/.well-known/openid-configuration` gives the JWKS URL |
+| `LPB_JWT_ISSUER` | unset | Required for `jwt`. Matched exactly against `iss`; its OpenID (or, D47, RFC 8414) metadata gives the JWKS URL. `https` (D47) |
 | `LPB_JWT_JWKS_URL` | unset | Overrides discovery |
 | `LPB_JWT_AUDIENCE` | unset | Required for `jwt`. Must be in `aud` (RFC 8707 resource) |
 | `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms; only asymmetric ones are accepted |
@@ -69,14 +69,17 @@ never runs a login.
 | `LPB_JWT_SCOPE_PREFIX` | empty | Stripped before matching scopes to operations, e.g. `api://engine/` |
 | `LPB_JWT_ADMIN_SCOPE` | unset | The scope that makes an admin credential; unset, no token is admin |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
+| `LPB_JWT_TOKEN_TYPES` | `at+jwt,application/at+jwt` | D47: accepted `typ`; `jwt` is the opt-out |
+| `LPB_JWT_MAX_LIFETIME_S` | `3600` | D47: the longest `exp - iat` accepted |
+| `LPB_JWT_ALLOW_HTTP` | `false` | D47: development only, an `http` issuer and key URL |
 
 ### The authenticator
 
 - **Recognizing a token:** `Authorization: Bearer <three base64url parts>` whose unverified `iss` is the
   configured issuer. Anything else returns `None`, so `lpk_` keys and other authenticators still work.
 - **Keys:** `JwksCache` fetches the JWKS through `httpx`, finding it from the issuer's discovery
-  document and checking that document's `issuer`. It keeps the keys for an hour and fetches again, at
-  most once a minute, for an unknown `kid`. A token without `kid` is accepted only when the set has
+  document and checking that document's `issuer`. It fetches again, at most once a minute, for an unknown
+  `kid`. (D47: keys refresh in the background after 10 minutes and are not served after an hour.) A token without `kid` is accepted only when the set has
   exactly one key.
 - **Claims:** a token without `exp`, `iss`, `aud` or the actor claim is refused. Permissions are the
   scopes that name an operation, after the prefix. `actors.assert` is never granted: it belongs to the
@@ -126,6 +129,24 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
     allowed, a key's `alg` ignored, no pause after a failure. The first version of the URL test missed one,
     so a test for a URL that worked and then moved was added.
 
+- 26 October: PR #50 review (John, six findings), each fixed test-first (D47):
+  1. **Token type:** only `typ` `at+jwt` (any case) by default, with `client_id`, `jti` and `iat` required.
+     `LPB_JWT_TOKEN_TYPES` with `jwt` is the opt-out; it still requires `iat`.
+  2. **Admin scope:** startup refuses an operation name or a standard OpenID scope. An ordinary token's
+     403 on admin routes was already tested.
+  3. **Lifetime:** `exp - iat` over `LPB_JWT_MAX_LIFETIME_S` (an hour) is refused. Keys refresh in the
+     background after 10 minutes, one refresh at a time, and are not served after an hour.
+  4. **Fetching:** `https` issuer and key URL (`LPB_JWT_ALLOW_HTTP` for development), a 3 s timeout, a
+     1 MiB body cap read by streaming. Private hosts stay allowed: an in-cluster Keycloak is one.
+  5. **Discovery:** RFC 8414 after OpenID Discovery, only when the OpenID request fails.
+  6. **Headers:** the issuer is read from the payload first, so a refused header on this issuer's token is a
+     401. `kty: oct` keys are skipped.
+  - **Mutations,** each caught (20): among them no typ check, case-sensitive `typ`, no lifetime cap, no
+    `iat`, strict claims off, `oct` allowed, no size cap, `http` keys allowed, a blocking refresh, no hour
+    limit, the header read first, no cancel on close. Three survived the first run: a guard that duplicated
+    the pause in `_fetch` (removed), an `http` key URL test the stand-in never served (fixed), and closing
+    with a running refresh (a test with a refresh that never answers was added).
+
 ## Decision log
 
 - **26 October (Mike, D45, from his recommendation):**
@@ -137,3 +158,6 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
   5. **Revocation:** a JWT cannot be revoked before it expires, so the guidance is short-lived access
      tokens (5 to 15 minutes).
   6. **Library:** `PyJWT[crypto]`, confined to `adapters/jwt.py`, which also joins the `httpx` row.
+- **26 October (Mike, D47, John's review):** fix all six findings on #50 before it merges.
+  1. **Token type:** strict RFC 9068 by default, with an opt-out.
+  2. **Fetching:** `https` required, with a development override.

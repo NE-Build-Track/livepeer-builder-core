@@ -34,10 +34,13 @@ class IdentityProvider:
             "iss": self.issuer,
             "aud": AUDIENCE,
             "sub": "alice",
+            "iat": now,
             "exp": now + 300,
+            "jti": "t-1",
+            "client_id": "console",
             "scope": "discover jobs.read",
         }
-        return jwt.encode(body | claims, self._key, algorithm="RS256", headers={"kid": "k1"})
+        return jwt.encode(body | claims, self._key, algorithm="RS256", headers={"kid": "k1", "typ": "at+jwt"})
 
 
 @pytest.fixture
@@ -62,7 +65,8 @@ async def idp() -> AsyncIterator[IdentityProvider]:
 
 
 def jwt_settings(idp: IdentityProvider, auth: str = "jwt", **extra: str) -> dict[str, Any]:
-    return {"auth": auth, "jwt_issuer": idp.issuer, "jwt_audience": AUDIENCE, **extra}
+    # the local identity provider is plain http, which needs the dev override (D47)
+    return {"auth": auth, "jwt_issuer": idp.issuer, "jwt_audience": AUDIENCE, "jwt_allow_http": True, **extra}
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -205,3 +209,46 @@ async def test_without_a_bearer_challenge_no_scheme_is_declared(idp: IdentityPro
         assert "securitySchemes" not in create_app(engine, manage_lifecycle=False).openapi().get(
             "components", {}
         )
+
+
+def test_review_defaults_are_strict() -> None:
+    settings = EngineSettings(auth=("jwt",), jwt_issuer="https://idp/", jwt_audience="a")
+    assert settings.jwt_token_types == ("at+jwt", "application/at+jwt")
+    assert (settings.jwt_max_lifetime_s, settings.jwt_allow_http) == (3600, False)
+
+
+@pytest.mark.parametrize(
+    ("values", "complaint"),
+    [
+        ({"jwt_issuer": "http://idp/"}, "https"),
+        ({"jwt_jwks_url": "http://idp/keys"}, "https"),
+        ({"jwt_admin_scope": "jobs.run"}, "admin"),
+        ({"jwt_admin_scope": "openid"}, "admin"),
+        ({"jwt_token_types": ""}, "token_types"),
+    ],
+    ids=[
+        "http issuer",
+        "http key URL",
+        "admin scope is an operation",
+        "admin scope is openid",
+        "no token type",
+    ],
+)
+def test_risky_jwt_settings_fail_at_startup(values: dict[str, Any], complaint: str) -> None:
+    """An admin scope every user token carries would make every user an admin (#50 review)."""
+    base = {"auth": "jwt", "jwt_issuer": "https://idp/", "jwt_audience": "a"}
+    with pytest.raises(ValidationError, match=complaint):
+        EngineSettings.model_validate(base | values)
+
+
+def test_token_types_are_read_as_a_lower_case_list() -> None:
+    base = {"auth": "jwt", "jwt_issuer": "https://idp/", "jwt_audience": "a"}
+    settings = EngineSettings.model_validate(base | {"jwt_token_types": "AT+JWT, jwt"})
+    assert settings.jwt_token_types == ("at+jwt", "jwt")
+
+
+def test_the_dev_override_allows_an_http_issuer() -> None:
+    settings = EngineSettings(
+        auth=("jwt",), jwt_issuer="http://keycloak:8080/", jwt_audience="a", jwt_allow_http=True
+    )
+    assert settings.jwt_issuer == "http://keycloak:8080/"

@@ -165,8 +165,8 @@ async def test_a_missing_permission_is_access_denied_before_any_lookup(side: Sid
 
 
 async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) -> None:
-    """Summary, allowance, offerings and runners answer AccessDenied without the permission, on both sides,
-    before anything is looked up (#48 review)."""
+    """Summary, allowance and runners answer AccessDenied without the permission, on both sides, before
+    anything is looked up (#48 review). Offerings are public (#5): no actor to check."""
     no_costs = ALICE.model_copy(update={"permissions": ALICE.permissions - {"costs.read"}})
     no_discover = ALICE.model_copy(update={"permissions": ALICE.permissions - {"discover"}})
     async with side() as engine:
@@ -176,8 +176,6 @@ async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) ->
             )
         with pytest.raises(AccessDenied):
             await engine.payments.allowance(no_costs)
-        with pytest.raises(AccessDenied):
-            engine.discovery.offerings(no_discover)
         with pytest.raises(AccessDenied):
             engine.discovery.runners(no_discover, APP)
 

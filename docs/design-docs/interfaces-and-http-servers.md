@@ -125,7 +125,7 @@ classDiagram
     }
     class DiscoveryApi {
         <<interface>>
-        +offerings(actor, app) Offering[]
+        +offerings(app) Offering[]
         +runners(actor, app) Runner[]
         +candidates(app) Runner[]
     }
@@ -289,7 +289,7 @@ classDiagram
         +async run(stop) None
         +candidates(app) Runner[]
         +runners(actor, app) Runner[]
-        +offerings(actor, app) Offering[]
+        +offerings(app) Offering[]
     }
     class JobService {
         -discovery DiscoveryService
@@ -813,7 +813,8 @@ from `app.state`. `actor_dependency(engine)` is the authentication dependency, a
 
 ### Routes
 
-Each route authenticates, then makes one engine call. Authorization happens in the services.
+Each route authenticates, then makes one engine call. Authorization happens in the services. Health and
+`GET /v1/offerings` are public (D51, proposed).
 
 | Route | Engine call | Answer |
 | --- | --- | --- |
@@ -1135,9 +1136,9 @@ entirely, serve the same `GET /discovery` format from anything and point `LPB_DI
 
 Points worth deciding, noticed while drawing these:
 
-1. **`DiscoveryApi.candidates` checks no permission.** `runners` and `offerings` check `DISCOVER`;
-   `candidates` does not, because the job service calls it after its own check. It is still on the
-   public `ActorApi`, and ChatLPT and inference-gateway call it for readiness. Keep it public and
+1. **`DiscoveryApi.candidates` checks no permission.** `runners` checks `DISCOVER` (`offerings` is
+   public, D51, proposed); `candidates` does not, because the job service calls it after its own check. It is
+   still on the public `ActorApi`, and ChatLPT and inference-gateway call it for readiness. Keep it public and
    document that, or move readiness to a policy-checked call?
 2. **`ProviderError` passes some provider statuses through.** A Batteries `400`, `404`, `409` or `422`
    becomes the engine's own status, so a client cannot tell a provider rejection from an engine one.

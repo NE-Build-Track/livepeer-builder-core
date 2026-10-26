@@ -34,7 +34,9 @@ flowchart TB
 Diagrams for the components and the key flows (authentication, provisioning, a paid job with
 failover, cost sync, reconciliation, recovery) are in
 [docs/design-docs/architecture-diagrams.md](docs/design-docs/architecture-diagrams.md). The database ER
-diagram is generated into [docs/generated/db-schema.md](docs/generated/db-schema.md#entity-relationship-diagram).
+diagram is generated into [docs/generated/db-schema.md](docs/generated/db-schema.md#entity-relationship-diagram). Class and
+sequence diagrams of the interfaces and of the two HTTP servers are in
+[docs/design-docs/interfaces-and-http-servers.md](docs/design-docs/interfaces-and-http-servers.md).
 
 ## Layers
 

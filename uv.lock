@@ -1180,7 +1180,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "livepeer-gateway", git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=76a1a1c58656ef2ad0c28542ea5f99086b76db69" },
+    { name = "livepeer-gateway", git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=2017a80c740af5fcb0fef4ee84659af9b07fb90c" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.13" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
@@ -1206,7 +1206,7 @@ dev = [
 [[package]]
 name = "livepeer-gateway"
 version = "1.0.0"
-source = { git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=76a1a1c58656ef2ad0c28542ea5f99086b76db69#76a1a1c58656ef2ad0c28542ea5f99086b76db69" }
+source = { git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=2017a80c740af5fcb0fef4ee84659af9b07fb90c#2017a80c740af5fcb0fef4ee84659af9b07fb90c" }
 dependencies = [
     { name = "aiohttp" },
     { name = "av" },

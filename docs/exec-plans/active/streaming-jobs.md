@@ -217,6 +217,10 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
       callback = `payment_sent=False` and job `failed`), and a missing payload is sent as `{}`.
 - [x] 2026-10-22: SDK re-pinned from NE `dev/bytestreaming` `3238731` to livepeer/livepeer-python-gateway
       `main` `76a1a1c`. #80 and #81 are on `main`. D41 is unchanged.
+- [x] 2026-10-27: SDK re-pinned to `main` `2017a80`. It adds the runner-side session stop
+      ([livepeer-python-gateway#83](https://github.com/livepeer/livepeer-python-gateway/pull/83)), which
+      the engine does not call. `call_runner(stream=True)` and its payment path are unchanged, so D41
+      and T14 still hold.
 
 ## Decision log
 

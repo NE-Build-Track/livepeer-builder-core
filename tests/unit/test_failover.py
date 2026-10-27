@@ -1,4 +1,4 @@
-"""D51: what a failed attempt means for its job, and which runner is tried next."""
+"""D52: what a failed attempt means for its job, and which runner is tried next."""
 
 import pytest
 

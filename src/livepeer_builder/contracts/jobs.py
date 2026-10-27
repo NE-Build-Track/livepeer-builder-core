@@ -38,7 +38,7 @@ class JobRequest(Contract):
 
 
 # "payment_refused": the signer refused to pay *this orchestrator* (bad payment params, price above the
-# session ceiling). Another orchestrator may succeed, so the job fails over (D26, D51).
+# session ceiling). Another orchestrator may succeed, so the job fails over (D26, D52).
 # "payment": any other payment failure.
 # "abandoned": the caller stopped reading a stream before the runner finished
 # (docs/contracts/engine.md#streaming).

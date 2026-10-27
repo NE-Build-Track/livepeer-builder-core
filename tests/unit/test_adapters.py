@@ -192,7 +192,7 @@ def test_sdk_errors_keep_payment_evidence() -> None:
     after_signing = call_error(
         LivepeerHTTPError(400, signer), runner_url, payment_sent=True, manifest_ids=("m-7",)
     )
-    # still about this orchestrator once paid: the engine fails over to another one (D51)
+    # still about this orchestrator once paid: the engine fails over to another one (D52)
     assert (after_signing.kind, after_signing.payment_sent, after_signing.manifest_ids) == (
         "payment_refused",
         True,

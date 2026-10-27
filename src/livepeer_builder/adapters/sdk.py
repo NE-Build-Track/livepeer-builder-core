@@ -49,7 +49,7 @@ from livepeer_builder.utils import BODY_LIMIT
 
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
-# may succeed, whether or not this call had already paid (D26, D51). 400 = incomplete/expired params;
+# may succeed, whether or not this call had already paid (D26, D52). 400 = incomplete/expired params;
 # 481 = price ceiling.
 # Caller- or signer-side refusals (402 allowance, 403 forbidden, 502 webhook, 503 outbox) are not here.
 _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
@@ -127,7 +127,7 @@ class _SignedSessions:
     ``on_payment_session`` runs only after ``LivePaymentSession.get_payment()`` validates a signed
     payment and before the paid request is sent to the runner. A reported session means the signer
     charged the allocation and counts as ``payment_sent``: the engine then fails over only to another
-    orchestrator, and only when the failure did not run the work (D51). If signing fails or is
+    orchestrator, and only when the failure did not run the work (D52). If signing fails or is
     cancelled before the callback runs,
     ``signed`` stays ``False`` (no payment sent). Each session is also passed to ``on_signed``, which
     the SDK awaits before the paid request goes out, so the engine stores the evidence first (D42).

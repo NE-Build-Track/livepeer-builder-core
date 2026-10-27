@@ -1,4 +1,4 @@
-"""Failover: what a failed attempt means for its job, and which runner is tried next (D51).
+"""Failover: what a failed attempt means for its job, and which runner is tried next (D52).
 
 A failed attempt either moves the job to the next runner (``failover``), or ends it ``failed`` or
 ``uncertain``. Payment alone does not bind a job to a runner: an attempt that was paid and refused

@@ -3,7 +3,7 @@
 Classification (accepted 12 October, docs/contracts/payments.md#cost-classification):
   delivered             the attempt succeeded
   failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors),
-                        including an attempt the job failed over from (D51)
+                        including an attempt the job failed over from (D52)
   uncertain             the attempt that left the job uncertain, or one that never reported back
   pending               payment went out and no applied usage row has arrived yet (never zero)
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
@@ -337,7 +337,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
         elif attempt.outcome == "succeeded":
             cost_class = "delivered"
         elif attempt.outcome == "in_flight" or (job.state == "uncertain" and attempt.number == last):
-            cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D51)
+            cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D52)
         else:
             cost_class = "failed_after_payment"
         attempts.append(AttemptCost(attempt_number=attempt.number, cost_class=cost_class, fees=fees_of(mine)))

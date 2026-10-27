@@ -9,7 +9,7 @@ Baseline `44df061`. Pinned to `2017a80`, the head of [livepeer/livepeer-python-g
 | `call_runner(..., on_payment_session=callback)` (#81) | Called once for each new session the signer signs, after the SDK validates the signer's reply (non-empty `payment` and `segCreds`) and before the paid request goes out. `SdkRunnerTransport` awaits the engine's `on_signed(session.manifest_id)` there, so the evidence is stored before the paid request (the SDK awaits an async callback; D42), collects `session.manifest_id` into `RunnerReply.manifest_ids` and derives `payment_sent` solely from whether `on_payment_session` ran: if signing fails or times out before the callback runs, `payment_sent` is `False` and the job fails (D41, T14) |
 | `call_runner(..., stream=True)` → `LiveRunnerCallStream` | `SdkRunnerTransport.open` (`jobs.streaming`); the 402 is paid before the first byte, and the engine bounds the wait for the runner's headers (`first_byte_timeout_s`, D35) |
 | `LivePaymentSession.manifest_id` | The manifest ID from the 402 challenge. The SDK does not read the signer's state |
-| `LivepeerHTTPError.status_code` / `.url` | Runner refusal vs signer refusal; signer 400/481 → `payment_refused` (failover, paid or not: D26, D51) |
+| `LivepeerHTTPError.status_code` / `.url` | Runner refusal vs signer refusal; signer 400/481 → `payment_refused` (failover, paid or not: D26, D52) |
 | `selection.reserve_session(...)` → `LiveRunnerSession(app_url, control_url)` | Persistent sessions (M4), proxied by the engine |
 
 ## Runner session stop (#83)
@@ -36,7 +36,7 @@ path arrives with `payment_sent=True`. Only a 502 can come after the app started
 | 502 | The proxy lost the runner, before or during its answer |
 
 The engine fails these over to a runner on another orchestrator, except a 400, which would be
-charged on every orchestrator ([engine.md](../contracts/engine.md#behavior-the-contract-fixes), D51).
+charged on every orchestrator ([engine.md](../contracts/engine.md#behavior-the-contract-fixes), D52).
 The charge stays on the attempt as `failed_after_payment`.
 
 The orchestrator mints a fresh manifest for each 402 challenge (`core.RandomManifestID()`): 4 random

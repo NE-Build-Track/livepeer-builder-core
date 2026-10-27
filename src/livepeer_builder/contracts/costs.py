@@ -70,7 +70,7 @@ class AttemptCost(Contract):
 class JobCost(Contract):
     """``fees`` is everything the job's attempts cost the allocation. ``billable`` is the part an
     enterprise bills its user for: the ``delivered`` attempts only, so a job that failed, or the
-    attempts a job failed over from, are never billable (D51). Both are final once ``status`` is
+    attempts a job failed over from, are never billable (D52). Both are final once ``status`` is
     ``observed`` or ``corrected``."""
 
     job_id: UUID

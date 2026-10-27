@@ -18,7 +18,7 @@ The signer only signs; it is not a discovery source (D43). With no `LPB_DISCOVER
 empty unless an embedder supplies a source.
 
 `offerings(app=None)` is public: it takes no actor and checks no permission, and `GET /v1/offerings`
-needs no key (D52, proposed, [#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)).
+needs no key (D51, proposed, [#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)).
 The handler returns the full `Offering`: modes, the rate range, `runner_count` and `ready_count`. It
 has no runner URL. `runners(actor, app)` returns runner URLs and still checks `discover`.
 
@@ -54,7 +54,7 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 
 ### Behavior the contract fixes
 
-1. **Fail over when another runner can do what this one did not (D51).** Runners are tried in
+1. **Fail over when another runner can do what this one did not (D52).** Runners are tried in
    selection order, at most `max_attempts` of them. A failed attempt decides what happens next
    (`services/failover.py`):
 

@@ -104,7 +104,7 @@ Each attempt that opened a payment session is classified:
 | Class | Rule | Typical enterprise treatment |
 | --- | --- | --- |
 | `delivered` | The attempt succeeded | Bill under its retail policy |
-| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**), including an attempt the job failed over from, even when a later one delivered (D51) | Absorb; don't bill |
+| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**), including an attempt the job failed over from, even when a later one delivered (D52) | Absorb; don't bill |
 | `uncertain` | The attempt that left the job `uncertain`, or an attempt that never reported back | Hold, then reconcile |
 | `pending` | The job is still running (its fees so far are not final), or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 
@@ -114,7 +114,7 @@ Only `applied` usage rows count. **Rows on an allocation that match no recorded 
 **`JobCost.fees` and `JobCost.billable`.** `fees` is what every attempt of the job cost the allocation.
 `billable` is only the `delivered` attempts' fees: what the enterprise bills its user for. A job that
 failed has `billable` zero, and a job that failed over and then succeeded bills only the attempt that
-delivered, while its allocation was debited for both (D51). Both are final once the cost status is
+delivered, while its allocation was debited for both (D52). Both are final once the cost status is
 `observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +

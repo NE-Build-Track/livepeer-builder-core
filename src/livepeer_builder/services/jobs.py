@@ -1,7 +1,7 @@
 """Jobs: immediate execution with failover, durable attempts, streaming, and recovery.
 
 Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes):
-1. Fail over when another runner can do what this one did not (services/failover.py, D51): before
+1. Fail over when another runner can do what this one did not (services/failover.py, D52): before
    payment, when the runner refused or never answered; after payment, when it was refused or failed on
    the runner's or orchestrator's side, and then only to another orchestrator. A paid failure that may
    have run the work is ``uncertain``; one about the request is ``failed``.

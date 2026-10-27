@@ -38,7 +38,7 @@ missing `payload` as the JSON object `{}` (D41).
 | `queued` | Reserved for async jobs (M4) |
 | `running` | Dispatching. A restart resolves leftover `running` jobs on start |
 | `succeeded` | A runner answered 2xx |
-| `failed` | It ended with a known outcome: nothing went out that might have run the work, or the runner answered with an error. `failure.payment_sent` says whether it was paid |
+| `failed` | It ended with a known outcome: nothing went out that might have run the work, or the runner answered with an error. After failing over, the failure is the last runner's. `failure.payment_sent` says whether any attempt was paid |
 | `uncertain` | Payment went out (or may have) and the outcome is unknown. Never retried automatically |
 
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
@@ -49,11 +49,32 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 
 ### Behavior the contract fixes
 
-1. **Failover only before payment.** A job moves to another runner only while `payment_sent` is false
-   and the outcome is `refused`, `unreachable` or `payment_refused`. After payment, the job is bound to
-   that runner.
-   - **`payment_refused`:** the signer refused to pay *this orchestrator* before anything was sent. The
-     signer statuses are 400 (incomplete or expired payment params) and 481 (price above the session ceiling). Another orchestrator may succeed.
+1. **Fail over when another runner can do what this one did not (D51).** Runners are tried in
+   selection order, at most `max_attempts` of them. A failed attempt decides what happens next
+   (`services/failover.py`):
+
+   | Attempt | Outcome | Next |
+   | --- | --- | --- |
+   | Not paid | `refused`, `unreachable`, `payment_refused` | Fail over |
+   | Not paid | Anything else | `failed` |
+   | Paid | `refused` (503), `payment_refused`, or `http` 404, 409 or 5xx | Fail over to **another orchestrator** |
+   | Paid | `timeout`, `unreachable` | `uncertain`: the runner may have run the work |
+   | Paid | `http` with any other status, `payment` | `failed`: the request would fail, and be charged, everywhere |
+
+   - **Another orchestrator.** After a paid failover, the engine skips every later runner on the
+     orchestrator that took the payment, so a job never pays one orchestrator twice. A skipped runner
+     does not count against `max_attempts`.
+   - **Paid 404, 409 and 503** come from the orchestrator refusing the paid request before the app ran:
+     the runner is gone or stopped its session (livepeer-python-gateway#83), the session already
+     exists, or the capacity was taken ([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)).
+   - **The charge stays attributed.** A paid attempt the job failed over from keeps its sessions and is
+     `failed_after_payment`: the allocation paid it, and it is never `billable`
+     ([payments.md](payments.md#cost-classification)).
+   - **Every runner failed over.** The job is `failed` with the last runner's status code and body, and
+     `failure.payment_sent` is true when any attempt was paid.
+   - **`payment_refused`:** the signer refused to pay *this orchestrator*. The signer statuses are 400
+     (incomplete or expired payment params) and 481 (price above the session ceiling). Another
+     orchestrator may succeed.
    - **`payment`:** caller- or signer-side refusals, such as 402 (allowance exhausted), 403, 502
      (webhook) and 503 (outbox). These do **not** fail over, because every orchestrator would fail the
      same way.
@@ -124,7 +145,8 @@ async with stream:  # leaving the block ends the stream, however the block ends
         forward(chunk)
 ```
 
-Everything up to the runner's answer is `run`: admission, idempotency, provisioning, failover. The
+Everything up to the runner's answer is `run`: admission, idempotency, provisioning, failover (a paid
+refusal at open moves to another orchestrator, as for `run`). The
 transport's `open` pays the 402 challenge before any byte flows, so `payment_sent` and the signed
 `manifest_ids` are known when the stream opens and are **written on the attempt before the first
 byte** (outcome `in_flight`, D31). A restart mid-stream therefore resolves the job as `uncertain`.

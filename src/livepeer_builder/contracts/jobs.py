@@ -37,8 +37,9 @@ class JobRequest(Contract):
         return self
 
 
-# "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment
-# params, price above the session ceiling). Safe to fail over. "payment": any other payment failure.
+# "payment_refused": the signer refused to pay *this orchestrator* (bad payment params, price above the
+# session ceiling). Another orchestrator may succeed, so the job fails over (D26, D51).
+# "payment": any other payment failure.
 # "abandoned": the caller stopped reading a stream before the runner finished
 # (docs/contracts/engine.md#streaming).
 AttemptOutcome = Literal[

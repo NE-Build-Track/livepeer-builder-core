@@ -8,7 +8,16 @@ from uuid import uuid4
 import pytest
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.contracts import ActorContext, Attempt, Job, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import (
+    ActorContext,
+    Attempt,
+    AttemptOutcome,
+    Job,
+    JobRequest,
+    Money,
+    ProvisionRequest,
+    Runner,
+)
 from livepeer_builder.errors import (
     JobFailed,
     NoCapacity,
@@ -56,7 +65,7 @@ async def test_success_records_attempt_payment_and_result_reference(
     assert transport.calls[0][1] is not None and transport.calls[0][1].startswith("lpg_")  # actor's own key
 
 
-async def test_fails_over_only_before_payment(
+async def test_fails_over_and_never_pays_the_same_orchestrator_twice(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
     engine = await provisioned(
@@ -73,7 +82,106 @@ async def test_fails_over_only_before_payment(
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert failed.value.job.state == "failed"
     assert failed.value.job.failure is not None and failed.value.job.failure.kind == "runner_error"
-    assert len(failed.value.job.attempts) == 1  # bound to the paid runner; no failover
+    assert len(failed.value.job.attempts) == 1  # r2 shares the orchestrator that took the payment
+
+
+ORCH_A, ORCH_B = "https://orch-a.example", "https://orch-b.example"
+
+
+def two_orchestrators() -> tuple[Runner, ...]:
+    return (
+        runner(url="https://a1", orchestrator_url=ORCH_A),
+        runner(url="https://a2", orchestrator_url=ORCH_A),
+        runner(url="https://b1", orchestrator_url=ORCH_B),
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "status"),
+    [
+        ("refused", 503),  # capacity taken between discovery and the paid reservation
+        ("http", 404),  # the runner stopped the session (livepeer-python-gateway#83)
+        ("http", 409),
+        ("http", 500),
+        ("http", 502),
+        ("payment_refused", 400),
+    ],
+)
+async def test_a_paid_failure_that_did_not_run_fails_over_to_another_orchestrator(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    kind: AttemptOutcome,
+    status: int,
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError(kind, "refused", payment_sent=True, manifest_ids=("m-1",), status_code=status),
+        ScriptedTransport.ok(manifest_ids=("m-2",)),
+    ]
+    result = await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=2))
+    assert result.job.state == "succeeded"
+    assert [url for url, _ in transport.calls] == ["https://a1", "https://b1"]  # a2: same orchestrator
+    stored = await engine.jobs.get(alice, result.job.id)
+    assert [(a.outcome, a.payment_sent, a.orchestrator_url) for a in stored.attempts] == [
+        (kind, True, ORCH_A),
+        ("succeeded", True, ORCH_B),
+    ]
+    assert [[s.manifest_id for s in a.sessions] for a in stored.attempts] == [["m-1"], ["m-2"]]
+
+
+@pytest.mark.parametrize("status", [400, 403, 413, 422])
+async def test_a_paid_request_error_does_not_fail_over(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    status: int,
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("http", "bad", payment_sent=True, manifest_ids=("m-1",), status_code=status)
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    assert (
+        failed.value.job.state == "failed" and len(failed.value.job.attempts) == 1
+    )  # it would fail everywhere
+    assert failed.value.job.failure is not None and failed.value.job.failure.kind == "runner_rejected"
+
+
+async def test_paid_failures_everywhere_fail_with_the_last_runner_s_words(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m-1",), status_code=503),
+        RunnerCallError(
+            "http", "boom", payment_sent=True, manifest_ids=("m-2",), status_code=500, body="trace"
+        ),
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    job = failed.value.job
+    assert job.state == "failed" and len(job.attempts) == 2  # neither failure ran the work: not uncertain
+    assert job.failure is not None
+    assert (job.failure.kind, job.failure.status_code, job.failure.body) == ("runner_error", 500, "trace")
+    assert job.failure.payment_sent and job.failure.message == "all 2 runners failed; last: boom"
+
+
+async def test_a_paid_timeout_after_a_failover_is_uncertain(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m-1",), status_code=503),
+        RunnerCallError("timeout", "timed out", payment_sent=True, manifest_ids=("m-2",)),
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    assert failed.value.job.state == "uncertain"  # the second runner may have run the work
+    assert [a.outcome for a in failed.value.job.attempts] == ["refused", "timeout"]
 
 
 async def test_signer_refusal_for_one_orchestrator_fails_over(

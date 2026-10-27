@@ -10,8 +10,9 @@ attribution.
 """
 
 import asyncio
+import contextlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol, overload
 
@@ -48,7 +49,8 @@ from livepeer_builder.utils import BODY_LIMIT
 
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
 # Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
-# may succeed. 400 = incomplete/expired params; 481 = price ceiling.
+# may succeed, whether or not this call had already paid (D26, D51). 400 = incomplete/expired params;
+# 481 = price ceiling.
 # Caller- or signer-side refusals (402 allowance, 403 forbidden, 502 webhook, 503 outbox) are not here.
 _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
 
@@ -124,8 +126,9 @@ class _SignedSessions:
 
     ``on_payment_session`` runs only after ``LivePaymentSession.get_payment()`` validates a signed
     payment and before the paid request is sent to the runner. A reported session means the signer
-    charged the allocation and counts as ``payment_sent``, so the engine never fails over (or
-    retries) work that was paid for. If signing fails or is cancelled before the callback runs,
+    charged the allocation and counts as ``payment_sent``: the engine then fails over only to another
+    orchestrator, and only when the failure did not run the work (D51). If signing fails or is
+    cancelled before the callback runs,
     ``signed`` stays ``False`` (no payment sent). Each session is also passed to ``on_signed``, which
     the SDK awaits before the paid request goes out, so the engine stores the evidence first (D42).
     """
@@ -141,6 +144,30 @@ class _SignedSessions:
             self.manifest_ids.append(session.manifest_id)
         if self._on_signed is not None:
             await self._on_signed(session.manifest_id or "")
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        return tuple(self.manifest_ids)
+
+    def error(
+        self, kind: AttemptOutcome, message: str, *, status_code: int | None = None, body: str | None = None
+    ) -> RunnerCallError:
+        """A failed call, carrying what the signer signed for it so far."""
+        return RunnerCallError(
+            kind, message, payment_sent=self.signed, manifest_ids=self.ids, status_code=status_code, body=body
+        )
+
+
+@contextlib.contextmanager
+def _translated(url: str, sessions: _SignedSessions, prefix: str = "") -> Iterator[None]:
+    """SDK and network failures as RunnerCallError, each with the payment evidence collected so far.
+    ``TimeoutError`` is an ``OSError``, so a read timeout lands here too."""
+    try:
+        yield
+    except LivepeerGatewayError as error:
+        raise call_error(error, url, payment_sent=sessions.signed, manifest_ids=sessions.ids) from error
+    except (aiohttp.ClientError, OSError) as error:
+        raise sessions.error(network_kind(error), f"{prefix}{error}") from error
 
 
 class SdkRunnerTransport:
@@ -158,7 +185,7 @@ class SdkRunnerTransport:
         self._call = call
 
     def _call_kwargs(
-        self, runner: Runner, request: JobRequest, credential: str | None, sessions: "_SignedSessions"
+        self, runner: Runner, request: JobRequest, credential: str | None, sessions: _SignedSessions
     ) -> tuple[str, dict[str, Any]]:
         paid = credential is not None and self._signer_url is not None
         instance = LiveRunnerInstance(
@@ -189,26 +216,15 @@ class SdkRunnerTransport:
     ) -> RunnerReply:
         sessions = _SignedSessions(on_signed)
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
-        try:
+        with _translated(url, sessions):
             result = await self._call(url, **kwargs)
-        except LivepeerGatewayError as error:
-            raise call_error(
-                error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
-            ) from error
-        except (aiohttp.ClientError, OSError) as error:
-            raise RunnerCallError(
-                network_kind(error),
-                str(error),
-                payment_sent=sessions.signed,
-                manifest_ids=tuple(sessions.manifest_ids),
-            ) from error
         content = result.content if result.content is not None else json.dumps(result.data).encode()
         return RunnerReply(
             status_code=200,
             content=content,
             content_type=result.content_type or "application/json",
             data=result.data if result.content is None else None,
-            manifest_ids=tuple(sessions.manifest_ids),
+            manifest_ids=sessions.ids,
             payment_sent=sessions.signed,
         )
 
@@ -225,34 +241,21 @@ class SdkRunnerTransport:
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):
-                stream = await self._call(url, stream=True, **kwargs)
-        except TimeoutError as error:
-            raise RunnerCallError(
-                "timeout",
-                f"no response from {url} within {request.first_byte_timeout_s:g}s",
-                payment_sent=sessions.signed,
-                manifest_ids=tuple(sessions.manifest_ids),
-            ) from error
-        except LivepeerGatewayError as error:
-            raise call_error(
-                error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
-            ) from error
-        except (aiohttp.ClientError, OSError) as error:
-            raise RunnerCallError(
-                network_kind(error),
-                str(error),
-                payment_sent=sessions.signed,
-                manifest_ids=tuple(sessions.manifest_ids),
-            ) from error
-        return SdkRunnerStream(stream, sessions)
+                with _translated(url, sessions):
+                    stream = await self._call(url, stream=True, **kwargs)
+        except TimeoutError as error:  # the deadline; the SDK's own timeouts are translated above
+            message = f"no response from {url} within {request.first_byte_timeout_s:g}s"
+            raise sessions.error("timeout", message) from error
+        return SdkRunnerStream(stream, sessions, url)
 
 
 class SdkRunnerStream:
     """The SDK's live response as a ``RunnerStream``. Mid-stream transport failures become RunnerCallError."""
 
-    def __init__(self, stream: LiveRunnerCallStream, sessions: "_SignedSessions") -> None:
+    def __init__(self, stream: LiveRunnerCallStream, sessions: _SignedSessions, url: str) -> None:
         self._stream = stream
         self._sessions = sessions
+        self._url = url
 
     @property
     def status_code(self) -> int:
@@ -264,7 +267,7 @@ class SdkRunnerStream:
 
     @property
     def manifest_ids(self) -> tuple[str, ...]:
-        return tuple(self._sessions.manifest_ids)
+        return self._sessions.ids
 
     @property
     def payment_sent(self) -> bool:
@@ -274,17 +277,10 @@ class SdkRunnerStream:
         return self._iterate()
 
     async def _iterate(self) -> AsyncIterator[bytes]:
-        try:
+        with _translated(self._url, self._sessions, prefix="stream failed: "):
             async for chunk in self._stream.aiter_bytes():
                 if chunk:
                     yield chunk
-        except (aiohttp.ClientError, OSError, TimeoutError) as error:
-            raise RunnerCallError(
-                network_kind(error),
-                f"stream failed: {error}",
-                payment_sent=self.payment_sent,
-                manifest_ids=self.manifest_ids,
-            ) from error
 
     async def aclose(self) -> None:
         await self._stream.aclose()
@@ -308,7 +304,7 @@ def call_error(
     elif isinstance(error, LivepeerHTTPError):
         # An HTTP error from any other URL came from the signer.
         orchestrator_specific = error.status_code in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES
-        kind = "payment_refused" if orchestrator_specific and not payment_sent else "payment"
+        kind = "payment_refused" if orchestrator_specific else "payment"
         status = error.status_code
     elif isinstance(error, _PAYMENT_ERRORS):
         kind = "payment"

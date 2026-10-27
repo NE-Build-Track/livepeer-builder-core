@@ -86,8 +86,16 @@ still balances. A later sync can turn a `matched` entry into `ambiguous`.
 
 `manifest_id` is the lookup, not the cost key. The 7 October run showed a client can put any string
 there ([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). A manifest on another
-allocation does not attribute. Whether a fresh manifest per challenge is an orchestrator guarantee
-is open (T13, [livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
+allocation does not attribute.
+
+The orchestrator mints a fresh manifest for each 402 challenge and reserves the runner session under it,
+so the orchestrator's session ID is the `manifest_id` the engine records
+([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)). The manifest is 4 random bytes
+(8 hex characters) from Go's `math/rand`, and the orchestrator refuses a duplicate only while the first
+session is live. Two sessions on one allocation can therefore share a manifest, and the chance grows
+with the allocation's volume: about 1% by 10,000 sessions. The match then turns `ambiguous`, including
+for an older entry that had matched (T13, T16,
+[livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
 
 ## Cost classification
 
@@ -96,12 +104,18 @@ Each attempt that opened a payment session is classified:
 | Class | Rule | Typical enterprise treatment |
 | --- | --- | --- |
 | `delivered` | The attempt succeeded | Bill under its retail policy |
-| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**) | Absorb; don't bill |
-| `uncertain` | The job is `uncertain`, or the attempt never reported back | Hold, then reconcile |
+| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**), including an attempt the job failed over from, even when a later one delivered (D51) | Absorb; don't bill |
+| `uncertain` | The attempt that left the job `uncertain`, or an attempt that never reported back | Hold, then reconcile |
 | `pending` | The job is still running (its fees so far are not final), or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
+
+**`JobCost.fees` and `JobCost.billable`.** `fees` is what every attempt of the job cost the allocation.
+`billable` is only the `delivered` attempts' fees: what the enterprise bills its user for. A job that
+failed has `billable` zero, and a job that failed over and then succeeded bills only the attempt that
+delivered, while its allocation was debited for both (D51). Both are final once the cost status is
+`observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
 `pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`

@@ -5,9 +5,11 @@ from typing import Any, cast
 
 from livepeer_builder.contracts import AttemptOutcome, FailureKind
 from livepeer_builder.errors import EngineError
+from livepeer_builder.services import failover
 
 NOT_DISPATCHED = frozenset({"no_offering", "no_capacity", "not_provisioned"})  # failed before any attempt
-UNCERTAIN_OUTCOMES = frozenset({"timeout", "unreachable", "in_flight"})  # paid, and the runner may have run
+# paid, and the runner may have run; "in_flight" is a job the engine stopped mid-call (recovery)
+UNCERTAIN_OUTCOMES: frozenset[AttemptOutcome] = failover.UNCERTAIN_OUTCOMES | {"in_flight"}
 
 
 def attempt_outcome(kind: FailureKind) -> AttemptOutcome:
@@ -25,9 +27,10 @@ def attempt_outcome(kind: FailureKind) -> AttemptOutcome:
 class Fails:
     """The job fails: ``run`` and ``stream`` raise ``JobFailed`` with this failure.
 
-    ``kind`` sets the attempt outcome the engine would record (``runner_error`` is ``http``). With
-    ``payment_sent=True`` the job fails on that runner (no failover); a paid ``timeout`` or
-    ``unreachable`` leaves it ``uncertain``, since the runner may have run. ``no_offering``,
+    ``kind`` sets the attempt outcome the engine would record (``runner_error`` is ``http``). The fake
+    has one runner, so a paid failure ends the job as it does in the engine once no other orchestrator
+    is left to fail over to (D51): ``failed`` with the runner's words, or ``uncertain`` for a paid
+    ``timeout`` or ``unreachable``, since the runner may have run. ``no_offering``,
     ``no_capacity`` and ``not_provisioned`` fail before any attempt. ``body`` is the runner's own
     words. Among stream chunks the stream was paid when it opened, so ``payment_sent`` does not apply.
     """

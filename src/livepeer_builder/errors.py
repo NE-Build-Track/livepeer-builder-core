@@ -94,10 +94,11 @@ class UnsupportedForBackend(EngineError):
 class RunnerCallError(EngineError):
     """One runner call failed. Raised by a RunnerTransport.
 
-    ``payment_sent`` is True once tickets went out with the request: the job is then bound to this
-    runner and must not fail over. ``manifest_ids`` lists the orchestrator sessions the signer
-    signed, one per session in signing order. It can be non-empty even when ``payment_sent`` is
-    False, because the signer charges when it signs.
+    ``payment_sent`` is True once the signer signed a payment for the call (``on_payment_session``,
+    D41): the allocation is charged, whatever happens next. The job may then fail over only to
+    another orchestrator, and only when the failure did not run the work (D51). ``manifest_ids``
+    lists the orchestrator sessions the signer signed, one per session in signing order; with the
+    SDK adapter, a non-empty list means ``payment_sent``.
     """
 
     def __init__(

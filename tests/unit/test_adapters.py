@@ -192,11 +192,29 @@ def test_sdk_errors_keep_payment_evidence() -> None:
     after_signing = call_error(
         LivepeerHTTPError(400, signer), runner_url, payment_sent=True, manifest_ids=("m-7",)
     )
+    # still about this orchestrator once paid: the engine fails over to another one (D51)
     assert (after_signing.kind, after_signing.payment_sent, after_signing.manifest_ids) == (
-        "payment",
+        "payment_refused",
         True,
         ("m-7",),
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "kind"),
+    [
+        (404, "runner session not found", "http"),  # the runner stopped the session (gateway #83)
+        (409, "session already exists", "http"),
+        (503, "no capacity available for runner", "refused"),
+    ],
+)
+def test_orchestrator_refusals_after_signing_keep_the_payment(status: int, body: str, kind: str) -> None:
+    """The orchestrator reserves the runner session on the paid request, so these come after signing."""
+    runner_url = "https://orch.example/apps/r1/run"
+    error = LivepeerHTTPError(status, runner_url, body=body)
+    mapped = call_error(error, runner_url, payment_sent=True, manifest_ids=("m-8",))
+    assert (mapped.kind, mapped.status_code, mapped.body) == (kind, status, body)
+    assert (mapped.payment_sent, mapped.manifest_ids) == (True, ("m-8",))
 
 
 class _Session:

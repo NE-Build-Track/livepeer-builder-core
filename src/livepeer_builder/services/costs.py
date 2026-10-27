@@ -2,10 +2,12 @@
 
 Classification (accepted 12 October, docs/contracts/payments.md#cost-classification):
   delivered             the attempt succeeded
-  failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors)
-  uncertain             the job is uncertain, or the attempt never reported back
+  failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors),
+                        including an attempt the job failed over from (D51)
+  uncertain             the attempt that left the job uncertain, or one that never reported back
   pending               payment went out and no applied usage row has arrived yet (never zero)
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
+``billable`` is the delivered fees only: what an enterprise bills its user for.
 A job's cost is ``pending`` until the job ends, and only an ended job is projected (#33): only cost
 sync stores projections, and reads compute live any job no projection covers yet (running, or ended
 since its projection was stored), so a paid job never reads as ``none``.
@@ -38,6 +40,8 @@ from livepeer_builder.contracts import (
     SyncCheckpoint,
     SyncReport,
     UsageRow,
+    add_fees,
+    billable_fees,
 )
 from livepeer_builder.errors import CursorMismatch, NotFound, ProviderUnavailable
 from livepeer_builder.protocols import (
@@ -312,6 +316,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     """
     applied = [row for row in rows if row.status == "applied"]
     running = job.state not in _ENDED
+    last = max((attempt.number for attempt in job.attempts), default=0)
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
         if not attempt.sessions and not attempt.payment_sent:
@@ -331,8 +336,8 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             cost_class = "pending"
         elif attempt.outcome == "succeeded":
             cost_class = "delivered"
-        elif job.state == "uncertain" or attempt.outcome == "in_flight":
-            cost_class = "uncertain"
+        elif attempt.outcome == "in_flight" or (job.state == "uncertain" and attempt.number == last):
+            cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D51)
         else:
             cost_class = "failed_after_payment"
         attempts.append(AttemptCost(attempt_number=attempt.number, cost_class=cost_class, fees=fees_of(mine)))
@@ -352,6 +357,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
         attempts=tuple(attempts),
         first_observed_at=None,
         updated_at=None,
+        billable=billable_fees(attempts),
     )
 
 
@@ -363,16 +369,6 @@ def fees_of(rows: Iterable[UsageRow]) -> Fees:
     if all(row.computed_fee_usd is not None for row in applied):
         usd = sum((row.computed_fee_usd or Decimal(0) for row in applied), Decimal(0))
     return Fees(fee_eth=eth, fee_usd=usd, row_count=len(applied))
-
-
-def add_fees(parts: Iterable[Fees]) -> Fees:
-    items = list(parts)
-    eth = sum((fees.fee_eth for fees in items), Decimal(0))
-    priced = [fees for fees in items if fees.row_count]
-    usd: Decimal | None = Decimal(0) if not priced else None
-    if priced and all(fees.fee_usd is not None for fees in priced):
-        usd = sum((fees.fee_usd or Decimal(0) for fees in priced), Decimal(0))
-    return Fees(fee_eth=eth, fee_usd=usd, row_count=sum(fees.row_count for fees in items))
 
 
 def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:

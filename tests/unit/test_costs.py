@@ -33,6 +33,7 @@ from livepeer_builder.testing import (
     FixedClock,
     ScriptedTransport,
     StreamScript,
+    runner,
 )
 from tests.conftest import EngineFactory
 
@@ -86,6 +87,65 @@ def test_classification_covers_every_class() -> None:
 
     unpaid = classify(job_with(("refused", (), False)), [])
     assert unpaid.status == "none" and unpaid.attempts == ()
+
+
+def test_only_delivered_attempts_are_billable() -> None:
+    rows = [row("1", "a-503", "2", usd="0.2"), row("2", "a-ok", "1", usd="0.1")]
+    failed_over = classify(job_with(("refused", ("a-503",), True), ("succeeded", ("a-ok",), True)), rows)
+    assert [a.cost_class for a in failed_over.attempts] == ["failed_after_payment", "delivered"]
+    assert failed_over.fees.fee_eth == Decimal(3)  # the allocation paid for both attempts
+    assert (failed_over.billable.fee_eth, failed_over.billable.fee_usd) == (Decimal(1), Decimal("0.1"))
+
+    failed = classify(
+        job_with(("refused", ("a-503",), True), ("http", ("a-ok",), True), state="failed"), rows
+    )
+    assert failed.fees.fee_eth == Decimal(3) and [a.cost_class for a in failed.attempts] == [
+        "failed_after_payment",
+        "failed_after_payment",
+    ]
+    assert (failed.billable.fee_eth, failed.billable.row_count) == (Decimal(0), 0)  # the user pays nothing
+
+
+def test_only_the_attempt_that_left_a_job_uncertain_is_uncertain() -> None:
+    job = job_with(("refused", ("a-503",), True), ("timeout", ("a-late",), True), state="uncertain")
+    cost = classify(job, [row("1", "a-503", "2"), row("2", "a-late", "1")])
+    assert [a.cost_class for a in cost.attempts] == ["failed_after_payment", "uncertain"]
+    assert cost.billable.fee_eth == Decimal(0)
+
+
+async def test_a_stored_projection_keeps_billable_apart_from_fees(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource,
+) -> None:  # fmt: skip
+    engine = await make_engine(
+        default_currency="ETH",
+        runners=(
+            runner(url="https://a1", orchestrator_url="https://orch-a.example"),
+            runner(url="https://b1", orchestrator_url="https://orch-b.example"),
+        ),
+    )
+    request = ProvisionRequest(
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(1), currency="ETH"),
+        grant_id="g",
+    )
+    allocation = (await engine.payments.provision(admin, request)).allocation_id
+    transport.steps = [
+        RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-a",), status_code=503),
+        ScriptedTransport.ok(manifest_ids=("m-b",)),
+    ]
+    job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
+    usage.rows = [
+        row("u1", "sess-a", "0.2", allocation=allocation, manifest="m-a"),
+        row("u2", "sess-b", "0.1", allocation=allocation, manifest="m-b"),
+    ]
+    await engine.costs.sync_once()
+    stored = await engine.store.get_projection(job.id)
+    assert stored is not None and stored.status == "observed"
+    assert [a.cost_class for a in stored.attempts] == ["failed_after_payment", "delivered"]
+    assert (stored.fees.fee_eth, stored.billable.fee_eth) == (Decimal("0.3"), Decimal("0.1"))
+    assert await engine.costs.for_job(alice, job.id) == stored
 
 
 def test_usd_total_only_when_every_row_is_priced() -> None:

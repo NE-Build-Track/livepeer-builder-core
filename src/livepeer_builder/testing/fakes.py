@@ -65,7 +65,7 @@ Step = RunnerReply | RunnerCallError | Callable[[Runner, JobRequest, str | None]
 
 
 async def report_signed(on_signed: OnSigned | None, manifest_ids: Sequence[str], paid: bool) -> None:
-    """What the SDK's ``on_payment_session`` does for a paid call: report each signed session first."""
+    """What the Live Runner transport does for a paid call: report each signed session first (D42)."""
     if on_signed is None or not paid:
         return
     for manifest_id in manifest_ids or ("",):

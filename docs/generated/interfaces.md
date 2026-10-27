@@ -117,11 +117,11 @@ classDiagram
     class HttpDiscoverySource
     class JwtBearerAuthenticator
     class MostCapacityFirst
+    class PaidStream
     class PaymentsService
     class ReservedEventFeed
     class ReservedSessions
     class RoutingSecretStore
-    class SdkRunnerStream
     class SdkRunnerTransport
     class SettingsSecretStore
     class SqlCostSnapshot
@@ -141,7 +141,7 @@ classDiagram
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
-    RunnerStream <|.. SdkRunnerStream
+    RunnerStream <|.. PaidStream
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
@@ -170,7 +170,7 @@ classDiagram
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
-| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.sdk` |
+| `RunnerStream` | `PaidStream` | `livepeer_builder.adapters.runner_call` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

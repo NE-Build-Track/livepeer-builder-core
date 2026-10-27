@@ -46,7 +46,7 @@ flowchart LR
     DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
     DiscSvc -.->|"active set + AI service URIs (on-chain directory)"| Chain
     Core -->|"provision, fund, /v1/usage"| Bat
-    Core -->|"paid call (SDK call_runner)"| Orch --> Runner
+    Core -->|"paid call (adapters/runner_call.py)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat
     Signer -->|"events (durable outbox)"| Kafka --> Bat
     Signer -.->|"deposit / reserve checks"| Chain
@@ -197,7 +197,7 @@ sequenceDiagram
     participant Adm as AdmissionLimiter
     participant DB as SqlStore
     participant Pay as PaymentsService
-    participant T as SdkRunnerTransport (SDK call_runner)
+    participant T as SdkRunnerTransport (adapters/runner_call.py)
     participant O as Orchestrator / runner
     participant Sg as node signer
     participant Bat as Batteries webhook

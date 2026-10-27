@@ -221,6 +221,9 @@ All four were answered: 1 by reading the SDK (no change needed), 2–4 by Mike a
       ([livepeer-python-gateway#83](https://github.com/livepeer/livepeer-python-gateway/pull/83)), which
       the engine does not call. `call_runner(stream=True)` and its payment path are unchanged, so D41
       and T14 still hold.
+- [x] 2026-10-27: the engine owns the paid runner call (D53). `SdkRunnerTransport.open` now answers the
+      402 itself and signs through the SDK's signer client; the stream keeps its metered funding until it
+      closes. T14 is closed.
 
 ## Decision log
 

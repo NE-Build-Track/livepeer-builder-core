@@ -38,16 +38,17 @@ The 22 October pin was `76a1a1c` (#81). `call_runner`, `discover_runners`, `open
 ([NE livepeer-python-gateway#5](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/5)).
 #80 and #81 are on upstream `main`, so that fork pin is dropped.
 
-`call_runner(on_payment_session=...)` is called once for each new session the signer signs, after
-`LivePaymentSession.get_payment()` validates the signer's reply and before the paid request goes out
-to the runner. If signing fails or is cancelled before `on_payment_session` runs, no callback fires,
-`payment_sent` is `False`, and the job fails. `LivePaymentSession.manifest_id` is the manifest from
-the 402 challenge. The SDK does not decode signer state.
+**What the engine uses (D53).** The engine no longer calls `call_runner`. Its own runner call
+(`adapters/runner_call.py`) is adapted from `call_runner` at `2017a80` (MIT): it sends the runner
+request, answers the 402, and signs through the SDK's signer client (`get_signer_info`,
+`LivePaymentSession.get_payment()` and, for metered prices, `run_payments()`). That lets it record each
+session's `manifest_id` before the signer is asked, which no SDK callback allows.
+`LivePaymentSession.manifest_id` is the manifest from the 402 challenge. The SDK does not decode
+signer state. `tests/unit/test_sdk_contract.py` holds the copy to the pinned SDK: it fails when
+`call_runner` or a helper the copy follows changes.
 
-- PyPI `livepeer-gateway` 1.0.0 has no payment-session reporting, so installing from PyPI would break
-  job cost attribution. That defect was found in the prototype on 12 October.
-- A callback error, including `SignerRefreshRequired`, belongs to the caller and does not restart
-  the payment challenge. The engine records each `manifest_id` on its session log.
+- PyPI `livepeer-gateway` 1.0.0 predates `LivePaymentSession.manifest_id`, so the engine still pins a
+  commit (T1).
 - Exit condition: tech debt T1 (re-pin to a release that includes #81).
 
 ## Licenses

@@ -14,9 +14,10 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
 3. The signer signs and **persists one `create_signed_ticket` event per signing request before
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
-4. The SDK ([#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)) calls
-   `on_payment_session` with each signed session. The engine records that session's `manifest_id`
-   on its own session log, with the allocation whose key paid.
+4. The engine's runner call (`adapters/runner_call.py`, D53) answers the orchestrator's 402 itself
+   and signs through the SDK's signer client. It reports each session's `manifest_id` before the
+   signer is asked, and again once the payment is validated, before the paid request goes out. The
+   engine records it on its own session log, with the allocation whose key paid.
 
 ## Allocation modes
 

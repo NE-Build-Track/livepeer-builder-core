@@ -27,6 +27,7 @@ from livepeer_builder.contracts import (
     NewAllocationKey,
     Operation,
     PaymentCredential,
+    PaymentState,
     ProvisionedActor,
     PurgeReport,
     ResourceRef,
@@ -97,6 +98,9 @@ class SelectionPolicy(Protocol):
 OnSigned = Callable[[str], Awaitable[None]]
 """Called with each signed session's ``manifest_id`` (``""`` when the challenge has none)."""
 
+OnPaymentState = Callable[[str, PaymentState], Awaitable[None]]
+"""Persist unknown before signing, or an explicit unpaid refusal; never infer unpaid from silence."""
+
 
 class RunnerTransport(Protocol):
     """One runner call. Raises RunnerCallError, carrying ``payment_sent`` and ``manifest_ids``.
@@ -147,6 +151,36 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
 
     async def open(
         self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+    ) -> RunnerStream: ...
+
+
+@runtime_checkable
+class PaymentIntentTransport(RunnerTransport, Protocol):
+    """Optional transport capability: await durable intent before any signing request."""
+
+    async def call_with_payment_intent(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        *,
+        on_signed: OnSigned,
+        on_payment_state: OnPaymentState,
+    ) -> RunnerReply: ...
+
+
+@runtime_checkable
+class PaymentIntentStreamingTransport(StreamingRunnerTransport, Protocol):
+    """Streaming counterpart of PaymentIntentTransport."""
+
+    async def open_with_payment_intent(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        *,
+        on_signed: OnSigned,
+        on_payment_state: OnPaymentState,
     ) -> RunnerStream: ...
 
 
@@ -251,15 +285,18 @@ class JobRepo(Protocol):
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
     async def record_payment_evidence(self, attempt: Attempt) -> None:
-        """Mark the attempt paid and add its signed sessions not stored yet, while the call is still
-        going (D42). Leaves its outcome, status and timing alone, so a late report never reopens it."""
+        """Persist intent state and signed evidence without changing outcome, status or timing.
+
+        Never regress paid evidence or rewrite cost-sync match columns. A pre-sign intent write
+        must succeed before signing (D45); a late report never reopens an attempt (D42).
+        """
         ...
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         """Update the attempt after the call. May run more than once (a stream writes at open and end).
 
-        Signed sessions are append-only: add the manifests not stored yet and leave stored rows as they
-        are, because cost sync owns their match columns (D39).
+        Add new manifests and update unconfirmed intent state. Preserve paid evidence and match
+        columns owned by cost sync (D39, D45), even when finishing with a stale attempt snapshot.
         """
 
     async def finish_job(

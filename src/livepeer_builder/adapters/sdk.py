@@ -12,7 +12,6 @@ attribution.
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol, overload
 
 import aiohttp
@@ -25,6 +24,7 @@ from livepeer_gateway.errors import (
     SkipPaymentCycle,
 )
 from livepeer_gateway.live_runner import (
+    LivePaymentErrorCallback,
     LivePaymentSessionCallback,
     LiveRunnerCallResult,
     LiveRunnerCallStream,
@@ -34,16 +34,16 @@ from livepeer_gateway.live_runner import (
 )
 from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
 
+from livepeer_builder.adapters.discovery_inventory import runners_from_entries as runners_from_entries
 from livepeer_builder.contracts import (
     AttemptOutcome,
     JobRequest,
     NetworkRate,
     Runner,
-    RunnerGPU,
     RunnerReply,
 )
 from livepeer_builder.errors import RunnerCallError
-from livepeer_builder.protocols import OnSigned
+from livepeer_builder.protocols import OnPaymentState, OnSigned
 from livepeer_builder.utils import BODY_LIMIT
 
 _PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
@@ -84,6 +84,8 @@ class CallRunner(Protocol):
         timeout: float,  # noqa: ASYNC109 - the SDK's own parameter name
         max_payment_challenge_retries: int,
         on_payment_session: LivePaymentSessionCallback | None,
+        on_payment_attempt: LivePaymentSessionCallback | None = None,
+        on_payment_error: LivePaymentErrorCallback | None = None,
         stream: Literal[False] = False,
     ) -> LiveRunnerCallResult: ...
 
@@ -101,6 +103,8 @@ class CallRunner(Protocol):
         timeout: float,  # noqa: ASYNC109 - the SDK's own parameter name
         max_payment_challenge_retries: int,
         on_payment_session: LivePaymentSessionCallback | None,
+        on_payment_attempt: LivePaymentSessionCallback | None = None,
+        on_payment_error: LivePaymentErrorCallback | None = None,
         stream: Literal[True],
     ) -> LiveRunnerCallStream: ...
 
@@ -130,10 +134,26 @@ class _SignedSessions:
     the SDK awaits before the paid request goes out, so the engine stores the evidence first (D42).
     """
 
-    def __init__(self, on_signed: OnSigned | None = None) -> None:
+    def __init__(
+        self, on_signed: OnSigned | None = None, on_payment_state: OnPaymentState | None = None
+    ) -> None:
         self.signed = False
         self.manifest_ids: list[str] = []
         self._on_signed = on_signed
+        self.on_payment_state = on_payment_state
+
+    async def starting(self, session: LivePaymentSession) -> None:
+        if self.on_payment_state is not None:
+            await self.on_payment_state(session.manifest_id, "unknown")
+
+    async def failed(self, session: LivePaymentSession, error: Exception) -> None:
+        # These are explicit signer refusals. A timeout, transport error, malformed 200 or 5xx
+        # cannot prove that the signer did not charge; the already-durable intent stays unknown.
+        refused = isinstance(error, (SignerRefreshRequired, SkipPaymentCycle)) or (
+            isinstance(error, LivepeerHTTPError) and error.status_code in {400, 401, 402, 403, 481}
+        )
+        if refused and self.on_payment_state is not None:
+            await self.on_payment_state(session.manifest_id, "unpaid")
 
     async def __call__(self, session: LivePaymentSession) -> None:
         self.signed = True
@@ -156,6 +176,28 @@ class SdkRunnerTransport:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
         self._call = call
+
+    async def call_with_payment_intent(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        *,
+        on_signed: OnSigned,
+        on_payment_state: OnPaymentState,
+    ) -> RunnerReply:
+        return await self.call(runner, request, credential, on_signed, on_payment_state=on_payment_state)
+
+    async def open_with_payment_intent(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        *,
+        on_signed: OnSigned,
+        on_payment_state: OnPaymentState,
+    ) -> "SdkRunnerStream":
+        return await self.open(runner, request, credential, on_signed, on_payment_state=on_payment_state)
 
     def _call_kwargs(
         self, runner: Runner, request: JobRequest, credential: str | None, sessions: "_SignedSessions"
@@ -182,12 +224,21 @@ class SdkRunnerTransport:
             "max_payment_challenge_retries": self._retries,
             "on_payment_session": sessions if paid else None,
         }
+        if paid and sessions.on_payment_state is not None:
+            kwargs["on_payment_attempt"] = sessions.starting
+            kwargs["on_payment_error"] = sessions.failed
         return url, kwargs
 
     async def call(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+        *,
+        on_payment_state: OnPaymentState | None = None,
     ) -> RunnerReply:
-        sessions = _SignedSessions(on_signed)
+        sessions = _SignedSessions(on_signed, on_payment_state)
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
             result = await self._call(url, **kwargs)
@@ -213,15 +264,22 @@ class SdkRunnerTransport:
         )
 
     async def open(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+        *,
+        on_payment_state: OnPaymentState | None = None,
     ) -> "SdkRunnerStream":
         """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here.
 
         The SDK does not bound the wait for the runner's response headers, so this does
         (``first_byte_timeout_s``, D35). A timeout keeps the sessions signed so far for cost sync;
-        if it hits before ``on_payment_session`` runs, ``payment_sent`` is ``False``.
+        if it hits before ``on_payment_session`` runs, ``payment_sent`` is ``False`` but an
+        already recorded intent remains unknown and prevents failover (D45).
         """
-        sessions = _SignedSessions(on_signed)
+        sessions = _SignedSessions(on_signed, on_payment_state)
         url, kwargs = self._call_kwargs(runner, request, credential, sessions)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):
@@ -335,77 +393,7 @@ def network_kind(error: BaseException) -> AttemptOutcome:
     return "http"
 
 
-def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:
-    runners: list[Runner] = []
-    for entry in entries:
-        orchestrator_url = _text(entry.get("address"))
-        for raw in entry.get("runners") or ():
-            runner = _runner_from_raw(raw, orchestrator_url)
-            if runner is not None:
-                runners.append(runner)
-    return runners
-
-
-def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None:
-    if not isinstance(raw, dict):
-        return None
-    url, app = _text(raw.get("url")), _text(raw.get("app"))
-    if not url or not app:
-        return None
-    capacity = raw.get("capacity") if isinstance(raw.get("capacity"), int) else None
-    sessions = raw.get("session_ids")
-    available = capacity - len(sessions) if capacity is not None and isinstance(sessions, list) else None
-    reported = raw.get("capacity_available")
-    if isinstance(reported, int) and not isinstance(reported, bool):
-        available = reported  # the node reports it directly; session_ids is the older form
-    return Runner(
-        url=url,
-        app=app,
-        runner_id=_text(raw.get("runner_id")),
-        mode=_text(raw.get("mode")),
-        orchestrator_url=orchestrator_url,
-        capacity=capacity,
-        capacity_available=available,
-        rate=_rate(raw.get("price_info")),
-        version=_text(raw.get("version")),
-        metadata=_text(raw.get("metadata")),
-        gpu=_gpu(raw.get("gpu")),
-    )
-
-
-def _gpu(value: object) -> RunnerGPU | None:
-    if not isinstance(value, dict):
-        return None
-    vram = value.get("vram_mb")
-    gpu = RunnerGPU(
-        id=_text(value.get("id")),
-        name=_text(value.get("name")),
-        vram_mb=vram if isinstance(vram, int) and vram > 0 else None,
-    )
-    return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
-
-
-def _rate(value: object) -> NetworkRate | None:
-    if not isinstance(value, dict):
-        return None
-    try:
-        amount = Decimal(str(value.get("price")))
-    except InvalidOperation:
-        return None
-    if not amount.is_finite() or amount < 0:
-        return None
-    return NetworkRate(
-        amount=amount,
-        currency=str(value.get("currency") or "usd").lower(),
-        unit=str(value.get("unit") or "hour").lower(),
-    )
-
-
 def _price_info(rate: NetworkRate | None) -> LiveRunnerPriceInfo | None:
     if rate is None:
         return None
     return LiveRunnerPriceInfo(price=str(rate.amount), currency=rate.currency, unit=rate.unit)
-
-
-def _text(value: object) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None

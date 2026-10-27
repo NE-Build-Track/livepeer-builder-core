@@ -314,7 +314,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     running = job.state not in _ENDED
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
-        if not attempt.sessions and not attempt.payment_sent:
+        if not any(s.payment_state != "unpaid" for s in attempt.sessions) and not attempt.payment_sent:
             continue
         matched = {
             session.payment_session_id
@@ -327,7 +327,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             cost_class = "pending"
         elif any(session.match == "ambiguous" for session in attempt.sessions):
             cost_class = "uncertain"
-        elif not mine:
+        elif attempt.payment_unknown or not mine:
             cost_class = "pending"
         elif attempt.outcome == "succeeded":
             cost_class = "delivered"

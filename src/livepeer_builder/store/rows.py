@@ -82,6 +82,7 @@ async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
                         manifest_id=session["manifest_id"],
                         payment_session_id=session["payment_session_id"],
                         match=session["match_status"],
+                        payment_state=session["payment_state"],
                     )
                     for session in sessions_by_attempt.get((a["job_id"], a["number"]), ())
                 ),

@@ -8,15 +8,18 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
 
 ## Payment path
 
-1. The SDK presents the actor's allocation key (`lpg_…`) to the signer as `Authorization: Bearer`.
+1. Before signing, the SDK awaits `on_payment_attempt`. The engine durably records the allocation
+   and manifest as `unknown`; a failed write prevents signing. The SDK presents the actor's allocation key (`lpg_…`) to the signer as `Authorization: Bearer`.
 2. The signer calls the Batteries webhook. Batteries resolves the key to its allocation, checks the
    balance, and returns an `auth_id` (the payment session).
 3. The signer signs and **persists one `create_signed_ticket` event per signing request before
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
-4. The SDK ([#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)) calls
-   `on_payment_session` with each signed session. The engine records that session's `manifest_id`
-   on its own session log, with the allocation whose key paid.
+4. After validating the signer response, the SDK calls `on_payment_session`. The engine marks
+   that manifest `paid` before the paid runner request. Explicit signer refusal marks it `unpaid`.
+   A lost, malformed, timed-out or cancelled signing reply leaves it `unknown`: stop failover,
+   return an `uncertain` job and keep its cost pending until usage resolves the intent. The SDK
+   does not wait for the signer to finish after cancellation.
 
 ## Allocation modes
 
@@ -75,9 +78,12 @@ them as `Decimal`.
 
 A charge joins an attempt by **`(allocation_id, payment_session_id)`**. The engine does not learn
 `payment_session_id` from the SDK. Each attempt records the allocation whose key paid and one
-session-log entry per signed `manifest_id` (`lpb_payment_sessions`). Cost sync resolves an entry
+session-log entry per attempted `manifest_id` (`lpb_payment_sessions`). Cost sync resolves an entry
 when exactly one applied usage row-set and one log entry share `(allocation_id, manifest_id)`, and
-stores that row's `payment_session_id` as `matched`.
+stores that row's `payment_session_id` as `matched`. An `unknown` entry becomes `paid`, and
+the attempt's `payment_sent` becomes true. Confirmed `paid` evidence never regresses. Explicitly
+`unpaid` entries are excluded from matching and cost classification. The job remains `uncertain`: a
+charge confirms payment, not that the runner delivered a result. No usage is not evidence of refusal.
 
 If Batteries has no session for the key yet, the entry stays `unmatched` and the attempt's cost is
 `pending`. If more than one Batteries session or more than one log entry shares the key, every
@@ -91,14 +97,14 @@ is open (T13, [livepeer-python-gateway#74](https://github.com/livepeer/livepeer-
 
 ## Cost classification
 
-Each attempt that opened a payment session is classified:
+Each attempt with a paid or unknown payment session is classified:
 
 | Class | Rule | Typical enterprise treatment |
 | --- | --- | --- |
 | `delivered` | The attempt succeeded | Bill under its retail policy |
 | `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**) | Absorb; don't bill |
 | `uncertain` | The job is `uncertain`, or the attempt never reported back | Hold, then reconcile |
-| `pending` | The job is still running (its fees so far are not final), or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
+| `pending` | The job is still running (its fees so far are not final), or an intent is unresolved, or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
@@ -114,8 +120,8 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 
 ### Job cost status
 
-`none` (the job ended and no attempt was paid), `pending` (the job is still running, or some paid
-attempt lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
+`none` (the job ended with no paid or unknown payment), `pending` (the job is still running, an
+intent is unresolved, or some paid attempt lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
 example a metered session that signed again).
 
 Only cost sync stores projections (`lpb_cost_projections`), and only for jobs that have ended: a
@@ -151,3 +157,15 @@ in M4:
 - grant-scoped credentials (an upstream Batteries change);
 - operator-provisioned keys plus a usage export (per application only);
 - an operator-run tenant layer.
+
+## Payment evidence compatibility
+
+`SignedSession.payment_state` is `unknown`, `unpaid` or `paid`; its historical default is `paid`.
+Migration 0006 preserves existing signed rows with that default. `Attempt.payment_sent` still means
+confirmed payment; false alone does not mean unpaid. Inspect the sessions for unknown intent.
+Do not downgrade to a version that cannot represent unknown intent while such entries remain.
+
+The stock SDK transport implements the optional `PaymentIntentTransport` and
+`PaymentIntentStreamingTransport` capabilities. Existing custom transports keep their signatures
+and must opt into those capabilities to protect the interval before the success callback.
+Metered renewals use the existing session; they do not create a new intent per payment cycle.

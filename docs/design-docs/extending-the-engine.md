@@ -26,6 +26,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 | `StreamingRunnerTransport` (optional `open` beside `call`) | `SdkRunnerTransport` | The same transport, streaming. Without `open`, `jobs.streaming` is `None` and the REST streaming route answers 400 (D33) | supply `transport=` |
 | `AllocationManager` / `UsageSource` | `BatteriesClient` / `BatteriesUsageSource` | Another payment provider, or a hosted operator's API (Mode B) | supply `allocation_manager=` / `usage_source=` |
 | `AllocationManager` for the grant desk | `BatteriesClient` with `LPB_BATTERIES_OPERATOR_TOKEN`, else off | Another grant administration API | supply `grants_manager=` (`None` turns the desk off) |
+| `PaymentIntentTransport` / `PaymentIntentStreamingTransport` | Optional capabilities: await `on_payment_state(manifest_id, "unknown")` before signing and abort if it fails. Report `"unpaid"` only for a definitive refusal, and use `on_signed` for confirmed payment. Cancellation or a lost/invalid reply leaves unknown intent; never retry an ambiguous signing request. The stock SDK transport implements both |
 | `EngineStore` | `SqlStore` (SQLite or PostgreSQL) | The enterprise's managed PostgreSQL (same `SqlStore`, different URL), or a custom store passing `tests/store/` | supply `store=` or set `LPB_DATABASE_URL` |
 | `Clock` | `SystemClock` | A controlled clock for tests | supply `clock=` |
 
@@ -304,7 +305,8 @@ named here show each one.
 | `StreamingRunnerTransport` | `open` returns once the runner answered (status, content type), with `payment_sent` and `manifest_ids` already known. It must give up after `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the payment evidence so far; the engine stops an `open` that runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) longer and treats it as paid (D35). Iteration raises `RunnerCallError` mid-stream; `aclose` closes the connection and stops any ongoing funding, and may be called more than once (`tests/unit/test_stream_deadlines.py`) |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result |
 | `UsageSource` | Opaque cursor. Raise `CursorMismatch` on a rejected cursor so the worker resyncs. Rows are immutable per `id` |
-| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` may run twice for one attempt and must only add signed sessions, never rewrite them (D39). `maintenance` may be `None`: the engine then purges nothing and reports no schema revision |
+| `PaymentIntentTransport` / `PaymentIntentStreamingTransport` | Optional capabilities: await `on_payment_state(manifest_id, "unknown")` before signing and abort if it fails. Report `"unpaid"` only for a definitive refusal, and use `on_signed` for confirmed payment. Cancellation or a lost/invalid reply leaves unknown intent; never retry an ambiguous signing request. The stock SDK transport implements both |
+| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` may run twice for one attempt and must preserve signed evidence and match columns; intent state may change until paid, which never regresses (D39, D45). `maintenance` may be `None`: the engine then purges nothing and reports no schema revision |
 
 ## Testing your implementation
 

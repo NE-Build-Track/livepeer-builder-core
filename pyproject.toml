@@ -19,10 +19,9 @@ dependencies = [
     "aiosqlite>=0.20",
     "cryptography>=42",
     "aiohttp>=3.9",  # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
-    # Pin to livepeer/livepeer-python-gateway main at 76a1a1c (22 October): Enforce TLS (#76),
-    # streamable runner bodies (#80) and on_payment_session (#81; reports LivePaymentSession.manifest_id).
-    # PyPI 1.0.0 lacks the callback, so this stays a git SHA until a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@76a1a1c58656ef2ad0c28542ea5f99086b76db69",
+    # Durable pre-sign intent and signing-error hooks (NE-Build-Track SDK PR #7),
+    # based on upstream 2017a80. Keep the immutable SHA until a release includes them (T1).
+    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@202721c7664d0fdd1f4bc5324216d6a816cfaf0f",
 ]
 
 [project.optional-dependencies]

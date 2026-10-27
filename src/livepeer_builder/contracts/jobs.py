@@ -12,6 +12,7 @@ ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, imple
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 SessionMatch = Literal["unmatched", "matched", "ambiguous"]
+PaymentState = Literal["unpaid", "unknown", "paid"]
 
 
 class JobRequest(Contract):
@@ -55,17 +56,20 @@ AttemptOutcome = Literal[
 
 
 class SignedSession(Contract):
-    """One session the signer signed for an attempt.
+    """One signing intent or confirmed session for an attempt (historical name retained).
 
     ``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to
     the Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays
     ``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session
-    and one log entry share the key, and ``ambiguous`` when they do not.
+    and one eligible log entry share the key, and ``ambiguous`` when they do not.
+    ``unknown`` means signing may have charged; ``unpaid`` means explicit refusal.
+    A validated signer response or unique applied usage confirms ``paid`` permanently.
     """
 
     manifest_id: str
     payment_session_id: str | None = None
     match: SessionMatch = "unmatched"
+    payment_state: PaymentState = "paid"  # historical entries are confirmed signatures
 
 
 class Attempt(Contract):
@@ -76,12 +80,16 @@ class Attempt(Contract):
     runner_url: str | None
     orchestrator_url: str | None
     allocation_id: str | None  # the allocation whose key paid; None when the call was unpaid
-    sessions: tuple[SignedSession, ...]  # one entry per signed session, in signing order
+    sessions: tuple[SignedSession, ...]  # one entry per manifest, in first-intent order
     payment_sent: bool
     outcome: AttemptOutcome
     status_code: int | None
     started_at: datetime
     ended_at: datetime | None
+
+    @property
+    def payment_unknown(self) -> bool:
+        return any(s.payment_state == "unknown" for s in self.sessions)
 
 
 FailureKind = Literal[

@@ -17,8 +17,6 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 import asyncio
 import contextlib
 import functools
-import hashlib
-import json
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -40,7 +38,6 @@ from livepeer_builder.contracts import (
     ResourceRef,
     ResultRef,
     Runner,
-    RunnerReply,
 )
 from livepeer_builder.errors import (
     InvalidRequest,
@@ -57,6 +54,8 @@ from livepeer_builder.protocols import (
     Clock,
     CredentialResolver,
     JobRepo,
+    PaymentIntentStreamingTransport,
+    PaymentIntentTransport,
     RunnerStream,
     RunnerTransport,
     SelectionPolicy,
@@ -65,6 +64,8 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
+from livepeer_builder.services.job_values import request_fingerprint as request_fingerprint
+from livepeer_builder.services.job_values import result_ref as _result_ref
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
@@ -316,8 +317,9 @@ class JobService:
         )
         await self._store.finish_attempt(attempts[-1])
         paid = attempts[-1].payment_sent
-        if paid or error.kind not in _FAILOVER_OUTCOMES:
-            paid_unknown = paid and error.kind in _UNCERTAIN_OUTCOMES
+        unknown = attempts[-1].payment_unknown
+        if paid or unknown or error.kind not in _FAILOVER_OUTCOMES:
+            paid_unknown = unknown or (paid and error.kind in _UNCERTAIN_OUTCOMES)
             finished = await self._finish(
                 job, "uncertain" if paid_unknown else "failed", _failure(error, paid), None, attempts
             )
@@ -340,7 +342,16 @@ class JobService:
             await self._start_attempt(job, number, runner, credential, attempts)
             recorder = SignedSessionRecorder(self._store, attempts)
             try:
-                reply = await self._transport.call(runner, request, credential.token, on_signed=recorder)
+                if isinstance(self._transport, PaymentIntentTransport):
+                    reply = await self._transport.call_with_payment_intent(
+                        runner,
+                        request,
+                        credential.token,
+                        on_signed=recorder,
+                        on_payment_state=recorder.payment_state,
+                    )
+                else:
+                    reply = await self._transport.call(runner, request, credential.token, on_signed=recorder)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error)
                 if failed is not None:
@@ -384,7 +395,16 @@ class JobService:
             bounded = request.model_copy(update={"first_byte_timeout_s": max(budget, 0.001)})
             try:
                 async with asyncio.timeout(max(budget, 0) + self._stream_limits.open_grace_s):
-                    opened = await transport.open(runner, bounded, credential.token, on_signed=recorder)
+                    if isinstance(transport, PaymentIntentStreamingTransport):
+                        opened = await transport.open_with_payment_intent(
+                            runner,
+                            bounded,
+                            credential.token,
+                            on_signed=recorder,
+                            on_payment_state=recorder.payment_state,
+                        )
+                    else:
+                        opened = await transport.open(runner, bounded, credential.token, on_signed=recorder)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error)
                 if failed is not None:
@@ -468,24 +488,6 @@ class JobService:
             created_at=self._clock.now(),
             completed_at=None,
         )
-
-
-def request_fingerprint(request: JobRequest) -> str:
-    """Stable hash of what a retry must repeat exactly. Limits and timeouts may differ between retries."""
-    fields = request.model_dump(
-        mode="json", include={"app", "path", "method", "payload", "capability", "model"}
-    )
-    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def _result_ref(reply: RunnerReply) -> ResultRef:
-    return ResultRef(
-        storage="inline",
-        content_type=reply.content_type,
-        size_bytes=len(reply.content),
-        sha256=hashlib.sha256(reply.content).hexdigest(),
-    )
 
 
 def _failure(error: RunnerCallError, paid: bool) -> Failure:

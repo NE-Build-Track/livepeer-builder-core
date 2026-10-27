@@ -11,8 +11,10 @@
   (D53): the engine owns the paid call, so these intent hooks need no SDK change.
 - Reference rebase: `rebase/payment-intent-on-62`, this work on top of #62 (upstream SDK `2017a80`,
   decision renumbered D54). `tasks/mz/payment-intent` is unchanged.
-- Publication target: `tasks/mz/payment-intent` → `releases/m3`. Remove the temporary builder
-  worktree after confirming the commit is retained on the remote. No deployment is part of this change.
+- Builder PR: [#56](https://github.com/NE-Build-Track/livepeer-builder-core/pull/56),
+  `tasks/mz/payment-intent` → `releases/m3`. Remove the temporary builder worktree after remote
+  verification. The branch push triggers the repository's configured preview deployment;
+  production deployment and merging are not part of this publication.
 
 ## Goal
 
@@ -86,6 +88,10 @@ keeps job cost pending until accounting evidence arrives. Keep upstream's prompt
   `attempt_verdict(..., unknown=True)` (D52's failover policy otherwise). The intent tests run on the
   loopback runner and signer. `adapters/discovery_inventory.py` is dropped: `adapters/sdk.py` is
   small again. 1141 passed, 27 skipped (PostgreSQL cases, no local server).
+
+- [x] 27 October: committed and pushed the builder implementation (`8a15c6b`) and opened PR #56
+  against `releases/m3`. GitHub reports it mergeable. CI, automated review and the repository's
+  automatic preview-deployment workflow started. Temporary PostgreSQL container stopped.
 
 ## Decision log
 

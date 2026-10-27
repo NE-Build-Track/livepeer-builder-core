@@ -81,6 +81,9 @@ keeps job cost pending until accounting evidence arrives. Keep upstream's prompt
   976 tests passed including SQLite and PostgreSQL 16; 97.15% coverage, all layer floors and
   100% changed-line coverage. Lint, formatting, strict types, docs/generated-doc checks,
   Railway compose validation, wheel/sdist build and fresh-environment install/smoke passed.
+- [x] 27 October: committed and pushed the builder implementation (`8a15c6b`) and opened PR #56
+  against `releases/m3`. GitHub reports it mergeable. CI, automated review and the repository's
+  automatic preview-deployment workflow started. Temporary PostgreSQL container stopped.
 - [x] 27 October (John): reference rebase onto #62. The SDK hooks (`on_payment_attempt`,
   `on_payment_error`) are replaced by the engine's own call, which reports `unknown` before signing
   and `unpaid` on explicit refusal; `SdkRunnerTransport` implements both payment-intent protocols
@@ -88,10 +91,6 @@ keeps job cost pending until accounting evidence arrives. Keep upstream's prompt
   `attempt_verdict(..., unknown=True)` (D52's failover policy otherwise). The intent tests run on the
   loopback runner and signer. `adapters/discovery_inventory.py` is dropped: `adapters/sdk.py` is
   small again. 1141 passed, 27 skipped (PostgreSQL cases, no local server).
-
-- [x] 27 October: committed and pushed the builder implementation (`8a15c6b`) and opened PR #56
-  against `releases/m3`. GitHub reports it mergeable. CI, automated review and the repository's
-  automatic preview-deployment workflow started. Temporary PostgreSQL container stopped.
 
 ## Decision log
 

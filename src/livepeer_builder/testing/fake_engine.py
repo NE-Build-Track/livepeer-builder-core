@@ -342,8 +342,7 @@ class FakeDiscovery:
         self._offerings, self._runners = list(offerings), list(runners)
         self._policy = policy or DefaultPolicy()
 
-    def offerings(self, actor: ActorContext, *, app: str | None = None) -> list[Offering]:
-        self._policy.check(actor, Operation.DISCOVER)
+    def offerings(self, *, app: str | None = None) -> list[Offering]:
         return [offering for offering in self._offerings if app is None or offering.app == app]
 
     def runners(self, actor: ActorContext, app: str) -> list[Runner]:

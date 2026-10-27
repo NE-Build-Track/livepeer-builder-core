@@ -85,8 +85,8 @@ class DiscoveryService:
         self._policy.check(actor, Operation.DISCOVER)
         return self.candidates(app)
 
-    def offerings(self, actor: ActorContext, *, app: str | None = None) -> list[Offering]:
-        self._policy.check(actor, Operation.DISCOVER)
+    def offerings(self, *, app: str | None = None) -> list[Offering]:
+        """The public catalog: no actor, no permission. It names no runner URL and spends nothing (#5)."""
         observed = self._snapshot.observed_at
         if observed is None:
             return []

@@ -60,6 +60,13 @@ class AccessPolicy(Protocol):
 - **Another actor's record** reads as missing (404), never 403, so its existence isn't revealed. A
   missing permission is 403. The order of the two checks is in [Answers](#answers).
 
+**Public reads (D52, proposed).** Health (`/livez`, `/readyz`) and the offerings catalog
+(`GET /v1/offerings`, `discovery.offerings`) take no actor and check no permission. The handler
+returns the full `Offering`: modes, the rate range, `runner_count` and `ready_count`. It has no
+runner URL, starts no work and spends nothing from an allocation. Pending Mike's agreement
+([#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)). `discover` gates only
+`GET /v1/runners` (`discovery.runners`), which returns runner URLs.
+
 ## Answers
 
 Every route on a job or its cost answers the same way (D44, `services/ownership.py`):

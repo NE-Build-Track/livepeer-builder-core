@@ -172,14 +172,17 @@ async def test_the_rest_service_accepts_the_providers_tokens(idp: IdentityProvid
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://engine"
         ) as client:
-            assert (await client.get("/v1/offerings", headers=bearer(idp.token()))).status_code == 200
-            missing = await client.get("/v1/offerings")
+            # offerings is public (#5); runners still requires a token
+            runners = "/v1/runners"
+            params = {"app": "example/echo"}
+            assert (await client.get(runners, params=params, headers=bearer(idp.token()))).status_code == 200
+            missing = await client.get(runners, params=params)
             assert (
                 missing.status_code == 401
                 and missing.headers["www-authenticate"] == 'Bearer realm="livepeer-builder"'
             )
             expired = await client.get(
-                "/v1/offerings", headers=bearer(idp.token(exp=int(time.time()) - 3600))
+                runners, params=params, headers=bearer(idp.token(exp=int(time.time()) - 3600))
             )
             assert expired.status_code == 401 and "expired" in expired.json()["error"]
             assert (

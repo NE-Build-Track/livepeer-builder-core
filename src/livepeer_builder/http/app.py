@@ -1,4 +1,5 @@
 """REST adapter (the ``[server]`` extra). Each route authenticates, then makes one engine call.
+Health and the catalog (``GET /v1/offerings``) are public.
 
 Routes are thin: authorization lives in the services' AccessPolicy checks, not here. Reserved
 contracts (async jobs, sessions, events) answer 501. The generated schema is committed at
@@ -187,10 +188,9 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         return health
 
     @app.get("/v1/offerings", response_model=list[Offering])
-    async def offerings(
-        actor: Actor, app_name: Annotated[str | None, Query(alias="app")] = None
-    ) -> list[Offering]:
-        return engine.discovery.offerings(actor, app=app_name)
+    async def offerings(app_name: Annotated[str | None, Query(alias="app")] = None) -> list[Offering]:
+        # Public (#5): the catalog names no runner URL, starts no work and spends nothing.
+        return engine.discovery.offerings(app=app_name)
 
     @app.get("/v1/runners", response_model=list[Runner])
     async def runners(actor: Actor, app_name: Annotated[str, Query(alias="app")]) -> list[Runner]:

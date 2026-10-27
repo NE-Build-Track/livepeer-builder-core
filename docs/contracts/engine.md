@@ -17,6 +17,11 @@ discovery service ([discovery.md](discovery.md)), which finds orchestrators on-c
 The signer only signs; it is not a discovery source (D43). With no `LPB_DISCOVERY_URL` the snapshot is
 empty unless an embedder supplies a source.
 
+`offerings(app=None)` is public: it takes no actor and checks no permission, and `GET /v1/offerings`
+needs no key (D52, proposed, [#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)).
+The handler returns the full `Offering`: modes, the rate range, `runner_count` and `ready_count`. It
+has no runner URL. `runners(actor, app)` returns runner URLs and still checks `discover`.
+
 | Model | Meaning |
 | --- | --- |
 | `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |

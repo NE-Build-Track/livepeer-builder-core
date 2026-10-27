@@ -3,7 +3,8 @@ name: Deploy
 on:
   push:
     branches:
-      - "**"
+      - main
+      - "releases/**"
   workflow_dispatch:
     inputs:
       service:
@@ -56,9 +57,10 @@ jobs:
             batteries|signer|discovery|engine) chosen="[\"$REQUESTED\"]" ;;
             *) chosen='["batteries","signer","discovery","engine"]' ;;
           esac
-          # Branch pushes update the engine only, so a preview branch does not
-          # restart the shared Batteries, signer and discovery. Production pushes, and a
-          # manual run, deploy the selected services.
+          # A manual run on a branch deploys the engine only, so it does not restart
+          # Batteries, the signer, or discovery. Production pushes, and a manual run on
+          # main or a release, deploy the selected services. Preview deploys run from
+          # preview.yml when a pull request opens.
           if [ "$EVENT_NAME" != "workflow_dispatch" ]; then
             case "$REF" in
               refs/heads/main|refs/heads/releases/*) chosen='["batteries","signer","discovery","engine"]' ;;

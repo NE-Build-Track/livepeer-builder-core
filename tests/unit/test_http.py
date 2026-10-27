@@ -30,10 +30,34 @@ async def tokens(engine: BuilderEngine) -> tuple[str, str]:
 
 async def test_unauthenticated_requests_get_a_challenge(api: tuple[httpx.AsyncClient, BuilderEngine]) -> None:
     client, _ = api
-    response = await client.get("/v1/offerings")
+    response = await client.get("/v1/runners", params={"app": "example/echo"})
     assert response.status_code == 401
     assert response.headers["www-authenticate"].startswith("Bearer")
     assert (await client.get("/livez")).status_code == 200
+
+
+async def test_offerings_are_public_and_name_no_runner(api: tuple[httpx.AsyncClient, BuilderEngine]) -> None:
+    """#5: the catalog needs no key, and gives an anonymous caller nothing to reach a runner with."""
+    client, _ = api
+    response = await client.get("/v1/offerings")
+    assert response.status_code == 200
+    offerings = response.json()
+    assert [offering["app"] for offering in offerings] == ["example/echo"]
+    # The fixture runner is https://runner-1.example behind https://orch.example. Neither host
+    # contains the substring "url", so a copied address has to be rejected by name.
+    assert "https://runner-1.example" not in response.text
+    assert "https://orch.example" not in response.text
+    for offering in offerings:
+        assert set(offering) == {
+            "app",
+            "modes",
+            "rate_low",
+            "rate_high",
+            "runner_count",
+            "ready_count",
+            "observed_at",
+        }
+    assert (await client.get("/v1/offerings", params={"app": "other/app"})).json() == []
 
 
 async def test_job_round_trip_and_admin_boundary(
@@ -92,5 +116,6 @@ async def test_openapi_declares_the_bearer_scheme(api: tuple[httpx.AsyncClient, 
     schemes = spec["components"].get("securitySchemes", {})
     bearer = [name for name, scheme in schemes.items() if scheme.get("scheme") == "bearer"]
     assert bearer, "the spec declares a bearer scheme, so Swagger UI shows Authorize"
-    assert spec["paths"]["/v1/offerings"]["get"]["security"] == [{bearer[0]: []}]
+    assert spec["paths"]["/v1/runners"]["get"]["security"] == [{bearer[0]: []}]
     assert "security" not in spec["paths"]["/readyz"]["get"]  # health stays unauthenticated
+    assert "security" not in spec["paths"]["/v1/offerings"]["get"]  # the catalog is public (#5)

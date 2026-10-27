@@ -115,7 +115,7 @@ async def test_an_error_after_signing_never_turns_the_attempt_unpaid(
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     job = failed.value.job
-    assert len(job.attempts) == 1 and job.attempts[0].payment_sent  # paid unreachable does not fail over (D52)
+    assert len(job.attempts) == 1 and job.attempts[0].payment_sent  # paid, so the evidence stays
     assert [session.manifest_id for session in job.attempts[0].sessions] == ["m-1"]
     assert job.state == "uncertain"  # paid and unreachable: the runner may have run
 

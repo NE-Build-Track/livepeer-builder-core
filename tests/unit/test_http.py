@@ -41,8 +41,22 @@ async def test_offerings_are_public_and_name_no_runner(api: tuple[httpx.AsyncCli
     client, _ = api
     response = await client.get("/v1/offerings")
     assert response.status_code == 200
-    assert [o["app"] for o in response.json()] == ["example/echo"]
-    assert "url" not in response.text
+    offerings = response.json()
+    assert [offering["app"] for offering in offerings] == ["example/echo"]
+    # The fixture runner is https://runner-1.example behind https://orch.example. Neither host
+    # contains the substring "url", so a copied address has to be rejected by name.
+    assert "https://runner-1.example" not in response.text
+    assert "https://orch.example" not in response.text
+    for offering in offerings:
+        assert set(offering) == {
+            "app",
+            "modes",
+            "rate_low",
+            "rate_high",
+            "runner_count",
+            "ready_count",
+            "observed_at",
+        }
     assert (await client.get("/v1/offerings", params={"app": "other/app"})).json() == []
 
 

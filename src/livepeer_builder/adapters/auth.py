@@ -1,7 +1,7 @@
 """Authenticators: the engine API-key adapter and the ordered chain (docs/contracts/access.md).
 
-JWT bearer (M4) and the trusted-backend service credential are defined in the contract and are
-not implemented here yet.
+JWT bearer lives in livepeer_builder.adapters.jwt. The trusted-backend service credential is defined in
+the contract and not implemented yet.
 """
 
 from collections.abc import Sequence
@@ -22,7 +22,7 @@ class ApiKeyAuthenticator:
         self._realm = realm
 
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
-        token = _bearer(request)
+        token = bearer_token(request)
         if token is None or not token.startswith(API_KEY_PREFIX):
             return None
         key = await self._store.access_key_by_hash(token_hash(token))
@@ -55,10 +55,11 @@ class AuthenticatorChain:
 
     def challenge(self) -> str | None:
         values = [value for a in self._authenticators if (value := a.challenge())]
-        return ", ".join(values) or None
+        return ", ".join(dict.fromkeys(values)) or None  # a scheme announced twice is announced once
 
 
-def _bearer(request: AuthRequest) -> str | None:
+def bearer_token(request: AuthRequest) -> str | None:
+    """The credential of an ``Authorization: Bearer ...`` header, or ``None``."""
     header = request.header("authorization")
     if header is None:
         return None

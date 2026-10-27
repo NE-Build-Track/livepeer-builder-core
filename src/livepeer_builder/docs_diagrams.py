@@ -15,6 +15,7 @@ from livepeer_builder import protocols
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
+from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerStream, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -52,7 +53,7 @@ from livepeer_builder.store.maintenance import SqlMaintenance
 
 # Extension protocols shown in the diagram, with their default implementations.
 DEFAULTS: dict[str, tuple[type, ...]] = {
-    "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain),
+    "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain, JwtBearerAuthenticator),
     "AccessPolicy": (DefaultPolicy,),
     "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
     "DiscoverySource": (HttpDiscoverySource, StaticDiscoverySource),

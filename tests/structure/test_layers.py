@@ -55,7 +55,8 @@ ALLOWED: dict[str, set[str]] = {
 CONFINED: dict[str, tuple[str, ...]] = {
     "livepeer_gateway": ("adapters/sdk.py",),
     "aiohttp": ("adapters/sdk.py",),
-    "httpx": ("adapters/batteries.py", "discovery/"),
+    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "discovery/"),
+    "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),
     "alembic": ("store/",),

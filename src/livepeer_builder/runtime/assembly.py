@@ -167,7 +167,22 @@ async def default_parts(
     else:
         store = supply.store
 
-    api_keys = ApiKeys(store) if isinstance(supply.api_keys, _Unset) else supply.api_keys
+    if isinstance(supply.api_keys, _Unset):
+        api_keys = ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
+    else:
+        api_keys = supply.api_keys
+
+    authenticators: tuple[Authenticator, ...]
+    if not isinstance(supply.authenticators, _Unset):
+        authenticators = supply.authenticators
+    elif "jwt" in settings.auth:
+        from livepeer_builder.adapters.jwt import jwt_authenticator
+
+        bearer = jwt_authenticator(settings)
+        own(stack, bearer, bearer.aclose)
+        authenticators = (bearer,)
+    else:
+        authenticators = ()
 
     secret_store: SecretStore
     if isinstance(supply.secret_store, _Unset):
@@ -226,7 +241,7 @@ async def default_parts(
         store=store,
         clock=clock,
         policy=policy,
-        authenticators=supply.authenticators if not isinstance(supply.authenticators, _Unset) else (),
+        authenticators=authenticators,
         api_keys=api_keys,
         discovery_source=discovery_source,
         transport=(

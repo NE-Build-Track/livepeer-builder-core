@@ -16,7 +16,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 
 | Interface | Default (simple) | Enterprise version (example) | Wire it with |
 | --- | --- | --- | --- |
-| `Authenticator` | none of your own; engine API keys (`ApiKeys`) after them | `SignedSsoHeaderAuthenticator`: trust a signed SSO-proxy header. Or OIDC/JWT, mTLS, session cookies | supply `authenticators=(...)` (tried **before** API keys); `api_keys=None` turns keys off |
+| `Authenticator` | engine API keys (`ApiKeys`); with `LPB_AUTH=jwt`, the built-in `JwtBearerAuthenticator` for OAuth access tokens ([access.md](../contracts/access.md#jwt-bearer)) | `SignedSsoHeaderAuthenticator`: trust a signed SSO-proxy header. Or mTLS, session cookies | supply `authenticators=(...)` (tried **before** API keys, and replacing the configured JWT one); `api_keys=None` turns keys off |
 | `AccessPolicy` | `DefaultPolicy` (permissions + own records + admin kind) | `TeamReadPolicy`: teammates read each other's jobs. Or org admins, RBAC/ABAC, entitlements | decorate (wrap `parts.policy`) or supply `policy=` |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | `AuditedVaultSecretStore`: HashiCorp Vault, AWS/GCP secret manager, HSM | supply `secret_store=` |
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | supply `selection=` |
@@ -320,7 +320,6 @@ named here show each one.
 
 | Interface | Status |
 | --- | --- |
-| `JwtBearerAuthenticator` (OIDC, MCP OAuth tokens) | Defined in [access.md](../contracts/access.md#modes); built in M4 |
 | `ServiceCredentialAuthenticator` (trusted backend with `actors.assert`) | Defined in [access.md](../contracts/access.md#service-mode); built in M4 |
 | `EventFeed` | Defined in [events.md](../contracts/events.md); built in M3 |
 | `SessionManager` | Defined in [engine.md](../contracts/engine.md#persistent-sessions); built in M4 |

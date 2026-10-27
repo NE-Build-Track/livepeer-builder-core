@@ -115,6 +115,7 @@ classDiagram
     class DefaultPolicy
     class EncryptedDbSecretStore
     class HttpDiscoverySource
+    class JwtBearerAuthenticator
     class MostCapacityFirst
     class PaymentsService
     class ReservedEventFeed
@@ -130,6 +131,7 @@ classDiagram
     class SystemClock
     Authenticator <|.. ApiKeyAuthenticator
     Authenticator <|.. AuthenticatorChain
+    Authenticator <|.. JwtBearerAuthenticator
     AccessPolicy <|.. DefaultPolicy
     SecretStore <|.. RoutingSecretStore
     SecretStore <|.. SettingsSecretStore
@@ -158,6 +160,7 @@ classDiagram
 | --- | --- | --- |
 | `Authenticator` | `ApiKeyAuthenticator` | `livepeer_builder.adapters.auth` |
 | `Authenticator` | `AuthenticatorChain` | `livepeer_builder.adapters.auth` |
+| `Authenticator` | `JwtBearerAuthenticator` | `livepeer_builder.adapters.jwt` |
 | `AccessPolicy` | `DefaultPolicy` | `livepeer_builder.services.policy` |
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |

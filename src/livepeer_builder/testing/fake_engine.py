@@ -54,6 +54,7 @@ from livepeer_builder.errors import (
 )
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
+from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.policy import DefaultPolicy
@@ -109,7 +110,9 @@ class FakeJobs:
                 body=scripted.body,
                 payment_sent=scripted.payment_sent,
             )
-            paid_unknown = scripted.payment_sent and attempt_outcome(scripted.kind) in UNCERTAIN_OUTCOMES
+            outcome = attempt_outcome(scripted.kind)  # a paid 502 or 504 may have run, as in the engine
+            may_have_run = attempt_verdict(outcome, scripted.status_code, True) == "uncertain"
+            paid_unknown = scripted.payment_sent and (outcome in UNCERTAIN_OUTCOMES or may_have_run)
             raise JobFailed(self.record(actor, request, "uncertain" if paid_unknown else "failed", failure))
         return scripted
 

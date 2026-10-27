@@ -100,7 +100,7 @@ class SdkRunnerTransport:
             status_code=status,
             content=body,
             content_type=content_type or "application/json",
-            data=json_object(body, content_type, events, paid.url),
+            data=json_object(body, content_type),
             manifest_ids=events.ids,
             payment_sent=events.signed,
         )

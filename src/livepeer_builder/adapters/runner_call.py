@@ -70,13 +70,15 @@ class PaymentEvents:
     A confirmed session means the signer charged the allocation and counts as ``payment_sent``: the
     engine then fails over only to another orchestrator, and only when the failure did not run the work
     (D52). Each one reaches ``on_signed`` before the paid request goes out, so the engine stores the
-    evidence first (D42).
+    evidence first (D42). ``unknown`` is set when the signer was asked and gave no validated answer and
+    no refusal: it may have charged, so the job must not pay another orchestrator.
     """
 
     def __init__(
         self, on_signed: OnSigned | None = None, on_payment_state: OnPaymentState | None = None
     ) -> None:
         self.signed = False
+        self.unknown = False
         self.manifest_ids: list[str] = []
         self._on_signed = on_signed
         self._on_payment_state = on_payment_state
@@ -93,7 +95,9 @@ class PaymentEvents:
         refused = isinstance(error, (SignerRefreshRequired, SkipPaymentCycle)) or (
             isinstance(error, LivepeerHTTPError) and error.status_code in _SIGNER_REFUSALS
         )
-        if refused and self._on_payment_state is not None:
+        if not refused:
+            self.unknown = True
+        elif self._on_payment_state is not None:
             await self._on_payment_state(manifest_id, "unpaid")
 
     async def confirmed(self, manifest_id: str) -> None:
@@ -107,7 +111,13 @@ class PaymentEvents:
     ) -> RunnerCallError:
         """A failed call, carrying what the signer signed for it so far."""
         return RunnerCallError(
-            kind, message, payment_sent=self.signed, manifest_ids=self.ids, status_code=status_code, body=body
+            kind,
+            message,
+            payment_sent=self.signed,
+            manifest_ids=self.ids,
+            status_code=status_code,
+            body=body,
+            payment_unknown=self.unknown,
         )
 
 
@@ -150,7 +160,8 @@ class PaidRequest:
         self._max_price = max_price(rate) if signer is not None else None
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
-        """The runner's status, body and content type, with the whole request bounded by ``timeout_s``."""
+        """The runner's status, body and content type. Each request to the runner (the first, then each
+        paid retry) is bounded by ``timeout_s``; signing has the SDK's own limits."""
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_s)) as session:
             with translated(self._events):
                 response, funding = await self._answered(session)
@@ -229,8 +240,11 @@ class PaidRequest:
         try:
             signed = await payment.get_payment()
         except Exception as error:
-            with contextlib.suppress(Exception):  # the manifest then stays unknown, which is safe
+            with contextlib.suppress(Exception):  # an unrecorded refusal leaves it unknown, which is safe
                 await self._events.failed(manifest_id, error)
+            raise
+        except BaseException:  # cancelled while signing: the signer may have charged
+            self._events.unknown = True
             raise
         await self._events.confirmed(manifest_id)
         return signed
@@ -341,15 +355,18 @@ def network_kind(error: BaseException) -> AttemptOutcome:
 
 
 def payment_type(rate: NetworkRate | None) -> str:
-    """``fixed`` pays once per request; ``live`` (metered) keeps paying while the work runs."""
+    """``fixed`` pays once per request; ``live`` (metered) keeps paying while the work runs.
+
+    A unit the engine cannot pay is about this runner's terms, not the job: ``payment_refused`` fails
+    over to the next runner before anything is signed.
+    """
     unit = rate.unit.strip().lower() if rate is not None else ""
     if not unit:
         return "live"
     if unit not in _PAYMENT_TYPES_BY_UNIT:
         expected = ", ".join(sorted(_PAYMENT_TYPES_BY_UNIT))
-        raise RunnerCallError(
-            "http", f"unsupported runner price unit {unit!r}; expected {expected}", payment_sent=False
-        )
+        message = f"unsupported runner price unit {unit!r}; expected {expected}"
+        raise RunnerCallError("payment_refused", message, payment_sent=False)
     return _PAYMENT_TYPES_BY_UNIT[unit]
 
 
@@ -370,23 +387,26 @@ def start_funding(payment: LivePaymentSession | None) -> asyncio.Task[Any] | Non
 
 
 async def stop_funding(task: asyncio.Task[Any] | None) -> None:
+    """Cancel the funding and wait for it to end. Only the funding's own cancellation is absorbed: a
+    cancel of the caller while it waits still propagates."""
     if task is None:
         return
-    if not task.done():
-        task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    task.cancel()
+    await asyncio.wait([task])
+    if not task.cancelled():
+        task.exception()  # retrieved, so asyncio does not warn about it
 
 
-def json_object(body: bytes, content_type: str, events: PaymentEvents, url: str) -> dict[str, Any] | None:
-    """The reply parsed when it is JSON (``application/json`` or ``+json``); ``None`` otherwise."""
+def json_object(body: bytes, content_type: str) -> dict[str, Any] | None:
+    """The reply parsed when it is a JSON object (``application/json`` or ``+json``); ``None`` otherwise.
+
+    The runner's bytes are the result either way: a delivered reply is never failed for its shape.
+    """
     mime = content_type.split(";", 1)[0].strip().lower()
     if not (mime.endswith("/json") or mime.endswith("+json")):
         return None
     try:
         data = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise events.error("http", f"{url} returned invalid JSON: {error}") from error
-    if not isinstance(data, dict):
-        raise events.error("http", f"{url} returned JSON that is not an object")
-    return data
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None

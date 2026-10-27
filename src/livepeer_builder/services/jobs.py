@@ -1,10 +1,9 @@
 """Jobs: immediate execution with failover, durable attempts, streaming, and recovery.
 
 Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes):
-1. Fail over when another runner can do what this one did not (services/failover.py, D52): before
-   payment, when the runner refused or never answered; after payment, when it was refused or failed on
-   the runner's or orchestrator's side, and then only to another orchestrator. A paid failure that may
-   have run the work is ``uncertain``; one about the request is ``failed``.
+1. Fail over when another runner can do what this one did not, and only to another orchestrator after
+   a payment (services/failover.py, D52). A paid failure that may have run the work, or whose payment is
+   unknown, is ``uncertain``; one that ran, or is about the request, is ``failed``.
 2. One (application, actor, operation_ref) dispatches at most once; a changed body is a conflict.
 3. An attempt row is written *before* the call and updated after it. Paid-but-unknown is
    ``uncertain``, never ``failed``. Jobs left ``running`` by a restart are resolved on start.
@@ -68,7 +67,7 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
-from livepeer_builder.services.failover import Candidates, attempt_verdict, failure_of
+from livepeer_builder.services.failover import Candidates, attempt_verdict, failure_of, payment_unresolved
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
 from livepeer_builder.utils import run_shielded
@@ -218,10 +217,11 @@ class JobService:
         return job.model_copy(update={"usage": usage})
 
     async def recover_interrupted(self) -> int:
-        """Resolve jobs a restart left ``running``. Anything that may have paid becomes ``uncertain``."""
+        """Resolve jobs a restart left ``running``. One that may hold a payment for work with an unknown
+        outcome becomes ``uncertain``; attempts it failed over from do not count (D52)."""
         recovered = 0
         for job in await self._store.jobs_in_state("running"):
-            maybe_paid = any(a.payment_sent or a.outcome == "in_flight" for a in job.attempts)
+            maybe_paid = payment_unresolved(job.attempts)
             failure = Failure(
                 kind="interrupted",
                 message="the engine stopped while this job was running",
@@ -280,7 +280,10 @@ class JobService:
             credential = await self._credentials.credential(actor)
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
-        return Candidates(self._selection.order(candidates, request), request.max_attempts), credential
+        ordered = tuple(self._selection.order(candidates, request))
+        if not ordered:  # an enterprise SelectionPolicy may filter every runner out
+            raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
+        return Candidates(ordered, request.max_attempts), credential
 
     async def _start_attempt(
         self, job: Job, number: int, runner: Runner, credential: PaymentCredential, attempts: list[Attempt]
@@ -321,18 +324,18 @@ class JobService:
         )
         await self._store.finish_attempt(attempts[-1])
         paid = attempts[-1].payment_sent
-        verdict = attempt_verdict(error.kind, error.status_code, paid)
+        verdict = attempt_verdict(error.kind, error.status_code, paid, payment_unknown=error.payment_unknown)
         if verdict == "failover":
             if paid:
                 candidates.exclude(runner)
             return None
         state: JobState = "uncertain" if verdict == "uncertain" else "failed"
-        return JobFailed(await self._finish(job, state, failure_of(error, paid), None, attempts))
+        failure = failure_of(error, any(attempt.payment_sent for attempt in attempts))  # earlier ones too
+        return JobFailed(await self._finish(job, state, failure, None, attempts))
 
     async def _exhausted(self, job: Job, attempts: list[Attempt], last: RunnerCallError) -> JobFailed:
-        """Every runner tried failed over: the job fails with the last runner's words. It is ``failed``,
-        not ``uncertain``, because none of those failures may have run the work. ``last`` is never
-        None here: the first candidate is always tried, and only a failover leaves the loop."""
+        """Every runner tried failed over, so none ran the work: the job is ``failed`` with the last
+        runner's words. ``last`` is set: ``_candidates`` fails a job with no runner to try."""
         failure = failure_of(last, any(attempt.payment_sent for attempt in attempts), tried=len(attempts))
         return JobFailed(await self._finish(job, "failed", failure, None, attempts))
 
@@ -427,7 +430,7 @@ class JobService:
         return JobFailed(await self._finish(job, "failed", failure, None, attempts))
 
     async def _close_after_error(self, job: Job, attempts: list[Attempt], exc: BaseException) -> None:
-        maybe_paid = any(a.payment_sent or a.outcome == "in_flight" for a in attempts)
+        maybe_paid = payment_unresolved(attempts)  # as recover_interrupted
         failure = Failure(
             kind="runner_error",
             message=f"engine error: {type(exc).__name__}",

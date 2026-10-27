@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+from collections.abc import Sequence
 from decimal import Decimal
 from uuid import uuid4
 
@@ -102,8 +103,6 @@ def two_orchestrators() -> tuple[Runner, ...]:
         ("refused", 503),  # capacity taken between discovery and the paid reservation
         ("http", 404),  # the runner stopped the session (livepeer-python-gateway#83)
         ("http", 409),
-        ("http", 500),
-        ("http", 502),
         ("payment_refused", 400),
     ],
 )
@@ -158,7 +157,12 @@ async def test_paid_failures_everywhere_fail_with_the_last_runner_s_words(
     transport.steps = [
         RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m-1",), status_code=503),
         RunnerCallError(
-            "http", "boom", payment_sent=True, manifest_ids=("m-2",), status_code=500, body="trace"
+            "http",
+            "gone",
+            payment_sent=True,
+            manifest_ids=("m-2",),
+            status_code=404,
+            body="runner session not found",
         ),
     ]
     with pytest.raises(JobFailed) as failed:
@@ -166,8 +170,88 @@ async def test_paid_failures_everywhere_fail_with_the_last_runner_s_words(
     job = failed.value.job
     assert job.state == "failed" and len(job.attempts) == 2  # neither failure ran the work: not uncertain
     assert job.failure is not None
-    assert (job.failure.kind, job.failure.status_code, job.failure.body) == ("runner_error", 500, "trace")
-    assert job.failure.payment_sent and job.failure.message == "all 2 runners failed; last: boom"
+    # an orchestrator's 404 is a refusal before the work ran: `refused` (503, retry later), not a 404
+    assert (job.failure.kind, job.failure.status_code, job.failure.body) == (
+        "refused",
+        404,
+        "runner session not found",
+    )
+    assert job.failure.payment_sent and job.failure.message == "all 2 runners failed; last: gone"
+
+
+@pytest.mark.parametrize(("status", "state"), [(500, "failed"), (502, "uncertain"), (504, "uncertain")])
+async def test_a_paid_5xx_never_runs_the_work_again(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    status: int,
+    state: str,
+) -> None:
+    """A 500 is the app's own error after it ran; a 502 or 504 may come while it still runs."""
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("http", "5xx", payment_sent=True, manifest_ids=("m-1",), status_code=status)
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    assert failed.value.job.state == state and len(failed.value.job.attempts) == 1
+
+
+async def test_the_job_failure_says_paid_when_an_earlier_attempt_paid(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m-1",), status_code=503),
+        RunnerCallError("http", "bad request", payment_sent=False, status_code=400),
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    job = failed.value.job
+    assert job.state == "failed" and [a.payment_sent for a in job.attempts] == [True, False]
+    assert job.failure is not None and job.failure.payment_sent  # the allocation paid orchestrator A
+
+
+async def test_an_unknown_payment_never_pays_another_orchestrator(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("unreachable", "signer reply lost", payment_sent=False, payment_unknown=True)
+    ]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    job = failed.value.job
+    assert job.state == "uncertain" and len(job.attempts) == 1  # the signer may have charged
+    assert job.failure is not None and not job.failure.payment_sent
+
+
+async def test_an_unpaid_orchestrator_refusal_fails_over(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    transport.steps = [
+        RunnerCallError("http", "runner not found", payment_sent=False, status_code=404),
+        ScriptedTransport.ok(),
+    ]
+    result = await engine.jobs.run(alice, JobRequest(app=APP))
+    assert [a.outcome for a in result.job.attempts] == ["http", "succeeded"]
+
+
+async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    class Nobody:
+        def order(self, candidates: Sequence[Runner], request: JobRequest) -> Sequence[Runner]:
+            return ()
+
+    engine = await provisioned(make_engine, admin, "alice", supply=EngineSupply(selection=Nobody()))
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    job = failed.value.job
+    assert job.state == "failed" and job.attempts == () and transport.calls == []
+    assert job.failure is not None and job.failure.kind == "no_offering"
 
 
 async def test_a_paid_timeout_after_a_failover_is_uncertain(
@@ -274,6 +358,31 @@ async def test_restart_recovery_marks_maybe_paid_jobs_uncertain(
     recovered = await store.get_job(job.id)
     assert recovered is not None and recovered.state == "uncertain"
     assert recovered.failure is not None and recovered.failure.kind == "interrupted"
+
+
+async def test_restart_between_attempts_after_a_paid_failover_is_failed(
+    make_engine: EngineFactory, store: SqlStore, clock: FixedClock
+) -> None:
+    """Attempt 1 was paid and refused (it failed over); the engine stopped before attempt 2 began."""
+    engine = await make_engine()
+    job = Job(
+        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
+        created_at=clock.now(), completed_at=None,
+    )  # fmt: skip
+    await store.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="https://r1", orchestrator_url=None, allocation_id="a", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await store.start_attempt(attempt)
+    await store.finish_attempt(
+        attempt.model_copy(update={"payment_sent": True, "outcome": "refused", "status_code": 503})
+    )
+    assert await engine.jobs.recover_interrupted() == 1
+    recovered = await store.get_job(job.id)
+    assert recovered is not None and recovered.state == "failed"  # nothing could have run
+    assert recovered.failure is not None and recovered.failure.payment_sent
 
 
 async def test_operation_ref_dispatches_at_most_once(

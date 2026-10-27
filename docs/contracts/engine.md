@@ -60,23 +60,35 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 
    | Attempt | Outcome | Next |
    | --- | --- | --- |
-   | Not paid | `refused`, `unreachable`, `payment_refused` | Fail over |
+   | Attempt | Outcome | Next |
+   | --- | --- | --- |
+   | Not paid | `refused`, `unreachable`, `payment_refused`, or `http` 404 or 409 | Fail over |
    | Not paid | Anything else | `failed` |
-   | Paid | `refused` (503), `payment_refused`, or `http` 404, 409 or 5xx | Fail over to **another orchestrator** |
-   | Paid | `timeout`, `unreachable` | `uncertain`: the runner may have run the work |
-   | Paid | `http` with any other status, `payment` | `failed`: the request would fail, and be charged, everywhere |
+   | Paid | `refused` (503), `payment_refused`, or `http` 404 or 409 | Fail over to **another orchestrator** |
+   | Paid | `timeout`, `unreachable`, or `http` 502 or 504 | `uncertain`: the runner may have run the work |
+   | Paid | `http` 500 or any other status, `payment` | `failed`: the runner ran and failed, or the request would fail, and be charged, everywhere |
+   | Any | The signer gave no validated answer (`payment_unknown`) | `uncertain`: the signer may have charged, so no one else is paid |
 
    - **Another orchestrator.** After a paid failover, the engine skips every later runner on the
-     orchestrator that took the payment, so a job never pays one orchestrator twice. A skipped runner
-     does not count against `max_attempts`.
-   - **Paid 404, 409 and 503** come from the orchestrator refusing the paid request before the app ran:
-     the runner is gone or stopped its session (livepeer-python-gateway#83), the session already
-     exists, or the capacity was taken ([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)).
+     orchestrator that took the payment, so a job never pays one orchestrator twice. Runners with no
+     known orchestrator count as one orchestrator. A skipped runner does not count against
+     `max_attempts`.
+   - **404, 409 and 503** come from the orchestrator refusing the request before the app ran: the
+     runner is gone or stopped its session (livepeer-python-gateway#83), the session already exists, or
+     the capacity was taken ([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)). A
+     500 is the app's own error after it ran; a 502 or 504 from the orchestrator's proxy can come while
+     the app still runs. Neither runs the work again.
    - **The charge stays attributed.** A paid attempt the job failed over from keeps its sessions and is
      `failed_after_payment`: the allocation paid it, and it is never `billable`
      ([payments.md](payments.md#cost-classification)).
-   - **Every runner failed over.** The job is `failed` with the last runner's status code and body, and
-     `failure.payment_sent` is true when any attempt was paid.
+   - **Every runner failed over.** The job is `failed` with the last runner's status code and body. A
+     404 or 409 is reported as `refused` (503, retry later), so the caller never reads an orchestrator's
+     refusal as its own not-found or conflict.
+   - **`failure.payment_sent`** is true when any attempt of the job was paid, not only the last.
+   - **A restart or an engine error** leaves the job `uncertain` only when its last attempt was still in
+     flight, or was paid and did not fail over. Attempts it failed over from ended with a known outcome.
+   - **No runner selected.** A `SelectionPolicy` that returns no runner fails the job `no_offering`,
+     before any payment.
    - **`payment_refused`:** the signer refused to pay *this orchestrator*. The signer statuses are 400
      (incomplete or expired payment params) and 481 (price above the session ceiling). Another
      orchestrator may succeed.

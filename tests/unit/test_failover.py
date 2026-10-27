@@ -1,33 +1,48 @@
 """D52: what a failed attempt means for its job, and which runner is tried next."""
 
+from datetime import UTC, datetime
+from uuid import uuid4
+
 import pytest
 
-from livepeer_builder.contracts import AttemptOutcome
+from livepeer_builder.contracts import Attempt, AttemptOutcome
 from livepeer_builder.errors import RunnerCallError
-from livepeer_builder.services.failover import Candidates, Verdict, attempt_verdict, failure_of
+from livepeer_builder.services.failover import (
+    Candidates,
+    Verdict,
+    attempt_verdict,
+    failure_of,
+    payment_unresolved,
+)
 from livepeer_builder.testing import runner
 
 
 @pytest.mark.parametrize(
     ("outcome", "status", "paid", "verdict"),
     [
-        # before payment: only a refusal, no answer, or a signer refusal for this orchestrator moves on
+        # before payment: a refusal, no answer, a signer refusal for this orchestrator, or the
+        # orchestrator losing the runner (404, 409) moves on; nothing is spent by trying another
         ("refused", 503, False, "failover"),
         ("unreachable", None, False, "failover"),
         ("payment_refused", 400, False, "failover"),
+        ("http", 404, False, "failover"),
+        ("http", 409, False, "failover"),
         ("payment", 402, False, "failed"),
         ("timeout", None, False, "failed"),
-        ("http", 500, False, "failed"),
-        # after payment: the runner or orchestrator failed it, so another orchestrator may succeed
+        ("http", 500, False, "failed"),  # a free runner's own error: it ran
+        ("http", 502, False, "failed"),
+        # after payment, refused before the work ran: another orchestrator may succeed
         ("refused", 503, True, "failover"),
         ("payment_refused", 481, True, "failover"),
         ("http", 404, True, "failover"),  # the runner stopped the session (livepeer-python-gateway#83)
         ("http", 409, True, "failover"),
-        ("http", 500, True, "failover"),
-        ("http", 502, True, "failover"),
-        # after payment: it may have run, or it would fail and be charged everywhere
+        # after payment: it may have run, so it is never run again
         ("timeout", None, True, "uncertain"),
         ("unreachable", None, True, "uncertain"),
+        ("http", 502, True, "uncertain"),  # the proxy lost the runner, perhaps mid-answer
+        ("http", 504, True, "uncertain"),
+        # after payment: it ran and failed, or it would fail and be charged everywhere
+        ("http", 500, True, "failed"),
         ("http", 400, True, "failed"),
         ("http", 422, True, "failed"),
         ("http", None, True, "failed"),
@@ -36,6 +51,11 @@ from livepeer_builder.testing import runner
 )
 def test_attempt_verdict(outcome: AttemptOutcome, status: int | None, paid: bool, verdict: Verdict) -> None:
     assert attempt_verdict(outcome, status, paid) == verdict
+
+
+@pytest.mark.parametrize("outcome", ["unreachable", "timeout", "payment", "refused"])
+def test_an_unknown_payment_stops_the_job_whatever_the_outcome(outcome: AttemptOutcome) -> None:
+    assert attempt_verdict(outcome, None, False, payment_unknown=True) == "uncertain"
 
 
 def test_candidates_skip_an_excluded_orchestrator_without_counting_it() -> None:
@@ -51,12 +71,40 @@ def test_candidates_skip_an_excluded_orchestrator_without_counting_it() -> None:
     assert tried == ["https://a1", "https://b1"]  # a2 skipped, and c1 is past max_attempts
 
 
-def test_a_runner_without_an_orchestrator_is_never_excluded() -> None:
+def test_runners_without_an_orchestrator_count_as_one() -> None:
     loose = runner(url="https://r1", orchestrator_url=None)
     other = runner(url="https://r2", orchestrator_url=None)
-    candidates = Candidates((loose, other), max_attempts=3)
-    candidates.exclude(loose)
-    assert [candidate.url for candidate in candidates] == ["https://r1", "https://r2"]
+    known = runner(url="https://r3", orchestrator_url="https://orch.example")
+    candidates = Candidates((loose, other, known), max_attempts=3)
+    tried = []
+    for candidate in candidates:
+        tried.append(candidate.url)
+        candidates.exclude(candidate)
+    assert tried == ["https://r1", "https://r3"]  # r2 could be the orchestrator that was just paid
+
+
+def _attempt(number: int, outcome: AttemptOutcome, paid: bool, status: int | None = None) -> Attempt:
+    return Attempt(
+        job_id=uuid4(), number=number, runner_url="r", orchestrator_url=None, allocation_id="a", sessions=(),
+        payment_sent=paid, outcome=outcome, status_code=status, started_at=datetime.now(UTC), ended_at=None,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("attempts", "unresolved"),
+    [
+        ((), False),
+        ((_attempt(1, "in_flight", False),), True),  # the call was under way: it may have paid and run
+        ((_attempt(1, "refused", True, 503), _attempt(2, "in_flight", False)), True),
+        ((_attempt(1, "refused", True, 503),), False),  # failed over, and the next attempt never started
+        ((_attempt(1, "succeeded", True, 200),), True),  # it ran, but the job's end was never written
+        ((_attempt(1, "timeout", False),), False),
+    ],
+)
+def test_only_the_last_attempt_can_leave_a_payment_unresolved(
+    attempts: tuple[Attempt, ...], unresolved: bool
+) -> None:
+    assert payment_unresolved(attempts) is unresolved
 
 
 def test_failure_of_counts_the_runners_tried() -> None:
@@ -65,3 +113,10 @@ def test_failure_of_counts_the_runners_tried() -> None:
     assert (one.kind, one.message, one.payment_sent) == ("runner_error", "boom", True)
     assert three.message == "all 3 runners failed; last: boom"
     assert one.body is not None and len(one.body) < 5000  # bounded
+
+
+@pytest.mark.parametrize("status", [404, 409])
+def test_an_orchestrator_refusal_is_reported_as_refused_not_as_the_runner_s_status(status: int) -> None:
+    error = RunnerCallError("http", "runner session not found", payment_sent=True, status_code=status)
+    failure = failure_of(error, paid=True, tried=2)
+    assert (failure.kind, failure.status_code) == ("refused", status)  # REST answers 503, retry later

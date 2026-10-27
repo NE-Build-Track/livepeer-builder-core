@@ -42,9 +42,10 @@ path arrives with `payment_sent=True`. Only a 502 can come after the app started
 | 400 | The orchestrator rejected the payment or the price |
 | 502 | The proxy lost the runner, before or during its answer |
 
-The engine fails these over to a runner on another orchestrator, except a 400, which would be
-charged on every orchestrator ([engine.md](../contracts/engine.md#behavior-the-contract-fixes), D52).
-The charge stays on the attempt as `failed_after_payment`.
+The engine fails the 404, 409 and 503 over to a runner on another orchestrator. A 400 ends the job
+`failed`, because it would be charged on every orchestrator, and a 502 ends it `uncertain`, because the
+work may have run ([engine.md](../contracts/engine.md#behavior-the-contract-fixes), D52). A charge the
+job failed over from stays on the attempt as `failed_after_payment`.
 
 The orchestrator mints a fresh manifest for each 402 challenge (`core.RandomManifestID()`): 4 random
 bytes from `math/rand`, written as 8 hex characters. It rejects a duplicate only while the first

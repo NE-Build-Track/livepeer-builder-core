@@ -114,7 +114,9 @@ class Net:
         if reply.hang_s:
             await self.hang(reply.hang_s)
         if not reply.chunks:
-            return web.Response(status=reply.status, body=reply.body, content_type=reply.content_type)
+            return web.Response(
+                status=reply.status, body=reply.body, headers={"Content-Type": reply.content_type}
+            )
         response = web.StreamResponse(status=reply.status, headers={"Content-Type": reply.content_type})
         await response.prepare(request)
         for chunk in reply.chunks:

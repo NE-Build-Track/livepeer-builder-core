@@ -18,6 +18,7 @@ from livepeer_builder.adapters.runner_call import (
     network_kind,
     payment_type,
     signer_error,
+    stop_funding,
 )
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import JobRequest, NetworkRate, Runner
@@ -125,6 +126,7 @@ async def test_a_signer_refusal_is_unpaid_only_when_the_signer_says_so(
         False,
         (),
     )
+    assert error.payment_unknown is (seen == ["unknown"])  # only a refusal says nothing was charged
     assert states(net) == [f"intent m-1 {state}" for state in seen]
     assert not any(entry.startswith("request") for entry in net.log)  # the runner never got paid work
 
@@ -137,7 +139,8 @@ async def test_a_lost_or_malformed_signer_reply_leaves_the_manifest_unknown(
     with pytest.raises(RunnerCallError) as failed:
         await call(net)
     assert (failed.value.kind, failed.value.payment_sent, failed.value.manifest_ids) == (kind, False, ())
-    assert states(net) == ["intent m-1 unknown"]  # it may have charged: cost sync settles it later
+    assert failed.value.payment_unknown  # it may have charged, so the job pays nobody else
+    assert states(net) == ["intent m-1 unknown"]  # cost sync settles it later
 
 
 async def test_a_refresh_is_unpaid_and_asks_for_a_fresh_challenge(net: Net) -> None:
@@ -184,13 +187,22 @@ async def test_a_runner_refusal_after_signing_keeps_the_payment(
     assert (error.payment_sent, error.manifest_ids) == (True, ("m-1",))
 
 
-async def test_replies_keep_their_bytes_and_bad_json_is_a_runner_error(net: Net) -> None:
-    net.replies = [Reply(body=b"\x89PNG", content_type="image/png"), Reply(body=b"not json")]
-    image = await call(net)
-    assert (image.content, image.content_type, image.data) == (b"\x89PNG", "image/png", None)
-    with pytest.raises(RunnerCallError) as bad:
-        await call(net)
-    assert (bad.value.kind, bad.value.payment_sent) == ("http", True)
+@pytest.mark.parametrize(
+    ("body", "content_type", "data"),
+    [
+        (b"\x89PNG", "image/png", None),
+        (b'{"ok": 1}', "application/json; charset=utf-8", {"ok": 1}),
+        (b'{"ok": 1}', "application/vnd.api+json", {"ok": 1}),
+        (b"[1, 2]", "application/json", None),  # valid JSON, not an object: still the result
+        (b"not json", "application/json", None),
+    ],
+)
+async def test_a_delivered_reply_keeps_its_bytes_whatever_its_shape(
+    net: Net, body: bytes, content_type: str, data: object
+) -> None:
+    net.replies = [Reply(body=body, content_type=content_type)]
+    reply = await call(net)
+    assert (reply.content, reply.data, reply.payment_sent) == (body, data, True)
 
 
 async def test_unreachable_runner_or_signer_is_unpaid() -> None:
@@ -234,13 +246,6 @@ async def test_an_invalid_payment_challenge_is_refused_before_signing(net: Net, 
         await call(net)
     assert (invalid.value.kind, invalid.value.status_code, invalid.value.payment_sent) == ("http", 402, False)
     assert not any(entry.startswith("sign m") for entry in net.log)
-
-
-async def test_a_json_reply_must_be_an_object(net: Net) -> None:
-    net.replies = [Reply(body=b"[1, 2]")]
-    with pytest.raises(RunnerCallError, match="not an object") as bad:
-        await call(net)
-    assert bad.value.payment_sent
 
 
 # -- streams -----------------------------------------------------------------------------------------
@@ -295,7 +300,11 @@ async def test_opening_is_bounded_by_first_byte_timeout_whether_or_not_it_paid(n
             "lpg_k",
             on_payment_state=recorder.on_payment_state,
         )
-    assert (during.value.kind, during.value.payment_sent) == ("timeout", False)
+    assert (during.value.kind, during.value.payment_sent, during.value.payment_unknown) == (
+        "timeout",
+        False,
+        True,
+    )
     assert states(net) == ["intent m-2 unknown"]  # cancelled while signing: still on record
 
 
@@ -351,5 +360,29 @@ def test_price_unit_and_ceiling() -> None:
     assert (payment_type(rate), payment_type(None)) == ("live", "live")
     assert max_price(rate) == {"price": pytest.approx(2.024), "currency": "usd", "unit": "seconds"}
     assert max_price(None) is None
-    with pytest.raises(RunnerCallError, match="unsupported runner price unit"):
+    with pytest.raises(RunnerCallError, match="unsupported runner price unit") as unsupported:
         payment_type(NetworkRate(amount=Decimal("1"), currency="usd", unit="request"))
+    assert (unsupported.value.kind, unsupported.value.payment_sent) == (
+        "payment_refused",
+        False,
+    )  # next runner
+
+
+async def test_stopping_the_funding_never_swallows_the_caller_s_own_cancel() -> None:
+    release = asyncio.Event()
+
+    async def slow_to_stop() -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await release.wait()  # winds down slowly
+
+    funding = asyncio.create_task(slow_to_stop())
+    await asyncio.sleep(0)
+    caller = asyncio.create_task(stop_funding(funding))
+    await asyncio.sleep(0.01)
+    caller.cancel()  # a disconnect or a deadline while the caller waits for the funding to stop
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    release.set()
+    await asyncio.wait([funding])

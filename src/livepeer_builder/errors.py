@@ -99,6 +99,8 @@ class RunnerCallError(EngineError):
     fail over only to another orchestrator, and only when the failure did not run the work (D52).
     ``manifest_ids`` lists the orchestrator sessions the signer signed, one per session in signing
     order; with the Live Runner transport, a non-empty list means ``payment_sent``.
+    ``payment_unknown`` is True when the signer was asked and gave no validated answer (a lost or
+    malformed reply, a 5xx, a cancel): it may have charged, so the job must not pay anyone else.
     """
 
     def __init__(
@@ -110,6 +112,7 @@ class RunnerCallError(EngineError):
         manifest_ids: tuple[str, ...] = (),
         status_code: int | None = None,
         body: str | None = None,
+        payment_unknown: bool = False,
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -117,3 +120,4 @@ class RunnerCallError(EngineError):
         self.manifest_ids = manifest_ids
         self.status_code = status_code
         self.body = body
+        self.payment_unknown = payment_unknown

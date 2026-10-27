@@ -72,7 +72,7 @@ async def test_the_engine_stops_a_transport_that_ignores_its_deadline(
 
 @pytest.mark.parametrize(
     ("hang", "paid", "state", "manifests"),
-    [("signer", False, "failed", ()), ("runner", True, "uncertain", ("m-1",))],
+    [("signer", False, "uncertain", ()), ("runner", True, "uncertain", ("m-1",))],
 )
 async def test_the_live_transport_times_out_by_whether_signing_finished(
     make_engine: EngineFactory,
@@ -84,8 +84,9 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     state: str,
     manifests: tuple[str, ...],
 ) -> None:
-    """The real transport against a loopback runner and signer: a timeout while signing is unpaid, one
-    after the signer's payment was validated is paid (D41), and neither fails over."""
+    """The real transport against a loopback runner and signer: a timeout while signing leaves the
+    payment unknown, one after the signer's payment was validated is paid (D41). Either may have
+    charged, so both are uncertain, and neither fails over."""
     if hang == "signer":
         net.sign = [5.0]
     else:

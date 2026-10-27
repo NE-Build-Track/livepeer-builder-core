@@ -7,8 +7,10 @@
 - Branch: `tasks/mz/payment-intent`, from `releases/m3` at `5a983a6`.
 - SDK companion: `tasks/mz/payment-intent`, from published `releases/final` at `2017a80`.
 - SDK PR: [#7](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/7), `202721c`.
-- Publication target: `tasks/mz/payment-intent` → `releases/m3`. Remove the temporary builder
-  worktree after confirming the commit is retained on the remote. No deployment is part of this change.
+- Builder PR: [#56](https://github.com/NE-Build-Track/livepeer-builder-core/pull/56),
+  `tasks/mz/payment-intent` → `releases/m3`. Remove the temporary builder worktree after remote
+  verification. The branch push triggers the repository's configured preview deployment;
+  production deployment and merging are not part of this publication.
 
 ## Goal
 
@@ -75,6 +77,10 @@ keeps job cost pending until accounting evidence arrives. Keep upstream's prompt
   976 tests passed including SQLite and PostgreSQL 16; 97.15% coverage, all layer floors and
   100% changed-line coverage. Lint, formatting, strict types, docs/generated-doc checks,
   Railway compose validation, wheel/sdist build and fresh-environment install/smoke passed.
+
+- [x] 27 October: committed and pushed the builder implementation (`8a15c6b`) and opened PR #56
+  against `releases/m3`. GitHub reports it mergeable. CI, automated review and the repository's
+  automatic preview-deployment workflow started. Temporary PostgreSQL container stopped.
 
 ## Decision log
 

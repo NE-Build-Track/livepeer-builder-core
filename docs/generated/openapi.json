@@ -3277,11 +3277,6 @@
             "description": "Validation Error"
           }
         },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "summary": "Offerings"
       }
     },

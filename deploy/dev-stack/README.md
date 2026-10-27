@@ -52,7 +52,7 @@ curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"amount":{"amount":"1","currency":"USD"}}' \
   http://127.0.0.1:8080/v1/admin/applications/default/actors/alice/allocation          # explicit funding
 ALICE=lpk_...
-curl -s -H "Authorization: Bearer $ALICE" http://127.0.0.1:8080/v1/offerings
+curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key
 curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
   -d '{"app":"<app from offerings>","path":"/v1/embeddings","payload":{"model":"...","input":"hi"}}' \
   http://127.0.0.1:8080/v1/jobs

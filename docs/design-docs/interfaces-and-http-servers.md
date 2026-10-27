@@ -317,15 +317,15 @@ classDiagram
     }
     class MostCapacityFirst
     class SdkRunnerTransport {
-        SDK call_runner, signer bearer lpg_
+        own paid call, SDK signer client, signer bearer lpg_
     }
-    class SdkRunnerStream
+    class PaidStream
     RunnerTransport <|-- StreamingRunnerTransport
     DiscoverySource <|.. HttpDiscoverySource
     DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     StreamingRunnerTransport <|.. SdkRunnerTransport
-    RunnerStream <|.. SdkRunnerStream
+    RunnerStream <|.. PaidStream
     DiscoveryService --> DiscoverySource
     JobService --> DiscoveryService
     JobService --> SelectionPolicy

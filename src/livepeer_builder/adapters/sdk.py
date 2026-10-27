@@ -1,58 +1,33 @@
-"""Python gateway SDK adapters: signer discovery and the paid runner call.
+"""Python gateway adapters: runner discovery and the Live Runner transport.
 
-The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
-comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#81, pinned in
-pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it once for each new payment session
-after the signer returns a valid payment and before the paid request goes out. The adapter derives
-``manifest_ids`` and ``payment_sent`` from those sessions: if signing fails or is cancelled before
-the callback runs, ``payment_sent`` stays ``False`` and the engine keeps owning failover and cost
-attribution.
+Discovery reads livepeer-node's ``/discovery`` inventory through the SDK's ``discover_runners``. The paid
+runner call is the engine's own (``adapters/runner_call.py``, D53): it signs through the SDK's signer
+client and reports each payment session before the signer is asked, so cost attribution never depends on
+a callback that a lost signer reply would skip (docs/references/sdk-gateway.md).
 """
 
 import asyncio
-import contextlib
-import json
-from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Protocol, overload
+from typing import Any, Protocol
 
-import aiohttp
 from livepeer_gateway.discovery import discover_runners
-from livepeer_gateway.errors import (
-    LivepeerGatewayError,
-    LivepeerHTTPError,
-    PaymentError,
-    SignerRefreshRequired,
-    SkipPaymentCycle,
-)
-from livepeer_gateway.live_runner import (
-    LivePaymentSessionCallback,
-    LiveRunnerCallResult,
-    LiveRunnerCallStream,
-    LiveRunnerInstance,
-    LiveRunnerPriceInfo,
-    call_runner,
-)
-from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
 
+from livepeer_builder.adapters.runner_call import (
+    OnPaymentState,
+    PaidRequest,
+    PaidStream,
+    PaymentEvents,
+    Signer,
+    json_object,
+)
 from livepeer_builder.contracts import (
-    AttemptOutcome,
     JobRequest,
     NetworkRate,
     Runner,
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import BODY_LIMIT
-
-_PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
-# Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
-# may succeed, whether or not this call had already paid (D26, D52). 400 = incomplete/expired params;
-# 481 = price ceiling.
-# Caller- or signer-side refusals (402 allowance, 403 forbidden, 502 webhook, 503 outbox) are not here.
-_ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
 
 
 class DiscoverRunners(Protocol):
@@ -63,48 +38,6 @@ class DiscoverRunners(Protocol):
         *,
         discovery_url: str | None,
     ) -> list[dict[str, Any]]: ...
-
-
-class CallRunner(Protocol):
-    """The SDK's ``call_runner``, narrowed to the arguments this adapter passes.
-
-    The SDK ships no type information, so mypy cannot hold the real function to this; a unit test
-    compares the SDK's signature with these keyword names instead.
-    """
-
-    @overload
-    async def __call__(
-        self,
-        runner_url: str,
-        /,
-        *,
-        runner: LiveRunnerInstance | None,
-        payload: Any,
-        method: str,
-        signer_url: str | None,
-        signer_headers: dict[str, str] | None,
-        timeout: float,  # noqa: ASYNC109 - the SDK's own parameter name
-        max_payment_challenge_retries: int,
-        on_payment_session: LivePaymentSessionCallback | None,
-        stream: Literal[False] = False,
-    ) -> LiveRunnerCallResult: ...
-
-    @overload
-    async def __call__(
-        self,
-        runner_url: str,
-        /,
-        *,
-        runner: LiveRunnerInstance | None,
-        payload: Any,
-        method: str,
-        signer_url: str | None,
-        signer_headers: dict[str, str] | None,
-        timeout: float,  # noqa: ASYNC109 - the SDK's own parameter name
-        max_payment_challenge_retries: int,
-        on_payment_session: LivePaymentSessionCallback | None,
-        stream: Literal[True],
-    ) -> LiveRunnerCallStream: ...
 
 
 class HttpDiscoverySource:
@@ -121,214 +54,80 @@ class HttpDiscoverySource:
         return tuple(runners_from_entries(entries))
 
 
-class _SignedSessions:
-    """Collects what the signer signed during one call (``on_payment_session``).
+class SdkRunnerTransport:
+    """The Live Runner call with the actor's credential as the signer bearer. Unpaid when there is none.
 
-    ``on_payment_session`` runs only after ``LivePaymentSession.get_payment()`` validates a signed
-    payment and before the paid request is sent to the runner. A reported session means the signer
-    charged the allocation and counts as ``payment_sent``: the engine then fails over only to another
-    orchestrator, and only when the failure did not run the work (D52). If signing fails or is
-    cancelled before the callback runs,
-    ``signed`` stays ``False`` (no payment sent). Each session is also passed to ``on_signed``, which
-    the SDK awaits before the paid request goes out, so the engine stores the evidence first (D42).
+    ``on_signed`` gets each session the signer signed, before the paid request goes out (D42).
+    ``on_payment_state`` (optional) gets each manifest as ``unknown`` before the signer is asked, and
+    ``unpaid`` when the signer refused it.
     """
 
-    def __init__(self, on_signed: OnSigned | None = None) -> None:
-        self.signed = False
-        self.manifest_ids: list[str] = []
-        self._on_signed = on_signed
-
-    async def __call__(self, session: LivePaymentSession) -> None:
-        self.signed = True
-        if session.manifest_id:
-            self.manifest_ids.append(session.manifest_id)
-        if self._on_signed is not None:
-            await self._on_signed(session.manifest_id or "")
-
-    @property
-    def ids(self) -> tuple[str, ...]:
-        return tuple(self.manifest_ids)
-
-    def error(
-        self, kind: AttemptOutcome, message: str, *, status_code: int | None = None, body: str | None = None
-    ) -> RunnerCallError:
-        """A failed call, carrying what the signer signed for it so far."""
-        return RunnerCallError(
-            kind, message, payment_sent=self.signed, manifest_ids=self.ids, status_code=status_code, body=body
-        )
-
-
-@contextlib.contextmanager
-def _translated(url: str, sessions: _SignedSessions, prefix: str = "") -> Iterator[None]:
-    """SDK and network failures as RunnerCallError, each with the payment evidence collected so far.
-    ``TimeoutError`` is an ``OSError``, so a read timeout lands here too."""
-    try:
-        yield
-    except LivepeerGatewayError as error:
-        raise call_error(error, url, payment_sent=sessions.signed, manifest_ids=sessions.ids) from error
-    except (aiohttp.ClientError, OSError) as error:
-        raise sessions.error(network_kind(error), f"{prefix}{error}") from error
-
-
-class SdkRunnerTransport:
-    """``call_runner`` with the actor's credential as the signer bearer. Unpaid when there is none."""
-
-    def __init__(
-        self,
-        signer_url: str | None,
-        max_payment_challenge_retries: int = 3,
-        *,
-        call: CallRunner = call_runner,
-    ) -> None:
+    def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
-        self._call = call
 
-    def _call_kwargs(
-        self, runner: Runner, request: JobRequest, credential: str | None, sessions: _SignedSessions
-    ) -> tuple[str, dict[str, Any]]:
-        paid = credential is not None and self._signer_url is not None
-        instance = LiveRunnerInstance(
-            url=runner.url,
+    def _request(
+        self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents
+    ) -> PaidRequest:
+        signer = None
+        if credential is not None and self._signer_url is not None:
+            signer = Signer(self._signer_url, {"Authorization": f"Bearer {credential}"})
+        return PaidRequest(
+            runner.url.rstrip("/") + request.path,
+            method=request.method,
+            # Runners expect a JSON object; an empty body for ``None`` is not the contract yet (T15).
+            payload={} if request.payload is None else request.payload,
             app=runner.app,
-            runner_id=runner.runner_id or "",
-            mode=runner.mode or "",
-            orchestrator_url=runner.orchestrator_url or "",
-            raw={},
-            price_info=_price_info(runner.rate),
+            rate=runner.rate,
+            signer=signer,
+            retries=self._retries,
+            events=events,
         )
-        url = runner.url.rstrip("/") + request.path
-        kwargs: dict[str, Any] = {
-            "runner": instance,
-            # The SDK sends an empty body for None; runners expect the JSON object earlier pins sent.
-            "payload": {} if request.payload is None else request.payload,
-            "method": request.method,
-            "signer_url": self._signer_url if paid else None,
-            "signer_headers": {"Authorization": f"Bearer {credential}"} if paid else None,
-            "timeout": request.timeout_s,
-            "max_payment_challenge_retries": self._retries,
-            "on_payment_session": sessions if paid else None,
-        }
-        return url, kwargs
 
     async def call(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+        *,
+        on_payment_state: OnPaymentState | None = None,
     ) -> RunnerReply:
-        sessions = _SignedSessions(on_signed)
-        url, kwargs = self._call_kwargs(runner, request, credential, sessions)
-        with _translated(url, sessions):
-            result = await self._call(url, **kwargs)
-        content = result.content if result.content is not None else json.dumps(result.data).encode()
+        events = PaymentEvents(on_signed, on_payment_state)
+        paid = self._request(runner, request, credential, events)
+        status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
-            status_code=200,
-            content=content,
-            content_type=result.content_type or "application/json",
-            data=result.data if result.content is None else None,
-            manifest_ids=sessions.ids,
-            payment_sent=sessions.signed,
+            status_code=status,
+            content=body,
+            content_type=content_type or "application/json",
+            data=json_object(body, content_type, events, paid.url),
+            manifest_ids=events.ids,
+            payment_sent=events.signed,
         )
 
     async def open(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
-    ) -> "SdkRunnerStream":
-        """``call_runner(stream=True)``: the 402 is paid before the first byte, so payment is known here.
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+        *,
+        on_payment_state: OnPaymentState | None = None,
+    ) -> PaidStream:
+        """The paid request, answered: the 402 is paid before the first byte, so payment is known here.
 
-        The SDK does not bound the wait for the runner's response headers, so this does
-        (``first_byte_timeout_s``, D35). A timeout keeps the sessions signed so far for cost sync;
-        if it hits before ``on_payment_session`` runs, ``payment_sent`` is ``False``.
+        Waiting for the runner's response headers is bounded by ``first_byte_timeout_s`` (D35). A timeout
+        keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
+        validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        sessions = _SignedSessions(on_signed)
-        url, kwargs = self._call_kwargs(runner, request, credential, sessions)
+        events = PaymentEvents(on_signed, on_payment_state)
+        paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):
-                with _translated(url, sessions):
-                    stream = await self._call(url, stream=True, **kwargs)
-        except TimeoutError as error:  # the deadline; the SDK's own timeouts are translated above
-            message = f"no response from {url} within {request.first_byte_timeout_s:g}s"
-            raise sessions.error("timeout", message) from error
-        return SdkRunnerStream(stream, sessions, url)
-
-
-class SdkRunnerStream:
-    """The SDK's live response as a ``RunnerStream``. Mid-stream transport failures become RunnerCallError."""
-
-    def __init__(self, stream: LiveRunnerCallStream, sessions: _SignedSessions, url: str) -> None:
-        self._stream = stream
-        self._sessions = sessions
-        self._url = url
-
-    @property
-    def status_code(self) -> int:
-        return int(self._stream.status)
-
-    @property
-    def content_type(self) -> str:
-        return str(self._stream.content_type or "application/octet-stream")
-
-    @property
-    def manifest_ids(self) -> tuple[str, ...]:
-        return self._sessions.ids
-
-    @property
-    def payment_sent(self) -> bool:
-        return self._sessions.signed
-
-    def __aiter__(self) -> AsyncIterator[bytes]:
-        return self._iterate()
-
-    async def _iterate(self) -> AsyncIterator[bytes]:
-        with _translated(self._url, self._sessions, prefix="stream failed: "):
-            async for chunk in self._stream.aiter_bytes():
-                if chunk:
-                    yield chunk
-
-    async def aclose(self) -> None:
-        await self._stream.aclose()
-
-
-def call_error(
-    error: LivepeerGatewayError,
-    runner_url: str,
-    *,
-    payment_sent: bool,
-    manifest_ids: tuple[str, ...] = (),
-) -> RunnerCallError:
-    """Map an SDK error to an attempt outcome, with the payment evidence the callback collected."""
-    kind: AttemptOutcome
-    status: int | None = None
-    body: str | None = None
-    if isinstance(error, LivepeerHTTPError) and error.url == runner_url:
-        status = error.status_code
-        body = error.body[:BODY_LIMIT] if error.body else None
-        kind = "refused" if status == 503 else "http"
-    elif isinstance(error, LivepeerHTTPError):
-        # An HTTP error from any other URL came from the signer.
-        orchestrator_specific = error.status_code in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES
-        kind = "payment_refused" if orchestrator_specific else "payment"
-        status = error.status_code
-    elif isinstance(error, _PAYMENT_ERRORS):
-        kind = "payment"
-    else:
-        kind = network_kind(error)
-    return RunnerCallError(
-        kind,
-        str(error),
-        payment_sent=payment_sent,
-        manifest_ids=manifest_ids,
-        status_code=status,
-        body=body,
-    )
-
-
-def network_kind(error: BaseException) -> AttemptOutcome:
-    current: BaseException | None = error
-    while current is not None:
-        if isinstance(current, TimeoutError):
-            return "timeout"
-        if isinstance(current, (ConnectionError, OSError, aiohttp.ClientConnectionError)):
-            return "unreachable"
-        current = current.__cause__
-    return "http"
+                return await paid.open(connect_timeout_s=request.timeout_s)
+        except TimeoutError as error:  # the deadline; the call's own timeouts are already RunnerCallError
+            message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
+            raise events.error("timeout", message) from error
 
 
 def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:
@@ -395,12 +194,6 @@ def _rate(value: object) -> NetworkRate | None:
         currency=str(value.get("currency") or "usd").lower(),
         unit=str(value.get("unit") or "hour").lower(),
     )
-
-
-def _price_info(rate: NetworkRate | None) -> LiveRunnerPriceInfo | None:
-    if rate is None:
-        return None
-    return LiveRunnerPriceInfo(price=str(rate.amount), currency=rate.currency, unit=rate.unit)
 
 
 def _text(value: object) -> str | None:

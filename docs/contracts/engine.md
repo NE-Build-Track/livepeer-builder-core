@@ -167,10 +167,10 @@ The admission slot is held until the stream ends.
 
 `first_byte_timeout_s` and `idle_timeout_s` measure the runner's silence, so they count only while
 the caller waits for data; a slow reader is not the runner's fault. A timeout never fails over to
-another runner, paid or not, exactly as for `run`. The SDK transport enforces the first-byte limit
-itself and keeps the sessions signed so far: a timeout after `on_payment_session` has
-`payment_sent=True` (job `uncertain`), while a timeout or failure during signing before
-`on_payment_session` has `payment_sent=False` (job `failed`, D41). The engine stops a transport that
+another runner, paid or not, exactly as for `run`. The Live Runner transport enforces the first-byte
+limit itself and keeps the sessions signed so far: a timeout after the signer's payment was validated
+has `payment_sent=True` (job `uncertain`), while a timeout or failure during signing has
+`payment_sent=False` (job `failed`, D41, D53). The engine stops a transport that
 runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
 cannot know.
 

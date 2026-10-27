@@ -148,7 +148,10 @@ class PaidRequest:
     ) -> None:
         self.url = url
         # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
-        self._payment_origins = {_origin(url)} | ({_origin(orchestrator_url)} if orchestrator_url else set())
+        origins = {_origin(url), _origin(orchestrator_url) if orchestrator_url else None} - {None}
+        if _origin(url) is None:  # refused before any request, unpaid
+            raise RunnerCallError("http", f"invalid runner URL {url!r}", payment_sent=False)
+        self._payment_origins = origins
         self._method = method.upper()
         self._body = json.dumps(payload).encode()
         self._app = app
@@ -269,7 +272,7 @@ class PaidRequest:
             if isinstance(data, dict):
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
                 valid = all(isinstance(value, str) and value for value in fields.values())
-                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:
+                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:  # None never is
                     return LivePaymentChallenge(**fields)
         # Malformed, or its payment_url names another host: refused before anything is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
@@ -337,11 +340,18 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
         raise events.error(network_kind(error), f"{prefix}{error}") from error
 
 
-def _origin(url: str) -> str:
-    """``scheme://host:port``, lower-cased, with the default port filled in."""
-    parts = urlsplit(url if "://" in url else f"https://{url}")
-    scheme = parts.scheme.lower()
-    return f"{scheme}://{(parts.hostname or '').lower()}:{parts.port or (443 if scheme == 'https' else 80)}"
+def _origin(url: str) -> str | None:
+    """``scheme://host:port`` of an absolute ``http``/``https`` URL, lower-cased, with the default port
+    filled in; ``None`` when the URL is relative, has another scheme, or does not parse (a bad port, a
+    broken IPv6 host)."""
+    try:
+        parts = urlsplit(url)
+        scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
+    except (ValueError, UnicodeError):
+        return None
+    if scheme not in ("http", "https") or not host:
+        return None
+    return f"{scheme}://{host.lower()}:{port or (443 if scheme == 'https' else 80)}"
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:

@@ -197,7 +197,7 @@ cannot know.
 | The runner closes the stream normally | `succeeded` (a `ResultRef` for the bytes received) | `succeeded` |
 | The caller calls `complete()` (D38) | `succeeded` (a `ResultRef` for the bytes the caller read, not the engine's read-ahead) | `succeeded` |
 | The runner fails mid-stream (reset, 5xx trailer) | `http` or `unreachable`, `payment_sent` as known | `uncertain` when paid, else `failed` |
-| A deadline above runs out | `timeout` | `uncertain` when paid, else `failed` |
+| A deadline above runs out | `timeout`, or `payment_unknown` when it runs out while signing | `uncertain` when paid or `payment_unknown`, else `failed` |
 | The caller calls `aclose()`, leaves `async with` before the end, or stops iterating (`break`, `return`, an error in the loop) | `abandoned`, at once | `uncertain` when paid, else `failed` (D30, D40) |
 | The caller is cancelled, or calls `disconnected()` because its HTTP client went away | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S` (the `ResultRef` then includes what it sent in that window), else `abandoned` | as above (D38) |
 | `engine.stop()` while the stream is open | `abandoned` after `LPB_STREAM_DRAIN_TIMEOUT_S`; ends already being written finish first (D36) | `uncertain` when paid, else `failed` |

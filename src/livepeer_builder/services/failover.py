@@ -108,7 +108,9 @@ class Candidates:
 def orchestrator_of(runner: Runner) -> str:
     """``scheme://host:port`` of the runner's orchestrator, lower-cased, with the default port filled in."""
     url = runner.orchestrator_url or runner.url
-    parts = urlsplit(url if "://" in url else f"https://{url}")
-    scheme = parts.scheme.lower()
-    port = parts.port or (443 if scheme == "https" else 80)
-    return f"{scheme}://{(parts.hostname or '').lower()}:{port}"
+    try:
+        parts = urlsplit(url if "://" in url else f"https://{url}")
+        scheme, host, port = parts.scheme.lower(), (parts.hostname or "").lower(), parts.port
+    except (ValueError, UnicodeError):  # a URL that does not parse is its own orchestrator
+        return url.strip().lower()
+    return f"{scheme}://{host}:{port or (443 if scheme == 'https' else 80)}"

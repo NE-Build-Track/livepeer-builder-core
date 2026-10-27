@@ -6,9 +6,10 @@
 - **Ticket:** [#49](https://github.com/NE-Build-Track/livepeer-builder-core/issues/49), part of ISS-33 (M4). The mode
   was defined in M2 (D13, D14; [access.md#modes](../../contracts/access.md#modes)).
 - **Branch:** `tasks/mz/jwt-bearer`, on top of the ISS-08 branch (`tasks/mz/iss-08-credentials`, #48) at `a2d115d`.
-- **Progress:** decisions locked 26 October (D45); built, shown live, and in review.
+- **Progress:** decisions locked 26 October (D45); built and shown live; merged into `releases/m3` on
+  27 October (#50). The review follow-up (D50) is in review.
 - **Source:** Mike's recommendation of 26 October (`2026-10-26-builder-core-oauth-recommendation.md`).
-- **Decision:** D45; the review hardening is D47.
+- **Decision:** D45; the review hardening is D47, D49 and D50.
 
 ## Goal
 
@@ -160,6 +161,20 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
     redundant (removed), and a trickle test that failed fast for the wrong reason (its fake response was
     invalid, fixed; it now asserts the timeout). The catch-all got its own test.
 
+- 27 October: #50 merged into `releases/m3`. John's last review comment, fixed test-first in a follow-up
+  branch (`tasks/mz/jwt-review-followup`, D50):
+  1. **Algorithm and key type:** a token whose algorithm does not fit its key's type is a 401. A key
+     published without `alg` let the header choose, and eight pairings (an `RSA` key with `ES*`, an `EC` or
+     `OKP` key with `RS*`/`PS*`, an `OKP` key with `ES*`) raised `TypeError`, a 500.
+  2. **Short RSA keys:** under 2048 bits never verify; PyJWT's own reason is the 401's. The floor is now
+     `pyjwt[crypto]>=2.13`, because earlier releases ignore the option when it is passed to `decode`.
+  3. **The outage test:** the cold-start test now names real unknown `kid`s (it can only reach the cold
+     path, since nothing is cached). A new test caches `k1` first, so unknown `kid`s reach the refetch
+     during a slow outage and make no provider requests within the pause.
+  - **Mutations,** each caught (6): no key-type check, the minimum length not enforced, the key error not
+    mapped, the pause stamped when the fetch started, no pause in the shared fetch, and an unknown-`kid`
+    refetch that skips the pause (`test_a_failed_refetch_does_not_use_up_the_minute` catches that one too).
+
 ## Decision log
 
 - **26 October (Mike, D45, from his recommendation):**
@@ -175,3 +190,5 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
   1. **Token type:** strict RFC 9068 by default, with an opt-out.
   2. **Fetching:** `https` required, with a development override.
 - **26 October (Mike, D49, the second review round):** fix all of John's and Cursor's round-2 findings on #50.
+- **27 October (Mike, D50, after the merge):** fix John's three remaining notes in a follow-up PR on
+  `releases/m3`, as his approval allowed.

@@ -14,7 +14,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from livepeer_builder.adapters.jwt import JwksCache, JwtBearerAuthenticator, JwtSettings
 from livepeer_builder.contracts import AuthProvenance, AuthRequest
@@ -761,9 +761,11 @@ async def test_the_pause_starts_when_a_slow_fetch_fails_not_before_it(clock: Clo
     with pytest.raises(ProviderUnavailable):
         await authenticator.authenticate(bearer(provider.token()))
     tried = len(requests)
-    for kid in ("k1", "random-1", "random-2"):  # random kids during the outage too
+    for kid in ("random-1", "random-2"):
+        provider.add_key(kid, publish=False)
+    for kid in ("k1", "random-1", "random-2"):  # nothing is cached, so every kid is a cold start here
         with pytest.raises(ProviderUnavailable):
-            await authenticator.authenticate(bearer(provider.token(kid=kid if kid == "k1" else None)))
+            await authenticator.authenticate(bearer(provider.token(kid=kid)))
     assert len(requests) == tried  # nothing new within the pause
 
 
@@ -857,3 +859,70 @@ async def test_any_unexpected_failure_reading_keys_is_a_503_and_a_pause(
     with pytest.raises(ProviderUnavailable):
         await authenticator.authenticate(bearer(provider.token()))
     assert len(calls) == 1  # paused
+
+
+# -- PR #50 review, follow-up (D50) -------------------------------------------------------------------------
+
+
+def reheaded(token: str, **header: Any) -> str:
+    """The same claims and signature under another header: what a client choosing its own ``alg`` sends."""
+    _, payload, signature = token.split(".")
+    return ".".join([jwt.utils.base64url_encode(json.dumps(header).encode()).decode(), payload, signature])
+
+
+async def test_a_key_without_alg_still_verifies_its_own_family(make: Make, provider: Provider) -> None:
+    provider.extra = {"k1": {"alg": None}}  # RFC 7517 makes alg optional; the header then names it
+    assert await make().authenticate(bearer(provider.token())) is not None
+
+
+async def test_a_key_without_alg_refuses_another_familys_algorithm_with_a_401(
+    make: Make, provider: Provider
+) -> None:
+    """An RSA key published without alg, and an ES256 header: PyJWT raised TypeError, a 500 (#50 review)."""
+    provider.extra = {"k1": {"alg": None}}
+    token = reheaded(provider.token(), alg="ES256", kid="k1", typ="at+jwt")
+    with pytest.raises(NotAuthenticated, match="cannot use"):
+        await make().authenticate(bearer(token))
+
+
+async def test_an_rsa_algorithm_never_uses_an_ec_key(make: Make, provider: Provider) -> None:
+    """The other direction: an EC key published without alg, and an RS256 header."""
+    public = ec.generate_private_key(ec.SECP256R1()).public_key()
+    provider.raw_keys = [json.loads(jwt.algorithms.ECAlgorithm.to_jwk(public)) | {"kid": "e1", "use": "sig"}]
+    token = reheaded(provider.token(), alg="RS256", kid="e1", typ="at+jwt")
+    with pytest.raises(NotAuthenticated, match="cannot use"):
+        await make().authenticate(bearer(token))
+
+
+@pytest.mark.filterwarnings("ignore::jwt.warnings.InsecureKeyLengthWarning")  # signing it, here
+async def test_an_rsa_key_shorter_than_2048_bits_never_verifies(make: Make, provider: Provider) -> None:
+    """PyJWT only warns about a short key unless asked to enforce the minimum (#50 review)."""
+    provider.keys["k1"] = rsa.generate_private_key(public_exponent=65537, key_size=1024)  # noqa: S505 - the point
+    with pytest.raises(NotAuthenticated, match="1024 bits"):
+        await make().authenticate(bearer(provider.token()))
+
+
+async def test_unknown_kids_during_an_outage_leave_the_provider_alone(
+    provider: Provider, clock: Clock
+) -> None:
+    """With keys cached, an unknown kid's refetch fails slowly; the next unknown kids wait out the pause."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if provider.down:
+            clock.now += 6  # each failing attempt takes 6 s, longer than the 5 s pause
+        return provider.handler(request)
+
+    keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
+    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # k1 cached
+    for kid in ("random-1", "random-2", "random-3"):
+        provider.add_key(kid, publish=False)  # signed with a key the provider never publishes
+    provider.down = True
+    with pytest.raises(ProviderUnavailable):
+        await authenticator.authenticate(bearer(provider.token(kid="random-1")))  # the refetch fails
+    tried = len(provider.requests)
+    for kid in ("random-2", "random-3"):
+        with pytest.raises(ProviderUnavailable):
+            await authenticator.authenticate(bearer(provider.token(kid=kid)))
+    assert len(provider.requests) == tried  # nothing new within the pause
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # k1 still verifies

@@ -1182,7 +1182,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "livepeer-gateway", git = "https://github.com/livepeer/livepeer-python-gateway.git?rev=76a1a1c58656ef2ad0c28542ea5f99086b76db69" },
     { name = "pydantic", specifier = ">=2.7" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.13" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "starlette", marker = "extra == 'server'", specifier = ">=0.37.2" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },

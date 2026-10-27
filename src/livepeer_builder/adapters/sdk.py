@@ -78,6 +78,7 @@ class CallRunner(Protocol):
         *,
         runner: LiveRunnerInstance | None,
         payload: Any,
+        content_type: str | None = None,
         method: str,
         signer_url: str | None,
         signer_headers: dict[str, str] | None,
@@ -95,6 +96,7 @@ class CallRunner(Protocol):
         *,
         runner: LiveRunnerInstance | None,
         payload: Any,
+        content_type: str | None = None,
         method: str,
         signer_url: str | None,
         signer_headers: dict[str, str] | None,
@@ -160,6 +162,10 @@ class SdkRunnerTransport:
     def _call_kwargs(
         self, runner: Runner, request: JobRequest, credential: str | None, sessions: "_SignedSessions"
     ) -> tuple[str, dict[str, Any]]:
+        if request.headers:
+            raise RunnerCallError(
+                "http", "Pinned SDK does not support custom runner headers", payment_sent=False
+            )
         paid = credential is not None and self._signer_url is not None
         instance = LiveRunnerInstance(
             url=runner.url,
@@ -182,6 +188,10 @@ class SdkRunnerTransport:
             "max_payment_challenge_retries": self._retries,
             "on_payment_session": sessions if paid else None,
         }
+        if request.raw_body is not None:
+            kwargs["payload"] = request.raw_body
+        if request.content_type is not None:
+            kwargs["content_type"] = request.content_type
         return url, kwargs
 
     async def call(
@@ -261,6 +271,10 @@ class SdkRunnerStream:
     @property
     def content_type(self) -> str:
         return str(self._stream.content_type or "application/octet-stream")
+
+    @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        return tuple(self._stream.headers.items())
 
     @property
     def manifest_ids(self) -> tuple[str, ...]:

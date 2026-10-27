@@ -44,6 +44,7 @@ classDiagram
     class RunnerStream {
         <<interface>>
         +content_type str
+        +headers str[][]
         +manifest_ids str[]
         +payment_sent bool
         +status_code int

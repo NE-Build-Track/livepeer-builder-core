@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import functools
 import hashlib
-import json
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -66,6 +65,7 @@ from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits, failure_kind
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
@@ -468,15 +468,6 @@ class JobService:
             created_at=self._clock.now(),
             completed_at=None,
         )
-
-
-def request_fingerprint(request: JobRequest) -> str:
-    """Stable hash of what a retry must repeat exactly. Limits and timeouts may differ between retries."""
-    fields = request.model_dump(
-        mode="json", include={"app", "path", "method", "payload", "capability", "model"}
-    )
-    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _result_ref(reply: RunnerReply) -> ResultRef:

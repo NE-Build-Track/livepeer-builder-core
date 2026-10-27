@@ -41,3 +41,6 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | ISS-08 Standalone credentials and ownership controls | [active/iss-08-standalone-credentials.md](exec-plans/active/iss-08-standalone-credentials.md) | Mike (John reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.
+
+- [Native HTTP transport](exec-plans/active/native-http-transport.md): bounded raw bodies,
+  operation identity and stream headers; remaining SDK dependencies are explicit.

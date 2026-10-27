@@ -36,6 +36,9 @@ classDiagram
         +str path
         +enum method
         +map? payload
+        +bytes? raw_body
+        +str? content_type
+        +str[][] headers
         +str? operation_ref
         +str? capability
         +str? model

@@ -54,9 +54,9 @@ from livepeer_builder.errors import (
 )
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
-from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.policy import DefaultPolicy
+from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,

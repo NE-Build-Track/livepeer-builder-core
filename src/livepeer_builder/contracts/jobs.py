@@ -4,9 +4,10 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.http import request_headers
 
 ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
 
@@ -15,10 +16,27 @@ SessionMatch = Literal["unmatched", "matched", "ambiguous"]
 
 
 class JobRequest(Contract):
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
     app: str = Field(min_length=1)  # the runner app a discovery entry advertises
     path: str = ""  # appended to the runner URL; must start with "/" when set
     method: HttpMethod = "POST"
     payload: dict[str, Any] | None = None
+    raw_body: bytes | None = Field(default=None, strict=True, max_length=8388608, repr=False)
+    content_type: str | None = Field(default=None, min_length=1, max_length=256)
+    headers: tuple[tuple[str, str], ...] = Field(default=(), repr=False)
+
+    @field_validator("headers")
+    @classmethod
+    def _headers(cls, value: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        return request_headers(value)
+
+    @field_validator("content_type")
+    @classmethod
+    def _media_type(cls, value: str | None) -> str | None:
+        if value is not None and any(ord(c) < 32 or ord(c) > 126 for c in value):
+            raise ValueError("Invalid content type")
+        return value
+
     operation_ref: str | None = Field(default=None, max_length=200)  # the caller's retry key
     capability: str | None = None  # label only in M2; resolution is a later contract
     model: str | None = None
@@ -32,6 +50,10 @@ class JobRequest(Contract):
 
     @model_validator(mode="after")
     def _first_byte_within_total(self) -> "JobRequest":
+        if self.raw_body is not None and self.payload is not None:
+            raise ValueError("Use either payload or raw_body")
+        if self.raw_body is not None and self.content_type is None:
+            raise ValueError("raw_body requires an explicit content_type")
         if "first_byte_timeout_s" in self.model_fields_set and self.first_byte_timeout_s > self.timeout_s:
             raise ValueError("first_byte_timeout_s cannot be longer than timeout_s")
         return self

@@ -9,7 +9,7 @@ from hypothesis import strategies as st
 
 from livepeer_builder.contracts import Attempt, Job, JobRequest, SignedSession, UsageRow
 from livepeer_builder.services.costs import add_fees, classify, fees_of
-from livepeer_builder.services.jobs import request_fingerprint
+from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.store.rows import usage_row
 from livepeer_builder.store.sql import _usage_values
 

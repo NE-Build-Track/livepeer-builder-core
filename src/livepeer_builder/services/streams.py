@@ -151,6 +151,10 @@ class JobStream:
         return self._stream.status_code
 
     @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        return self._stream.headers
+
+    @property
     def content_type(self) -> str:
         return self._stream.content_type
 

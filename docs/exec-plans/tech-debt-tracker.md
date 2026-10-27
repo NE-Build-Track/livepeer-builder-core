@@ -19,3 +19,11 @@ Known shortcuts and gaps. Each entry names its exit condition.
 | T13 | **A manifest is not yet a caller-owned reference.** Cost sync treats a manifest that maps to more than one Batteries payment session, or to more than one session-log entry, as `ambiguous` | The node signer forwards the caller's headers to the Batteries webhook, but Batteries does not store a caller reference on the payment session. Open question to Josh: is a fresh `ManifestID` per challenge an orchestrator guarantee? ([#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)) | Batteries stores a caller reference the signer already forwards, and returns it on usage rows. Then `manifest_id` is a label only and the session log matches on that reference |
 | T14 | **The engine bounds the SDK's first read for streams.** At `76a1a1c`, `call_runner(stream=True)` bounds the connection (and the 100-continue handshake of a streamed body) by `timeout`, and closes its response and HTTP sessions on cancellation (metered funding starts only once the stream is open), but sets no read timeout, so a runner that never sends headers holds the call. `SdkRunnerTransport.open` keeps its `first_byte_timeout_s` wrapper (D35), which keeps any sessions reported by `on_payment_session` before the timeout and leaves `payment_sent=False` when signing has not completed (D41) | SDK issue drafted 20 October (not yet filed; `livepeer/livepeer-python-gateway`) | The SDK bounds the first read; then the engine's wrapper is a second line of defence only |
 | T15 | **A missing `payload` is sent as `{}`.** At `76a1a1c` the SDK sends `payload=None` as an empty body; earlier pins sent `{}`, so `SdkRunnerTransport` maps `None` to `{}` (D41) | Runners may still expect a JSON object | Decide whether an empty body is the contract for a request without a payload; then pass `None` through |
+
+### Native HTTP SDK integration
+
+Opaque bounded request bytes and stream header access are implemented. Custom runner request
+headers fail before SDK dispatch because the pinned SDK has no corresponding argument.
+Transparent backend HTTP errors and buffered response headers also need an upstream contract.
+Keep payment challenges distinct from application errors, preserve attempt/payment evidence,
+and never replay a paid ambiguous request. See [native HTTP plan](active/native-http-transport.md).

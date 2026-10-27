@@ -241,3 +241,45 @@ These are the explicit decisions for ISS-02.
   background (default 15 s and 30 s). There are no latency guarantees in M2.
 - **Streaming is per job, not continuous media.** `jobs.streaming.stream` delivers one runner response as it
   arrives (above); live media and persistent sessions remain M4 (ISS-27).
+
+## Opaque request bodies and stream headers
+
+`JobRequest` accepts `raw_body: bytes` instead of `payload`, with an explicit `content_type`.
+The raw body is limited to 8 MiB. Empty bytes are an explicit empty body, distinct from the
+legacy omitted JSON payload. The default SDK adapter passes these bytes unchanged through
+its existing payment challenge flow. For example:
+
+```python
+request = JobRequest(
+    app="inference/runner",
+    path="/v1/chat/completions",
+    model="served-model",
+    raw_body=b' {"model":"served-model","messages":[]} ',
+    content_type="application/json",
+)
+```
+
+In the stock REST JSON request envelope, `raw_body` uses URL-safe base64, as generated in
+OpenAPI. Embedded Python callers use bytes directly. Request bodies are not added to job
+records. The operation fingerprint includes a raw-body digest/length, content type and
+normalized headers; legacy JSON fingerprints are unchanged. A changed body under the same
+operation reference remains an operation conflict. No database migration is needed.
+
+`headers` is an immutable tuple of name/value pairs for injected transports. Names are
+normalized and sorted; duplicate names, control characters, credentials, Livepeer control
+headers and HTTP framing headers are rejected. Limits are 32 fields and 16 KiB of names and
+values. Use `content_type` rather than a Content-Type header. **The pinned default SDK does
+not accept custom runner headers**: it rejects a nonempty tuple before invoking the SDK,
+without signing or sending a request. This is not yet an Anthropic header forwarding feature.
+
+`RunnerStream.headers` and `JobStreamApi.headers` expose response header pairs to embedded
+callers, preserving repeated fields from the SDK. Custom stream implementations must provide
+this property (an empty tuple when no headers exist). The shipped fakes support it. These
+headers are untrusted; applications must filter cookies, credentials, hop-by-hop fields and
+content framing before forwarding them to another client. The stock REST stream keeps its
+existing header policy. Buffered SDK results do not expose a new header guarantee.
+
+The pinned SDK still raises errors for non-402 HTTP failures. This change does not introduce
+transparent error-body delivery, change job success/failure semantics or bypass paid retry
+rules. It also does not add streaming uploads or a provider-specific request parser. Native
+inference pass-through still needs the SDK's runner-header and error-response contracts.

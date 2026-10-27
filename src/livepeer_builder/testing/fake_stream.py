@@ -57,6 +57,10 @@ class FakeJobStream:
         return self._reply.status_code
 
     @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        return self._reply.headers
+
+    @property
     def content_type(self) -> str:
         return self._reply.content_type
 

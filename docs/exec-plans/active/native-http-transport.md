@@ -45,3 +45,11 @@ identity and existing payment/cleanup behavior. Keep inference protocols outside
 
 - 2026-10-27: Follow-up validation: 969 tests passed, 21 PostgreSQL cases skipped locally;
   total coverage 97.12%, changed-line coverage 98%. Full layer coverage gates pass.
+
+- 2026-10-27: Review fixes align the encoded REST size bound with 8 MiB decoded bytes,
+  make paid fake HTTP errors match real-engine failure outcomes (including redirects),
+  and reject buffered error policy in the fake before recording. SDK cd6ed5e includes the
+  collected payment-retry test; SDK suite passes 346 tests.
+- 2026-10-27: Review follow-up passes 972 tests (21 PostgreSQL tests skipped locally),
+  overall coverage 97.11%, changed-line coverage 99%, and all layer gates. Lint, formatting,
+  typing, documentation and generated schema checks pass.

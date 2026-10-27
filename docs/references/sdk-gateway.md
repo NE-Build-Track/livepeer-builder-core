@@ -1,6 +1,6 @@
 # Python gateway SDK (as relied on by the engine)
 
-Native HTTP review pin: **NE-Build-Track/livepeer-python-gateway `f500ecd`**, from
+Native HTTP review pin: **NE-Build-Track/livepeer-python-gateway `cd6ed5e`**, from
 [PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6), supplies validated
 runner headers and opt-in error streams. This supersedes the historical pin below for
 this branch. Publication stays in NE-Build-Track forks.

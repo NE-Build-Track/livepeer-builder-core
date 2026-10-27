@@ -21,10 +21,19 @@ class JobRequest(Contract):
     path: str = ""  # appended to the runner URL; must start with "/" when set
     method: HttpMethod = "POST"
     payload: dict[str, Any] | None = None
-    raw_body: bytes | None = Field(default=None, strict=True, max_length=8388608, repr=False)
+    raw_body: bytes | None = Field(
+        default=None, strict=True, repr=False, json_schema_extra={"maxLength": 11184812}
+    )
     content_type: str | None = Field(default=None, min_length=1, max_length=256)
     headers: tuple[tuple[str, str], ...] = Field(default=(), repr=False)
     return_http_errors: bool = False
+
+    @field_validator("raw_body")
+    @classmethod
+    def _body_limit(cls, value: bytes | None) -> bytes | None:
+        if value is not None and len(value) > 8388608:
+            raise ValueError("raw_body exceeds 8 MiB decoded limit")
+        return value
 
     @field_validator("headers")
     @classmethod

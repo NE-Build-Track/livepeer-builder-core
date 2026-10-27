@@ -208,12 +208,37 @@ async def test_error_policy_requires_stream_api_and_changes_identity():
             await engine.jobs.run(ActorContext(actor_id="a"), request)
 
 
-async def test_fake_native_error_matches_engine_failure():
-    engine = FakeEngine(streaming=True, replies={("chat", ""): Reply(status_code=400, chunks=(b"error",))})
+@pytest.mark.parametrize(("status", "kind"), [(307, "runner_error"), (400, "runner_rejected")])
+async def test_fake_native_error_matches_engine_failure(status, kind):
+    engine = FakeEngine(
+        streaming=True,
+        runners=[runner("chat")],
+        replies={("chat", ""): Reply(status_code=status, chunks=(b"error",))},
+    )
     stream = await engine.jobs.streaming.stream(
         ActorContext(actor_id="a"), raw_request(return_http_errors=True)
     )
     assert b"".join([c async for c in stream]) == b"error"
     assert stream.job.state == "failed"
-    assert stream.job.failure.status_code == 400
+    assert stream.job.failure.status_code == status
+    assert stream.job.failure.kind == kind
+    assert stream.job.attempts[-1].payment_sent
+    assert stream.job.attempts[-1].outcome == "http"
     await stream.aclose()
+
+
+def test_rest_schema_limit_matches_encoded_body_limit():
+    request = JobRequest(app="x", raw_body=b"a" * 8388608, content_type="application/octet-stream")
+    encoded = request.model_dump_json()
+    assert JobRequest.model_validate_json(encoded) == request
+    field = JobRequest.model_json_schema()["properties"]["raw_body"]
+    assert len(json.loads(encoded)["raw_body"]) == field["maxLength"] == 11184812
+
+
+async def test_fake_rejects_buffered_error_policy_before_recording():
+    from livepeer_builder.errors import InvalidRequest
+
+    engine = FakeEngine()
+    with pytest.raises(InvalidRequest, match="streaming"):
+        await engine.jobs.run(ActorContext(actor_id="a"), raw_request(return_http_errors=True))
+    assert not engine.jobs.requests

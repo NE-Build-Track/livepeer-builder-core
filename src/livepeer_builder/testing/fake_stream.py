@@ -22,6 +22,7 @@ class StreamEndings(Protocol):
         *,
         result: ResultRef | None = None,
         failure: Failure | None = None,
+        http_error: bool = False,
     ) -> Job: ...
 
     def broke(self, job: Job, fails: Fails, stream_status: int) -> Job: ...
@@ -142,14 +143,16 @@ class FakeJobStream:
 
     def _succeed(self) -> None:
         if self._return_http_errors and self._reply.status_code >= 300:
-            self._fail(
-                Fails(
+            if not self._ended:
+                self._ended = True
+                status = self._reply.status_code
+                failure = Failure(
+                    kind="runner_rejected" if 400 <= status < 500 else "runner_error",
                     message="Runner returned HTTP error",
-                    status_code=self._reply.status_code,
-                    kind="runner_rejected" if self._reply.status_code < 500 else "runner_error",
-                    payment_sent=True,
+                    status_code=status,
+                    payment_sent=any(a.payment_sent for a in self._job.attempts),
                 )
-            )
+                self._job = self._jobs.ended(self._job, "http", status, failure=failure, http_error=True)
             return
         if not self._ended:
             self._ended = True

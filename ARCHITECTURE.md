@@ -16,7 +16,7 @@ flowchart TB
         ST["store: SQLite / PostgreSQL"]
     end
     Disc["discovery service (lpb discovery, its own process)"]
-    SDK["livepeer-python-gateway (pinned f500ecd)"]
+    SDK["livepeer-python-gateway (pinned cd6ed5e)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
     Orch["Orchestrators + Live Runners (on the network)"]

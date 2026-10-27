@@ -1179,7 +1179,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "livepeer-gateway", git = "https://github.com/NE-Build-Track/livepeer-python-gateway.git?rev=f500ecdccf5e6afd549524f346411b734879b897" },
+    { name = "livepeer-gateway", git = "https://github.com/NE-Build-Track/livepeer-python-gateway.git?rev=cd6ed5e539b3e98f26f04cd316f9c99e4bec952a" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "starlette", marker = "extra == 'server'", specifier = ">=0.37.2" },
@@ -1204,7 +1204,7 @@ dev = [
 [[package]]
 name = "livepeer-gateway"
 version = "1.0.0"
-source = { git = "https://github.com/NE-Build-Track/livepeer-python-gateway.git?rev=f500ecdccf5e6afd549524f346411b734879b897#f500ecdccf5e6afd549524f346411b734879b897" }
+source = { git = "https://github.com/NE-Build-Track/livepeer-python-gateway.git?rev=cd6ed5e539b3e98f26f04cd316f9c99e4bec952a#cd6ed5e539b3e98f26f04cd316f9c99e4bec952a" }
 dependencies = [
     { name = "aiohttp" },
     { name = "av" },

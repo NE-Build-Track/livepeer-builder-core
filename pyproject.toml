@@ -22,7 +22,7 @@ dependencies = [
     # Pin to livepeer/livepeer-python-gateway main at 76a1a1c (22 October): Enforce TLS (#76),
     # streamable runner bodies (#80) and on_payment_session (#81; reports LivePaymentSession.manifest_id).
     # PyPI 1.0.0 lacks the callback, so this stays a git SHA until a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@f500ecdccf5e6afd549524f346411b734879b897",
+    "livepeer-gateway @ git+https://github.com/NE-Build-Track/livepeer-python-gateway.git@cd6ed5e539b3e98f26f04cd316f9c99e4bec952a",
 ]
 
 [project.optional-dependencies]

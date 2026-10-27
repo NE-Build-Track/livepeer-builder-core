@@ -210,6 +210,7 @@ class FakeJobs:
         *,
         result: ResultRef | None = None,
         failure: Failure | None = None,
+        http_error: bool = False,
     ) -> Job:
         """Record how a stream ended: the attempt's outcome, then ``succeeded``, or ``uncertain`` when
         a paid call did not finish (``failed`` when it was not paid)."""
@@ -219,7 +220,9 @@ class FakeJobs:
             for attempt in job.attempts
         )
         paid = any(attempt.payment_sent for attempt in attempts)
-        state: JobState = "succeeded" if failure is None else "uncertain" if paid else "failed"
+        state: JobState = (
+            "succeeded" if failure is None else "uncertain" if paid and not http_error else "failed"
+        )
         done = job.model_copy(
             update={
                 "state": state,
@@ -247,6 +250,8 @@ class FakeJobs:
         return self.ended(job, attempt_outcome(fails.kind), status, failure=failure)
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
+        if request.return_http_errors:
+            raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
         reply = self.reply_for(actor, request)
         job = self.record(actor, request, "succeeded", None, reply=reply)
         result = JobResult(

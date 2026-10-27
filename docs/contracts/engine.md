@@ -288,7 +288,7 @@ and signer failures remain control flow, not client responses. The SDK opt-in mo
 redirects, transparent decompression and implicit connection retries; callers must interpret
 any content encoding returned despite the identity encoding request.
 
-This implementation pins NE-Build-Track SDK commit `f500ecd` from
+This implementation pins NE-Build-Track SDK commit `cd6ed5e` from
 [SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6). Review that
 PR alongside this change; it is not an upstream SDK release. No streaming uploads or
 provider-specific request processing is added.

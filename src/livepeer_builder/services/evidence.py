@@ -1,4 +1,7 @@
-"""Payment evidence on an attempt: stored when the signer signs, and never shrunk (ISS-16, D42).
+"""Durable intent before signing (D54), then confirmed evidence that never shrinks (ISS-16, D42).
+
+The pre-sign ``payment_state`` write is strict: failure prevents the signing request. Cancellation
+or an invalid/lost response leaves unknown intent. Only explicit refusal records unpaid.
 
 A transport calls ``on_signed(manifest_id)`` for each session the signer signs, before the paid request
 goes out. ``SignedSessionRecorder`` is that callback for one runner call. It puts the session on the
@@ -12,7 +15,7 @@ on, and the write after the call (``finish_attempt``), or the close after an err
 import logging
 from collections.abc import Sequence
 
-from livepeer_builder.contracts import Attempt
+from livepeer_builder.contracts import Attempt, PaymentState, SignedSession
 from livepeer_builder.protocols import JobRepo
 from livepeer_builder.services.streams import sessions_from
 from livepeer_builder.utils import run_shielded
@@ -33,6 +36,21 @@ class SignedSessionRecorder:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
         self._attempts[self._index] = attempt
         await run_shielded(_write(self._store, attempt))
+
+    async def payment_state(self, manifest_id: str, state: PaymentState) -> None:
+        """Fail closed: an intent write must succeed before the transport may sign."""
+        attempt = self._attempts[self._index]
+        sessions = {session.manifest_id: session for session in attempt.sessions}
+        previous = sessions.get(manifest_id)
+        if previous is None or previous.payment_state != "paid":
+            sessions[manifest_id] = (
+                previous.model_copy(update={"payment_state": state})
+                if previous is not None
+                else SignedSession(manifest_id=manifest_id, payment_state=state)
+            )
+        attempt = attempt.model_copy(update={"sessions": tuple(sessions.values())})
+        self._attempts[self._index] = attempt
+        await run_shielded(self._store.record_payment_evidence(attempt))
 
 
 async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:
@@ -60,5 +78,12 @@ def with_evidence(attempt: Attempt, manifest_ids: Sequence[str], payment_sent: b
     known = {session.manifest_id for session in attempt.sessions}
     added = sessions_from(tuple(m for m in dict.fromkeys(manifest_ids) if m not in known))
     return attempt.model_copy(
-        update={"sessions": attempt.sessions + added, "payment_sent": attempt.payment_sent or payment_sent}
+        update={
+            "sessions": tuple(
+                s.model_copy(update={"payment_state": "paid"}) if s.manifest_id in manifest_ids else s
+                for s in attempt.sessions
+            )
+            + added,
+            "payment_sent": attempt.payment_sent or payment_sent,
+        }
     )

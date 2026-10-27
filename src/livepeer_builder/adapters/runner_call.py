@@ -18,9 +18,9 @@ SDK's ``call_runner`` or its helpers change, so every pin bump reviews this copy
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
 
 import aiohttp
 from livepeer_gateway.errors import (
@@ -40,13 +40,8 @@ from livepeer_gateway.remote_signer import (
 
 from livepeer_builder.contracts import AttemptOutcome, NetworkRate
 from livepeer_builder.errors import RunnerCallError
-from livepeer_builder.protocols import OnSigned
+from livepeer_builder.protocols import OnPaymentState, OnSigned
 from livepeer_builder.utils import BODY_LIMIT
-
-PaymentState = Literal["unpaid", "unknown", "paid"]
-OnPaymentState = Callable[[str, PaymentState], Awaitable[None]]
-"""Called with ``(manifest_id, "unknown")`` before a session is signed, and ``"unpaid"`` when the signer
-refused it. Raising from the ``"unknown"`` call stops the signing request (fail closed)."""
 
 PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"

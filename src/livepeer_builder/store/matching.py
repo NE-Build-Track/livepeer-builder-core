@@ -117,13 +117,14 @@ async def match_payment_sessions(conn: AsyncConnection, rows: Sequence[UsageRow]
         )
         .where(
             t.payment_sessions.c.match_status == "unmatched",
+            t.payment_sessions.c.payment_state != "unpaid",
             t.attempts.c.allocation_id.is_not(None),
         )
         .distinct()
     )
     keys.update((allocation, manifest) for allocation, manifest in pending if allocation and manifest)
     changed: set[UUID] = set()
-    for allocation_id, manifest_id in keys:
+    for allocation_id, manifest_id in sorted(keys):
         changed.update(await _match_key(conn, allocation_id, manifest_id))
     touched = [row.payment_session_id for row in rows if row.status == "applied" and row.payment_session_id]
     for chunk in _chunks(touched):
@@ -161,6 +162,7 @@ async def _match_key(conn: AsyncConnection, allocation_id: str, manifest_id: str
                     t.payment_sessions.c.seq,
                     t.payment_sessions.c.match_status,
                     t.payment_sessions.c.payment_session_id,
+                    t.payment_sessions.c.payment_state,
                 )
                 .join(
                     t.attempts,
@@ -172,6 +174,7 @@ async def _match_key(conn: AsyncConnection, allocation_id: str, manifest_id: str
                 .where(
                     t.attempts.c.allocation_id == allocation_id,
                     t.payment_sessions.c.manifest_id == manifest_id,
+                    t.payment_sessions.c.payment_state != "unpaid",
                 )
             )
         )
@@ -184,8 +187,19 @@ async def _match_key(conn: AsyncConnection, allocation_id: str, manifest_id: str
         status, session_id = "ambiguous", None
     changed: set[UUID] = set()
     for entry in entries:
-        if entry["match_status"] == status and entry["payment_session_id"] == session_id:
+        confirmed = status == "matched" and entry["payment_state"] == "unknown"
+        if entry["match_status"] == status and entry["payment_session_id"] == session_id and not confirmed:
             continue
+        # Same lock order as record_payment_evidence: attempt before session.
+        if confirmed:
+            await conn.execute(
+                update(t.attempts)
+                .where(
+                    t.attempts.c.job_id == entry["job_id"],
+                    t.attempts.c.number == entry["attempt_number"],
+                )
+                .values(payment_sent=True)
+            )
         await conn.execute(
             update(t.payment_sessions)
             .where(
@@ -193,7 +207,11 @@ async def _match_key(conn: AsyncConnection, allocation_id: str, manifest_id: str
                 t.payment_sessions.c.attempt_number == entry["attempt_number"],
                 t.payment_sessions.c.seq == entry["seq"],
             )
-            .values(match_status=status, payment_session_id=session_id)
+            .values(
+                match_status=status,
+                payment_session_id=session_id,
+                payment_state="paid" if confirmed else t.payment_sessions.c.payment_state,
+            )
         )
         changed.add(UUID(entry["job_id"]))
     return changed

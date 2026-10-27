@@ -19,7 +19,8 @@ from aiohttp.test_utils import TestServer
 from livepeer_builder.contracts import NetworkRate, Runner
 
 # What the signer does with one /generate-live-payment request: "ok", an HTTP status, "malformed" (no
-# segCreds), "drop" (the connection closes before the reply) or a number of seconds to hang.
+# segCreds), "drop" (the connection closes before the reply) or a number of seconds to hang. ``on_sign``
+# may also return a JSON body to send as the reply.
 SignStep = str | int | float
 
 
@@ -42,6 +43,7 @@ class Net:
     challenge_paid: bool = False  # answer 402 even to a paid request
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
+    on_sign: Callable[[], Awaitable[SignStep | dict[str, Any]]] | None = None  # replaces ``sign`` steps
     sign: list[SignStep] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
@@ -58,9 +60,12 @@ class Net:
     def url(self) -> str:
         return str(self.server.make_url("")).rstrip("/")
 
-    def runner(self, unit: str = "fixed", price: str = "0.10", orchestrator_url: str | None = None) -> Runner:
+    def runner(
+        self, unit: str = "fixed", price: str = "0.10", orchestrator_url: str | None = None, name: str = ""
+    ) -> Runner:
         return Runner(
-            url=f"{self.url}/app", app="example/echo", runner_id="r1", mode="single-shot",
+            url=f"{self.url}/app" + (f"/{name}" if name else ""), app="example/echo", runner_id=name or "r1",
+            mode="single-shot",
             orchestrator_url=orchestrator_url or self.url, capacity=1, capacity_available=1,
             rate=NetworkRate(amount=Decimal(price), currency="usd", unit=unit),
         )  # fmt: skip
@@ -73,8 +78,10 @@ class Net:
         payload = await request.json()
         self.signer_requests.append(payload)
         manifest = payload["ManifestID"]
-        step = self.sign.pop(0) if self.sign else "ok"
         self.log.append(f"sign {manifest}")
+        step = await self.on_sign() if self.on_sign else (self.sign.pop(0) if self.sign else "ok")
+        if isinstance(step, dict):
+            return web.json_response(step)
         if step == "malformed":
             return web.json_response({"payment": "p", "state": {"n": 1}})
         if step == "drop":

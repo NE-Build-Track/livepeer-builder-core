@@ -13,7 +13,6 @@ from typing import Any, Protocol
 from livepeer_gateway.discovery import discover_runners
 
 from livepeer_builder.adapters.runner_call import (
-    OnPaymentState,
     PaidRequest,
     PaidStream,
     PaymentEvents,
@@ -27,7 +26,7 @@ from livepeer_builder.contracts import (
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.protocols import OnSigned
+from livepeer_builder.protocols import OnPaymentState, OnSigned
 
 
 class DiscoverRunners(Protocol):
@@ -128,6 +127,30 @@ class SdkRunnerTransport:
         except TimeoutError as error:  # the deadline; the call's own timeouts are already RunnerCallError
             message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
             raise events.error("timeout", message) from error
+
+    async def call_with_payment_intent(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        *,
+        on_signed: OnSigned,
+        on_payment_state: OnPaymentState,
+    ) -> RunnerReply:
+        """``PaymentIntentTransport``: ``call`` with each manifest recorded before signing (D54)."""
+        return await self.call(runner, request, credential, on_signed, on_payment_state=on_payment_state)
+
+    async def open_with_payment_intent(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        *,
+        on_signed: OnSigned,
+        on_payment_state: OnPaymentState,
+    ) -> PaidStream:
+        """``PaymentIntentStreamingTransport``: ``open`` with each manifest recorded before signing (D54)."""
+        return await self.open(runner, request, credential, on_signed, on_payment_state=on_payment_state)
 
 
 def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:

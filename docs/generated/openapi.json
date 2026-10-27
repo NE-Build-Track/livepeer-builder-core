@@ -1795,7 +1795,7 @@
       },
       "SignedSession": {
         "additionalProperties": false,
-        "description": "One session the signer signed for an attempt.\n\n``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to\nthe Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays\n``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session\nand one log entry share the key, and ``ambiguous`` when they do not.",
+        "description": "One signing intent or confirmed session for an attempt (historical name retained).\n\n``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to\nthe Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays\n``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session\nand one eligible log entry share the key, and ``ambiguous`` when they do not.\n``unknown`` means signing may have charged; ``unpaid`` means explicit refusal.\nA validated signer response or unique applied usage confirms ``paid`` permanently.",
         "properties": {
           "manifest_id": {
             "title": "Manifest Id",
@@ -1821,6 +1821,16 @@
               }
             ],
             "title": "Payment Session Id"
+          },
+          "payment_state": {
+            "default": "paid",
+            "enum": [
+              "unpaid",
+              "unknown",
+              "paid"
+            ],
+            "title": "Payment State",
+            "type": "string"
           }
         },
         "required": [

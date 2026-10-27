@@ -83,6 +83,7 @@ erDiagram
         string manifest_id
         string payment_session_id
         string match_status
+        string payment_state
     }
     lpb_secrets {
         string ref PK
@@ -219,6 +220,7 @@ Indexes:
 | `manifest_id` | VARCHAR(200) | no |  |
 | `payment_session_id` | VARCHAR(200) | yes |  |
 | `match_status` | VARCHAR(16) | no |  |
+| `payment_state` | VARCHAR(16) | no |  |
 
 Indexes:
 

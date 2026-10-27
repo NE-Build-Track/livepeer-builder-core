@@ -26,8 +26,16 @@ _PAID_FAILOVER_OUTCOMES: frozenset[AttemptOutcome] = frozenset({"refused", "paym
 _PAID_FAILOVER_STATUSES = frozenset({404, 409})
 
 
-def attempt_verdict(outcome: AttemptOutcome, status_code: int | None, paid: bool) -> Verdict:
-    """What a failed attempt means for its job (docs/contracts/engine.md#behavior-the-contract-fixes)."""
+def attempt_verdict(
+    outcome: AttemptOutcome, status_code: int | None, paid: bool, *, unknown: bool = False
+) -> Verdict:
+    """What a failed attempt means for its job (docs/contracts/engine.md#behavior-the-contract-fixes).
+
+    ``unknown``: a session was signed with no answer from the signer, so it may have charged. The job
+    stops there, ``uncertain``, and cost sync settles the payment from usage (D54).
+    """
+    if unknown:
+        return "uncertain"
     if not paid:
         return "failover" if outcome in FAILOVER_OUTCOMES else "failed"
     if outcome in UNCERTAIN_OUTCOMES:

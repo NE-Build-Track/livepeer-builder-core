@@ -41,6 +41,17 @@ classDiagram
         +async call(runner, request, credential, on_signed) RunnerReply
         +async open(runner, request, credential, on_signed) RunnerStream
     }
+    class PaymentIntentTransport {
+        <<interface>>
+        +async call(runner, request, credential, on_signed) RunnerReply
+        +async call_with_payment_intent(runner, request, credential, on_signed, on_payment_state) RunnerReply
+    }
+    class PaymentIntentStreamingTransport {
+        <<interface>>
+        +async call(runner, request, credential, on_signed) RunnerReply
+        +async open(runner, request, credential, on_signed) RunnerStream
+        +async open_with_payment_intent(runner, request, credential, on_signed, on_payment_state) RunnerStream
+    }
     class RunnerStream {
         <<interface>>
         +content_type str
@@ -141,6 +152,8 @@ classDiagram
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
+    PaymentIntentTransport <|.. SdkRunnerTransport
+    PaymentIntentStreamingTransport <|.. SdkRunnerTransport
     RunnerStream <|.. PaidStream
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
@@ -170,6 +183,8 @@ classDiagram
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `PaymentIntentTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `PaymentIntentStreamingTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `RunnerStream` | `PaidStream` | `livepeer_builder.adapters.runner_call` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |

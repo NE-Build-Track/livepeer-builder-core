@@ -38,6 +38,7 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
 | Dependency-injection refactor (internal, before ISS-32) | [active/dependency-injection-refactor.md](exec-plans/active/dependency-injection-refactor.md) | Mike |
 | Discovery service, [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45) (ISS-09) | [active/discovery-service.md](exec-plans/active/discovery-service.md) | Mike |
+| Durable payment intent | [active/payment-intent.md](exec-plans/active/payment-intent.md) | Mike |
 | ISS-08 Standalone credentials and ownership controls | [active/iss-08-standalone-credentials.md](exec-plans/active/iss-08-standalone-credentials.md) | Mike (John reviews) |
 | JWT bearer, chosen by `LPB_AUTH` (#49, ISS-33 in M4) | [active/jwt-bearer.md](exec-plans/active/jwt-bearer.md) | Mike |
 | Neon Postgres, with a database branch per pull request | [active/neon-preview-branches.md](exec-plans/active/neon-preview-branches.md) | John |

@@ -39,7 +39,7 @@ def attempt_verdict(
     The paid request never left, but a second payment could double the charge: the job stops there.
     """
     not_run = outcome == "http" and status_code in NOT_RUN_STATUSES
-    if payment_unknown:
+    if payment_unknown or outcome == "payment_unknown":
         return "uncertain"
     if not paid:
         return "failover" if outcome in FAILOVER_OUTCOMES or not_run else "failed"
@@ -55,7 +55,7 @@ def payment_unresolved(attempts: Sequence[Attempt]) -> bool:
     if not attempts:
         return False
     last = max(attempts, key=lambda attempt: attempt.number)
-    if last.outcome == "in_flight":
+    if last.outcome in ("in_flight", "payment_unknown"):  # under way, or the signer may have charged
         return True
     return last.payment_sent and attempt_verdict(last.outcome, last.status_code, True) != "failover"
 

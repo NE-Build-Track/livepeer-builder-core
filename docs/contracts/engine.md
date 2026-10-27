@@ -49,7 +49,8 @@ missing `payload` as the JSON object `{}` (D41).
 An `Attempt` is one runner call. It records `allocation_id` (the allocation whose key paid),
 `sessions` (one entry per session the signer signed, in order, each with a `manifest_id` and a
 match of `unmatched`, `matched` or `ambiguous`), `payment_sent`, `outcome` (`in_flight`,
-`succeeded`, `refused`, `unreachable`, `payment_refused`, `payment`, `timeout`, `http`, `abandoned`), the status
+`succeeded`, `refused`, `unreachable`, `payment_refused`, `payment`, `timeout`, `http`, `abandoned`,
+`payment_unknown`), the status
 code and timestamps. The cost key is the matched `payment_session_id`, not the manifest.
 
 ### Behavior the contract fixes
@@ -58,8 +59,6 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    selection order, at most `max_attempts` of them. A failed attempt decides what happens next
    (`services/failover.py`):
 
-   | Attempt | Outcome | Next |
-   | --- | --- | --- |
    | Attempt | Outcome | Next |
    | --- | --- | --- |
    | Not paid | `refused`, `unreachable`, `payment_refused`, or `http` 404 or 409 | Fail over |
@@ -86,7 +85,7 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      refusal as its own not-found or conflict.
    - **`failure.payment_sent`** is true when any attempt of the job was paid, not only the last.
    - **A restart or an engine error** leaves the job `uncertain` only when its last attempt was still in
-     flight, or was paid and did not fail over. Attempts it failed over from ended with a known outcome.
+     flight, ended `payment_unknown`, or was paid and did not fail over. Attempts it failed over from ended with a known outcome.
    - **No runner selected.** A `SelectionPolicy` that returns no runner fails the job `no_offering`,
      before any payment.
    - **`payment_refused`:** the signer refused to pay *this orchestrator*. The signer statuses are 400

@@ -73,6 +73,7 @@ async def test_the_engine_stops_a_transport_that_ignores_its_deadline(
 @pytest.mark.parametrize(
     ("hang", "paid", "state", "manifests"),
     [("signer", False, "uncertain", ("m-1",)), ("runner", True, "uncertain", ("m-1",))],
+    ids=["while-signing", "after-payment"],
 )
 async def test_the_live_transport_times_out_by_whether_signing_finished(
     make_engine: EngineFactory,
@@ -107,8 +108,9 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     assert job.failure.payment_sent is paid
     assert len(job.attempts) == 1  # a timeout never fails over, paid or not
     attempt = job.attempts[0]
+    outcome = "timeout" if paid else "payment_unknown"  # stored, so a restart still sees it may have paid
     assert (attempt.outcome, attempt.payment_sent, tuple(s.manifest_id for s in attempt.sessions)) == (
-        "timeout",
+        outcome,
         paid,
         manifests,
     )

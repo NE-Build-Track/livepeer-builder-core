@@ -329,7 +329,9 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             if session.match == "matched" and session.payment_session_id
         }
         mine = [row for row in applied if row.payment_session_id in matched]
-        last_word = attempt.outcome == "in_flight" or (job.state == "uncertain" and attempt.number == last)
+        last_word = attempt.outcome in ("in_flight", "payment_unknown") or (
+            job.state == "uncertain" and attempt.number == last
+        )
         if not attempt.payment_sent and not mine and not (running or last_word):
             continue  # a manifest recorded before signing (D53) that was refused or failed over: no charge
         cost_class: CostClass

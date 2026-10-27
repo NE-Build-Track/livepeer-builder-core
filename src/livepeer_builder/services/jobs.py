@@ -315,12 +315,12 @@ class JobService:
     ) -> JobFailed | None:
         """Record the error on the current attempt. Returns the JobFailed to raise, or None to fail over.
 
-        Evidence the signer reported during the call stays: an error that says ``payment_sent=False``
-        after a session was signed still leaves the attempt paid. A paid attempt that fails over takes
-        its orchestrator out of the candidates, so the job never pays it twice.
+        Evidence the signer reported stays: a signed session keeps the attempt paid. A paid attempt that
+        fails over takes its orchestrator out of the candidates, so the job never pays it twice.
         """
+        outcome = "payment_unknown" if error.payment_unknown else error.kind  # stored: recovery must see it
         attempts[-1] = with_evidence(attempts[-1], error.manifest_ids, error.payment_sent).model_copy(
-            update={"outcome": error.kind, "status_code": error.status_code, "ended_at": self._clock.now()}
+            update={"outcome": outcome, "status_code": error.status_code, "ended_at": self._clock.now()}
         )
         await self._store.finish_attempt(attempts[-1])
         paid = attempts[-1].payment_sent

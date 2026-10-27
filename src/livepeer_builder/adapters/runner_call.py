@@ -21,6 +21,7 @@ import json
 from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 from livepeer_gateway.errors import (
@@ -143,8 +144,11 @@ class PaidRequest:
         signer: Signer | None,
         retries: int,
         events: PaymentEvents,
+        orchestrator_url: str | None = None,
     ) -> None:
         self.url = url
+        # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
+        self._payment_origins = {_origin(url)} | ({_origin(orchestrator_url)} if orchestrator_url else set())
         self._method = method.upper()
         self._body = json.dumps(payload).encode()
         self._app = app
@@ -264,8 +268,10 @@ class PaidRequest:
             data = json.loads(body)
             if isinstance(data, dict):
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
-                if all(isinstance(value, str) and value for value in fields.values()):
+                valid = all(isinstance(value, str) and value for value in fields.values())
+                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:
                     return LivePaymentChallenge(**fields)
+        # Malformed, or its payment_url names another host: refused before anything is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
 
 
@@ -329,6 +335,13 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
         raise signer_error(error, events) from error
     except (aiohttp.ClientError, OSError) as error:
         raise events.error(network_kind(error), f"{prefix}{error}") from error
+
+
+def _origin(url: str) -> str:
+    """``scheme://host:port``, lower-cased, with the default port filled in."""
+    parts = urlsplit(url if "://" in url else f"https://{url}")
+    scheme = parts.scheme.lower()
+    return f"{scheme}://{(parts.hostname or '').lower()}:{parts.port or (443 if scheme == 'https' else 80)}"
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:

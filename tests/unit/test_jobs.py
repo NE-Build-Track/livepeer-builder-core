@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
@@ -225,6 +226,7 @@ async def test_an_unknown_payment_never_pays_another_orchestrator(
     job = failed.value.job
     assert job.state == "uncertain" and len(job.attempts) == 1  # the signer may have charged
     assert job.failure is not None and not job.failure.payment_sent
+    assert job.failure.kind == "unreachable" and job.attempts[0].outcome == "payment_unknown"  # stored
 
 
 async def test_an_unpaid_orchestrator_refusal_fails_over(
@@ -358,6 +360,33 @@ async def test_restart_recovery_marks_maybe_paid_jobs_uncertain(
     recovered = await store.get_job(job.id)
     assert recovered is not None and recovered.state == "uncertain"
     assert recovered.failure is not None and recovered.failure.kind == "interrupted"
+
+
+async def test_restart_after_an_unknown_payment_stays_uncertain(
+    make_engine: EngineFactory, store: SqlStore, clock: FixedClock
+) -> None:
+    """The attempt was stored as payment_unknown, then the engine stopped before the job's end was written."""
+    engine = await make_engine()
+    job = Job(
+        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
+        created_at=clock.now(), completed_at=None,
+    )  # fmt: skip
+    await store.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="https://r1", orchestrator_url=None, allocation_id="a", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await store.start_attempt(attempt)
+    await store.finish_attempt(attempt.model_copy(update={"outcome": "payment_unknown"}))
+    assert await engine.jobs.recover_interrupted() == 1
+    recovered = await store.get_job(job.id)
+    assert recovered is not None and recovered.state == "uncertain"  # never `failed`: it may have paid
+
+
+async def test_a_payload_that_is_not_json_is_refused_before_any_attempt() -> None:
+    with pytest.raises(ValidationError, match="payload must be JSON"):
+        JobRequest(app=APP, payload={"amount": Decimal("1.5")})
 
 
 async def test_restart_between_attempts_after_a_paid_failover_is_failed(

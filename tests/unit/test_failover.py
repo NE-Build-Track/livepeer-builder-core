@@ -57,6 +57,7 @@ def test_attempt_verdict(outcome: AttemptOutcome, status: int | None, paid: bool
 @pytest.mark.parametrize("outcome", ["unreachable", "timeout", "payment", "refused"])
 def test_an_unknown_payment_stops_the_job_whatever_the_outcome(outcome: AttemptOutcome) -> None:
     assert attempt_verdict(outcome, None, False, payment_unknown=True) == "uncertain"
+    assert attempt_verdict("payment_unknown", None, False) == "uncertain"  # as stored on the attempt
 
 
 def test_candidates_skip_an_excluded_orchestrator_without_counting_it() -> None:
@@ -102,6 +103,10 @@ def _attempt(number: int, outcome: AttemptOutcome, paid: bool, status: int | Non
         ((_attempt(1, "refused", True, 503),), False),  # failed over, and the next attempt never started
         ((_attempt(1, "succeeded", True, 200),), True),  # it ran, but the job's end was never written
         ((_attempt(1, "timeout", False),), False),
+        (
+            (_attempt(1, "payment_unknown", False),),
+            True,
+        ),  # the signer may have charged: stored, so a restart sees it
     ],
 )
 def test_only_the_last_attempt_can_leave_a_payment_unresolved(

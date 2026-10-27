@@ -1,10 +1,11 @@
 """Job contracts: requests, attempts, failures, results and measured usage (docs/contracts/engine.md)."""
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from livepeer_builder.contracts.common import Contract
 
@@ -30,6 +31,17 @@ class JobRequest(Contract):
     first_byte_timeout_s: float = Field(default=60.0, gt=0, le=3600)
     idle_timeout_s: float | None = Field(default=60.0, gt=0, le=3600)
 
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_json(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The runner receives the payload as JSON, so it is checked here, before any attempt or payment."""
+        if value is not None:
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"payload must be JSON: {error}") from error
+        return value
+
     @model_validator(mode="after")
     def _first_byte_within_total(self) -> "JobRequest":
         if "first_byte_timeout_s" in self.model_fields_set and self.first_byte_timeout_s > self.timeout_s:
@@ -42,6 +54,8 @@ class JobRequest(Contract):
 # "payment": any other payment failure.
 # "abandoned": the caller stopped reading a stream before the runner finished
 # (docs/contracts/engine.md#streaming).
+# "payment_unknown": the signer was asked and gave neither a validated payment nor a refusal (a lost or
+# malformed reply, a 5xx, a cancel), so it may have charged; the job is uncertain (D53).
 AttemptOutcome = Literal[
     "in_flight",
     "succeeded",
@@ -52,6 +66,7 @@ AttemptOutcome = Literal[
     "timeout",
     "http",
     "abandoned",
+    "payment_unknown",
 ]
 
 

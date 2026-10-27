@@ -5,6 +5,7 @@ order the parties saw: the intent before the signer, the evidence before the pai
 """
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
@@ -13,6 +14,7 @@ import pytest
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError, PaymentError
 
 from livepeer_builder.adapters.runner_call import (
+    PaidRequest,
     PaymentEvents,
     max_price,
     network_kind,
@@ -239,7 +241,12 @@ async def test_payment_retries_are_bounded(net: Net) -> None:
     )
 
 
-@pytest.mark.parametrize("body", [b"not json", b"[]", b'{"manifest_id": "m-1"}', b'{"payment_params": ""}'])
+OTHER_HOST = b'{"payment_params": "p", "manifest_id": "m-1", "payment_url": "https://elsewhere.example/pay"}'
+
+
+@pytest.mark.parametrize(
+    "body", [b"not json", b"[]", b'{"manifest_id": "m-1"}', b'{"payment_params": ""}', OTHER_HOST]
+)
 async def test_an_invalid_payment_challenge_is_refused_before_signing(net: Net, body: bytes) -> None:
     net.challenge_body = body
     with pytest.raises(RunnerCallError) as invalid:
@@ -353,6 +360,23 @@ async def test_metered_funding_runs_while_the_work_runs_and_is_not_a_new_session
 
 
 # -- pure pieces -------------------------------------------------------------------------------------
+
+
+def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() -> None:
+    def challenge(payment_url: str) -> str:
+        return json.dumps({"payment_params": "p", "manifest_id": "m-1", "payment_url": payment_url})
+
+    paid = PaidRequest(
+        "https://runner.example/apps/r1/run", method="POST", payload={}, app=APP, rate=None,
+        signer=None, retries=0, events=PaymentEvents(), orchestrator_url="https://orch.example:8935",
+    )  # fmt: skip
+    assert (
+        paid._challenge(challenge("https://orch.example:8935/apps/r1/session/m-1/payment")).manifest_id
+        == "m-1"
+    )
+    assert paid._challenge(challenge("https://RUNNER.example:443/pay")).manifest_id == "m-1"
+    with pytest.raises(RunnerCallError, match="invalid payment challenge"):
+        paid._challenge(challenge("https://10.0.0.5/pay"))
 
 
 def test_signer_errors_map_to_outcomes() -> None:

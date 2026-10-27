@@ -82,6 +82,7 @@ class SdkRunnerTransport:
             signer=signer,
             retries=self._retries,
             events=events,
+            orchestrator_url=runner.orchestrator_url,
         )
 
     async def call(

@@ -178,7 +178,8 @@
               "payment",
               "timeout",
               "http",
-              "abandoned"
+              "abandoned",
+              "payment_unknown"
             ],
             "title": "Outcome",
             "type": "string"

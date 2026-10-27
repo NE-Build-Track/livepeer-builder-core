@@ -23,6 +23,7 @@ _RESERVED = frozenset(
         "content-encoding",
         "content-type",
         "expect",
+        "accept-encoding",
     }
 )
 

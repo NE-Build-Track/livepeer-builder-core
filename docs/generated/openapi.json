@@ -1107,6 +1107,11 @@
             ],
             "title": "Raw Body"
           },
+          "return_http_errors": {
+            "default": false,
+            "title": "Return Http Errors",
+            "type": "boolean"
+          },
           "timeout_s": {
             "default": 300.0,
             "exclusiveMinimum": 0.0,

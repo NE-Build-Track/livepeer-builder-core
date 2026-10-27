@@ -1,5 +1,11 @@
 # Python gateway SDK (as relied on by the engine)
 
+Native HTTP review pin: **NE-Build-Track/livepeer-python-gateway `f500ecd`**, from
+[PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6), supplies validated
+runner headers and opt-in error streams. This supersedes the historical pin below for
+this branch. Publication stays in NE-Build-Track forks.
+
+
 Baseline `44df061`. Pinned to `76a1a1c`, the head of [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) `main` on 22 October: "Enforce TLS" ([#76](https://github.com/livepeer/livepeer-python-gateway/pull/76)), streamable runner bodies ([#80](https://github.com/livepeer/livepeer-python-gateway/pull/80)) and the payment session callback ([#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), which superseded [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) and livepeer #71). The 21 October pin was NE-Build-Track `dev/bytestreaming` `3238731`. See [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
 
 | SDK surface | Engine use |

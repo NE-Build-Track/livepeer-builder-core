@@ -268,9 +268,8 @@ operation reference remains an operation conflict. No database migration is need
 `headers` is an immutable tuple of name/value pairs for injected transports. Names are
 normalized and sorted; duplicate names, control characters, credentials, Livepeer control
 headers and HTTP framing headers are rejected. Limits are 32 fields and 16 KiB of names and
-values. Use `content_type` rather than a Content-Type header. **The pinned default SDK does
-not accept custom runner headers**: it rejects a nonempty tuple before invoking the SDK,
-without signing or sending a request. This is not yet an Anthropic header forwarding feature.
+values. Use `content_type` rather than a Content-Type header. The SDK adapter passes
+these headers only to the runner; signer credentials remain separate.
 
 `RunnerStream.headers` and `JobStreamApi.headers` expose response header pairs to embedded
 callers, preserving repeated fields from the SDK. Custom stream implementations must provide
@@ -279,7 +278,17 @@ headers are untrusted; applications must filter cookies, credentials, hop-by-hop
 content framing before forwarding them to another client. The stock REST stream keeps its
 existing header policy. Buffered SDK results do not expose a new header guarantee.
 
-The pinned SDK still raises errors for non-402 HTTP failures. This change does not introduce
-transparent error-body delivery, change job success/failure semantics or bypass paid retry
-rules. It also does not add streaming uploads or a provider-specific request parser. Native
-inference pass-through still needs the SDK's runner-header and error-response contracts.
+`return_http_errors=True` is opt-in and requires `jobs.streaming.stream` (or the REST stream
+option). Non-402 backend HTTP responses are returned as status/headers/original bytes. A
+completed response with status >= 300 records an HTTP attempt and a failed job, including
+when paid. It never becomes a successful inference. A timeout, cancellation or interrupted
+body retains existing uncertain/abandoned semantics. Error bodies are not added to durable
+failure records. Default calls retain exception and failover behavior. Payment challenges
+and signer failures remain control flow, not client responses. The SDK opt-in mode disables
+redirects, transparent decompression and implicit connection retries; callers must interpret
+any content encoding returned despite the identity encoding request.
+
+This implementation pins NE-Build-Track SDK commit `f500ecd` from
+[SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6). Review that
+PR alongside this change; it is not an upstream SDK release. No streaming uploads or
+provider-specific request processing is added.

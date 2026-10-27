@@ -39,8 +39,11 @@ class FakeJobStream:
     caller's calls.
     """
 
-    def __init__(self, job: Job, reply: Reply, jobs: StreamEndings) -> None:
+    def __init__(
+        self, job: Job, reply: Reply, jobs: StreamEndings, *, return_http_errors: bool = False
+    ) -> None:
         self._job, self._reply, self._jobs = job, reply, jobs
+        self._return_http_errors = return_http_errors
         self._next = 0  # the next scripted chunk
         self._read = hashlib.sha256()
         self._size = 0
@@ -84,7 +87,16 @@ class FakeJobStream:
                     raise JobFailed(self._job)
                 self._count(chunk)
                 yield chunk
-            if self._job.state != "succeeded" and not self.closed:
+            if (
+                self._job.state != "succeeded"
+                and not self.closed
+                and not (
+                    self._return_http_errors
+                    and self._reply.status_code >= 300
+                    and self._job.failure
+                    and self._job.failure.message == "Runner returned HTTP error"
+                )
+            ):
                 raise JobFailed(self._job)  # iterating a stream that already failed
         except GeneratorExit:  # the iterator was closed or dropped: the caller stopped
             self._abandon()
@@ -129,6 +141,16 @@ class FakeJobStream:
         self._size += len(chunk)
 
     def _succeed(self) -> None:
+        if self._return_http_errors and self._reply.status_code >= 300:
+            self._fail(
+                Fails(
+                    message="Runner returned HTTP error",
+                    status_code=self._reply.status_code,
+                    kind="runner_rejected" if self._reply.status_code < 500 else "runner_error",
+                    payment_sent=True,
+                )
+            )
+            return
         if not self._ended:
             self._ended = True
             result = ResultRef(

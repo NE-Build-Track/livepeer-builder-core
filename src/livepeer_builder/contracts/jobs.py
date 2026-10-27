@@ -24,6 +24,7 @@ class JobRequest(Contract):
     raw_body: bytes | None = Field(default=None, strict=True, max_length=8388608, repr=False)
     content_type: str | None = Field(default=None, min_length=1, max_length=256)
     headers: tuple[tuple[str, str], ...] = Field(default=(), repr=False)
+    return_http_errors: bool = False
 
     @field_validator("headers")
     @classmethod

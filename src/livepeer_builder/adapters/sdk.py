@@ -79,6 +79,8 @@ class CallRunner(Protocol):
         runner: LiveRunnerInstance | None,
         payload: Any,
         content_type: str | None = None,
+        headers: dict[str, str] | None = None,
+        return_http_errors: bool = False,
         method: str,
         signer_url: str | None,
         signer_headers: dict[str, str] | None,
@@ -97,6 +99,8 @@ class CallRunner(Protocol):
         runner: LiveRunnerInstance | None,
         payload: Any,
         content_type: str | None = None,
+        headers: dict[str, str] | None = None,
+        return_http_errors: bool = False,
         method: str,
         signer_url: str | None,
         signer_headers: dict[str, str] | None,
@@ -162,10 +166,6 @@ class SdkRunnerTransport:
     def _call_kwargs(
         self, runner: Runner, request: JobRequest, credential: str | None, sessions: "_SignedSessions"
     ) -> tuple[str, dict[str, Any]]:
-        if request.headers:
-            raise RunnerCallError(
-                "http", "Pinned SDK does not support custom runner headers", payment_sent=False
-            )
         paid = credential is not None and self._signer_url is not None
         instance = LiveRunnerInstance(
             url=runner.url,
@@ -192,6 +192,10 @@ class SdkRunnerTransport:
             kwargs["payload"] = request.raw_body
         if request.content_type is not None:
             kwargs["content_type"] = request.content_type
+        if request.headers:
+            kwargs["headers"] = dict(request.headers)
+        if request.return_http_errors:
+            kwargs["return_http_errors"] = True
         return url, kwargs
 
     async def call(

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from livepeer_builder import ActorContext, EngineSupply, JobRequest
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.errors import OperationConflict, RunnerCallError
+from livepeer_builder.errors import OperationConflict
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.testing import (
     FakeEngine,
@@ -118,17 +118,19 @@ async def test_stream_headers_keep_repeated_values_and_close_sdk():
     assert closed == [True]
 
 
-async def test_custom_headers_fail_before_sdk_dispatch():
-    async def forbidden(*args, **kwargs):
-        pytest.fail("SDK must not be called")
+async def test_custom_headers_and_error_policy_reach_sdk():
+    seen = []
 
-    transport = SdkRunnerTransport("https://signer", call=forbidden)
-    for method in [transport.call, transport.open]:
-        with pytest.raises(RunnerCallError, match="custom runner headers") as exc:
-            await method(
-                runner("chat"), raw_request(headers=(("anthropic-version", "2023-06-01"),)), "secret"
-            )
-        assert not exc.value.payment_sent
+    async def call(url, **kwargs):
+        seen.append(kwargs)
+        return SimpleNamespace(status=400, content_type="application/json", headers={})
+
+    request = raw_request(headers=(("anthropic-version", "2023-06-01"),), return_http_errors=True)
+    stream = await SdkRunnerTransport(None, call=call).open(runner("chat"), request, None)
+    assert stream.status_code == 400
+    assert seen[0]["headers"] == {"anthropic-version": "2023-06-01"}
+    assert seen[0]["return_http_errors"] is True
+    assert set(seen[0]) <= set(inspect.signature(call_runner).parameters)
 
 
 async def test_raw_identity_and_headers_through_real_engine():
@@ -162,4 +164,56 @@ async def test_fake_engine_exposes_headers():
     actor = ActorContext(actor_id="a")
     stream = await engine.jobs.streaming.stream(actor, raw_request())
     assert stream.headers == (("X-Trace", "fake"),)
+    await stream.aclose()
+
+
+@pytest.mark.parametrize("status", [307, 400, 429, 500])
+@pytest.mark.parametrize("ending", ["eof", "complete", "disconnect"])
+async def test_returned_http_errors_are_failed_jobs_not_successes(status, ending):
+    transport = ScriptedStreamTransport(opens=[StreamScript(events=[b"backend error"], status_code=status)])
+    async with make_engine(
+        runners=[runner("chat")],
+        supply=EngineSupply(transport=transport),
+        allocation_mode="per_application",
+        shared_payment_key="fixture",
+        shared_allocation_id="fixture",
+    ) as engine:
+        actor = ActorContext(
+            actor_id="a", application_id="app", permissions=frozenset({"jobs.run", "jobs.read"})
+        )
+        stream = await engine.jobs.streaming.stream(actor, raw_request(return_http_errors=True))
+        async with stream:
+            if ending == "eof":
+                assert b"".join([part async for part in stream]) == b"backend error"
+            elif ending == "complete":
+                await stream.complete()
+            else:
+                await stream.disconnected()
+        assert stream.job.state == "failed"
+        assert stream.job.failure.status_code == status
+        assert stream.job.failure.body is None
+        assert stream.job.attempts[-1].payment_sent
+        assert stream.job.attempts[-1].outcome == "http"
+        assert b"".join([part async for part in stream]) == b""
+        assert len(transport.calls) == 1
+
+
+async def test_error_policy_requires_stream_api_and_changes_identity():
+    from livepeer_builder.errors import InvalidRequest
+
+    request = raw_request(return_http_errors=True)
+    assert request_fingerprint(request) != request_fingerprint(raw_request())
+    async with make_engine() as engine:
+        with pytest.raises(InvalidRequest, match="streaming"):
+            await engine.jobs.run(ActorContext(actor_id="a"), request)
+
+
+async def test_fake_native_error_matches_engine_failure():
+    engine = FakeEngine(streaming=True, replies={("chat", ""): Reply(status_code=400, chunks=(b"error",))})
+    stream = await engine.jobs.streaming.stream(
+        ActorContext(actor_id="a"), raw_request(return_http_errors=True)
+    )
+    assert b"".join([c async for c in stream]) == b"error"
+    assert stream.job.state == "failed"
+    assert stream.job.failure.status_code == 400
     await stream.aclose()

@@ -17,7 +17,7 @@ identity and existing payment/cleanup behavior. Keep inference protocols outside
 - [x] Ambiguous bodies, unsafe headers and oversized input fail validation.
 - [x] Raw bytes/media type/headers affect operation identity without persisting request content.
 - [x] Stream response headers reach embedded callers, including repeated fields.
-- [x] Unsupported custom runner headers fail before SDK/payment dispatch.
+- [x] Validated custom runner headers reach the SDK; native HTTP errors remain failed jobs.
 - [x] Tests, types, documentation and packaging checks pass; SDK gaps are explicit.
 
 ## Progress
@@ -37,3 +37,11 @@ identity and existing payment/cleanup behavior. Keep inference protocols outside
 - 2026-10-27: The current SDK cannot send custom runner headers or return full HTTP error responses.
   Expose validated request headers for custom transports, fail explicitly in the default SDK adapter,
   and defer transparent error delivery rather than changing payment/retry behavior speculatively.
+
+- 2026-10-27: Follow-up consumes NE-Build-Track SDK PR #6 at f500ecd. Custom headers and
+  opt-in HTTP error delivery are implemented. Default exception/payment behavior stays
+  unchanged; complete native error responses record failure without persisting error bodies.
+  User requires all publishing to stay within NE-Build-Track forks.
+
+- 2026-10-27: Follow-up validation: 969 tests passed, 21 PostgreSQL cases skipped locally;
+  total coverage 97.12%, changed-line coverage 98%. Full layer coverage gates pass.

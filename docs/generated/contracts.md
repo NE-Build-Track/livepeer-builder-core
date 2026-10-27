@@ -39,6 +39,7 @@ classDiagram
         +bytes? raw_body
         +str? content_type
         +str[][] headers
+        +bool return_http_errors
         +str? operation_ref
         +str? capability
         +str? model

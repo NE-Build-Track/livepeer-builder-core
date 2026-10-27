@@ -19,5 +19,7 @@ def request_fingerprint(request: JobRequest) -> str:
         fields["content_type"] = request.content_type
     if request.headers:
         fields["headers"] = request.headers
+    if request.return_http_errors:
+        fields["return_http_errors"] = True
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

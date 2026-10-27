@@ -74,7 +74,12 @@ class FakeStreaming:
 
     async def stream(self, actor: ActorContext, request: JobRequest) -> FakeJobStream:
         reply = self._jobs.reply_for(actor, request)
-        return FakeJobStream(self._jobs.record(actor, request, "running", None), reply, self._jobs)
+        return FakeJobStream(
+            self._jobs.record(actor, request, "running", None),
+            reply,
+            self._jobs,
+            return_http_errors=request.return_http_errors,
+        )
 
 
 class FakeJobs:

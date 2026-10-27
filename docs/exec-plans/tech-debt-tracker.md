@@ -22,8 +22,8 @@ Known shortcuts and gaps. Each entry names its exit condition.
 
 ### Native HTTP SDK integration
 
-Opaque bounded request bytes and stream header access are implemented. Custom runner request
-headers fail before SDK dispatch because the pinned SDK has no corresponding argument.
-Transparent backend HTTP errors and buffered response headers also need an upstream contract.
-Keep payment challenges distinct from application errors, preserve attempt/payment evidence,
-and never replay a paid ambiguous request. See [native HTTP plan](active/native-http-transport.md).
+Opaque bounded request bytes, runner headers and opt-in HTTP error streams are implemented
+against [NE-Build-Track SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6).
+Both PRs need review before adoption; no upstream release is claimed. Buffered response
+headers and streaming uploads remain outside this slice. Application adapters must filter
+response headers and handle content encoding. See [native HTTP plan](active/native-http-transport.md).

@@ -121,6 +121,8 @@ class JobStream:
         self._job = job.model_copy(update={"attempts": tuple(attempts)})
         self._attempts = attempts
         self._stream = stream
+        self._return_http_errors = request.return_http_errors
+        self._returned_http_error = False
         self._idle = request.idle_timeout_s
         self._slot = slot
         self._limits = limits
@@ -249,7 +251,7 @@ class JobStream:
         """Iterating a stream that already ended: nothing more, or the failure that ended it."""
         assert self._final is not None
         await run_shielded(self._wait(self._final))
-        if self._job.state != "succeeded" and not self._caller_stopped:
+        if self._job.state != "succeeded" and not self._caller_stopped and not self._returned_http_error:
             raise JobFailed(self._job)
 
     async def _next(self) -> bytes | Exception:
@@ -374,6 +376,9 @@ class JobStream:
                 await self._stream.aclose()
 
     async def _record(self, ending: _Ending) -> None:
+        if ending.outcome == "succeeded" and self._return_http_errors and self._stream.status_code >= 300:
+            self._returned_http_error = True
+            ending = _Ending("http", "Runner returned HTTP error", status_code=self._stream.status_code)
         await self._stop_runner()
         await self._store_attempt(ending.outcome, ending.status_code)
         if ending.outcome == "succeeded":
@@ -394,7 +399,7 @@ class JobStream:
                 body=ending.body[:BODY_LIMIT] if ending.body else None,
                 payment_sent=paid,
             )
-            state = "uncertain" if paid else "failed"
+            state = "uncertain" if paid and not self._returned_http_error else "failed"
             self._job = await self._finish(self._job, state, failure, None, self._attempts)
         _LOG.info(
             "stream ended",

@@ -107,6 +107,8 @@ class JobService:
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
         """Dispatch one immediate job and wait for its result. Raises JobFailed, OperationExists."""
+        if request.return_http_errors:
+            raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
         fingerprint = await self._admit_request(actor, request)
         async with self._admission.admit(request.app):
             job = self._new_job(actor, request)

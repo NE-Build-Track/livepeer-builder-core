@@ -145,7 +145,7 @@ class EngineSettings(Contract):
                 "so every user would be an admin"
             )
         read = self.jwt_admin_read_scope
-        if read is not None and (read in RESERVED_SCOPES or read == self.jwt_admin_scope):
+        if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
             raise ValueError(
                 f"jwt_admin_read_scope {read!r} is a scope ordinary tokens carry, or the admin scope, "
                 "so it would not mark a read-only admin"

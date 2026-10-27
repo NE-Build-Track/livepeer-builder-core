@@ -136,7 +136,7 @@ mode, with no code:
     a provider invents. Choosing a scope that only operators are ever issued stays the operator's
     responsibility. A dedicated namespace or a separate admin claim would remove that reliance (a
     follow-up, not built);
-- an `LPB_JWT_ADMIN_READ_SCOPE` that ordinary tokens carry, or that equals the admin scope (D46): the read
+- an `LPB_JWT_ADMIN_READ_SCOPE` that ordinary tokens carry (bare or prefixed, D49), or that equals the admin scope (D46): the read
   scope marks a read-only admin across the application, so it too must be issued to operators and dashboards
   alone;
 - an empty `LPB_JWT_TOKEN_TYPES`.

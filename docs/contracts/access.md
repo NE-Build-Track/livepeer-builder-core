@@ -145,6 +145,10 @@ mode, with no code:
   - **Which keys:** only asymmetric keys for signatures count (`kty` `RSA`, `EC` or `OKP`). A shared-secret
     key (`kty: oct`), a key with `use: enc`, or one with `key_ops` that lack `verify`, is skipped; a key
     that omits `use` counts. A key published with an `alg` verifies only that algorithm (RFC 8725).
+  - **The algorithm must fit the key (D50):** `RS*` and `PS*` need an `RSA` key, `ES*` an `EC` key on the
+    algorithm's curve, and `EdDSA` an `OKP` key. This matters for a key published without `alg`, which
+    RFC 7517 allows: the token's header then names the algorithm, and a mismatch is a 401.
+  - **Key length (D50):** an RSA key shorter than 2048 bits never verifies (NIST SP 800-131A).
   - **Caching (D47):** keys older than 10 minutes are refreshed in the background while requests keep
     using them, so a slow provider never stalls a request, and a key the provider withdrew stops verifying
     within about 10 minutes. Keys older than an hour are not served: the request waits for a fetch. A token
@@ -187,7 +191,7 @@ mode, with no code:
 | The credential | Answer |
 | --- | --- |
 | Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
-| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
+| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, a key the algorithm cannot use or one that is too short, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
 | The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503) with a fixed message, because no token can be checked. The details are logged |
 
 **Claims become an `ActorContext`:**

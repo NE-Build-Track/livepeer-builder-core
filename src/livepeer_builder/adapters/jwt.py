@@ -65,6 +65,9 @@ class JwtSettings:
 UNAVAILABLE = "the identity provider's signing keys cannot be read"  # the 503 body: no URL, no client error
 MAX_DOCUMENT_BYTES = 1024 * 1024  # a discovery document or key set larger than this is refused
 SIGNATURE_KEY_TYPES = frozenset({"RSA", "EC", "OKP"})  # never "oct": a shared secret is not a published key
+# The key type each algorithm family verifies with (RFC 7518 3, RFC 8037). A key published without "alg" lets
+# the token's header choose, and PyJWT raises TypeError for a family the key cannot serve (#50 review).
+KEY_TYPE_FOR_ALGORITHM = {"RS": "RSA", "PS": "RSA", "ES": "EC", "Ed": "OKP"}
 
 
 @dataclass(frozen=True)
@@ -341,6 +344,10 @@ class JwtBearerAuthenticator:
             raise NotAuthenticated(
                 f"the token's algorithm {algorithm!r} is not the one its key was published for"
             )
+        if KEY_TYPE_FOR_ALGORITHM.get(algorithm[:2]) != signing.key.key_type:
+            raise NotAuthenticated(
+                f"the token's algorithm {algorithm!r} cannot use its {signing.key.key_type} key"
+            )
         try:
             claims = jwt.decode(
                 token,
@@ -349,7 +356,7 @@ class JwtBearerAuthenticator:
                 audience=settings.audience,
                 issuer=settings.issuer,
                 leeway=settings.leeway_s,
-                options={"require": _required(settings)},
+                options={"require": _required(settings), "enforce_minimum_key_length": True},
             )
         except jwt.ExpiredSignatureError as exc:
             raise NotAuthenticated("the token has expired") from exc
@@ -361,6 +368,8 @@ class JwtBearerAuthenticator:
             raise NotAuthenticated(f"the token has no {exc.claim} claim") from exc
         except jwt.InvalidSignatureError as exc:
             raise NotAuthenticated("the token's signature does not verify") from exc
+        except jwt.InvalidKeyError as exc:  # an RSA key under 2048 bits, or an EC key on another curve
+            raise NotAuthenticated(f"the token's signing key is refused: {exc}") from exc
         except jwt.PyJWTError as exc:
             raise NotAuthenticated(f"invalid token: {type(exc).__name__}") from exc
         if "cnf" in claims:  # bound to a certificate (RFC 8705) or a DPoP key (RFC 9449): fail closed

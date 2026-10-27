@@ -23,7 +23,7 @@ dependencies = [
     # streamable runner bodies (#80) and on_payment_session (#81; reports LivePaymentSession.manifest_id).
     # PyPI 1.0.0 lacks the callback, so this stays a git SHA until a release (tech debt T1).
     "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@76a1a1c58656ef2ad0c28542ea5f99086b76db69",
-    "pyjwt[crypto]>=2.9",
+    "pyjwt[crypto]>=2.13",
 ]
 
 [project.optional-dependencies]

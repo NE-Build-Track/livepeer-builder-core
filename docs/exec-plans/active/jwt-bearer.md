@@ -147,6 +147,19 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
     the pause in `_fetch` (removed), an `http` key URL test the stand-in never served (fixed), and closing
     with a running refresh (a test with a refresh that never answers was added).
 
+- 26 October: PR #50 review, round 2 (Cursor and John, D49), each fixed test-first:
+  1. **Prefixed admin scope:** `api:jobs.run` with the prefix `api:` is refused at startup (it made every
+     builder an admin); a token with only `api:jobs.run` stays an actor.
+  2. **One fetch at a time:** refreshes, cold starts and unknown-`kid` refetches share one fetch that alone
+     publishes; an unknown `kid` waits for a fetch in flight, then asks again; one 3 s deadline per document.
+  3. **NumericDate:** a numeric-string `exp` or `iat` is a 401.
+  4. **The pause** is counted from the failure, so a slow failure still pauses (unknown `kid`s too).
+  5. **Robust parsing:** a non-text `kty` or `alg` is skipped; any failure reading keys is a 503 and a pause.
+  6. **Docs:** the admin-scope denylist's limit; the private-host decision recorded in D47.
+  - **Mutations,** each caught (10). Two survived the first run: an `alg` check the wider `PyJWK` catch made
+    redundant (removed), and a trickle test that failed fast for the wrong reason (its fake response was
+    invalid, fixed; it now asserts the timeout). The catch-all got its own test.
+
 ## Decision log
 
 - **26 October (Mike, D45, from his recommendation):**
@@ -161,3 +174,4 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
 - **26 October (Mike, D47, John's review):** fix all six findings on #50 before it merges.
   1. **Token type:** strict RFC 9068 by default, with an opt-out.
   2. **Fetching:** `https` required, with a development override.
+- **26 October (Mike, D49, the second review round):** fix all of John's and Cursor's round-2 findings on #50.

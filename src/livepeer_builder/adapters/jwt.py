@@ -14,9 +14,7 @@ at most ``max_lifetime_s`` (D47, #50 review).
 """
 
 import asyncio
-import base64
 import binascii
-import contextlib
 import json
 import logging
 import time
@@ -90,9 +88,13 @@ class JwksCache:
     Only asymmetric keys for signatures count: ``kty: oct``, ``use: enc``, or ``key_ops`` without ``verify``,
     is skipped. A discovered key URL is kept only once it has served a usable key set, so a bad first one is
     discovered again; it must be https unless ``allow_http``. A document over ``MAX_DOCUMENT_BYTES`` is
-    refused.
-    After a failed fetch the provider is left alone for ``pause_after_failure_s``, and the request is answered
-    503 meanwhile. Reasons go to the log (``auth.jwks_unavailable``), never to the response.
+    refused. After a failed fetch the provider is left alone for ``pause_after_failure_s``, counted from the
+    failure, and the request is answered 503 meanwhile. Reasons go to the log (``auth.jwks_unavailable``),
+    never to the response.
+
+    One fetch at a time (D49): a background refresh, a cold start and an unknown-``kid`` refetch share one
+    task, and only that task updates the cache, so an older answer can never replace a newer key set. No lock
+    is held while the provider answers, and each document has one ``fetch_timeout_s`` deadline in all.
     """
 
     def __init__(
@@ -105,6 +107,7 @@ class JwksCache:
         stale_limit_s: float = 3600.0,
         refetch_after_s: float = 60.0,
         pause_after_failure_s: float = 5.0,
+        fetch_timeout_s: float = 3.0,
         allow_http: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -117,44 +120,70 @@ class JwksCache:
         self._allow_http = allow_http
         self._refetch_after_s = refetch_after_s
         self._pause_s = pause_after_failure_s
+        self._timeout_s = fetch_timeout_s
         self._monotonic = monotonic
         self._keys: list[SigningKey] = []
-        self._fetched_at: float | None = None
+        self._fetched_at: float | None = None  # when the cached set was requested
         self._refetched_at: float | None = None  # the last successful fetch an unknown kid caused
-        self._failed_at: float | None = None
-        self._lock = asyncio.Lock()
-        self._refresh: asyncio.Task[None] | None = None
+        self._failed_at: float | None = None  # when the last fetch failed, measured when it failed
+        self._fetching: asyncio.Task[None] | None = None  # the one fetch in flight (D49)
 
     async def key(self, kid: str | None) -> SigningKey | None:
         """The key for ``kid``; with no ``kid``, the only key. ``None`` when the provider has no such key."""
-        async with self._lock:
-            now = self._monotonic()
-            if self._fetched_at is None or now - self._fetched_at >= self._stale_limit_s:
-                await self._fetch(now)
-            elif now - self._fetched_at >= self._max_age_s:
-                self._refresh_in_background(now)
+        now = self._monotonic()
+        if self._fetched_at is None or now - self._fetched_at >= self._stale_limit_s:
+            await self._shared_fetch()
+        elif now - self._fetched_at >= self._max_age_s:
+            self._refresh_in_background()
+        found = self._find(kid)
+        if found is None and kid is not None and self._may_refetch(now):
+            # a fetch already in flight may predate the rotation that minted this kid: wait, then ask again
+            await self._settled()
             found = self._find(kid)
-            if found is None and kid is not None and self._may_refetch(now):
-                await self._fetch(now)
-                self._refetched_at = now  # only a fetch that worked uses up the minute
+            if found is None:
+                await self._shared_fetch()
+                self._refetched_at = self._monotonic()  # only a fetch that worked uses up the minute
                 found = self._find(kid)
-            return found
+        return found
 
     async def aclose(self) -> None:
-        if self._refresh is not None:
-            self._refresh.cancel()
-            await asyncio.gather(self._refresh, return_exceptions=True)
+        if self._fetching is not None:
+            self._fetching.cancel()
+            await asyncio.gather(self._fetching, return_exceptions=True)
         await self._client.aclose()
 
-    def _refresh_in_background(self, now: float) -> None:
-        if self._refresh is not None and not self._refresh.done():
-            return  # one refresh at a time; during a pause after a failure, _fetch refuses without a request
-        self._refresh = asyncio.create_task(self._quiet_fetch(now))
+    def _refresh_in_background(self) -> None:
+        if self._paused():
+            return
+        self._start()  # joins a fetch already in flight; nobody waits on it
 
-    async def _quiet_fetch(self, now: float) -> None:
-        """A background refresh: a failure is logged by ``_fetch`` and the cached keys stay in use."""
-        with contextlib.suppress(ProviderUnavailable):
-            await self._fetch(now)
+    async def _shared_fetch(self) -> None:
+        """The fetch in flight, or a new one. Concurrent callers share one request, and only that fetch
+        publishes, so an older response can never replace a newer key set (#50 review)."""
+        if self._fetching is None and self._paused():
+            raise ProviderUnavailable(UNAVAILABLE)  # a fetch just failed: leave the provider alone a moment
+        await asyncio.shield(self._start())  # a caller that goes away does not cancel the shared fetch
+
+    async def _settled(self) -> None:
+        """Wait for the fetch in flight, if any, whatever its outcome."""
+        if self._fetching is not None:
+            await asyncio.gather(asyncio.shield(self._fetching), return_exceptions=True)
+
+    def _start(self) -> asyncio.Task[None]:
+        if self._fetching is None:
+            task = asyncio.create_task(self._fetch(self._monotonic()))
+            task.add_done_callback(self._finished)
+            self._fetching = task
+        return self._fetching
+
+    def _finished(self, task: asyncio.Task[None]) -> None:
+        if self._fetching is task:
+            self._fetching = None
+        if not task.cancelled():
+            task.exception()  # a background refresh's failure was logged by _fetch; mark it retrieved
+
+    def _paused(self) -> bool:
+        return self._failed_at is not None and self._monotonic() - self._failed_at < self._pause_s
 
     def _may_refetch(self, now: float) -> bool:
         return self._refetched_at is None or now - self._refetched_at >= self._refetch_after_s
@@ -164,29 +193,32 @@ class JwksCache:
             return self._keys[0] if len(self._keys) == 1 else None
         return next((signing for signing in self._keys if signing.key.key_id == kid), None)
 
-    async def _fetch(self, now: float) -> None:
-        if self._failed_at is not None and now - self._failed_at < self._pause_s:
-            raise ProviderUnavailable(UNAVAILABLE)  # a fetch just failed: leave the provider alone a moment
+    async def _fetch(self, started: float) -> None:
         try:
             url = self._configured_url or self._discovered_url or await self._discover()
             keys = _signing_keys(await self._json(url))
             if not keys:
                 raise _Unreadable("the key set has no usable signing keys", url)
-        except _Unreadable as exc:
-            self._failed_at, self._discovered_url = now, None  # discovered again next time
+        except Exception as exc:  # anything at all becomes 503 and a pause, never a 500
+            unreadable = (
+                exc
+                if isinstance(exc, _Unreadable)
+                else _Unreadable("unexpected error", "", f"{type(exc).__name__}: {exc}"[:300])
+            )
+            self._failed_at, self._discovered_url = self._monotonic(), None  # discovered again next time
             _LOG.warning(
                 "the identity provider's keys cannot be read",
                 extra={
                     "event": "auth.jwks_unavailable",
-                    "reason": exc.reason,
-                    "url": exc.url,
-                    "error": exc.error,
+                    "reason": unreadable.reason,
+                    "url": unreadable.url,
+                    "error": unreadable.error,
                 },
             )
             raise ProviderUnavailable(UNAVAILABLE) from None
         if self._configured_url is None:
             self._discovered_url = url
-        self._keys, self._fetched_at, self._failed_at = keys, now, None
+        self._keys, self._fetched_at, self._failed_at = keys, started, None
 
     async def _discover(self) -> str:
         """The ``jwks_uri`` from the OpenID configuration, or else from RFC 8414 metadata."""
@@ -215,8 +247,9 @@ class JwksCache:
         return uri
 
     async def _json(self, url: str) -> dict[str, Any]:
+        """One document, within ``fetch_timeout_s`` in all: a provider that trickles bytes is cut off."""
         try:
-            async with self._client.stream("GET", url) as response:
+            async with asyncio.timeout(self._timeout_s), self._client.stream("GET", url) as response:
                 response.raise_for_status()
                 content = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -224,7 +257,7 @@ class JwksCache:
                     if len(content) > MAX_DOCUMENT_BYTES:
                         raise _Unreadable(f"the answer is larger than {MAX_DOCUMENT_BYTES} bytes", url)
             body = json.loads(content)
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError, TimeoutError) as exc:
             raise _Unreadable("the request failed", url, f"{type(exc).__name__}: {exc}"[:300]) from None
         if not isinstance(body, dict):
             raise _Unreadable("the answer is not a JSON object", url)
@@ -247,16 +280,16 @@ def _signing_keys(document: dict[str, Any]) -> list[SigningKey]:
     for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, dict) or entry.get("use", "sig") != "sig":
             continue
-        if entry.get("kty") not in SIGNATURE_KEY_TYPES:
+        kind, declared = entry.get("kty"), entry.get("alg")
+        if not isinstance(kind, str) or kind not in SIGNATURE_KEY_TYPES:
             continue
         operations = entry.get("key_ops")
         if operations is not None and (not isinstance(operations, list) or "verify" not in operations):
             continue
         try:
             key = jwt.PyJWK(entry)
-        except jwt.PyJWTError:
+        except (jwt.PyJWTError, TypeError, ValueError, KeyError):  # e.g. "alg": ["RS256"] (#50 review)
             continue
-        declared = entry.get("alg")
         keys.append(SigningKey(key=key, algorithm=declared if isinstance(declared, str) else None))
     return keys
 
@@ -334,7 +367,10 @@ class JwtBearerAuthenticator:
             raise NotAuthenticated(f"invalid token: {type(exc).__name__}") from exc
         if "cnf" in claims:  # bound to a certificate (RFC 8705) or a DPoP key (RFC 9449): fail closed
             raise NotAuthenticated("the token is sender-constrained (cnf), which this engine cannot verify")
-        lifetime = claims["exp"] - claims["iat"]
+        expires, issued = claims["exp"], claims["iat"]
+        if not all(isinstance(v, int | float) and not isinstance(v, bool) for v in (expires, issued)):
+            raise NotAuthenticated("the token's exp and iat must each be a NumericDate (a number)")
+        lifetime = expires - issued
         if lifetime > settings.max_lifetime_s:
             raise NotAuthenticated(
                 f"the token's lifetime of {lifetime:.0f}s is longer than {settings.max_lifetime_s:.0f}s"
@@ -394,7 +430,13 @@ def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 3.0) -> Jw
         name_claim=settings.jwt_name_claim,
     )
     client = httpx.AsyncClient(timeout=timeout_s, follow_redirects=False)
-    keys = JwksCache(client, settings.jwt_issuer, settings.jwt_jwks_url, allow_http=settings.jwt_allow_http)
+    keys = JwksCache(
+        client,
+        settings.jwt_issuer,
+        settings.jwt_jwks_url,
+        fetch_timeout_s=timeout_s,
+        allow_http=settings.jwt_allow_http,
+    )
     return JwtBearerAuthenticator(config, keys)
 
 
@@ -407,9 +449,8 @@ def _required(settings: JwtSettings) -> list[str]:
 def _unverified_issuer(token: str) -> object:
     """The payload's ``iss`` before anything is verified, or ``None`` when the payload is not a JSON object.
     Read without PyJWT so a header it refuses cannot make our token look like someone else's."""
-    payload = token.split(".")[1]
     try:
-        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        claims = json.loads(jwt.utils.base64url_decode(token.split(".")[1]))
     except (binascii.Error, ValueError):
         return None
     return claims.get("iss") if isinstance(claims, dict) else None

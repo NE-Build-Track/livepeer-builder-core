@@ -7,7 +7,7 @@ by an httpx mock transport, so nothing touches the network.
 import asyncio
 import json
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -746,3 +746,138 @@ async def test_the_name_claim_becomes_the_display_name(make: Make, provider: Pro
     assert off is not None and off.display_name is None
     missing = await make().authenticate(bearer(provider.token(preferred_username=42)))
     assert missing is not None and missing.display_name is None  # not text: no name, never a 401
+
+
+# -- PR #50 review, round 2 (D49) ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("claim", ["exp", "iat"])
+async def test_a_numeric_string_date_is_a_401_not_a_500(make: Make, provider: Provider, claim: str) -> None:
+    """PyJWT accepts "1793052138" for exp/iat and leaves the string in the claims (#50 review)."""
+    now = int(time.time())
+    value = str(now + 300 if claim == "exp" else now)
+    with pytest.raises(NotAuthenticated, match="NumericDate"):
+        await make().authenticate(bearer(provider.token(**{claim: value})))
+
+
+@pytest.mark.parametrize("field", ["kty", "alg"])
+async def test_a_key_with_a_non_text_field_is_skipped_not_a_500(
+    make: Make, provider: Provider, field: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider.extra = {"k1": {field: ["RSA"] if field == "kty" else ["RS256"]}}  # the only published key
+    with pytest.raises(ProviderUnavailable):
+        await make().authenticate(bearer(provider.token()))
+    assert "no usable signing keys" in unavailable_reason(caplog)
+
+
+async def test_the_pause_starts_when_a_slow_fetch_fails_not_before_it(clock: Clock) -> None:
+    """A provider that takes longer than the pause to fail must still be left alone afterwards."""
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        clock.now += 6  # each attempt takes 6 s, longer than the 5 s pause
+        return httpx.Response(503)
+
+    keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
+    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    provider = Provider()
+    with pytest.raises(ProviderUnavailable):
+        await authenticator.authenticate(bearer(provider.token()))
+    tried = len(requests)
+    for kid in ("k1", "random-1", "random-2"):  # random kids during the outage too
+        with pytest.raises(ProviderUnavailable):
+            await authenticator.authenticate(bearer(provider.token(kid=kid if kid == "k1" else None)))
+    assert len(requests) == tried  # nothing new within the pause
+
+
+async def test_an_older_refresh_never_overwrites_a_newer_key_set(
+    make: Make, provider: Provider, clock: Clock
+) -> None:
+    """A background refresh that started before a rotation must not put back the withdrawn key (#50 review)."""
+    authenticator = make()
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # k1 cached
+    gate = asyncio.Event()
+    plain = provider.handler
+
+    async def slow_first_keys(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == JWKS_URL and not gate.is_set():
+            answer = plain(request)  # the key set as it is now: k1
+            await gate.wait()
+            return answer
+        return plain(request)
+
+    authenticator._keys._client._transport = httpx.MockTransport(slow_first_keys)  # type: ignore[attr-defined]
+    clock.now += 601
+    assert await authenticator.authenticate(bearer(provider.token())) is not None  # starts the refresh, k1
+    await asyncio.sleep(0)
+    provider.add_key("k2")
+    provider.published = ["k2"]  # rotated: k1 withdrawn while the refresh is still reading
+    gate.set()
+    assert await authenticator.authenticate(bearer(provider.token(kid="k2"))) is not None  # fresh, after it
+    for _ in range(20):
+        await asyncio.sleep(0)
+    with pytest.raises(NotAuthenticated, match="unknown signing key"):
+        await authenticator.authenticate(bearer(provider.token()))  # k1 stays withdrawn
+
+
+async def test_a_document_that_trickles_is_cut_off_at_the_deadline(
+    provider: Provider, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The fetch timeout bounds the whole document, not each read (#50 review)."""
+
+    async def trickle() -> AsyncIterator[bytes]:
+        yield b'{"issuer": "'
+        while True:
+            await asyncio.sleep(0.05)
+            yield b" "
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=trickle())
+
+    keys = JwksCache(
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        ISSUER,
+        monotonic=clock,
+        fetch_timeout_s=0.3,
+    )
+    started = time.monotonic()
+    with pytest.raises(ProviderUnavailable):
+        await JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys).authenticate(
+            bearer(provider.token())
+        )
+    assert time.monotonic() - started < 2  # two documents (OpenID, RFC 8414), 0.3 s each
+    assert "TimeoutError" in unavailable_reason(caplog)
+
+
+async def test_a_prefixed_operation_scope_is_a_permission_never_admin(make: Make, provider: Provider) -> None:
+    """With LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is jobs.run; only the configured admin scope is admin."""
+    configured = make(scope_prefix="api:", admin_scope="api:operators")
+    actor = await configured.authenticate(bearer(provider.token(scope="api:jobs.run")))
+    assert (
+        actor is not None
+        and actor.credential_kind == "actor"
+        and actor.permissions == frozenset({"jobs.run"})
+    )
+    unconfigured = await make(scope_prefix="api:").authenticate(bearer(provider.token(scope="api:jobs.run")))
+    assert unconfigured is not None and unconfigured.credential_kind == "actor"
+
+
+async def test_any_unexpected_failure_reading_keys_is_a_503_and_a_pause(
+    provider: Provider, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Whatever goes wrong while reading keys answers 503 and pauses, never a 500 (#50 review)."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        raise RuntimeError("the transport broke")
+
+    keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
+    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    with pytest.raises(ProviderUnavailable):
+        await authenticator.authenticate(bearer(provider.token()))
+    assert "RuntimeError" in unavailable_reason(caplog)
+    with pytest.raises(ProviderUnavailable):
+        await authenticator.authenticate(bearer(provider.token()))
+    assert len(calls) == 1  # paused

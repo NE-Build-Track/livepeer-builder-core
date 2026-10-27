@@ -23,6 +23,12 @@ ASYMMETRIC_ALGORITHMS = frozenset(
 )
 
 
+def _reserved(scope: str, prefix: str) -> bool:
+    """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
+    with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
+    return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
+
+
 class EngineSettings(Contract):
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
 
@@ -133,7 +139,7 @@ class EngineSettings(Contract):
                     raise ValueError(
                         f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
                     )
-        if self.jwt_admin_scope is not None and self.jwt_admin_scope in RESERVED_SCOPES:
+        if self.jwt_admin_scope is not None and _reserved(self.jwt_admin_scope, self.jwt_scope_prefix):
             raise ValueError(
                 f"jwt_admin_scope {self.jwt_admin_scope!r} is a scope ordinary tokens carry, "
                 "so every user would be an admin"

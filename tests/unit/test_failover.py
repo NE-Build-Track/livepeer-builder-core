@@ -12,6 +12,7 @@ from livepeer_builder.services.failover import (
     Verdict,
     attempt_verdict,
     failure_of,
+    orchestrator_of,
     payment_unresolved,
 )
 from livepeer_builder.testing import runner
@@ -71,16 +72,18 @@ def test_candidates_skip_an_excluded_orchestrator_without_counting_it() -> None:
     assert tried == ["https://a1", "https://b1"]  # a2 skipped, and c1 is past max_attempts
 
 
-def test_runners_without_an_orchestrator_count_as_one() -> None:
-    loose = runner(url="https://r1", orchestrator_url=None)
-    other = runner(url="https://r2", orchestrator_url=None)
-    known = runner(url="https://r3", orchestrator_url="https://orch.example")
-    candidates = Candidates((loose, other, known), max_attempts=3)
+def test_a_runner_without_an_orchestrator_is_matched_by_its_own_origin() -> None:
+    """A Live Runner is reached through its orchestrator, so its URL's origin names the orchestrator."""
+    known = runner(url="https://orch.example/apps/a", orchestrator_url="https://ORCH.example:443/")
+    same = runner(url="https://orch.example/apps/b", orchestrator_url=None)
+    other = runner(url="https://other.example:8935/apps/c", orchestrator_url=None)
+    candidates = Candidates((known, same, other), max_attempts=3)
     tried = []
     for candidate in candidates:
         tried.append(candidate.url)
         candidates.exclude(candidate)
-    assert tried == ["https://r1", "https://r3"]  # r2 could be the orchestrator that was just paid
+    assert tried == ["https://orch.example/apps/a", "https://other.example:8935/apps/c"]
+    assert orchestrator_of(other) == "https://other.example:8935"
 
 
 def _attempt(number: int, outcome: AttemptOutcome, paid: bool, status: int | None = None) -> Attempt:

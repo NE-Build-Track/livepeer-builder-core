@@ -45,6 +45,7 @@ from livepeer_builder.contracts import (
     SecretRef,
 )
 from livepeer_builder.services.discovery import MostCapacityFirst
+from livepeer_builder.services.evidence import SignedSessionRecorder
 from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
@@ -62,6 +63,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
     "RunnerStream": (PaidStream,),
+    "PaymentIntentRecorder": (SignedSessionRecorder,),
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient,),
     "UsageSource": (BatteriesUsageSource,),

@@ -70,9 +70,9 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    | Any | The signer gave no validated answer (`payment_unknown`) | `uncertain`: the signer may have charged, so no one else is paid |
 
    - **Another orchestrator.** After a paid failover, the engine skips every later runner on the
-     orchestrator that took the payment, so a job never pays one orchestrator twice. Runners with no
-     known orchestrator count as one orchestrator. A skipped runner does not count against
-     `max_attempts`.
+     orchestrator that took the payment, so a job never pays one orchestrator twice. A runner without
+     an `orchestrator_url` is matched by its own URL's origin, since a Live Runner is reached through
+     its orchestrator. A skipped runner does not count against `max_attempts`.
    - **404, 409 and 503** come from the orchestrator refusing the request before the app ran: the
      runner is gone or stopped its session (livepeer-python-gateway#83), the session already exists, or
      the capacity was taken ([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)). A
@@ -97,10 +97,13 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      same way.
 2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
    most once (see [idempotency](#idempotency)).
-3. **The attempt row is written before the call** (`in_flight`) and updated after it. **Payment evidence
+3. **The attempt row is written before the call** (`in_flight`) and updated after it. **The manifest is
+   written before the signer is asked**, unpaid (D53): the Live Runner transport calls the recorder's
+   `payment_state(manifest_id, "unknown")`, and if that write fails nothing is signed. **Payment evidence
    is written when the signer signs**, before the paid request goes out: the transport calls
    `on_signed(manifest_id)` and the engine stores `payment_sent` and the session on the attempt then
-   (D42). A cancel, a disconnect or a crash during the paid request therefore keeps the charge
+   (D42). A manifest that never confirms costs nothing unless usage matches it or the job may still
+   have been charged. A cancel, a disconnect or a crash during the paid request therefore keeps the charge
    attributed to its job. If that write fails, the call goes on, and the write after the call, or the
    close after an error or cancel, stores the same sessions again. A report that arrives after the job
    ended increments the job's evidence version, so its stored cost projection is out of date and the
@@ -181,8 +184,10 @@ The admission slot is held until the stream ends.
 the caller waits for data; a slow reader is not the runner's fault. A timeout never fails over to
 another runner, paid or not, exactly as for `run`. The Live Runner transport enforces the first-byte
 limit itself and keeps the sessions signed so far: a timeout after the signer's payment was validated
-has `payment_sent=True` (job `uncertain`), while a timeout or failure during signing has
-`payment_sent=False` (job `failed`, D41, D53). The engine stops a transport that
+has `payment_sent=True` (job `uncertain`). A timeout or failure during signing leaves the payment
+unknown: the manifest stored before the signer was asked stays on the attempt, `payment_sent` is
+`False`, and the job is `uncertain` (D53). Only an explicit signer refusal ends it unpaid. The engine
+stops a transport that
 runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
 cannot know.
 

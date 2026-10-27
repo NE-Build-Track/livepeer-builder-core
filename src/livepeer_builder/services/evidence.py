@@ -7,13 +7,17 @@ in-memory attempt first, so the engine's error path has it too, then writes it w
 off half way. A failed write is logged, not raised: the signer has already charged, so the call goes
 on, and the write after the call (``finish_attempt``), or the close after an error or cancel
 (``record_payment_evidence`` again), stores the same sessions.
+
+Before the signer is asked, a transport that signs in steps calls ``payment_state`` (D53): the manifest
+is stored on the attempt, unpaid, so a charge whose reply never arrives keeps its manifest. That write
+is strict, because nothing should be signed that the engine could not attribute.
 """
 
 import logging
 from collections.abc import Sequence
 
 from livepeer_builder.contracts import Attempt
-from livepeer_builder.protocols import JobRepo
+from livepeer_builder.protocols import JobRepo, PaymentState
 from livepeer_builder.services.streams import sessions_from
 from livepeer_builder.utils import run_shielded
 
@@ -33,6 +37,16 @@ class SignedSessionRecorder:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
         self._attempts[self._index] = attempt
         await run_shielded(_write(self._store, attempt))
+
+    async def payment_state(self, manifest_id: str, state: PaymentState) -> None:
+        """Before the signer is asked (``unknown``): store the manifest on the attempt, unpaid, so a charge
+        whose reply is lost still has it (D53). Strict: a failed write raises, and the transport does not
+        sign. A refusal (``unpaid``) needs no write: an unconfirmed session with no usage costs nothing."""
+        if state != "unknown":
+            return
+        attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=False)
+        self._attempts[self._index] = attempt
+        await run_shielded(self._store.record_payment_evidence(attempt))
 
 
 async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:

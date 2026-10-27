@@ -13,7 +13,6 @@ from typing import Any, Protocol
 from livepeer_gateway.discovery import discover_runners
 
 from livepeer_builder.adapters.runner_call import (
-    OnPaymentState,
     PaidRequest,
     PaidStream,
     PaymentEvents,
@@ -27,7 +26,7 @@ from livepeer_builder.contracts import (
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.protocols import OnSigned
+from livepeer_builder.protocols import OnPaymentState, OnSigned, PaymentIntentRecorder
 
 
 class DiscoverRunners(Protocol):
@@ -58,8 +57,9 @@ class SdkRunnerTransport:
     """The Live Runner call with the actor's credential as the signer bearer. Unpaid when there is none.
 
     ``on_signed`` gets each session the signer signed, before the paid request goes out (D42).
-    ``on_payment_state`` (optional) gets each manifest as ``unknown`` before the signer is asked, and
-    ``unpaid`` when the signer refused it.
+    ``on_payment_state`` gets each manifest as ``unknown`` before the signer is asked, and ``unpaid`` when
+    the signer refused it. When it is not given, an ``on_signed`` that is a ``PaymentIntentRecorder``
+    (the engine's ``SignedSessionRecorder``) supplies it, so the job path records intent (D53).
     """
 
     def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
@@ -93,7 +93,7 @@ class SdkRunnerTransport:
         *,
         on_payment_state: OnPaymentState | None = None,
     ) -> RunnerReply:
-        events = PaymentEvents(on_signed, on_payment_state)
+        events = _events(on_signed, on_payment_state)
         paid = self._request(runner, request, credential, events)
         status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
@@ -120,7 +120,7 @@ class SdkRunnerTransport:
         keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
         validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        events = PaymentEvents(on_signed, on_payment_state)
+        events = _events(on_signed, on_payment_state)
         paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):
@@ -128,6 +128,12 @@ class SdkRunnerTransport:
         except TimeoutError as error:  # the deadline; the call's own timeouts are already RunnerCallError
             message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
             raise events.error("timeout", message) from error
+
+
+def _events(on_signed: OnSigned | None, on_payment_state: OnPaymentState | None) -> PaymentEvents:
+    if on_payment_state is None and isinstance(on_signed, PaymentIntentRecorder):
+        on_payment_state = on_signed.payment_state
+    return PaymentEvents(on_signed, on_payment_state)
 
 
 def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:

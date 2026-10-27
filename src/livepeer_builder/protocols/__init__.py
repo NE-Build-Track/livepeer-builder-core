@@ -6,7 +6,7 @@ Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from livepeer_builder.contracts import (
@@ -96,6 +96,22 @@ class SelectionPolicy(Protocol):
 
 OnSigned = Callable[[str], Awaitable[None]]
 """Called with each signed session's ``manifest_id`` (``""`` when the challenge has none)."""
+
+PaymentState = Literal["unknown", "unpaid"]
+OnPaymentState = Callable[[str, PaymentState], Awaitable[None]]
+"""Called with ``(manifest_id, "unknown")`` before the signer is asked, and ``"unpaid"`` when it refused.
+Raising from the ``"unknown"`` call stops the signing (fail closed)."""
+
+
+@runtime_checkable
+class PaymentIntentRecorder(Protocol):
+    """An ``on_signed`` callback that also records payment intent (D53). A transport that signs in steps
+    calls ``payment_state`` before asking the signer, so a charge whose reply is lost, malformed or
+    cancelled keeps its manifest on the attempt. ``SignedSessionRecorder`` is the engine's."""
+
+    async def __call__(self, manifest_id: str) -> None: ...
+
+    async def payment_state(self, manifest_id: str, state: PaymentState) -> None: ...
 
 
 class RunnerTransport(Protocol):
@@ -251,8 +267,10 @@ class JobRepo(Protocol):
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
     async def record_payment_evidence(self, attempt: Attempt) -> None:
-        """Mark the attempt paid and add its signed sessions not stored yet, while the call is still
-        going (D42). Leaves its outcome, status and timing alone, so a late report never reopens it."""
+        """Add the attempt's sessions not stored yet, and mark it paid when it is, while the call is still
+        going (D42). Never marks a paid attempt unpaid: a session recorded before signing (D53) is stored
+        with ``payment_sent`` as it stands. Leaves outcome, status and timing alone, so a late report never
+        reopens it."""
         ...
 
     async def finish_attempt(self, attempt: Attempt) -> None:

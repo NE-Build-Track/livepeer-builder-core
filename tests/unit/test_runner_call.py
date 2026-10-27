@@ -248,6 +248,19 @@ async def test_an_invalid_payment_challenge_is_refused_before_signing(net: Net, 
     assert not any(entry.startswith("sign m") for entry in net.log)
 
 
+async def test_a_redirect_is_a_runner_error_and_is_never_followed(net: Net) -> None:
+    """Following it would replay the payment headers to another host and take its answer as the runner's."""
+    net.replies = [Reply(status=302, body=b"", headers={"Location": f"{net.url}/app/elsewhere"})]
+    with pytest.raises(RunnerCallError) as redirected:
+        await call(net)
+    assert (redirected.value.kind, redirected.value.status_code, redirected.value.payment_sent) == (
+        "http",
+        302,
+        True,
+    )
+    assert net.log.count("request pay-m-1") == 1 and len(net.bodies) == 2  # nothing went to /elsewhere
+
+
 # -- streams -----------------------------------------------------------------------------------------
 
 

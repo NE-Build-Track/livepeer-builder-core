@@ -10,6 +10,7 @@ would repeat, and be charged, everywhere (``failed``).
 
 from collections.abc import Iterator, Sequence
 from typing import Literal
+from urllib.parse import urlsplit
 
 from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, Runner
 from livepeer_builder.errors import RunnerCallError
@@ -80,24 +81,34 @@ class Candidates:
     """The runners a job may try, in selection order, at most ``max_attempts`` of them.
 
     ``exclude`` drops every later runner on an orchestrator, so one that took a payment and failed is
-    never paid again for the same job. Runners whose orchestrator is unknown count as one orchestrator:
-    any of them could be the one that was paid. A skipped runner does not count as an attempt.
+    never paid again for the same job. A runner is matched to its orchestrator by ``orchestrator_url``,
+    or by its own URL's origin when that is missing: a Live Runner is reached through its
+    orchestrator. A skipped runner does not count as an attempt.
     """
 
     def __init__(self, ordered: Sequence[Runner], max_attempts: int) -> None:
         self.ordered = tuple(ordered)
         self._max_attempts = max_attempts
-        self._excluded: set[str | None] = set()
+        self._excluded: set[str] = set()
 
     def __iter__(self) -> Iterator[Runner]:
         tried = 0
         for runner in self.ordered:
             if tried >= self._max_attempts:
                 return
-            if runner.orchestrator_url in self._excluded:
+            if orchestrator_of(runner) in self._excluded:
                 continue
             tried += 1
             yield runner
 
     def exclude(self, runner: Runner) -> None:
-        self._excluded.add(runner.orchestrator_url)
+        self._excluded.add(orchestrator_of(runner))
+
+
+def orchestrator_of(runner: Runner) -> str:
+    """``scheme://host:port`` of the runner's orchestrator, lower-cased, with the default port filled in."""
+    url = runner.orchestrator_url or runner.url
+    parts = urlsplit(url if "://" in url else f"https://{url}")
+    scheme = parts.scheme.lower()
+    port = parts.port or (443 if scheme == "https" else 80)
+    return f"{scheme}://{(parts.hostname or '').lower()}:{port}"

@@ -11,6 +11,8 @@ Rows on an allocation that match no recorded attempt are ``unattributed`` (recon
 A job's cost is ``pending`` until the job ends, and only an ended job is projected (#33): only cost
 sync stores projections, and reads compute live any job no projection covers yet (running, or ended
 since its projection was stored), so a paid job never reads as ``none``.
+A manifest recorded before signing (D53) that never confirmed counts only once usage matches it, or
+while the job may still have been charged (it is running, or its last attempt left it uncertain).
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
 entry, is ambiguous: the attempt is uncertain and those rows stay unattributed.
@@ -327,6 +329,9 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             if session.match == "matched" and session.payment_session_id
         }
         mine = [row for row in applied if row.payment_session_id in matched]
+        last_word = attempt.outcome == "in_flight" or (job.state == "uncertain" and attempt.number == last)
+        if not attempt.payment_sent and not mine and not (running or last_word):
+            continue  # a manifest recorded before signing (D53) that was refused or failed over: no charge
         cost_class: CostClass
         if running:
             cost_class = "pending"
@@ -336,7 +341,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             cost_class = "pending"
         elif attempt.outcome == "succeeded":
             cost_class = "delivered"
-        elif attempt.outcome == "in_flight" or (job.state == "uncertain" and attempt.number == last):
+        elif last_word:
             cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D52)
         else:
             cost_class = "failed_after_payment"

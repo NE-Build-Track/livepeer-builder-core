@@ -33,6 +33,7 @@ class Reply:
     chunks: tuple[bytes, ...] = ()  # streamed with a pause between them, after the headers
     hang_s: float = 0.0  # before the headers
     drop_after_chunks: bool = False
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -58,9 +59,12 @@ class Net:
     def url(self) -> str:
         return str(self.server.make_url("")).rstrip("/")
 
-    def runner(self, unit: str = "fixed", price: str = "0.10", orchestrator_url: str | None = None) -> Runner:
+    def runner(
+        self, unit: str = "fixed", price: str = "0.10", orchestrator_url: str | None = None, name: str = ""
+    ) -> Runner:
         return Runner(
-            url=f"{self.url}/app", app="example/echo", runner_id="r1", mode="single-shot",
+            url=f"{self.url}/app" + (f"/{name}" if name else ""), app="example/echo", runner_id=name or "r1",
+            mode="single-shot",
             orchestrator_url=orchestrator_url or self.url, capacity=1, capacity_available=1,
             rate=NetworkRate(amount=Decimal(price), currency="usd", unit=unit),
         )  # fmt: skip
@@ -114,9 +118,8 @@ class Net:
         if reply.hang_s:
             await self.hang(reply.hang_s)
         if not reply.chunks:
-            return web.Response(
-                status=reply.status, body=reply.body, headers={"Content-Type": reply.content_type}
-            )
+            headers = {"Content-Type": reply.content_type, **reply.headers}
+            return web.Response(status=reply.status, body=reply.body, headers=headers)
         response = web.StreamResponse(status=reply.status, headers={"Content-Type": reply.content_type})
         await response.prepare(request)
         for chunk in reply.chunks:

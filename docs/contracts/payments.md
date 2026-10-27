@@ -15,9 +15,12 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
 4. The engine's runner call (`adapters/runner_call.py`, D53) answers the orchestrator's 402 itself
-   and signs through the SDK's signer client. It reports each session's `manifest_id` before the
-   signer is asked, and again once the payment is validated, before the paid request goes out. The
-   engine records it on its own session log, with the allocation whose key paid.
+   and signs through the SDK's signer client. Before the signer is asked, the engine stores the
+   session's `manifest_id` on its own session log, unpaid, with the allocation whose key would pay; if
+   that write fails nothing is signed. A validated payment marks the attempt paid before the paid
+   request goes out. An explicit refusal leaves an unpaid manifest that costs nothing. A lost,
+   malformed or cancelled reply leaves the job `uncertain` and its cost `pending` until usage matches
+   the manifest, which then attributes the charge to the job.
 
 ## Allocation modes
 

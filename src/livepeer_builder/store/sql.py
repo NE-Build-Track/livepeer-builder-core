@@ -234,7 +234,8 @@ class SqlStore:
     async def record_payment_evidence(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
         async with self.engine.begin() as conn:  # outcome, status and timing are left as they are
-            await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
+            if attempt.payment_sent:  # an intent recorded before signing (D53) is not a payment
+                await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
             await _append_sessions(conn, attempt)
             await bump_evidence(conn, [str(attempt.job_id)])  # a late report on an ended job changes its cost
 
@@ -387,8 +388,8 @@ class SqlStore:
 
 
 async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
-    """Add the attempt's signed sessions not stored yet. Append-only (D39): cost sync owns the match
-    columns, so a row it matched is never rewritten."""
+    """Add the attempt's sessions not stored yet: signed, or recorded before signing (D53). Append-only
+    (D39): cost sync owns the match columns, so a row it matched is never rewritten."""
     session_key = and_(
         t.payment_sessions.c.job_id == str(attempt.job_id),
         t.payment_sessions.c.attempt_number == attempt.number,

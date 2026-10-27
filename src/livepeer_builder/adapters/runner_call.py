@@ -18,9 +18,9 @@ SDK's ``call_runner`` or its helpers change, so every pin bump reviews this copy
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
 
 import aiohttp
 from livepeer_gateway.errors import (
@@ -40,13 +40,8 @@ from livepeer_gateway.remote_signer import (
 
 from livepeer_builder.contracts import AttemptOutcome, NetworkRate
 from livepeer_builder.errors import RunnerCallError
-from livepeer_builder.protocols import OnSigned
+from livepeer_builder.protocols import OnPaymentState, OnSigned
 from livepeer_builder.utils import BODY_LIMIT
-
-PaymentState = Literal["unpaid", "unknown", "paid"]
-OnPaymentState = Callable[[str, PaymentState], Awaitable[None]]
-"""Called with ``(manifest_id, "unknown")`` before a session is signed, and ``"unpaid"`` when the signer
-refused it. Raising from the ``"unknown"`` call stops the signing request (fail closed)."""
 
 PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"
@@ -209,11 +204,15 @@ class PaidRequest:
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
             funding = start_funding(payment) if self._payment_type == "live" else None
             try:
-                response = await session.request(self._method, self.url, data=self._body, headers=sent)
+                # A redirect would replay the payment headers to another host, and its answer is not
+                # the runner's: a 3xx is a runner error like any other.
+                response = await session.request(
+                    self._method, self.url, data=self._body, headers=sent, allow_redirects=False
+                )
             except BaseException:
                 await stop_funding(funding)
                 raise
-            if response.status < 400:
+            if response.status < 300:
                 return response, funding
             await stop_funding(funding)
             text = (await response.read()).decode(errors="replace")

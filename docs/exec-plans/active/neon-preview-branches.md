@@ -5,8 +5,8 @@
 - **Owner:** John.
 - **Ticket:** none. Operator cutover of the builder-engine database.
 - **Branch:** `feat/neon-migration`.
-- **Progress:** production is on Neon. The preview workflow is in the tree. The preview GitHub
-  environment has `NEON_PROJECT_ID` and still needs `NEON_API_KEY`.
+- **Progress:** production is on Neon. PR #60 created `preview/pr-60`; the first preview job
+  failed with HTTP 423 while the compute was still locked.
 
 ## Goal
 
@@ -26,8 +26,8 @@ that data, migrates it, and the branch is deleted when the PR closes.
 - [x] `.github/workflows/preview.yml` creates `preview/pr-<number>` from `main` on open, synchronize,
   and reopen, and deletes it when the PR closes. Pushes of other branches no longer deploy the
   preview engine.
-- [ ] `NEON_API_KEY` is set on the GitHub `preview` environment. `NEON_PROJECT_ID` is already set
-  there. A pull request has not yet created a branch, because the workflow is not on `main`.
+- [x] `NEON_API_KEY` and `NEON_PROJECT_ID` are set on the GitHub `preview` environment. PR #60
+  created `preview/pr-60` from `main`.
 - [x] Railway Postgres is still provisioned in production and preview.
 
 ## Progress
@@ -38,7 +38,8 @@ that data, migrates it, and the branch is deleted when the PR closes.
 - [x] 27 October — Entrypoint rewrite, preview migrations, and tests.
 - [x] 27 October — Preview workflow and the production deploy workflow limited to `main` and
   `releases/*`.
-- [x] 27 October — `NEON_PROJECT_ID` on the GitHub `preview` environment.
+- [x] 27 October — `NEON_PROJECT_ID` and `NEON_API_KEY` on the GitHub `preview` environment.
+- [x] 27 October — Preview job retries Neon 423/409 while the compute is still locked.
 
 ## Decision log
 

@@ -71,22 +71,35 @@ jobs:
           PY
           api=https://console.neon.tech/api/v2
           auth="Authorization: Bearer ${NEON_API_KEY}"
-          curl -sS -f -X PATCH \
-            -H "$auth" \
+          neon_curl() {
+            local out="$1"; shift
+            local i status
+            for i in $(seq 1 30); do
+              status=$(curl -sS -o "$out" -w "%{http_code}" -H "$auth" "$@" || true)
+              if [ "$status" = "200" ]; then
+                return 0
+              fi
+              if [ "$status" != "423" ] && [ "$status" != "409" ]; then
+                echo "Neon HTTP ${status}" >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "Neon still locked after retries" >&2
+            return 1
+          }
+          neon_curl /tmp/neon-branch.json -X PATCH \
             -H "Content-Type: application/json" \
             -d "{\"branch\":{\"expires_at\":\"${EXPIRES_AT}\"}}" \
-            "$api/projects/${NEON_PROJECT_ID}/branches/${BRANCH_ID}" \
-            -o /tmp/neon-branch.json
+            "$api/projects/${NEON_PROJECT_ID}/branches/${BRANCH_ID}"
           python3 -c 'import json; b=json.load(open("/tmp/neon-branch.json"))["branch"]; print(b["name"], b.get("expires_at"))'
-          endpoint=$(curl -sS -f -H "$auth" \
-            "$api/projects/${NEON_PROJECT_ID}/branches/${BRANCH_ID}/endpoints" \
-            | python3 -c 'import json,sys; eps=json.load(sys.stdin)["endpoints"]; print(next(e["id"] for e in eps if e["type"]=="read_write"))')
-          curl -sS -f -X PATCH \
-            -H "$auth" \
+          neon_curl /tmp/neon-endpoints.json \
+            "$api/projects/${NEON_PROJECT_ID}/endpoints"
+          endpoint=$(python3 -c 'import json,os; eps=json.load(open("/tmp/neon-endpoints.json"))["endpoints"]; print(next(e["id"] for e in eps if e["branch_id"]==os.environ["BRANCH_ID"] and e["type"]=="read_write"))')
+          neon_curl /tmp/neon-endpoint.json -X PATCH \
             -H "Content-Type: application/json" \
             -d '{"endpoint":{"autoscaling_limit_min_cu":0.25,"autoscaling_limit_max_cu":1,"suspend_timeout_seconds":300}}' \
-            "$api/projects/${NEON_PROJECT_ID}/endpoints/${endpoint}" \
-            -o /tmp/neon-endpoint.json
+            "$api/projects/${NEON_PROJECT_ID}/endpoints/${endpoint}"
           python3 -c 'import json; e=json.load(open("/tmp/neon-endpoint.json"))["endpoint"]; print(e["id"], e["autoscaling_limit_max_cu"], e["suspend_timeout_seconds"])'
 
       - name: Install Railway CLI

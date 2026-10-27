@@ -121,9 +121,14 @@ mode, with no code:
 **Startup refuses risky settings (D47):**
 - an `http` issuer or key URL without the development override;
 - an `LPB_JWT_ADMIN_SCOPE` that ordinary tokens carry: an operation name (`jobs.run`, ...) or a standard
-  OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`). The admin scope makes an
+  OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`), whether written bare or
+  with `LPB_JWT_SCOPE_PREFIX` (`api:jobs.run` with the prefix `api:`, D49). The admin scope makes an
   engine-wide admin that skips permission and ownership checks in every application, so it must be a scope
   the provider issues to operators alone;
+  - **This check is a denylist.** It catches the scopes every provider puts on ordinary tokens, not ones
+    a provider invents. Choosing a scope that only operators are ever issued stays the operator's
+    responsibility. A dedicated namespace or a separate admin claim would remove that reliance (a
+    follow-up, not built);
 - an empty `LPB_JWT_TOKEN_TYPES`.
 
 **Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):
@@ -145,12 +150,17 @@ mode, with no code:
     within about 10 minutes. Keys older than an hour are not served: the request waits for a fetch. A token
     that names an unknown `kid` causes a fetch at most once a minute; only a refetch that worked uses up
     that minute.
+  - **One fetch at a time (D49):** a refresh, a cold start and an unknown-`kid` refetch all share one fetch,
+    and only that fetch updates the cache, so an older response can never put back a key set the provider
+    has since changed. An unknown `kid` first waits for a fetch already in flight (it may predate the
+    rotation that minted the `kid`), then asks again. No lock is held while the provider answers.
   - **No `kid`:** a token without `kid` is accepted only when the provider publishes exactly one signing key.
 - **Claims:** `iss`, `aud`, `exp` and `iat` are required, plus `client_id` and `jti` unless the opt-out is
   on (RFC 9068 2.2). `exp`, `nbf` and `iat` are checked with `LPB_JWT_LEEWAY_S` (30 s). `aud` may be a
   list that contains the engine.
 - **Lifetime (D47):** a token whose `exp - iat` exceeds `LPB_JWT_MAX_LIFETIME_S` (an hour) is refused,
   however valid its signature. This is what makes the short-lifetime revocation guidance enforceable.
+  `exp` and `iat` must be numbers: a numeric string, which PyJWT accepts, is a 401 (D49).
 - **Sender-constrained tokens are refused.** A token with `cnf` is bound to a client certificate
   (RFC 8705) or a DPoP key (RFC 9449). This engine verifies neither, so it refuses the token rather than
   accept it as a plain bearer token.
@@ -159,14 +169,17 @@ mode, with no code:
   - **Two metadata URLs (D47):** OpenID Discovery first (`<issuer>/.well-known/openid-configuration`); if
     that request fails, RFC 8414 (`https://host/.well-known/oauth-authorization-server/<issuer path>`). A
     document that answers but is wrong is not retried at the other URL.
-  - **Bounded:** each request has a 3 s timeout and a 1 MiB body cap, and redirects are not followed.
+  - **Bounded:** each document must arrive whole within 3 s (one deadline, not one per read, so a provider
+    that trickles bytes is cut off, D49), is capped at 1 MiB, and redirects are not followed.
     The token's own `jku` and `x5u` headers are ignored, so a token cannot choose where its keys come from.
-  - **No host block:** the metadata comes from the operator's configured issuer over `https`, and a
-    provider in the same cluster (a Keycloak) legitimately sits on a private address, so private and
-    loopback hosts are allowed.
+  - **No host block (a decision, D47):** the metadata comes from the operator's configured issuer over
+    `https`, and a provider in the same cluster (a Keycloak) legitimately sits on a private address, so
+    private, link-local and loopback hosts are allowed. Agreed in the #50 review.
   - **A bad URL is retried:** a discovered URL is kept only once it has served a usable key set, so a bad
     one, or one the issuer has moved, is discovered again.
-  - **After a failed fetch,** the provider is left alone for 5 s, and token requests answer 503 meanwhile.
+  - **After a failed fetch,** the provider is left alone for 5 s, counted from when the fetch failed (D49),
+    and token requests answer 503 meanwhile, unknown `kid`s included. Any failure counts, including a key
+    set the parser rejects (a non-text `kty` or `alg` is skipped): it is a 503, never a 500.
   - **Logging:** the reason, the URL and the client's error are logged as `auth.jwks_unavailable`. The 503
     body is a fixed message and never carries them.
 - **Answers:**

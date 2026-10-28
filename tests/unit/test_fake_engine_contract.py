@@ -444,8 +444,14 @@ async def test_a_paid_job_costs_pending_until_its_usage_arrives(side: Side) -> N
     async with side() as engine:
         job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
         cost = await engine.costs.for_job(ALICE, job.id)
-    assert cost.job_id == job.id and cost.status == "pending"
-    assert [attempt.cost_class for attempt in cost.attempts] == ["pending"]
+    assert cost.job_id == job.id
+    if job.attempts[0].sessions:
+        assert cost.status == "pending" and [attempt.cost_class for attempt in cost.attempts] == ["pending"]
+    else:
+        assert cost.status == "observed"
+        assert [(attempt.cost_class, attempt.fees.fee_eth) for attempt in cost.attempts] == [
+            ("delivered", Decimal(0))
+        ]
 
 
 async def test_a_running_stream_costs_pending(side: Side) -> None:

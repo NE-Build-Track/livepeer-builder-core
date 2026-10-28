@@ -88,6 +88,10 @@ def test_classification_covers_every_class() -> None:
     held = classify(job_with(("timeout", ("a-late",), True), state="uncertain"), [])
     assert held.status == "pending" and held.attempts[0].cost_class == "pending"
 
+    bare = classify(job_with(("timeout", (), True), state="uncertain"), [])
+    assert bare.status == "observed"
+    assert [(a.cost_class, a.fees.fee_eth) for a in bare.attempts] == [("uncertain", Decimal(0))]
+
     unpaid = classify(job_with(("refused", (), False)), [])
     assert unpaid.status == "none" and unpaid.attempts == ()
 

@@ -139,7 +139,7 @@ class PaidRequest:
                     response.release()
         return response.status, body, response.content_type
 
-    async def open(self, connect_timeout_s: float) -> "PaidStream":
+    async def open(self, connect_timeout_s: float) -> "SdkRunnerStream":
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
         session = aiohttp.ClientSession(timeout=timeout)
         try:
@@ -148,8 +148,7 @@ class PaidRequest:
         except BaseException:
             await session.close()
             raise
-        return PaidStream(session, response, funding, self._events)
-
+        return SdkRunnerStream(session, response, funding, self._events)
     async def _answered(
         self, session: aiohttp.ClientSession
     ) -> tuple[aiohttp.ClientResponse, asyncio.Task[Any] | None]:
@@ -261,7 +260,7 @@ class PaidRequest:
 
 
 class PaidStream:
-    def __init__(
+class SdkRunnerStream:
         self,
         session: aiohttp.ClientSession,
         response: aiohttp.ClientResponse,

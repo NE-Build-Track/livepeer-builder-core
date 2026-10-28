@@ -319,13 +319,13 @@ classDiagram
     class SdkRunnerTransport {
         own paid call, SDK signer client, signer bearer lpg_
     }
-    class PaidStream
+    class SdkRunnerStream
     RunnerTransport <|-- StreamingRunnerTransport
     DiscoverySource <|.. HttpDiscoverySource
     DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     StreamingRunnerTransport <|.. SdkRunnerTransport
-    RunnerStream <|.. PaidStream
+    RunnerStream <|.. SdkRunnerStream
     DiscoveryService --> DiscoverySource
     JobService --> DiscoveryService
     JobService --> SelectionPolicy

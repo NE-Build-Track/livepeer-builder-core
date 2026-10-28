@@ -14,8 +14,8 @@ from livepeer_gateway.discovery import discover_runners
 
 from livepeer_builder.adapters.runner_call import (
     PaidRequest,
-    PaidStream,
     PaymentEvents,
+    SdkRunnerStream,
     json_object,
 )
 from livepeer_builder.contracts import (
@@ -107,7 +107,7 @@ class SdkRunnerTransport:
         request: JobRequest,
         credential: str | None,
         on_signed: OnSigned | None = None,
-    ) -> PaidStream:
+    ) -> SdkRunnerStream:
         """The paid request, answered: the 402 is paid before the first byte, so payment is known here.
 
         Waiting for the runner's response headers is bounded by ``first_byte_timeout_s`` (D35). A timeout

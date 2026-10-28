@@ -16,7 +16,7 @@ from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorCha
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
-from livepeer_builder.adapters.runner_call import PaidStream
+from livepeer_builder.adapters.runner_call import SdkRunnerStream
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -61,7 +61,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
-    "RunnerStream": (PaidStream,),
+    "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient,),
     "UsageSource": (BatteriesUsageSource,),

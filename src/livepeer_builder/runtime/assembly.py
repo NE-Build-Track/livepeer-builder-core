@@ -312,6 +312,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
             settle_s=settings.stream_settle_s,
             open_grace_s=settings.stream_open_grace_s,
         ),
+        max_paid_attempts=settings.max_paid_attempts,
     )
     worker = CostSyncWorker(parts.usage_source, parts.store) if parts.usage_source is not None else None
     costs = CostService(

@@ -67,7 +67,13 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
-from livepeer_builder.services.failover import Candidates, attempt_verdict, failure_of, payment_unresolved
+from livepeer_builder.services.failover import (
+    Candidates,
+    attempt_verdict,
+    failure_of,
+    payment_unresolved,
+    recover_interrupted,
+)
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
 from livepeer_builder.utils import run_shielded
@@ -87,6 +93,7 @@ class JobService:
         admission: AdmissionLimiter,
         clock: Clock,
         stream_limits: StreamLimits | None = None,
+        max_paid_attempts: int = 2,
     ) -> None:
         self._store = store
         self._discovery = discovery
@@ -97,6 +104,7 @@ class JobService:
         self._admission = admission
         self._clock = clock
         self._stream_limits = stream_limits or StreamLimits()
+        self._max_paid_attempts = max_paid_attempts  # D55
         self.streaming: Streaming | None = (  # decided once (D33): only a transport with open() streams
             Streaming(functools.partial(self._stream, transport=transport))
             if isinstance(transport, StreamingRunnerTransport)
@@ -217,23 +225,8 @@ class JobService:
         return job.model_copy(update={"usage": usage})
 
     async def recover_interrupted(self) -> int:
-        """Resolve jobs a restart left ``running``. One that may hold a payment for work with an unknown
-        outcome becomes ``uncertain``; attempts it failed over from do not count (D52)."""
-        recovered = 0
-        for job in await self._store.jobs_in_state("running"):
-            maybe_paid = payment_unresolved(job.attempts)
-            failure = Failure(
-                kind="interrupted",
-                message="the engine stopped while this job was running",
-                payment_sent=any(a.payment_sent for a in job.attempts),
-            )
-            await self._store.finish_job(
-                job.id, "uncertain" if maybe_paid else "failed", failure, None, self._clock.now()
-            )
-            recovered += 1
-        if recovered:
-            _LOG.warning("recovered interrupted jobs", extra={"event": "jobs.recovered", "count": recovered})
-        return recovered
+        """Resolve jobs a restart left ``running`` (``failover.recover_interrupted``)."""
+        return await recover_interrupted(self._store, self._clock)
 
     # -- shared steps -------------------------------------------------------------------------------
 
@@ -283,7 +276,7 @@ class JobService:
         ordered = tuple(self._selection.order(candidates, request))
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
-        return Candidates(ordered, request.max_attempts), credential
+        return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
 
     async def _start_attempt(
         self, job: Job, number: int, runner: Runner, credential: PaymentCredential, attempts: list[Attempt]
@@ -327,7 +320,7 @@ class JobService:
         verdict = attempt_verdict(error.kind, error.status_code, paid, payment_unknown=error.payment_unknown)
         if verdict == "failover":
             if paid:
-                candidates.exclude(runner)
+                candidates.paid_failover(runner)
             return None
         state: JobState = "uncertain" if verdict == "uncertain" else "failed"
         failure = failure_of(error, any(attempt.payment_sent for attempt in attempts))  # earlier ones too

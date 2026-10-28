@@ -72,6 +72,12 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      orchestrator that took the payment, so a job never pays one orchestrator twice. A runner without
      an `orchestrator_url` is matched by its own URL's origin, since a Live Runner is reached through
      its orchestrator. A skipped runner does not count against `max_attempts`.
+   - **The operator caps paid failover (D55).** `LPB_MAX_PAID_ATTEMPTS` (default 2, 1 to 10) is how many
+     paid attempts a job may fail over from. Once that many have, no further attempt starts, because
+     the next could be paid too: the job is `failed` with the last runner's words, and
+     `jobs.paid_attempt_cap` is logged. Each of those payments is `failed_after_payment`, never
+     billable, so the operator pays for them; the caller's `max_attempts` cannot raise the cap. Unpaid
+     failovers do not count. `1` turns paid failover off.
    - **404, 409 and 503** come from the orchestrator refusing the request before the app ran: the
      runner is gone or stopped its session (livepeer-python-gateway#83), the session already exists, or
      the capacity was taken ([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)). A

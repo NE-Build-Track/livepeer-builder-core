@@ -1,13 +1,18 @@
 """What a failed attempt means for its job, and which runner is tried next (D52)."""
 
+import logging
 from collections.abc import Iterator, Sequence
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, FailureKind, Runner
 from livepeer_builder.errors import RunnerCallError
+from livepeer_builder.protocols import Clock, JobRepo
 from livepeer_builder.services.streams import failure_kind
 from livepeer_builder.utils import BODY_LIMIT
+
+_LOG = logging.getLogger(__name__)
 
 Verdict = Literal["failover", "failed", "uncertain"]
 
@@ -52,6 +57,24 @@ def refused_everything(attempt: Attempt) -> bool:
     return bool(attempt.sessions) and all(session.payment_state == "unpaid" for session in attempt.sessions)
 
 
+async def recover_interrupted(store: JobRepo, clock: Clock) -> int:
+    """Resolve jobs a restart left ``running``. One that may hold a payment for work with an unknown
+    outcome becomes ``uncertain``; attempts it failed over from do not count (D52)."""
+    recovered = 0
+    for job in await store.jobs_in_state("running"):
+        maybe_paid = payment_unresolved(job.attempts)
+        failure = Failure(
+            kind="interrupted",
+            message="the engine stopped while this job was running",
+            payment_sent=any(a.payment_sent for a in job.attempts),
+        )
+        await store.finish_job(job.id, "uncertain" if maybe_paid else "failed", failure, None, clock.now())
+        recovered += 1
+    if recovered:
+        _LOG.warning("recovered interrupted jobs", extra={"event": "jobs.recovered", "count": recovered})
+    return recovered
+
+
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
     """A 404 or 409 is reported as ``refused``. ``status_code`` keeps the orchestrator's status.
 
@@ -75,17 +98,34 @@ def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
 
 
 class Candidates:
-    """Selection order, at most ``max_attempts``. ``exclude`` skips that orchestrator's later runners."""
+    """Selection order, at most ``max_attempts``. ``exclude`` skips that orchestrator's later runners.
 
-    def __init__(self, ordered: Sequence[Runner], max_attempts: int) -> None:
+    ``max_paid_failovers`` is the operator's cap on payments a job fails over from (D55): once that many
+    paid attempts have failed over, no further attempt starts, because the next could be paid too.
+    """
+
+    def __init__(
+        self,
+        ordered: Sequence[Runner],
+        max_attempts: int,
+        max_paid_failovers: int | None = None,
+        job_id: UUID | None = None,
+    ) -> None:
         self.ordered = tuple(ordered)
+        self._job_id = job_id
         self._max_attempts = max_attempts
+        self._max_paid_failovers = max_paid_failovers
         self._excluded: set[str] = set()
+        self.paid_failovers = 0
+
+    @property
+    def capped(self) -> bool:
+        return self._max_paid_failovers is not None and self.paid_failovers >= self._max_paid_failovers
 
     def __iter__(self) -> Iterator[Runner]:
         tried = 0
         for runner in self.ordered:
-            if tried >= self._max_attempts:
+            if tried >= self._max_attempts or self.capped:
                 return
             if orchestrator_of(runner) in self._excluded:
                 continue
@@ -94,6 +134,20 @@ class Candidates:
 
     def exclude(self, runner: Runner) -> None:
         self._excluded.add(orchestrator_of(runner))
+
+    def paid_failover(self, runner: Runner) -> None:
+        """A paid attempt failed over: never pay that orchestrator again, and count the payment."""
+        self.exclude(runner)
+        self.paid_failovers += 1
+        if self.capped:
+            _LOG.info(
+                "paid attempt cap reached",
+                extra={
+                    "event": "jobs.paid_attempt_cap",
+                    "job_id": str(self._job_id),
+                    "paid": self.paid_failovers,
+                },
+            )
 
 
 def orchestrator_of(runner: Runner) -> str:

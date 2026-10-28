@@ -58,6 +58,13 @@ def test_the_copied_sdk_call_path_is_unchanged(name: str) -> None:
     )
 
 
+def test_the_copy_keeps_the_sdk_s_mit_notice() -> None:
+    """MIT asks every copy of a substantial portion to carry the copyright and permission notice."""
+    source = inspect.getsource(runner_call)
+    assert "Copyright (c) 2026 Livepeer Foundation" in source
+    assert "The above copyright notice and this permission notice shall be included in all" in source
+
+
 def test_the_copied_protocol_constants_match() -> None:
     assert runner_call._PAYMENT_TYPES_BY_UNIT == live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT
     assert runner_call.PAYER_ADDRESS_HEADER == live_runner._LIVE_RUNNER_PAYER_ADDRESS_HEADER

@@ -216,6 +216,34 @@ async def test_cancelling_the_consumer_abandons_the_stream(
     assert engine.admission.running == 0
 
 
+async def test_a_stream_obeys_the_paid_attempt_cap(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await make_engine(
+        runners=(
+            runner(APP, url="https://a1", orchestrator_url="https://orch-a.example"),
+            runner(APP, url="https://b1", orchestrator_url="https://orch-b.example"),
+        ),
+        max_paid_attempts=1,
+    )
+    provision = ProvisionRequest(
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(5), currency="USD"),
+        grant_id="g",
+    )
+    await engine.payments.provision(admin, provision)
+    transport.opens = [
+        RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-1",), status_code=503),
+        StreamScript(events=[b"ok"], manifest_ids=("m-2",)),
+    ]
+    assert engine.jobs.streaming is not None
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
+    assert failed.value.job.state == "failed" and len(failed.value.job.attempts) == 1
+    assert engine.admission.running == 0
+
+
 async def test_unpaid_stream_failure_is_failed_not_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:

@@ -5,9 +5,12 @@
 - **Owner:** Mike.
 - **Ticket:** [#49](https://github.com/NE-Build-Track/livepeer-builder-core/issues/49), part of ISS-33 (M4). The mode
   was defined in M2 (D13, D14; [access.md#modes](../../contracts/access.md#modes)).
-- **Branch:** `tasks/mz/jwt-bearer`, on top of the ISS-08 branch (`tasks/mz/iss-08-credentials`, #48) at `a2d115d`.
-- **Progress:** decisions locked 26 October (D45); built and shown live; merged into `releases/m3` on
-  27 October (#50). The review follow-up (D50) is in review.
+- **Branches:** `tasks/mz/jwt-bearer` (#50), then `tasks/mz/jwt-review-followup` (#57), both merged into
+  `releases/m3`.
+- **Progress:** **done.** Every acceptance item is evidenced. #50 merged into `releases/m3` on 27 October,
+  and the review follow-up #57 (D50) the same day, both approved by John. Accepted by Mike on 28 October.
+- **Follow-up:** the admin scope is still checked against a denylist; a dedicated namespace or an admin
+  claim is [#58](https://github.com/NE-Build-Track/livepeer-builder-core/issues/58) (T19).
 - **Source:** Mike's recommendation of 26 October (`2026-10-26-builder-core-oauth-recommendation.md`).
 - **Decision:** D45; the review hardening is D47, D49 and D50.
 
@@ -174,6 +177,8 @@ silent for an authenticator with another scheme. `AuthenticatorChain.challenge` 
   - **Mutations,** each caught (6): no key-type check, the minimum length not enforced, the key error not
     mapped, the pause stamped when the fetch started, no pause in the shared fetch, and an unknown-`kid`
     refetch that skips the pause (`test_a_failed_refetch_does_not_use_up_the_minute` catches that one too).
+- 27 October: #57 approved by John and Cursor and merged. The admin-scope denylist, named as residual risk in
+  both reviews, became #58 (T19). The plan moved to `completed/`.
 
 ## Decision log
 

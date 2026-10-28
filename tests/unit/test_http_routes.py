@@ -312,3 +312,36 @@ async def test_a_raw_body_arrives_as_base64_over_rest(  # type: ignore[no-untype
     )
     bad = await client.post("/v1/jobs", json=job | {"raw_body": "not base64!"}, headers=alice)
     assert bad.status_code == 422
+
+
+async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignore[no-untyped-def]
+    client, engine, admin, alice = api
+    provisioned = await client.post(
+        ALLOCATION,
+        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "label": "Alice Smith"},
+        headers=admin,
+    )
+    assert provisioned.status_code == 201 and provisioned.json()["label"] == "Alice Smith"
+    listed = await client.get("/v1/admin/actors", headers=admin)
+    assert listed.status_code == 200
+    assert [
+        (a["actor_id"], a["label"], a["provisioned"], a["allocation"]["status"]) for a in listed.json()
+    ] == [
+        ("alice", "Alice Smith", True, "active")
+    ]  # D48: each row says whether it is provisioned; the allocation is nested
+    assert (await client.get("/v1/admin/actors?provisioned=false", headers=admin)).json() == []
+    assert (await client.get("/v1/admin/actors?status=paused", headers=admin)).json() == []
+    one = await client.get(ALLOCATION, headers=admin)
+    assert one.status_code == 200 and one.json()["actor_id"] == "alice"
+    assert (await client.get(ALLOCATION.replace("alice", "nobody"), headers=admin)).status_code == 404
+    assert (await client.get("/v1/admin/actors", headers=alice)).status_code == 403
+    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    auditor = await engine.keys.issue(operator, kind="auditor", actor_id="dashboard")
+    as_auditor = {"Authorization": f"Bearer {auditor.token}"}
+    assert (await client.get("/v1/admin/actors", headers=as_auditor)).status_code == 200
+    funded = await client.post(
+        ALLOCATION + "/fund",
+        json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
+        headers=as_auditor,
+    )
+    assert funded.status_code == 403  # an auditor reads; it never moves money

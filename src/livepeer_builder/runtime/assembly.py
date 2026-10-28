@@ -50,6 +50,7 @@ from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
+from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
 
 # The one deliberate conditional import: the default adapters load inside default_parts, so that
@@ -266,7 +267,7 @@ class EngineServices:
     store: EngineStore
     clock: Clock
     policy: AccessPolicy
-    authenticator: AuthenticatorChain
+    authenticator: Authenticator  # the chain, recording the people an identity provider signs in (D48)
     discovery: DiscoveryService
     jobs: JobService
     payments: PaymentsService
@@ -327,7 +328,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         store=parts.store,
         clock=parts.clock,
         policy=parts.policy,
-        authenticator=AuthenticatorChain(authenticators),
+        authenticator=SightingRecorder(AuthenticatorChain(authenticators), parts.store, parts.clock),
         discovery=discovery,
         jobs=jobs,
         payments=payments,

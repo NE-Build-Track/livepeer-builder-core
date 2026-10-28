@@ -489,6 +489,15 @@ async def test_a_key_url_that_worked_and_then_fails_is_discovered_again(
     assert provider.requests[-2:] == [DISCOVERY, JWKS_URL_2]
 
 
+async def test_the_admin_read_scope_makes_an_auditor_and_admin_wins(make: Make, provider: Provider) -> None:
+    """A dashboard's service account gets a read-only credential (#52, D46)."""
+    authenticator = make(admin_scope="livepeer:admin", admin_read_scope="livepeer:read")
+    reader = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read")))
+    assert reader is not None and reader.credential_kind == "auditor"
+    both = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read livepeer:admin")))
+    assert both is not None and both.credential_kind == "admin"
+
+
 # -- PR #50, John's review (D47) ---------------------------------------------------------------------------
 
 
@@ -722,6 +731,21 @@ async def test_closing_cancels_a_refresh_the_provider_never_answers(provider: Pr
 async def test_a_key_that_cannot_be_loaded_is_skipped(make: Make, provider: Provider) -> None:
     provider.raw_keys = [{"kty": "RSA", "kid": "broken", "n": "!", "e": "AQAB"}]
     assert await make().authenticate(bearer(provider.token(kid=None))) is not None
+
+
+# -- registration on first sign-in (#52, D48) ---------------------------------------------------------------
+
+
+async def test_the_name_claim_becomes_the_display_name(make: Make, provider: Provider) -> None:
+    """The name an operator recognises (preferred_username by default); the actor stays the immutable sub."""
+    actor = await make().authenticate(bearer(provider.token(preferred_username="alice")))
+    assert actor is not None and (actor.actor_id, actor.display_name) == ("alice", "alice")
+    renamed = await make(name_claim="name").authenticate(bearer(provider.token(name="Alice Smith")))
+    assert renamed is not None and renamed.display_name == "Alice Smith"
+    off = await make(name_claim=None).authenticate(bearer(provider.token(preferred_username="alice")))
+    assert off is not None and off.display_name is None
+    missing = await make().authenticate(bearer(provider.token(preferred_username=42)))
+    assert missing is not None and missing.display_name is None  # not text: no name, never a 401
 
 
 # -- PR #50 review, round 2 (D49) ----------------------------------------------------------------------------

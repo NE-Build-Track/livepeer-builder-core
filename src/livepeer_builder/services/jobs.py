@@ -74,7 +74,7 @@ from livepeer_builder.services.failover import (
     recover_interrupted,
     returned_failover,
 )
-from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
 from livepeer_builder.utils import run_shielded
@@ -203,7 +203,7 @@ class JobService:
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
         """The caller's own jobs; an admin's are every actor's in its application, as the cost reads (D44)."""
-        target = None if actor.credential_kind == "admin" else actor.actor_id
+        target = None if sees_every_actor(actor) else actor.actor_id
         self._policy.check(
             actor,
             Operation.JOBS_READ,

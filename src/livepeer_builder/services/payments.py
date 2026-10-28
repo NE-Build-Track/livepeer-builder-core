@@ -21,6 +21,7 @@ from livepeer_builder.contracts import (
     Currency,
     FundRequest,
     GrantRecord,
+    KnownActor,
     Money,
     Operation,
     PaymentCredential,
@@ -28,6 +29,7 @@ from livepeer_builder.contracts import (
     ProvisionRequest,
     ResourceRef,
     SecretRef,
+    SeenActor,
 )
 from livepeer_builder.errors import InvalidRequest, NotFound, NotProvisioned, ProviderUnavailable
 from livepeer_builder.protocols import AccessPolicy, ActorRepo, AllocationManager, Clock, SecretStore
@@ -53,7 +55,7 @@ class GrantDesk:
         self._currency = currency
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(admin, Operation.ADMIN_READ)
         return await self._manager.list_grants()
 
     async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:
@@ -138,6 +140,10 @@ class PaymentsService:
         if not grant_id:
             raise InvalidRequest("choose a grant")
         manager = self._require_manager()
+        if not request.label:  # a person who signed in is labelled with their name (D48)
+            seen = await self._store.get_sighting(request.application_id, request.actor_id)
+            if seen is not None and seen.name:
+                request = request.model_copy(update={"label": seen.name})
         operation = f"provision:{request.application_id}:{request.actor_id}"
         if existing is not None:  # re-provisioning after a revoke is a new operation
             operation += f":{existing.updated_at.isoformat()}"
@@ -162,9 +168,48 @@ class PaymentsService:
             status="exhausted" if request.amount.amount == 0 else "active",
             created_at=now,
             updated_at=now,
+            label=request.label,
         )
         await self._store.save_actor(provisioned)
         return provisioned
+
+    # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------
+
+    async def list_actors(
+        self,
+        admin: ActorContext,
+        *,
+        application_id: str | None = None,
+        status: AllocationStatus | None = None,
+        provisioned: bool | None = None,
+        limit: int = 500,
+    ) -> list[KnownActor]:
+        """Every actor an operator can act on: the provisioned ones (gap G2) and the people an identity
+        provider signed in, provisioned or not (D48). Every application's for an admin unless it names one;
+        an auditor's own. ``status`` filters allocations, so it leaves out the unprovisioned."""
+        scope = application_id or (None if admin.credential_kind == "admin" else admin.application_id)
+        resource = None if scope is None else ResourceRef(kind="actor", application_id=scope)
+        self._policy.check(admin, Operation.ADMIN_READ, resource)
+        allocations = {(a.application_id, a.actor_id): a for a in await self._store.list_actors(scope)}
+        sightings = {(s.application_id, s.actor_id): s for s in await self._store.list_sightings(scope)}
+        known = [
+            _known(key, allocations.get(key), sightings.get(key))
+            for key in sorted(allocations.keys() | sightings.keys())
+        ]
+        return [
+            actor
+            for actor in known
+            if (provisioned is None or actor.provisioned == provisioned)
+            and (status is None or (actor.allocation is not None and actor.allocation.status == status))
+        ][:limit]
+
+    async def get_actor(self, admin: ActorContext, application_id: str, actor_id: str) -> ProvisionedActor:
+        resource = ResourceRef(kind="actor", application_id=application_id, owner_actor_id=actor_id)
+        self._policy.check(admin, Operation.ADMIN_READ, resource)  # before the lookup (D44)
+        actor = await self._store.get_actor(application_id, actor_id)
+        if actor is None:
+            raise NotFound(f"actor {actor_id!r} is not provisioned")
+        return actor
 
     async def fund(
         self, admin: ActorContext, application_id: str, actor_id: str, request: FundRequest
@@ -279,3 +324,16 @@ class PaymentsService:
 
 def _secret_name(application_id: str, actor_id: str) -> str:
     return f"lpg/{application_id}/{actor_id}"
+
+
+def _known(key: tuple[str, str], allocation: ProvisionedActor | None, seen: SeenActor | None) -> KnownActor:
+    name = seen.name if seen is not None and seen.name else None
+    return KnownActor(
+        application_id=key[0],
+        actor_id=key[1],
+        label=(allocation.label if allocation is not None else "") or name or "",
+        name=name if seen is not None else None,
+        allocation=allocation,
+        first_seen_at=seen.first_seen_at if seen is not None else None,
+        last_seen_at=seen.last_seen_at if seen is not None else None,
+    )

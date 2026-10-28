@@ -18,6 +18,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SeenActor,
     SignedSession,
     SyncCheckpoint,
     UsageRow,
@@ -89,10 +90,12 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
         application_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:x"), currency="USD", status="active", created_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_actor(actor)
-    await sql.save_actor(actor.model_copy(update={"status": "paused"}))
+    await sql.save_actor(actor.model_copy(update={"label": "Alice Smith"}))
+    await sql.save_actor(actor.model_copy(update={"status": "paused", "label": "Alice Smith"}))
     loaded = await sql.get_actor("default", "alice")
     assert loaded is not None and loaded.status == "paused" and loaded.secret_ref.ref == "db:x"
+    assert loaded.label == "Alice Smith"  # the readable name beside an opaque actor_id (D46)
+    assert [a.label for a in await sql.list_actors("default")] == ["Alice Smith"]
 
     key = AccessKey(
         key_id="k", kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
@@ -607,3 +610,29 @@ async def test_a_refusal_that_lands_during_matching_is_never_billed(sql: SqlStor
     assert (session.payment_state, session.match) == ("unpaid", "unmatched")
     assert not loaded.attempts[0].payment_sent
     assert [r.computed_fee_eth for r in await sql.unattributed_usage("alloc_1")] == [Decimal(1)]
+
+
+async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, clock: FixedClock) -> None:
+    """A person the identity provider signed in, before any allocation (D48)."""
+    first = clock.now()
+    seen = SeenActor(
+        application_id="default", actor_id="4f6c2a1e", name="alice", first_seen_at=first, last_seen_at=first
+    )
+    await sql.save_sighting(seen)
+    later = first + timedelta(hours=2)
+    await sql.save_sighting(
+        seen.model_copy(update={"name": "alice.smith", "first_seen_at": later, "last_seen_at": later})
+    )
+    await sql.save_sighting(
+        SeenActor(application_id="app-2", actor_id="b", name="bob", first_seen_at=first, last_seen_at=first)
+    )
+    nameless = later + timedelta(hours=1)  # the name claim switched off: the name is kept, the time moves
+    await sql.save_sighting(
+        seen.model_copy(update={"name": "", "first_seen_at": nameless, "last_seen_at": nameless})
+    )
+    later = nameless
+    [kept] = await sql.list_sightings("default")
+    assert (kept.name, kept.first_seen_at, kept.last_seen_at) == ("alice.smith", first, later)
+    assert await sql.get_sighting("default", "4f6c2a1e") == kept
+    assert await sql.get_sighting("default", "nobody") is None
+    assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by application, then actor

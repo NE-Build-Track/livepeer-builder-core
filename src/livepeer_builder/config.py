@@ -82,10 +82,13 @@ class EngineSettings(Contract):
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential
+    jwt_admin_read_scope: str | None = None  # an auditor: a read-only admin (D46); the admin scope wins
     jwt_leeway_s: float = Field(default=30.0, ge=0)
     # RFC 9068 access tokens only; add "jwt" for a provider that cannot send at+jwt (weaker, D47)
     jwt_token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")
     jwt_max_lifetime_s: float = Field(default=3600.0, gt=0)  # exp - iat; longer tokens are refused (D47)
+    # The person's display name, for the operator's actor list (D48); empty turns it off
+    jwt_name_claim: str | None = "preferred_username"
     jwt_allow_http: bool = False  # dev only: an http issuer or key URL, such as a local Keycloak (D47)
 
     # operations
@@ -143,6 +146,12 @@ class EngineSettings(Contract):
             raise ValueError(
                 f"jwt_admin_scope {self.jwt_admin_scope!r} is a scope ordinary tokens carry, "
                 "so every user would be an admin"
+            )
+        read = self.jwt_admin_read_scope
+        if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
+            raise ValueError(
+                f"jwt_admin_read_scope {read!r} is a scope ordinary tokens carry, or the admin scope, "
+                "so it would not mark a read-only admin"
             )
         return self
 

@@ -116,3 +116,27 @@ async def test_an_admin_lists_every_actors_jobs_in_its_application(
     await engine.jobs.run(carol, JobRequest(app=APP))  # another application: not the admin's
     assert {job.id for job in await engine.jobs.list_jobs(admin)} == {alices, bobs}
     assert [job.id for job in await engine.jobs.list_jobs(alice)] == [alices]
+
+
+# -- the auditor (#52, D46) --------------------------------------------------------------------------------
+
+
+async def test_an_auditor_reads_every_actor_in_its_application_and_changes_nothing(
+    make_engine: EngineFactory, transport: ScriptedTransport, alice: ActorContext, bob: ActorContext
+) -> None:
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # application "default"
+    engine, alices = await engine_with_job(make_engine, transport, alice)
+    assert [job.id for job in await engine.jobs.list_jobs(auditor)] == [alices]  # another actor's job
+    assert (await engine.jobs.get(auditor, alices)).id == alices
+    assert (await engine.costs.for_job(auditor, alices)).job_id == alices
+    with pytest.raises(AccessDenied):
+        await engine.costs.sync_now(auditor)
+    with pytest.raises(AccessDenied):
+        await engine.jobs.run(auditor, JobRequest(app=APP))
+    with pytest.raises(AccessDenied, match="another application"):
+        await engine.costs.reconcile(auditor, "other-app", None)
+    other = bob.model_copy(update={"application_id": "other-app"})
+    transport.steps = [ScriptedTransport.ok()]
+    elsewhere = (await engine.jobs.run(other, JobRequest(app=APP))).job.id
+    with pytest.raises(NotFound):
+        await engine.jobs.get(auditor, elsewhere)  # another application's job reads as missing

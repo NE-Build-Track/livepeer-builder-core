@@ -57,7 +57,7 @@ from livepeer_builder.protocols import (
     JobRepo,
     UsageSource,
 )
-from livepeer_builder.services.ownership import check_owner
+from livepeer_builder.services.ownership import check_owner, sees_every_actor
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -197,7 +197,7 @@ class CostService:
             return (await _compute_all([job], reads))[0]  # running, or ended since sync stored it (#33)
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
-        target = None if actor.credential_kind == "admin" else actor.actor_id
+        target = None if sees_every_actor(actor) else actor.actor_id
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         async with self._store.cost_snapshot() as reads:
             recent = await reads.recent_with_projections(actor.application_id, target, limit)
@@ -210,7 +210,7 @@ class CostService:
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
     ) -> CostSummary:
-        target = actor_id or (None if actor.credential_kind == "admin" else actor.actor_id)
+        target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         with_cost = pending = 0
@@ -238,7 +238,7 @@ class CostService:
         alongside can never count a row twice or nowhere. ``spent`` is read from the provider afterwards
         and can be ahead of usage the engine has not synced yet; ``balanced`` is then ``False`` until it is.
         """
-        self._policy.check(admin, Operation.ADMIN_COSTS)
+        self._policy.check(admin, Operation.ADMIN_READ, _resource(application_id, actor_id))
         if self._allowances is None:
             raise ProviderUnavailable("no payment provider is configured")
         allocation_id = await self._allowances.allocation_for(application_id, actor_id)

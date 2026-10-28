@@ -29,7 +29,7 @@ def output(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
 
 def test_migrate_and_revision(db: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert run("migrate") == 0
-    assert output(capsys) == {"revision": "0006"}
+    assert output(capsys) == {"revision": "0008"}
     assert run("revision") == 0
     assert output(capsys)["up_to_date"] is True
 
@@ -42,7 +42,7 @@ def test_revision_reports_a_database_that_is_behind(db: Path, capsys: pytest.Cap
 
     asyncio.run(at_first_revision())
     assert run("revision") == 2
-    assert output(capsys) == {"database": "0001", "package_head": "0006", "up_to_date": False}
+    assert output(capsys) == {"database": "0001", "package_head": "0008", "up_to_date": False}
 
 
 def test_backup_verify_and_restore(db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -75,7 +75,7 @@ def test_gen_secret_key_smoke_and_purge(db: Path, capsys: pytest.CaptureFixture[
     assert len(capsys.readouterr().out.strip()) == 44  # a Fernet key
     assert run("smoke") == 0
     smoke = output(capsys)
-    assert smoke["ok"] is True and smoke["schema_revision"] == "0006"
+    assert smoke["ok"] is True and smoke["schema_revision"] == "0008"
     assert run("purge") == 0
     assert output(capsys) == {"jobs_deleted": 0, "usage_rows_deleted": 0}
 

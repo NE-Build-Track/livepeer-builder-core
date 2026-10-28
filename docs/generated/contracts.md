@@ -19,6 +19,7 @@ classDiagram
         +enum credential_kind
         +map attributes
         +AuthProvenance? auth
+        +str? display_name
     }
     class AuthProvenance {
         +str method
@@ -167,6 +168,7 @@ classDiagram
         +enum status
         +datetime created_at
         +datetime updated_at
+        +str label
     }
     class SecretRef {
         +str ref

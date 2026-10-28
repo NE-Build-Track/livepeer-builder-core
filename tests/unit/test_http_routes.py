@@ -348,3 +348,17 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
         headers=as_auditor,
     )
     assert funded.status_code == 403  # an auditor reads; it never moves money
+
+
+async def test_a_label_too_long_to_store_is_refused_before_any_money_moves(  # type: ignore[no-untyped-def]
+    api, manager: FakeAllocationManager
+) -> None:
+    """The stored label holds 200 characters. A longer one is a 422 before the provider creates a key,
+    so a retry cannot find money moved and no actor saved (John, #53 review)."""
+    client, _engine, admin, _alice = api
+    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "label": "x" * 201}
+    refused = await client.post(ALLOCATION, json=body, headers=admin)
+    assert refused.status_code == 422
+    assert "create_key_for_grant" not in manager.calls
+    accepted = await client.post(ALLOCATION, json=body | {"label": "x" * 200}, headers=admin)
+    assert accepted.status_code == 201 and accepted.json()["label"] == "x" * 200

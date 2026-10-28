@@ -103,7 +103,7 @@ class IssueKeyBody(BaseModel):
 
 class ProvisionBody(BaseModel):
     amount: Money
-    label: str = ""
+    label: str = Field(default="", max_length=200)  # ProvisionedActor.label; a 422 before money moves
     grant_id: str = ""
 
 

@@ -30,7 +30,7 @@ class ProvisionRequest(Contract):
     application_id: str
     actor_id: str
     amount: Money  # may be zero: identity without money; fund later with an explicit command
-    label: str = ""
+    label: str = Field(default="", max_length=200)  # as stored: refused before any provider call
     grant_id: str = ""  # empty uses the grant of the caller's own allocation
 
 

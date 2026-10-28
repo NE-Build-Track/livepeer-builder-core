@@ -1400,6 +1400,7 @@
           },
           "label": {
             "default": "",
+            "maxLength": 200,
             "title": "Label",
             "type": "string"
           }

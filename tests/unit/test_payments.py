@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest, SeenActor
@@ -149,6 +150,14 @@ async def test_an_auditor_never_sees_the_operators_grants(
     with pytest.raises(AccessDenied):
         await desk.list_grants(auditor)
     assert len(await desk.list_grants(admin)) == 1
+
+
+def test_a_provisioning_label_is_capped_where_it_is_stored() -> None:
+    """``ProvisionedActor.label`` holds 200 characters, so the request refuses more before any provider
+    call (John, #53 review)."""
+    with pytest.raises(ValidationError):
+        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), label="x" * 201)
+    assert ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), label="x" * 200)
 
 
 async def test_funding_a_named_grant_applies_once(

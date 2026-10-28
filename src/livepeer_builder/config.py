@@ -49,6 +49,9 @@ class EngineSettings(Contract):
     max_concurrent_jobs: int | None = Field(default=64, ge=1)
     max_concurrent_jobs_per_app: int | None = Field(default=None, ge=1)
 
+    # paid failover (D55): how many paid attempts a job may fail over from; 1 turns paid failover off
+    max_paid_attempts: int = Field(default=2, ge=1, le=10)
+
     # streaming (docs/contracts/engine.md#streaming)
     stream_finalize_timeout_s: float = Field(default=10.0, gt=0)  # the most a stream's closing writes take
     stream_drain_timeout_s: float = Field(default=30.0, ge=0)  # engine stop waits this long for open streams

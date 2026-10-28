@@ -240,6 +240,14 @@ def test_tuning_values_are_settings_with_todays_defaults() -> None:
             EngineSettings.model_validate({field: 0})
 
 
+def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
+    assert EngineSettings().max_paid_attempts == 2  # D55
+    assert EngineSettings.from_env({"LPB_MAX_PAID_ATTEMPTS": "3"}).max_paid_attempts == 3
+    for value in (0, 11):
+        with pytest.raises(ValidationError):
+            EngineSettings.model_validate({"max_paid_attempts": value})
+
+
 def test_batteries_http_client_uses_the_configured_timeout() -> None:
     client = batteries_http_client("https://batteries.example/", "t", timeout_s=7.0)
     assert client.timeout == httpx.Timeout(7.0)

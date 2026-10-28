@@ -7,7 +7,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 | Component | Repository | Baseline commit | Used by |
 | --- | --- | --- | --- |
 | Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (12 October baseline); pinned now to `76a1a1c` on `main` (22 October: [#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), [#80](https://github.com/livepeer/livepeer-python-gateway/pull/80), [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81); was `3238731` on the NE fork) | `adapters/sdk.py` |
-| Signer and orchestrator | [NE-Build-Track/node](https://github.com/NE-Build-Track/node) | `406b248f6cb8728e6e7eba1809901f589060bc6b` (v1.0.2, 19 October; was `f970be6`, and `1432123` before that). It includes Josh's fix for T10 | dev stack and Railway; [node-signer.md](node-signer.md) |
+| Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `406b248f6cb8728e6e7eba1809901f589060bc6b` (v1.0.2, 19 October; was `f970be6`, and `1432123` before that). It includes Josh's fix for T10. Built from upstream since 28 October; the NE-Build-Track fork has no commits of its own at this pin | dev stack and Railway; [node-signer.md](node-signer.md) |
 | Clearinghouse Batteries | [NE-Build-Track/clearinghouse-batteries](https://github.com/NE-Build-Track/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659` | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
 

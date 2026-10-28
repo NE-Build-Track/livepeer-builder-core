@@ -7,7 +7,7 @@ payment side, the discovery service and the engine:
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | NE-Build-Track/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It only signs payments |
+| `signer` | livepeer/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It only signs payments |
 | `discovery` | This repository's discovery service (`lpb discovery`, the engine image) on `127.0.0.1:8939`, with the static directory `config/orchestrators.txt` ([contract](../../docs/contracts/discovery.md)) |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from the discovery service (`LPB_DISCOVERY_URL`) |
 

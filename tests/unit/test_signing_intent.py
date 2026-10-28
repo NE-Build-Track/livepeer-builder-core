@@ -1,20 +1,21 @@
-"""D53: ``on_signed`` writes a paid session. A non-refusal keeps the remembered manifest, unpaid.
+"""D53, D54: the manifest is stored as ``unknown`` before the signer is asked, then ``paid`` or ``unpaid``.
 
-An expired challenge and a signer refusal leave no session. A lost reply and a cancel keep the
-manifest the signer was asked for. The engine, the Live Runner transport and the SDK's signer client
+``on_signed`` makes it ``paid``. An expired challenge and a signer refusal make it ``unpaid``, and usage
+for an unpaid manifest is never attributed. A lost reply and a cancel leave it ``unknown``, so a crash
+during signing still has it. The engine, the Live Runner transport and the SDK's signer client
 are real; only the network is local (tests/unit/livepeer_net.py). The job passes the recorder as
 ``on_signed``; nothing passes a second callback.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from decimal import Decimal
 
 import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, Attempt, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import JobFailed
 from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store import SqlStore
@@ -22,6 +23,10 @@ from livepeer_builder.testing import FakeUsageSource
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_costs import row
+
+
+def states(attempt: Attempt) -> Sequence[tuple[str, str]]:
+    return [(session.manifest_id, session.payment_state) for session in attempt.sessions]
 
 
 @pytest.fixture
@@ -74,7 +79,7 @@ async def test_a_signer_that_gives_no_answer_keeps_the_manifest_and_an_uncertain
     stored = await engine.jobs.get(alice, job.id)
     attempt = stored.attempts[0]
     assert attempt.outcome == "payment_unknown"
-    assert [s.manifest_id for s in attempt.sessions] == ["m-1"] and not attempt.payment_sent
+    assert states(attempt) == [("m-1", "unknown")] and not attempt.payment_sent
     assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # until usage says
 
     usage.rows = [row("u1", "s1", "0.002", usd="0.2", allocation=allocation, manifest="m-1")]
@@ -82,9 +87,11 @@ async def test_a_signer_that_gives_no_answer_keeps_the_manifest_and_an_uncertain
     cost = await engine.costs.for_job(alice, job.id)
     assert cost.status == "observed" and cost.fees.fee_eth == Decimal("0.002")
     assert cost.attempts[0].cost_class == "uncertain" and cost.billable.fee_eth == 0
+    confirmed = await engine.jobs.get(alice, job.id)
+    assert states(confirmed.attempts[0]) == [("m-1", "paid")]  # unique usage confirms the payment
 
 
-async def test_a_refused_signing_stores_only_the_delivered_session(
+async def test_a_refused_manifest_is_stored_unpaid_and_never_billed(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
@@ -99,11 +106,11 @@ async def test_a_refused_signing_stores_only_the_delivered_session(
         ("payment_refused", False),
         ("succeeded", True),
     ]
-    assert [s.manifest_id for s in job.attempts[0].sessions] == []
-    assert [s.manifest_id for s in job.attempts[1].sessions] == ["m-2"]
+    assert states(job.attempts[0]) == [("m-1", "unpaid")]  # stored before signing, refused
+    assert states(job.attempts[1]) == [("m-2", "paid")]
     waiting = await engine.costs.for_job(alice, job.id)
     assert waiting.status == "pending"  # the signed session has no usage yet
-    assert [a.cost_class for a in waiting.attempts] == ["pending"]
+    assert [a.cost_class for a in waiting.attempts] == ["pending"]  # the refused attempt costs nothing
     assert waiting.billable.fee_eth == 0
 
     usage.rows = [row("u1", "s1", "0.002", usd="0.2", allocation=allocation, manifest="m-1")]
@@ -116,7 +123,7 @@ async def test_a_refused_signing_stores_only_the_delivered_session(
     assert [item.computed_fee_eth for item in unattributed] == [Decimal("0.002")]
 
 
-async def test_a_cancel_during_signing_keeps_the_manifest_unpaid(
+async def test_a_cancel_during_signing_keeps_the_manifest_unknown(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net, store: SqlStore
 ) -> None:
     net.sign = [30.0]  # the signer accepts the request and does not answer
@@ -133,11 +140,11 @@ async def test_a_cancel_during_signing_keeps_the_manifest_unpaid(
         async with asyncio.timeout(2):
             await task
     [job] = await store.jobs_in_state("uncertain")
-    assert [s.manifest_id for s in job.attempts[0].sessions] == ["m-1"]
+    assert states(job.attempts[0]) == [("m-1", "unknown")]
     assert not job.attempts[0].payment_sent
 
 
-async def test_a_refresh_stores_only_the_signed_manifest(
+async def test_an_expired_manifest_is_stored_unpaid_and_never_billed(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
@@ -149,7 +156,7 @@ async def test_a_refresh_stores_only_the_signed_manifest(
     result = await engine.jobs.run(alice, JobRequest(app="example/echo"))
     job = await engine.jobs.get(alice, result.job.id)
     assert [(a.outcome, a.payment_sent) for a in job.attempts] == [("succeeded", True)]
-    assert [s.manifest_id for s in job.attempts[0].sessions] == ["m-2"]
+    assert states(job.attempts[0]) == [("m-1", "unpaid"), ("m-2", "paid")]
     usage.rows = [
         row("u1", "s1", "0.001", usd="0.1", allocation=allocation, manifest="m-1"),
         row("u2", "s2", "0.004", usd="0.4", allocation=allocation, manifest="m-2"),
@@ -193,7 +200,7 @@ async def test_a_signed_session_without_usage_keeps_the_job_pending(
     assert cost.fees.fee_eth == Decimal("0.004") and cost.billable.fee_eth == Decimal("0.004")
 
 
-async def test_a_refreshed_stream_stores_only_the_signed_manifest(
+async def test_a_refreshed_stream_stores_the_expired_manifest_unpaid(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net
 ) -> None:
     engine, _allocation = await paid_engine(make_engine, admin, net)
@@ -204,7 +211,7 @@ async def test_a_refreshed_stream_stores_only_the_signed_manifest(
     stream = await streaming.stream(alice, JobRequest(app="example/echo"))
     assert b"".join([chunk async for chunk in stream]) == b"data: a\n\n"
     assert stream.job.state == "succeeded"
-    assert [s.manifest_id for s in stream.job.attempts[0].sessions] == ["m-2"]
+    assert states(stream.job.attempts[0]) == [("m-1", "unpaid"), ("m-2", "paid")]
 
 
 async def test_an_exhausted_refresh_fails_over_to_the_other_orchestrator(
@@ -218,5 +225,95 @@ async def test_an_exhausted_refresh_fails_over_to_the_other_orchestrator(
         ("payment_refused", False),
         ("succeeded", True),
     ]
-    assert [s.manifest_id for s in job.attempts[0].sessions] == []
-    assert [s.manifest_id for s in job.attempts[1].sessions] == ["m-3"]
+    assert states(job.attempts[0]) == [("m-1", "unpaid"), ("m-2", "unpaid")]
+    assert states(job.attempts[1]) == [("m-3", "paid")]
+
+
+async def test_the_manifest_is_stored_before_the_signer_is_asked(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net, store: SqlStore
+) -> None:
+    """While the signer is still answering, the database already holds the manifest (D54): a crash now
+    leaves an ``unknown`` intent for cost sync, not a charge with nothing to match it."""
+    net.sign = [30.0]  # the signer accepts the request and does not answer
+    engine, _ = await paid_engine(make_engine, admin, net)
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app="example/echo")))
+    try:
+        for _ in range(200):
+            if "sign m-1" in net.log:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("the signer was not asked")
+        [job] = await store.jobs_in_state("running")  # what a crash right now would leave
+        assert states(job.attempts[0]) == [("m-1", "unknown")]
+        assert not job.attempts[0].payment_sent
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            async with asyncio.timeout(2):
+                await task
+
+
+async def test_a_failed_intent_write_signs_nothing(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail closed (D54): no manifest on record, no signing. The attempt is unpaid, so the job is
+    ``failed``, not ``uncertain``, and no other orchestrator is tried."""
+    engine, _ = await paid_engine(make_engine, admin, net)
+
+    async def database_down(attempt: Attempt) -> None:
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(store, "record_payment_evidence", database_down)
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app="example/echo"))
+    job = failed.value.job
+    assert job.state == "failed"
+    assert [(a.outcome, a.payment_sent) for a in job.attempts] == [("payment", False)]
+    assert not any(entry.startswith("sign ") for entry in net.log)
+    stored = await engine.jobs.get(alice, job.id)
+    assert states(stored.attempts[0]) == []  # no intent was stored, so none is kept
+    assert (await engine.costs.for_job(alice, job.id)).status == "none"  # never pending forever
+
+
+async def test_a_cancel_during_the_intent_write_keeps_the_intent_and_signs_nothing(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The write cannot be cancelled half way, so the intent lands and the attempt keeps it. The signer
+    was never asked; the engine stays conservative and leaves the manifest ``unknown``."""
+    engine, _ = await paid_engine(make_engine, admin, net)
+    writing, release = asyncio.Event(), asyncio.Event()
+    write = store.record_payment_evidence
+
+    async def slow_first_write(attempt: Attempt) -> None:
+        if not writing.is_set():
+            writing.set()
+            await release.wait()
+        await write(attempt)
+
+    monkeypatch.setattr(store, "record_payment_evidence", slow_first_write)
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app="example/echo")))
+    async with asyncio.timeout(2):
+        await writing.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        async with asyncio.timeout(2):
+            await task
+    for _ in range(100):  # the close runs in a task the caller cannot cancel (D34)
+        if await store.jobs_in_state("uncertain"):
+            break
+        await asyncio.sleep(0.01)
+    [job] = await store.jobs_in_state("uncertain")
+    assert states(job.attempts[0]) == [("m-1", "unknown")] and not job.attempts[0].payment_sent
+    assert not any(entry.startswith("sign ") for entry in net.log)

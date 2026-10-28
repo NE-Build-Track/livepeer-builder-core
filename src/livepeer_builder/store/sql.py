@@ -1,10 +1,12 @@
 """SqlStore: the EngineStore over SQLAlchemy Core (async). SQLite by default, PostgreSQL via [postgres]."""
 
+import asyncio
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
+from weakref import WeakValueDictionary
 
 from sqlalchemy import and_, delete, event, func, insert, select, update
 from sqlalchemy.engine import make_url
@@ -65,6 +67,7 @@ class SqlStore:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
         self.maintenance = SqlMaintenance(engine)
+        self._evidence_locks: WeakValueDictionary[tuple[str, int], asyncio.Lock] = WeakValueDictionary()
 
     @classmethod
     async def connect(cls, url: str, *, migrate: bool = True) -> "SqlStore":
@@ -227,17 +230,29 @@ class SqlStore:
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
-        async with self.engine.begin() as conn:
-            await conn.execute(update(t.attempts).where(key).values(_attempt_values(attempt)))
+        async with self._evidence_lock(attempt), self.engine.begin() as conn:
+            values = _attempt_values(attempt) | {"payment_sent": _paid(attempt)}  # never unpaid again (D54)
+            await conn.execute(update(t.attempts).where(key).values(values))
             await _append_sessions(conn, attempt)
 
     async def record_payment_evidence(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
-        async with self.engine.begin() as conn:  # outcome, status and timing are left as they are
-            if attempt.payment_sent:  # a session stored while the attempt is unpaid is not a payment
+        async with self._evidence_lock(attempt), self.engine.begin() as conn:  # outcome and timing stay
+            if attempt.payment_sent:  # an intent stored before signing (D54) is not a payment
                 await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
             await _append_sessions(conn, attempt)
             await bump_evidence(conn, [str(attempt.job_id)])  # a late report on an ended job changes its cost
+
+    def _evidence_lock(self, attempt: Attempt) -> asyncio.Lock:
+        """One writer at a time for an attempt's evidence. The write before signing (D54), ``on_signed``
+        and the close after a cancel can overlap, and each numbers new sessions from what it read, so two
+        at once would both claim the next ``seq``. Every writer of an attempt runs in the process that
+        runs its job, so an in-process lock is enough."""
+        key = (str(attempt.job_id), attempt.number)
+        lock = self._evidence_locks.get(key)
+        if lock is None:
+            lock = self._evidence_locks[key] = asyncio.Lock()
+        return lock
 
     async def finish_job(
         self,
@@ -387,9 +402,14 @@ class SqlStore:
 # -- row mapping --------------------------------------------------------------------------------------
 
 
+def _paid(attempt: Attempt) -> Any:
+    """``payment_sent`` as stored or as reported: a stale writer cannot unpay a confirmed payment."""
+    return t.attempts.c.payment_sent | attempt.payment_sent
+
+
 async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
-    """Add the attempt's sessions not stored yet. Append-only
-    (D39): cost sync owns the match columns, so a row it matched is never rewritten."""
+    """Add the attempt's sessions not stored yet, and move a stored one's ``payment_state`` on until it
+    is ``paid``, which is final (D54). Cost sync owns the match columns, which this never writes (D39)."""
     session_key = and_(
         t.payment_sessions.c.job_id == str(attempt.job_id),
         t.payment_sessions.c.attempt_number == attempt.number,
@@ -397,6 +417,17 @@ async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
     known = [
         row[0] for row in await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
     ]
+    for session in attempt.sessions:
+        if session.manifest_id in known:
+            await conn.execute(
+                update(t.payment_sessions)
+                .where(
+                    session_key,
+                    t.payment_sessions.c.manifest_id == session.manifest_id,
+                    t.payment_sessions.c.payment_state != "paid",
+                )
+                .values(payment_state=session.payment_state)
+            )
     new = [s for s in attempt.sessions if s.manifest_id not in known]
     for seq, session in enumerate(new, start=len(known)):
         await conn.execute(
@@ -407,6 +438,7 @@ async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
                 manifest_id=session.manifest_id,
                 payment_session_id=session.payment_session_id,
                 match_status=session.match,
+                payment_state=session.payment_state,
             )
         )
 

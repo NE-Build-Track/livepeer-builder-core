@@ -8,16 +8,19 @@ off half way. A failed write is logged, not raised: the signer has already charg
 on, and the write after the call (``finish_attempt``), or the close after an error or cancel
 (``record_payment_evidence`` again), stores the same sessions.
 
-Before ``get_payment``, the transport calls ``remember`` (D53) with ``LivePaymentSession.manifest_id``.
-The recorder holds that id and does not write yet. ``on_signed`` writes the row and marks the attempt
-paid. A refusal drops the id. Any other signing error keeps it on the attempt, unpaid, and
-``finish_attempt`` or the shielded close persists that row.
+Before ``get_payment``, the transport calls ``remember`` with ``LivePaymentSession.manifest_id`` (D54).
+The recorder stores that manifest on the attempt as ``unknown`` before the signer is asked, in a write
+the caller cannot cancel. That write is strict: if it fails, the transport signs nothing, because a
+charge the engine could not attribute must not happen. A crash during signing then leaves the
+``unknown`` manifest for cost sync, so the cost stays ``pending`` instead of ``none`` at 0.
+``on_signed`` makes it ``paid`` and marks the attempt paid; a refusal makes it ``unpaid``, which cost
+sync never matches. Any other signing error leaves it ``unknown``.
 """
 
 import logging
 from collections.abc import Sequence
 
-from livepeer_builder.contracts import Attempt
+from livepeer_builder.contracts import Attempt, PaymentState
 from livepeer_builder.protocols import JobRepo
 from livepeer_builder.services.streams import sessions_from
 from livepeer_builder.utils import run_shielded
@@ -33,7 +36,6 @@ class SignedSessionRecorder:
         self._store = store
         self._attempts = attempts
         self._index = len(attempts) - 1
-        self._remembered: str | None = None
 
     async def __call__(self, manifest_id: str) -> None:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
@@ -41,19 +43,28 @@ class SignedSessionRecorder:
         await run_shielded(_write(self._store, attempt))
 
     async def remember(self, manifest_id: str) -> None:
-        """Before ``get_payment``: hold this manifest id. No session on the attempt and no write."""
-        self._remembered = manifest_id
-
-    def keep_unconfirmed(self) -> None:
-        """The signer was asked and did not refuse. The in-memory attempt keeps the id, unpaid."""
-        manifest_id = self._remembered
-        if manifest_id is None:
-            return
-        self._attempts[self._index] = with_evidence(
-            self._attempts[self._index],
-            (manifest_id,),
-            payment_sent=False,
+        """Before ``get_payment``: store the manifest as ``unknown`` (D54). Raises when the write fails,
+        so the transport signs nothing."""
+        attempt = with_evidence(
+            self._attempts[self._index], (manifest_id,), payment_sent=False, state="unknown"
         )
+        try:
+            await run_shielded(self._store.record_payment_evidence(attempt))
+        except Exception:
+            raise  # nothing stored and nothing signed: the attempt keeps no intent
+        except BaseException:
+            self._attempts[self._index] = attempt  # cancelled: the shielded write may still land
+            raise
+        self._attempts[self._index] = attempt
+
+    async def refused(self, manifest_id: str) -> None:
+        """The signer refused this manifest: ``unpaid``. Logged, never raised: the stored row stays
+        ``unknown`` if this write fails, which keeps the cost ``pending``, never 0."""
+        attempt = with_evidence(
+            self._attempts[self._index], (manifest_id,), payment_sent=False, state="unpaid"
+        )
+        self._attempts[self._index] = attempt
+        await run_shielded(_write(self._store, attempt))
 
 
 async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:
@@ -75,14 +86,22 @@ async def _write(store: JobRepo, attempt: Attempt) -> None:
         )
 
 
-def with_evidence(attempt: Attempt, manifest_ids: Sequence[str], payment_sent: bool) -> Attempt:
-    """The attempt with the manifests not recorded yet, in order. ``payment_sent`` never goes back to
+def with_evidence(
+    attempt: Attempt, manifest_ids: Sequence[str], payment_sent: bool, state: PaymentState = "paid"
+) -> Attempt:
+    """The attempt with these manifests in ``state``: new ones are added in order, and a known one's
+    state moves on unless it is ``paid``, which is final (D54). ``payment_sent`` never goes back to
     ``False``: a transport that reports otherwise after the signer signed does not unpay the call."""
-    known = {session.manifest_id for session in attempt.sessions}
+    named = set(manifest_ids)
+    sessions = tuple(
+        s.model_copy(update={"payment_state": state})
+        if s.manifest_id in named and s.payment_state != "paid"
+        else s
+        for s in attempt.sessions
+    )
+    known = {session.manifest_id for session in sessions}
     fresh = tuple(m for m in dict.fromkeys(manifest_ids) if m not in known)
+    added = tuple(s.model_copy(update={"payment_state": state}) for s in sessions_from(fresh))
     return attempt.model_copy(
-        update={
-            "sessions": attempt.sessions + sessions_from(fresh),
-            "payment_sent": attempt.payment_sent or payment_sent,
-        }
+        update={"sessions": sessions + added, "payment_sent": attempt.payment_sent or payment_sent}
     )

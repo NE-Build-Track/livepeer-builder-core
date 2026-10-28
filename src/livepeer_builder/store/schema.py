@@ -120,6 +120,7 @@ payment_sessions = Table(
     Column("manifest_id", String(ID), nullable=False),
     Column("payment_session_id", String(ID), nullable=True),
     Column("match_status", String(16), nullable=False),
+    Column("payment_state", String(16), nullable=False, server_default="paid"),  # D54
     ForeignKeyConstraint(
         ["job_id", "attempt_number"], ["lpb_attempts.job_id", "lpb_attempts.number"], ondelete="CASCADE"
     ),

@@ -129,6 +129,22 @@ async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTrans
     assert (await client.get("/v1/jobs", headers=alice)).status_code == 401  # revoked key
 
 
+async def test_a_signing_that_may_have_charged_is_503_without_retry_after(
+    api, transport: ScriptedTransport
+) -> None:  # type: ignore[no-untyped-def]
+    """The signer was asked and gave no answer: retrying could pay twice, so no ``Retry-After`` (D53)."""
+    client, _engine, admin, alice = api
+    await client.post(
+        ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"}, headers=admin
+    )
+    transport.steps = [
+        RunnerCallError("payment", "no answer from the signer", payment_sent=False, payment_unknown=True)
+    ]
+    response = await client.post("/v1/jobs", json={"app": APP}, headers=alice)
+    assert response.status_code == 503
+    assert "retry-after" not in response.headers
+
+
 async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     client, engine, admin, alice = api
     await client.post(

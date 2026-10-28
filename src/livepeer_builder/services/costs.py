@@ -324,11 +324,13 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     last = max((attempt.number for attempt in job.attempts), default=0)
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
-        if not attempt.sessions and not attempt.payment_sent:
+        # A manifest the signer refused is no charge (D54); a stored ``unknown`` one may be, so it waits.
+        sessions = tuple(session for session in attempt.sessions if session.payment_state != "unpaid")
+        if not sessions and not attempt.payment_sent:
             continue
         matched_ids = {
             session.payment_session_id
-            for session in attempt.sessions
+            for session in sessions
             if session.match == "matched" and session.payment_session_id
         }
         mine = [row for row in applied if row.payment_session_id in matched_ids]
@@ -346,7 +348,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
         waiting = any(
             session.match == "unmatched"
             or (session.match == "matched" and session.payment_session_id not in arrived)
-            for session in attempt.sessions
+            for session in sessions
         )
         if waiting:
             attempts.append(
@@ -356,7 +358,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
         # Pending wins while a sibling is still waiting. Once usage has been seen, an ambiguous
         # signed session makes the attempt uncertain. Its rows stay unattributed; a sibling's
         # matched fee stays on the attempt.
-        if any(session.match == "ambiguous" for session in attempt.sessions) and not waiting:
+        if any(session.match == "ambiguous" for session in sessions) and not waiting:
             attempts.append(
                 AttemptCost(attempt_number=attempt.number, cost_class="uncertain", fees=fees_of(mine))
             )

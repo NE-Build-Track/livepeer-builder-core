@@ -15,17 +15,16 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
 4. The engine's runner call (`adapters/runner_call.py`, D53) answers the orchestrator's 402 itself
-   and signs through the SDK's signer client. `remember` keeps `LivePaymentSession.manifest_id` in
-   memory only, before `get_payment`, and does not insert a session row. `on_signed` writes that row
-   once the signer validates the manifest, and marks the attempt paid before the paid request goes
-   out. Batteries' `payment_session_id` is not known at sign time; cost sync fills it on
-   `(allocation_id, manifest_id)`. An expired challenge (a signer 480 inside the retry budget) and a
-   400 or 481 refusal are not stored. If the signer charged an omitted manifest anyway, the debit is
-   unattributed on the allocation and the customer is not billed. A lost reply, a signer 5xx, or a
-   cancel during `get_payment` keeps the remembered manifest on the attempt, unpaid. The cost stays
-   `pending` until usage matches it. The job pays no other orchestrator. If the engine dies during
-   `get_payment`, the remembered manifest is lost: the job is `uncertain`, its cost `none`, and the
-   debit unattributed, until a follow-up stores the manifest before signing.
+   and signs through the SDK's signer client. Before `get_payment`, `remember` stores
+   `LivePaymentSession.manifest_id` on the attempt as an `unknown` session (D54); if that write fails,
+   nothing is signed. `on_signed` makes it `paid` once the signer validates the manifest, and marks
+   the attempt paid before the paid request goes out. Batteries' `payment_session_id` is not known at
+   sign time; cost sync fills it on `(allocation_id, manifest_id)`. An expired challenge (a signer
+   480) and a 400, 401, 402, 403 or 481 refusal make the session `unpaid`. If the signer charged an
+   unpaid manifest anyway, the debit is unattributed on the allocation and the customer is not
+   billed. A lost reply, a signer 5xx, a cancel during `get_payment`, or the engine dying then leaves
+   the session `unknown`: the cost stays `pending` until usage matches it, and the job pays no other
+   orchestrator.
 
 ## Allocation modes
 
@@ -84,9 +83,11 @@ them as `Decimal`.
 
 A charge joins an attempt by **`(allocation_id, payment_session_id)`**. The engine does not learn
 `payment_session_id` from the SDK. Each attempt records the allocation whose key paid and one
-session-log entry per signed `manifest_id` (`lpb_payment_sessions`). Cost sync resolves an entry
-when exactly one applied usage row-set and one log entry share `(allocation_id, manifest_id)`, and
-stores that row's `payment_session_id` as `matched`.
+session-log entry per `manifest_id` it asked the signer for (`lpb_payment_sessions`), with its
+`payment_state`: `unknown`, `paid` or `unpaid` (D54). Cost sync resolves an entry when exactly one
+applied usage row-set and one log entry share `(allocation_id, manifest_id)`, and stores that row's
+`payment_session_id` as `matched`; that also confirms an `unknown` entry as `paid`. An `unpaid` entry
+is never matched.
 
 If Batteries has no session for the key yet, the entry stays `unmatched` and the attempt's cost is
 `pending`. A signed session whose usage has not arrived keeps the attempt `pending`, so the job is

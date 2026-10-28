@@ -22,4 +22,9 @@ def test_built_wheel_contains_migrations() -> None:
         pytest.skip("no wheel in dist/ (CI builds one before running this check)")
     names = zipfile.ZipFile(wheels[-1]).namelist()
     assert "livepeer_builder/store/migrations/env.py" in names
-    assert any(name.startswith("livepeer_builder/store/migrations/versions/0007") for name in names)
+    # every revision, up to the head, not one named file (John, #53 review)
+    revisions = sorted(path.name for path in (MIGRATIONS_DIR / "versions").glob("[0-9]*.py"))
+    assert revisions[-1].startswith(head_revision())
+    prefix = "livepeer_builder/store/migrations/versions/"
+    shipped = {name.removeprefix(prefix) for name in names if name.startswith(prefix)}
+    assert set(revisions) <= shipped, sorted(set(revisions) - shipped)

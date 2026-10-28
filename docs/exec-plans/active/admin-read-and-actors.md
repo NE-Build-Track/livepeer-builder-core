@@ -102,3 +102,11 @@ take over an actor's money or history.
   3. **Name:** `LPB_JWT_NAME_CLAIM` (`preferred_username`), kept fresh; the operator's label is separate and
      defaults to it.
   4. **Where:** on #53.
+- **28 October (Mike, John's #53 review).** Rebuilt on `releases/m3` instead of merged (see Progress):
+  1. **Grants:** the grant list needs `admin.allocations`. Grants fund every application and carry
+     none, so an auditor never reads them. The console's auditor reader must handle that 403.
+  2. **Labels:** a provisioning label over 200 characters is refused (`ProvisionRequest`, and a 422 on
+     REST) before the provider creates a key.
+  3. **Identity length:** a JWT whose actor or application claim is over 200 characters is a 401. Every
+     record stores those ids in 200 characters, and cutting one could merge two people.
+  4. **Wheel:** the packaging check requires every migration up to the head, not one named file.

@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from livepeer_builder.contracts import Attempt, AttemptOutcome
+from livepeer_builder.contracts import Attempt, AttemptOutcome, PaymentState, SignedSession
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.services.failover import (
     Candidates,
@@ -130,3 +130,28 @@ def test_an_orchestrator_refusal_is_reported_as_refused_not_as_the_runner_s_stat
     error = RunnerCallError("http", "runner session not found", payment_sent=True, status_code=status)
     failure = failure_of(error, paid=True, tried=2)
     assert (failure.kind, failure.status_code) == ("refused", status)  # REST answers 503, retry later
+
+
+def _asked(*states: PaymentState) -> Attempt:
+    """An ``in_flight`` attempt with the manifests it stored before signing (D54)."""
+    sessions = tuple(
+        SignedSession(manifest_id=f"m-{i}", payment_state=state) for i, state in enumerate(states)
+    )
+    return _attempt(1, "in_flight", False).model_copy(update={"sessions": sessions})
+
+
+@pytest.mark.parametrize(
+    ("attempt", "unresolved"),
+    [
+        (_asked("unpaid"), False),  # the signer refused it: nothing was paid
+        (_asked("unpaid", "unpaid"), False),  # a 480 refresh, then a refusal
+        (_asked("unpaid", "unknown"), True),  # the second may have charged
+        (_asked("unknown"), True),
+        (_asked(), True),  # nothing stored: from before D54, or before the 402; stay conservative
+        (_asked("unpaid").model_copy(update={"payment_sent": True}), True),
+    ],
+)
+def test_an_in_flight_attempt_whose_manifests_were_all_refused_paid_nothing(
+    attempt: Attempt, unresolved: bool
+) -> None:
+    assert payment_unresolved([attempt]) is unresolved

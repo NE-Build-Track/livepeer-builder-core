@@ -8,7 +8,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, false, func, or_, select, update
+from sqlalchemy import and_, case, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -191,26 +191,30 @@ async def _match_key(conn: AsyncConnection, allocation_id: str, manifest_id: str
         confirms = status == "matched" and entry["payment_state"] == "unknown"
         if entry["match_status"] == status and entry["payment_session_id"] == session_id and not confirms:
             continue
-        if confirms:  # attempt before session: the same lock order as record_payment_evidence
-            await conn.execute(
-                update(t.attempts)
-                .where(t.attempts.c.job_id == entry["job_id"], t.attempts.c.number == entry["attempt_number"])
-                .values(payment_sent=True)
-            )
-        await conn.execute(
+        attempt = and_(t.attempts.c.job_id == entry["job_id"], t.attempts.c.number == entry["attempt_number"])
+        # Attempt before session, as every evidence writer locks them (D54): on PostgreSQL a refusal or a
+        # confirmation cannot commit between this read and the write below.
+        await conn.execute(select(t.attempts.c.number).where(attempt).with_for_update())
+        state = t.payment_sessions.c.payment_state
+        written = await conn.execute(
             update(t.payment_sessions)
             .where(
                 t.payment_sessions.c.job_id == entry["job_id"],
                 t.payment_sessions.c.attempt_number == entry["attempt_number"],
                 t.payment_sessions.c.seq == entry["seq"],
+                state != "unpaid",  # refused since the read: never matched, never billed
             )
-            # a confirmation the signer's callback wrote after this read is kept, never reset
+            # only a row still ``unknown`` is confirmed; a ``paid`` one written since the read is kept
             .values(
                 match_status=status,
                 payment_session_id=session_id,
-                payment_state="paid" if confirms else t.payment_sessions.c.payment_state,
+                payment_state=case((state == "unknown", "paid"), else_=state) if confirms else state,
             )
         )
+        if written.rowcount == 0:
+            continue
+        if confirms:  # usage proves the signer charged: the attempt was paid
+            await conn.execute(update(t.attempts).where(attempt).values(payment_sent=True))
         changed.add(UUID(entry["job_id"]))
     return changed
 

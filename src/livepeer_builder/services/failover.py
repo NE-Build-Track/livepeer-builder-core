@@ -39,9 +39,17 @@ def payment_unresolved(attempts: Sequence[Attempt]) -> bool:
     if not attempts:
         return False
     last = max(attempts, key=lambda attempt: attempt.number)
+    if last.outcome == "in_flight" and not last.payment_sent and refused_everything(last):
+        return False  # every manifest it stored before signing was refused: nothing was paid (D54)
     if last.outcome in ("in_flight", "payment_unknown"):  # under way, or the signer may have charged
         return True
     return last.payment_sent and attempt_verdict(last.outcome, last.status_code, True) != "failover"
+
+
+def refused_everything(attempt: Attempt) -> bool:
+    """The attempt asked the signer at least once, and every manifest was refused. An attempt with no
+    stored manifest may predate D54, so it does not count."""
+    return bool(attempt.sessions) and all(session.payment_state == "unpaid" for session in attempt.sessions)
 
 
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:

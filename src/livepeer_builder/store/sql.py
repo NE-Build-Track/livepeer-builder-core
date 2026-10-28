@@ -238,6 +238,8 @@ class SqlStore:
     async def record_payment_evidence(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
         async with self._evidence_lock(attempt), self.engine.begin() as conn:  # outcome and timing stay
+            # attempt before session, as matching locks them (D54)
+            await conn.execute(select(t.attempts.c.number).where(key).with_for_update())
             if attempt.payment_sent:  # an intent stored before signing (D54) is not a payment
                 await conn.execute(update(t.attempts).where(key).values(payment_sent=True))
             await _append_sessions(conn, attempt)

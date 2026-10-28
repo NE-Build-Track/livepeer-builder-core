@@ -538,3 +538,38 @@ async def test_matching_keeps_a_confirmation_that_arrived_after_its_read(
     assert confirmed and loaded is not None
     assert loaded.attempts[0].sessions[0].match == "ambiguous"
     assert loaded.attempts[0].sessions[0].payment_state == "paid"
+
+
+async def test_a_refusal_that_lands_during_matching_is_never_billed(sql: SqlStore, clock: FixedClock) -> None:
+    """Matching read the intent as ``unknown``; the signer's refusal commits before matching writes. The
+    refusal stands: the manifest stays ``unpaid`` and unmatched, the attempt unpaid, the usage unattributed."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    attempt = make_attempt(job.id, clock, allocation_id="alloc_1").model_copy(
+        update={"payment_sent": False, "sessions": (SignedSession(manifest_id="m", payment_state="unknown"),)}
+    )
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    await sql.record_payment_evidence(attempt)
+    rows = [row("u1", "s1", "1", manifest="m", allocation="alloc_1")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    refused = False
+
+    def refuse_before_match_write(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        nonlocal refused
+        if not refused and statement.startswith("UPDATE lpb_payment_sessions"):
+            refused = True
+            conn.execute(text("UPDATE lpb_payment_sessions SET payment_state = 'unpaid'"))
+
+    event.listen(sql.engine.sync_engine, "before_cursor_execute", refuse_before_match_write)
+    try:
+        await sql.match_sessions(rows)
+    finally:
+        event.remove(sql.engine.sync_engine, "before_cursor_execute", refuse_before_match_write)
+    loaded = await sql.get_job(job.id)
+    assert refused and loaded is not None
+    session = loaded.attempts[0].sessions[0]
+    assert (session.payment_state, session.match) == ("unpaid", "unmatched")
+    assert not loaded.attempts[0].payment_sent
+    assert [r.computed_fee_eth for r in await sql.unattributed_usage("alloc_1")] == [Decimal(1)]

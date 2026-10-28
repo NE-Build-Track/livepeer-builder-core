@@ -317,3 +317,42 @@ async def test_a_cancel_during_the_intent_write_keeps_the_intent_and_signs_nothi
     [job] = await store.jobs_in_state("uncertain")
     assert states(job.attempts[0]) == [("m-1", "unknown")] and not job.attempts[0].payment_sent
     assert not any(entry.startswith("sign ") for entry in net.log)
+
+
+async def test_a_cancel_while_storing_a_refusal_leaves_the_job_failed(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The signer refused, and the caller went away while ``unpaid`` was being stored. Nothing was paid,
+    so the job is ``failed``, not ``uncertain`` (#64 review)."""
+    engine, _ = await paid_engine(make_engine, admin, net)
+    net.sign = [403]  # the signer refuses this payer
+    writing, release = asyncio.Event(), asyncio.Event()
+    write = store.record_payment_evidence
+
+    async def slow_refusal(attempt: Attempt) -> None:
+        if any(s.payment_state == "unpaid" for s in attempt.sessions) and not writing.is_set():
+            writing.set()
+            await release.wait()
+        await write(attempt)
+
+    monkeypatch.setattr(store, "record_payment_evidence", slow_refusal)
+    task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app="example/echo")))
+    async with asyncio.timeout(2):
+        await writing.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        async with asyncio.timeout(2):
+            await task
+    for _ in range(100):  # the close runs in a task the caller cannot cancel (D34)
+        if not await store.jobs_in_state("running"):
+            break
+        await asyncio.sleep(0.01)
+    assert not await store.jobs_in_state("uncertain")
+    [job] = await store.jobs_in_state("failed")
+    assert states(job.attempts[0]) == [("m-1", "unpaid")] and not job.attempts[0].payment_sent

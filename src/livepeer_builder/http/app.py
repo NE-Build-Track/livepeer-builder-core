@@ -69,6 +69,7 @@ _FAILURE_STATUS = {
     "refused": 503,
     "unreachable": 503,
     "payment": 503,
+    "payment_unknown": 503,
     "timeout": 504,
     "runner_rejected": 422,
     "runner_error": 502,

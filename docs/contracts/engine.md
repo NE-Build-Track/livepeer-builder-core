@@ -93,9 +93,11 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      `SignerRefreshRequired` (HTTP 480) that uses up the payment retry budget is the same refusal:
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
      challenge and does not fail the attempt. Another orchestrator may succeed.
-   - **`payment`:** caller- or signer-side refusals, such as 402 (allowance exhausted), 403, 502
-     (webhook) and 503 (outbox). These do **not** fail over, because every orchestrator would fail the
-     same way.
+   - **`payment`:** caller- or signer-side refusals, such as 402 (allowance exhausted) and 403.
+     These omit the manifest and end the job `failed`. They do **not** fail over, because every
+     orchestrator would fail the same way. A signer 502 or 503 is not that refusal: it is
+     `payment_unknown`, the manifest stays on the attempt unpaid, and the job ends `uncertain`.
+     The cost stays `pending` until usage matches it.
 2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
    most once (see [idempotency](#idempotency)).
 3. **The attempt row is written before the call** (`in_flight`) and updated after it. **`remember` is in
@@ -141,7 +143,8 @@ unique index, so concurrent duplicates are also refused.
 | `no_capacity` | no | 503 + `Retry-After` |
 | `not_provisioned` | no | 402 |
 | `refused`, `unreachable` (all runners) | no | 503 + `Retry-After` |
-| `payment` (includes every orchestrator refused by the signer) | maybe | 503 + `Retry-After` |
+| `payment` (402 or 403: the signer refused and omitted the manifest) | no | 503 + `Retry-After` |
+| `payment_unknown` (the signer was asked and did not refuse) | maybe | 503, no `Retry-After` |
 | `timeout` | maybe → `uncertain` when paid, else `failed` | 504 |
 | `runner_rejected` (4xx) | yes | the runner's own 4xx |
 | `runner_error` (5xx) | yes | 502 |

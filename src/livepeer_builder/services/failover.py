@@ -4,7 +4,7 @@ from collections.abc import Iterator, Sequence
 from typing import Literal
 from urllib.parse import urlsplit
 
-from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, Runner
+from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, FailureKind, Runner
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.services.streams import failure_kind
 from livepeer_builder.utils import BODY_LIMIT
@@ -45,10 +45,20 @@ def payment_unresolved(attempts: Sequence[Attempt]) -> bool:
 
 
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
-    """A 404 or 409 is reported as ``refused``. ``status_code`` keeps the orchestrator's status."""
+    """A 404 or 409 is reported as ``refused``. ``status_code`` keeps the orchestrator's status.
+
+    ``payment_unknown`` means the signer was asked and may have charged. It is not a retryable refusal.
+    """
     not_run = error.kind == "http" and error.status_code in NOT_RUN_STATUSES
+    kind: FailureKind
+    if error.payment_unknown:
+        kind = "payment_unknown"
+    elif not_run:
+        kind = "refused"
+    else:
+        kind = failure_kind(error.kind, error.status_code)
     return Failure(
-        kind="refused" if not_run else failure_kind(error.kind, error.status_code),
+        kind=kind,
         message=str(error) if tried == 1 else f"all {tried} runners failed; last: {error}",
         status_code=error.status_code,
         body=error.body[:BODY_LIMIT] if error.body else None,

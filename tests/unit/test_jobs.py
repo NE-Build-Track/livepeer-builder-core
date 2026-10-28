@@ -207,7 +207,7 @@ async def test_an_unknown_payment_never_pays_another_orchestrator(
     job = failed.value.job
     assert job.state == "uncertain" and len(job.attempts) == 1  # the signer may have charged
     assert job.failure is not None and not job.failure.payment_sent
-    assert job.failure.kind == "unreachable" and job.attempts[0].outcome == "payment_unknown"  # stored
+    assert job.failure.kind == "payment_unknown" and job.attempts[0].outcome == "payment_unknown"  # stored
 
 
 async def test_a_selection_policy_that_selects_nobody_fails_before_payment(

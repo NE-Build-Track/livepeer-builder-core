@@ -443,7 +443,9 @@ def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKin
     if outcome == "http":
         status = status_code or 0
         return "runner_rejected" if 400 <= status < 500 else "runner_error"
-    if outcome in ("payment_refused", "payment_unknown"):
+    if outcome == "payment_unknown":
+        return "payment_unknown"
+    if outcome == "payment_refused":
         return "payment"
     if outcome in ("in_flight", "succeeded"):
         return "runner_error"

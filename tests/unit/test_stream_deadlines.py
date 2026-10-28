@@ -104,7 +104,8 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.1))
     job = failed.value.job
-    assert job.state == state and job.failure is not None and job.failure.kind == "timeout"
+    expected_kind = "payment_unknown" if hang == "signer" else "timeout"
+    assert job.state == state and job.failure is not None and job.failure.kind == expected_kind
     assert job.failure.payment_sent is paid
     assert len(job.attempts) == 1  # a timeout never fails over, paid or not
     attempt = job.attempts[0]

@@ -348,7 +348,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             or (session.match == "matched" and session.payment_session_id not in arrived)
             for session in attempt.sessions
         )
-        if waiting:
+        if waiting or not attempt.sessions:
             attempts.append(
                 AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
             )

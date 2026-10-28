@@ -107,6 +107,7 @@ FailureKind = Literal[
     "refused",
     "unreachable",
     "payment",
+    "payment_unknown",
     "timeout",
     "runner_rejected",
     "runner_error",

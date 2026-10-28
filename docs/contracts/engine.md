@@ -321,8 +321,9 @@ These are the explicit decisions for ISS-02.
 
 `JobRequest` accepts `raw_body: bytes` instead of `payload`, with an explicit `content_type`.
 The raw body is limited to 8 MiB. Empty bytes are an explicit empty body, distinct from the
-legacy omitted JSON payload. The default SDK adapter passes these bytes unchanged through
-its existing payment challenge flow. For example:
+legacy omitted JSON payload. The engine's runner call (`adapters/runner_call.py`, D53) sends
+these bytes unchanged, with that content type, on the unpaid request and on the paid retry
+after the 402. For example:
 
 ```python
 request = JobRequest(
@@ -343,27 +344,33 @@ operation reference remains an operation conflict. No database migration is need
 `headers` is an immutable tuple of name/value pairs for injected transports. Names are
 normalized and sorted; duplicate names, control characters, credentials, Livepeer control
 headers and HTTP framing headers are rejected. Limits are 32 fields and 16 KiB of names and
-values. Use `content_type` rather than a Content-Type header. The SDK adapter passes
-these headers only to the runner; signer credentials remain separate.
+values. Use `content_type` rather than a Content-Type header. The runner call sends these
+headers only to the runner, on every request of the call; an `accept` header replaces the
+default `*/*`. Signer credentials and the payment headers stay the transport's.
 
 `RunnerStream.headers` and `JobStreamApi.headers` expose response header pairs to embedded
-callers, preserving repeated fields from the SDK. Custom stream implementations must provide
+callers, preserving repeated fields as the runner sent them. Custom stream implementations must provide
 this property (an empty tuple when no headers exist). The shipped fakes support it. These
 headers are untrusted; applications must filter cookies, credentials, hop-by-hop fields and
 content framing before forwarding them to another client. The stock REST stream keeps its
 existing header policy. Buffered SDK results do not expose a new header guarantee.
 
 `return_http_errors=True` is opt-in and requires `jobs.streaming.stream` (or the REST stream
-option). Non-402 backend HTTP responses are returned as status/headers/original bytes. A
-completed response with status >= 300 records an HTTP attempt and a failed job, including
-when paid. It never becomes a successful inference. A timeout, cancellation or interrupted
-body retains existing uncertain/abandoned semantics. Error bodies are not added to durable
-failure records. Default calls retain exception and failover behavior. Payment challenges
-and signer failures remain control flow, not client responses. The SDK opt-in mode disables
-redirects, transparent decompression and implicit connection retries; callers must interpret
-any content encoding returned despite the identity encoding request.
+option). Failover is unchanged (D56): an answer that fails over for a default call (503, 404,
+409, under D52 and the `LPB_MAX_PAID_ATTEMPTS` cap) still fails over while another runner can
+be tried. The answer the engine stops at, and any other non-402 answer, is returned as
+status, headers and original bytes. A completed response with status >= 300 records an HTTP
+attempt (`refused` for 503) and a failed job; a paid 502 or 504 leaves the job `uncertain`, as
+for a default call, since the app may still be running. It never becomes a successful
+inference. A timeout, cancellation or interrupted body retains existing uncertain/abandoned
+semantics. Error bodies are not added to durable failure records. Payment challenges and
+signer failures remain control flow, not client responses. In this mode the runner call turns
+off transparent decompression and asks for `Accept-Encoding: identity`; callers must interpret
+any content encoding returned anyway. Redirects are never followed, and no paid request is
+ever sent twice: aiohttp's resend of an idempotent request on a dropped connection is off for
+every runner request (D56).
 
-This implementation pins NE-Build-Track SDK commit `cd6ed5e` from
-[SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6). Review that
-PR alongside this change; it is not an upstream SDK release. No streaming uploads or
-provider-specific request processing is added.
+The engine sends the runner request itself (D53), so no SDK change is needed: the SDK stays
+pinned to upstream `2017a80`. An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
+([SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6)); that PR is
+replaced by this one. No streaming uploads or provider-specific request processing is added.

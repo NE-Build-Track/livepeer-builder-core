@@ -72,6 +72,7 @@ from livepeer_builder.services.failover import (
     failure_of,
     payment_unresolved,
     recover_interrupted,
+    returned_failover,
 )
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.request_identity import request_fingerprint
@@ -401,6 +402,12 @@ class JobService:
                 unknown = RunnerCallError("timeout", "no answer within first_byte_timeout", payment_sent=True)
                 failed = await self._attempt_failed(job, attempts, unknown, runner, candidates)
                 raise cast(JobFailed, failed) from error
+            if request.return_http_errors and (answer := returned_failover(opened, runner, candidates)):
+                with contextlib.suppress(Exception):
+                    await run_shielded(opened.aclose())  # stops any funding
+                await self._attempt_failed(job, attempts, answer, runner, candidates)  # fails over
+                last = answer
+                continue
             # Payment evidence is recorded now, so a restart mid-stream resolves the job as uncertain.
             attempts[-1] = with_evidence(attempts[-1], opened.manifest_ids, opened.payment_sent).model_copy(
                 update={"status_code": opened.status_code}

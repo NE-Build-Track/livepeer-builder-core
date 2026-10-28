@@ -2,14 +2,13 @@
 
 import logging
 from collections.abc import Iterator, Sequence
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, FailureKind, Runner
 from livepeer_builder.errors import RunnerCallError
-from livepeer_builder.protocols import Clock, JobRepo
-from livepeer_builder.services.streams import failure_kind
+from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
 from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
@@ -75,6 +74,41 @@ async def recover_interrupted(store: JobRepo, clock: Clock) -> int:
     return recovered
 
 
+def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKind:
+    """Attempt outcome → failure kind, for a call that failed or a stream that ended early."""
+    if outcome == "http":
+        status = status_code or 0
+        return "runner_rejected" if 400 <= status < 500 else "runner_error"
+    if outcome == "payment_unknown":
+        return "payment_unknown"
+    if outcome == "payment_refused":
+        return "payment"
+    if outcome in ("in_flight", "succeeded"):
+        return "runner_error"
+    return cast(FailureKind, outcome)
+
+
+def returned_failover(
+    opened: RunnerStream, runner: Runner, candidates: "Candidates"
+) -> RunnerCallError | None:
+    """An HTTP error the caller asked to receive (``return_http_errors``, #55) still fails over when
+    another runner could do the work (D52, D55), as the runner call would have raised it. ``None``:
+    the caller gets this answer, unchanged."""
+    status, paid = opened.status_code, opened.payment_sent
+    if status < 300:
+        return None
+    error = RunnerCallError(
+        "refused" if status == 503 else "http",
+        f"HTTP {status} from {runner.url}",
+        payment_sent=paid,
+        manifest_ids=opened.manifest_ids,
+        status_code=status,
+    )
+    if attempt_verdict(error.kind, status, paid) != "failover" or not candidates.more_after(runner, paid):
+        return None
+    return error
+
+
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
     """A 404 or 409 is reported as ``refused``. ``status_code`` keeps the orchestrator's status.
 
@@ -117,20 +151,31 @@ class Candidates:
         self._max_paid_failovers = max_paid_failovers
         self._excluded: set[str] = set()
         self.paid_failovers = 0
+        self._tried = 0
+        self._at = -1  # the index of the runner yielded last
 
     @property
     def capped(self) -> bool:
         return self._max_paid_failovers is not None and self.paid_failovers >= self._max_paid_failovers
 
     def __iter__(self) -> Iterator[Runner]:
-        tried = 0
-        for runner in self.ordered:
-            if tried >= self._max_attempts or self.capped:
+        self._tried, self._at = 0, -1
+        for index, runner in enumerate(self.ordered):
+            if self._tried >= self._max_attempts or self.capped:
                 return
             if orchestrator_of(runner) in self._excluded:
                 continue
-            tried += 1
+            self._tried += 1
+            self._at = index
             yield runner
+
+    def more_after(self, runner: Runner, paid: bool) -> bool:
+        """Whether another runner would be tried if ``runner``, the current one, failed over now."""
+        excluded = self._excluded | ({orchestrator_of(runner)} if paid else set())
+        cap = self._max_paid_failovers
+        if self._tried >= self._max_attempts or (paid and cap is not None and self.paid_failovers + 1 >= cap):
+            return False
+        return any(orchestrator_of(later) not in excluded for later in self.ordered[self._at + 1 :])
 
     def exclude(self, runner: Runner) -> None:
         self._excluded.add(orchestrator_of(runner))

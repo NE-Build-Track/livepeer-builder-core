@@ -2,7 +2,8 @@
 
 ## Status
 
-Owner: Mike. Implementation verified offline; awaiting human review. PR targets releases/m3. No live or paid acceptance.
+Owner: Mike. Rebuilt on the engine's own runner call (D53, D56) after #64; awaiting human review.
+PR targets releases/m3. The SDK fork pin is gone.
 
 ## Goal
 
@@ -13,12 +14,14 @@ identity and existing payment/cleanup behavior. Keep inference protocols outside
 ## Acceptance
 
 - [x] JSON requests retain their existing behavior and fingerprints.
-- [x] Raw bodies, including empty/non-UTF-8 bytes, reach the SDK unchanged with explicit media type.
+- [x] Raw bodies, including empty/non-UTF-8 bytes, reach the runner unchanged with explicit media type.
 - [x] Ambiguous bodies, unsafe headers and oversized input fail validation.
 - [x] Raw bytes/media type/headers affect operation identity without persisting request content.
 - [x] Stream response headers reach embedded callers, including repeated fields.
-- [x] Validated custom runner headers reach the SDK; native HTTP errors remain failed jobs.
-- [x] Tests, types, documentation and packaging checks pass; SDK gaps are explicit.
+- [x] Validated custom runner headers reach the runner; native HTTP errors remain failed jobs.
+- [x] `return_http_errors` keeps failover (D52, D55); the answer the engine stops at is returned.
+- [x] No paid request is sent twice on a dropped connection.
+- [x] Tests, types, documentation and packaging checks pass; no SDK fork is pinned.
 
 ## Progress
 
@@ -53,3 +56,9 @@ identity and existing payment/cleanup behavior. Keep inference protocols outside
 - 2026-10-27: Review follow-up passes 972 tests (21 PostgreSQL tests skipped locally),
   overall coverage 97.11%, changed-line coverage 99%, and all layer gates. Lint, formatting,
   typing, documentation and generated schema checks pass.
+
+- 2026-10-28: Rebuilt after #61 and #64 (Mike). The engine now sends the paid request itself
+  (D53), so SDK PR #6 would never run: its behavior moves into `adapters/runner_call.py` and
+  the fork pin is dropped. Header validation was already in `contracts/http.py`. Mike chose to
+  keep failover under `return_http_errors` and return only the answer the engine stops at, and
+  to turn off aiohttp's resend for every paid request, in this PR (D56).

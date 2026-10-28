@@ -226,9 +226,9 @@ class FakeJobs:
             for attempt in job.attempts
         )
         paid = any(attempt.payment_sent for attempt in attempts)
-        state: JobState = (
-            "succeeded" if failure is None else "uncertain" if paid and not http_error else "failed"
-        )
+        # A returned HTTP error is the caller's answer; a paid 502 or 504 may still run (D52).
+        may_run = not http_error or attempt_verdict(outcome, status_code, True) == "uncertain"
+        state: JobState = "succeeded" if failure is None else "uncertain" if paid and may_run else "failed"
         done = job.model_copy(
             update={
                 "state": state,

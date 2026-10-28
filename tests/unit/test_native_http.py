@@ -1,17 +1,12 @@
 """Raw HTTP contract and paid-engine behavior, without a network or live inference."""
 
 import hashlib
-import inspect
 import json
-from types import SimpleNamespace
 
 import pytest
-from livepeer_gateway.live_runner import call_runner
-from multidict import CIMultiDict
 from pydantic import ValidationError
 
 from livepeer_builder import ActorContext, EngineSupply, JobRequest
-from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.errors import OperationConflict
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.testing import (
@@ -78,59 +73,6 @@ def test_legacy_identity_stays_stable_and_raw_changes_conflict():
     assert request_fingerprint(raw_request(headers=(("X-B", "2"), ("X-A", "1")))) == request_fingerprint(
         raw_request(headers=(("x-a", "1"), ("x-b", "2")))
     )
-
-
-@pytest.mark.parametrize("body", [b"", b"\xff\x00", b' {"new":true} '])
-async def test_adapter_passes_original_bytes_and_content_type(body):
-    seen = []
-
-    async def call(url, **kwargs):
-        seen.append(kwargs)
-        return SimpleNamespace(content=b"{}", data={}, content_type="application/json")
-
-    request = JobRequest(app="chat", raw_body=body, content_type="application/json")
-    await SdkRunnerTransport(None, call=call).call(runner("chat"), request, None)
-    assert seen[0]["payload"] is body
-    assert seen[0]["content_type"] == "application/json"
-    assert set(seen[0]) <= set(inspect.signature(call_runner).parameters)
-
-
-async def test_stream_headers_keep_repeated_values_and_close_sdk():
-    seen = []
-    closed = []
-
-    async def close():
-        closed.append(True)
-
-    async def call(url, **kwargs):
-        seen.append(kwargs)
-        return SimpleNamespace(
-            status=200,
-            content_type="text/event-stream",
-            headers=CIMultiDict([("X-Trace", "a"), ("X-Trace", "b")]),
-            aclose=close,
-        )
-
-    stream = await SdkRunnerTransport(None, call=call).open(runner("chat"), raw_request(), None)
-    assert stream.headers == (("X-Trace", "a"), ("X-Trace", "b"))
-    assert seen[0]["payload"] == raw_request().raw_body and seen[0]["stream"]
-    await stream.aclose()
-    assert closed == [True]
-
-
-async def test_custom_headers_and_error_policy_reach_sdk():
-    seen = []
-
-    async def call(url, **kwargs):
-        seen.append(kwargs)
-        return SimpleNamespace(status=400, content_type="application/json", headers={})
-
-    request = raw_request(headers=(("anthropic-version", "2023-06-01"),), return_http_errors=True)
-    stream = await SdkRunnerTransport(None, call=call).open(runner("chat"), request, None)
-    assert stream.status_code == 400
-    assert seen[0]["headers"] == {"anthropic-version": "2023-06-01"}
-    assert seen[0]["return_http_errors"] is True
-    assert set(seen[0]) <= set(inspect.signature(call_runner).parameters)
 
 
 async def test_raw_identity_and_headers_through_real_engine():

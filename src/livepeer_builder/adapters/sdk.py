@@ -7,6 +7,7 @@ a callback that a lost signer reply would skip (docs/references/sdk-gateway.md).
 """
 
 import asyncio
+import json
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
@@ -72,7 +73,12 @@ class SdkRunnerTransport:
             runner.url.rstrip("/") + request.path,
             method=request.method,
             # Runners expect a JSON object; an empty body for ``None`` is not the contract yet (T15).
-            payload={} if request.payload is None else request.payload,
+            body=request.raw_body
+            if request.raw_body is not None
+            else json.dumps({} if request.payload is None else request.payload).encode(),
+            content_type=request.content_type or "application/json",
+            headers=request.headers,
+            return_http_errors=request.return_http_errors,
             app=runner.app,
             rate=runner.rate,
             signer_url=signer_url,

@@ -8,6 +8,7 @@ from typing import Protocol
 
 from livepeer_builder.contracts import AttemptOutcome, Failure, Job, ResultRef
 from livepeer_builder.errors import JobFailed
+from livepeer_builder.services.failover import failure_kind
 from livepeer_builder.testing.scripts import Fails, Reply
 
 
@@ -146,13 +147,14 @@ class FakeJobStream:
             if not self._ended:
                 self._ended = True
                 status = self._reply.status_code
+                outcome: AttemptOutcome = "refused" if status == 503 else "http"  # as the engine records it
                 failure = Failure(
-                    kind="runner_rejected" if 400 <= status < 500 else "runner_error",
+                    kind=failure_kind(outcome, status),
                     message="Runner returned HTTP error",
                     status_code=status,
                     payment_sent=any(a.payment_sent for a in self._job.attempts),
                 )
-                self._job = self._jobs.ended(self._job, "http", status, failure=failure, http_error=True)
+                self._job = self._jobs.ended(self._job, outcome, status, failure=failure, http_error=True)
             return
         if not self._ended:
             self._ended = True

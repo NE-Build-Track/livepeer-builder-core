@@ -70,8 +70,19 @@ async def test_the_answer_the_engine_stops_at_comes_back_unchanged() -> None:
     stream, body = await returned(transport)
     assert (stream.status_code, body) == (404, b"no such model")
     assert stream.job.state == "failed" and stream.job.failure is not None
-    assert stream.job.failure.status_code == 404
+    assert (stream.job.failure.kind, stream.job.failure.status_code) == ("refused", 404)  # as failure_of
     assert outcomes(stream) == [("refused", 503), ("http", 404)]
+
+
+async def test_a_returned_answer_after_a_paid_failover_keeps_the_earlier_payment() -> None:
+    """The answer the engine stops at was refused before any 402, but the first runner was paid: the
+    failure says a payment went out, as ``failure_of`` does for a raised error (Cursor, #55)."""
+    unpaid = StreamScript(events=[b"gone"], status_code=404, manifest_ids=(), payment_sent=False)
+    transport = ScriptedStreamTransport(opens=[answer(503, b"busy"), unpaid])
+    stream, body = await returned(transport)
+    assert (stream.status_code, body, stream.job.state) == (404, b"gone", "failed")
+    assert stream.job.failure is not None and stream.job.failure.payment_sent
+    assert [attempt.payment_sent for attempt in stream.job.attempts] == [True, False]
 
 
 async def test_an_application_error_comes_back_without_failover() -> None:
@@ -116,7 +127,7 @@ async def test_the_answer_comes_back_when_the_caller_allows_one_attempt() -> Non
     assert len(transport.calls) == 1
 
 
-@pytest.mark.parametrize("status", [307, 400, 404, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [307, 400, 404, 409, 500, 502, 503, 504])
 async def test_the_fake_engine_ends_a_returned_error_as_the_engine_does(status: int) -> None:
     """One runner: nothing to fail over to, so both return the answer and end the job alike."""
     transport = ScriptedStreamTransport(opens=[answer(status, b"error")])
@@ -145,3 +156,4 @@ async def test_the_fake_engine_ends_a_returned_error_as_the_engine_does(status: 
         assert job.failure is not None
         ended.append((job.state, job.failure.kind, job.attempts[-1].outcome))
     assert ended[0] == ended[1]
+    assert ended[0][1] == ("refused" if status in (404, 409, 503) else ended[0][1])

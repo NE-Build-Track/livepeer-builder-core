@@ -361,7 +361,9 @@ option). Failover is unchanged (D56): an answer that fails over for a default ca
 be tried. The answer the engine stops at, and any other non-402 answer, is returned as
 status, headers and original bytes. A completed response with status >= 300 records an HTTP
 attempt (`refused` for 503) and a failed job; a paid 502 or 504 leaves the job `uncertain`, as
-for a default call, since the app may still be running. It never becomes a successful
+for a default call, since the app may still be running. The job's failure is recorded as a
+raised runner error would be: a 404 or 409 is `refused`, and `payment_sent` is true when any
+attempt was paid, including one the job failed over from. It never becomes a successful
 inference. A timeout, cancellation or interrupted body retains existing uncertain/abandoned
 semantics. Error bodies are not added to durable failure records. Payment challenges and
 signer failures remain control flow, not client responses. In this mode the runner call turns

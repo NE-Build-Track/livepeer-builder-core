@@ -38,7 +38,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
-from livepeer_builder.services.failover import attempt_verdict, failure_kind
+from livepeer_builder.services.failover import attempt_verdict, failure_kind, failure_of
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -394,15 +394,21 @@ class JobStream:
             state: JobState = "succeeded"
             self._job = await self._finish(self._job, state, None, result, self._attempts)
         else:
-            paid = self._attempts[-1].payment_sent
+            paid = self._attempts[-1].payment_sent  # only the last attempt decides the state
+            any_paid = any(attempt.payment_sent for attempt in self._attempts)  # earlier ones too
             failure = Failure(
                 kind=failure_kind(ending.outcome, ending.status_code),
                 message=ending.message,
                 status_code=ending.status_code,
                 body=ending.body[:BODY_LIMIT] if ending.body else None,
-                payment_sent=paid,
+                payment_sent=any_paid,
             )
             if self._returned_http_error:  # a paid 502 or 504 may still be running behind the proxy (D52)
+                # recorded as a raised runner error would be: a 404 or 409 that ends a job is ``refused``
+                answer = RunnerCallError(
+                    ending.outcome, ending.message, payment_sent=paid, status_code=ending.status_code
+                )
+                failure = failure_of(answer, any_paid)
                 verdict = attempt_verdict(ending.outcome, ending.status_code, paid)
                 state = "uncertain" if verdict == "uncertain" else "failed"
             else:

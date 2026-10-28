@@ -256,6 +256,40 @@ async def test_unpaid_stream_failure_is_failed_not_uncertain(
     assert stream.job.state == "failed"
 
 
+async def test_a_stream_failure_after_a_paid_failover_says_a_payment_went_out(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    """The stream that broke was unpaid, so the job is ``failed``, but the runner it failed over from was
+    paid: ``failure.payment_sent`` covers every attempt, as ``failure_of`` does (Cursor, #55)."""
+    engine = await make_engine(
+        runners=(
+            runner(APP, url="https://a1", orchestrator_url="https://orch-a.example"),
+            runner(APP, url="https://b1", orchestrator_url="https://orch-b.example"),
+        )
+    )
+    provision = ProvisionRequest(
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(5), currency="USD"),
+        grant_id="g",
+    )
+    await engine.payments.provision(admin, provision)
+    transport.opens = [
+        RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-1",), status_code=503),
+        StreamScript(
+            events=[b"a", RunnerCallError("unreachable", "reset", payment_sent=False)],
+            manifest_ids=(),
+            payment_sent=False,
+        ),
+    ]
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
+    with pytest.raises(JobFailed):
+        await read_all(stream)
+    assert stream.job.state == "failed" and stream.job.failure is not None
+    assert stream.job.failure.payment_sent
+    assert [a.payment_sent for a in stream.job.attempts] == [True, False]
+
+
 async def test_stream_keeps_idempotency_and_needs_a_streaming_transport(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:

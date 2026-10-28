@@ -24,6 +24,8 @@ from livepeer_builder.contracts.costs import (
     SyncReport,
     UsagePage,
     UsageRow,
+    add_fees,
+    billable_fees,
 )
 from livepeer_builder.contracts.discovery import DiscoverySnapshot, NetworkRate, Offering, Runner, RunnerGPU
 from livepeer_builder.contracts.health import EngineHealth, PurgeReport
@@ -116,4 +118,6 @@ __all__ = [
     "SyncReport",
     "UsagePage",
     "UsageRow",
+    "add_fees",
+    "billable_fees",
 ]

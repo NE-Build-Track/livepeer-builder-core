@@ -178,7 +178,8 @@
               "payment",
               "timeout",
               "http",
-              "abandoned"
+              "abandoned",
+              "payment_unknown"
             ],
             "title": "Outcome",
             "type": "string"
@@ -522,6 +523,7 @@
               "refused",
               "unreachable",
               "payment",
+              "payment_unknown",
               "timeout",
               "runner_rejected",
               "runner_error",
@@ -892,6 +894,7 @@
       },
       "JobCost": {
         "additionalProperties": false,
+        "description": "``fees`` is everything the job's attempts cost the allocation. ``billable`` is the part an\nenterprise bills its user for: the ``delivered`` attempts only, so a job that failed, or the\nattempts a job failed over from, are never billable (D52). Both are final once ``status`` is\n``observed`` or ``corrected``.",
         "properties": {
           "attempts": {
             "items": {
@@ -899,6 +902,9 @@
             },
             "title": "Attempts",
             "type": "array"
+          },
+          "billable": {
+            "$ref": "#/components/schemas/Fees"
           },
           "fees": {
             "$ref": "#/components/schemas/Fees"

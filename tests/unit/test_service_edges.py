@@ -313,4 +313,4 @@ async def test_payment_refused_after_signing_is_a_payment_failure(
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert failed.value.job.failure is not None and failed.value.job.failure.kind == "payment"
-    assert len(failed.value.job.attempts) == 1  # paid: never failed over
+    assert len(failed.value.job.attempts) == 1  # r2 shares the orchestrator that took the payment

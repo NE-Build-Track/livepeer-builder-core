@@ -1,14 +1,10 @@
-"""Adapters: the Batteries wire format, SDK error mapping, secret stores, and settings."""
+"""Adapters: the Batteries wire format, runner discovery, secret stores, and settings."""
 
-import asyncio
 import json
 from decimal import Decimal
-from types import SimpleNamespace
 
-import aiohttp
 import httpx
 import pytest
-from livepeer_gateway.errors import LivepeerHTTPError, PaymentError
 from pydantic import ValidationError
 
 from livepeer_builder import generate_secret_key
@@ -20,16 +16,15 @@ from livepeer_builder.adapters.batteries import (
     allowance_from_body,
     batteries_http_client,
 )
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, call_error, runners_from_entries
+from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import JobRequest, Money, Runner, SecretRef
+from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     CursorMismatch,
     InvalidRequest,
     ProviderError,
     ProviderUnavailable,
-    RunnerCallError,
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
@@ -175,94 +170,6 @@ async def test_usage_pages_and_cursor_mismatch() -> None:
         await source.page("bad")
 
 
-def test_sdk_errors_keep_payment_evidence() -> None:
-    runner_url = "https://runner.example/run"
-    refused = LivepeerHTTPError(503, runner_url, body="busy")
-    mapped = call_error(refused, runner_url, payment_sent=False)
-    assert (mapped.kind, mapped.payment_sent, mapped.status_code) == ("refused", False, 503)
-
-    signer = "https://signer.example/generate-live-payment"
-    params = LivepeerHTTPError(400, signer, body="incomplete params")
-    assert call_error(params, runner_url, payment_sent=False).kind == "payment_refused"  # fail over
-    ceiling = LivepeerHTTPError(481, signer)
-    assert call_error(ceiling, runner_url, payment_sent=False).kind == "payment_refused"
-    exhausted = LivepeerHTTPError(402, signer)
-    assert call_error(exhausted, runner_url, payment_sent=False).kind == "payment"  # caller-side: no failover
-
-    after_signing = call_error(
-        LivepeerHTTPError(400, signer), runner_url, payment_sent=True, manifest_ids=("m-7",)
-    )
-    assert (after_signing.kind, after_signing.payment_sent, after_signing.manifest_ids) == (
-        "payment",
-        True,
-        ("m-7",),
-    )
-
-
-class _Session:
-    def __init__(self, manifest_id: str) -> None:
-        self.manifest_id = manifest_id
-
-
-def _runner() -> Runner:
-    return Runner(
-        url="https://runner.example", app="a/b", runner_id="r1", mode="single-shot",
-        orchestrator_url="https://orch.example", capacity=1, capacity_available=1, rate=None,
-    )  # fmt: skip
-
-
-async def test_transport_collects_signed_sessions() -> None:
-    async def paid_twice(url: str, **kwargs: object) -> SimpleNamespace:
-        callback = kwargs["on_payment_session"]
-        await callback(_Session("m-1"))  # type: ignore[operator]
-        await callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
-        await callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
-        return SimpleNamespace(
-            content=b'{"ok": 1}', data={}, content_type="application/json", session_id="m-1"
-        )
-
-    reply = await SdkRunnerTransport("https://signer.example", call=paid_twice).call(
-        _runner(), JobRequest(app="a/b"), "lpg_k"
-    )
-    assert (reply.manifest_ids, reply.payment_sent) == (("m-1", "m-2", "m-2"), True)
-
-
-async def test_transport_failures_carry_the_sessions_signed_before_them() -> None:
-    async def signed_then_500(url: str, **kwargs: object) -> SimpleNamespace:
-        await kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
-        raise LivepeerHTTPError(500, url, body="boom")
-
-    with pytest.raises(RunnerCallError) as failed:
-        await SdkRunnerTransport("https://signer.example", call=signed_then_500).call(
-            _runner(), JobRequest(app="a/b", path="/x"), "lpg_k"
-        )
-    assert (failed.value.kind, failed.value.payment_sent, failed.value.manifest_ids) == (
-        "http",
-        True,
-        ("m-9",),
-    )
-
-    async def refused_by_signer(url: str, **kwargs: object) -> SimpleNamespace:
-        raise LivepeerHTTPError(400, "https://signer.example/generate-live-payment", body="incomplete params")
-
-    with pytest.raises(RunnerCallError) as refused:
-        await SdkRunnerTransport("https://signer.example", call=refused_by_signer).call(
-            _runner(), JobRequest(app="a/b"), "lpg_k"
-        )
-    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)
-
-
-async def test_unpaid_calls_register_no_callback() -> None:
-    seen: dict[str, object] = {}
-
-    async def free(url: str, **kwargs: object) -> SimpleNamespace:
-        seen.update(kwargs)
-        return SimpleNamespace(content=b"{}", data={}, content_type="application/json", session_id="")
-
-    reply = await SdkRunnerTransport(None, call=free).call(_runner(), JobRequest(app="a/b"), None)
-    assert seen["on_payment_session"] is None and reply.payment_sent is False
-
-
 def test_discovery_entries_become_runners() -> None:
     entries = [
         {
@@ -342,73 +249,6 @@ def test_batteries_http_client_uses_the_configured_timeout() -> None:
 # -- streaming (docs/contracts/engine.md#streaming) --------------------------------------------------
 
 
-class _FakeLiveStream:
-    def __init__(
-        self, chunks: list[bytes | BaseException], status: int = 200, content_type: str = "text/event-stream"
-    ) -> None:
-        self.status = status
-        self.content_type = content_type
-        self.payment_session = object()
-        self.closed = False
-        self._chunks = chunks
-
-    async def aiter_bytes(self):  # type: ignore[no-untyped-def]
-        for chunk in self._chunks:
-            if isinstance(chunk, BaseException):
-                raise chunk
-            yield chunk
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-async def test_open_streams_chunks_and_reports_the_signed_session() -> None:
-    fake = _FakeLiveStream([b"data: a\n\n", b"", b"data: b\n\n"])
-
-    async def paid_stream(url: str, **kwargs: object) -> _FakeLiveStream:
-        assert kwargs["stream"] is True and url.endswith("/v1/chat/completions")
-        await kwargs["on_payment_session"](_Session("m-1"))  # type: ignore[operator]
-        return fake
-
-    transport = SdkRunnerTransport("https://signer.example", call=paid_stream)
-    stream = await transport.open(_runner(), JobRequest(app="a/b", path="/v1/chat/completions"), "lpg_k")
-    assert (stream.status_code, stream.content_type) == (200, "text/event-stream")
-    assert (stream.manifest_ids, stream.payment_sent) == (("m-1",), True)
-    assert [c async for c in stream] == [b"data: a\n\n", b"data: b\n\n"]  # empty chunks are skipped
-    await stream.aclose()
-    assert fake.closed
-
-
-async def test_open_maps_errors_before_and_during_the_stream() -> None:
-    async def refused(url: str, **kwargs: object) -> _FakeLiveStream:
-        raise LivepeerHTTPError(402, "https://signer.example/pay", body="allowance")
-
-    transport = SdkRunnerTransport("https://signer.example", call=refused)
-    with pytest.raises(RunnerCallError) as before:
-        await transport.open(_runner(), JobRequest(app="a/b"), "lpg_k")
-    assert before.value.kind == "payment" and not before.value.payment_sent
-
-    broken = _FakeLiveStream([b"x", aiohttp.ClientPayloadError("cut")])
-
-    async def opens_then_breaks(url: str, **kwargs: object) -> _FakeLiveStream:
-        await kwargs["on_payment_session"](_Session("m-2"))  # type: ignore[operator]
-        return broken
-
-    transport = SdkRunnerTransport("https://signer.example", call=opens_then_breaks)
-    stream = await transport.open(_runner(), JobRequest(app="a/b"), "lpg_k")
-    received: list[bytes] = []
-
-    async def drain() -> None:
-        async for chunk in stream:
-            received.append(chunk)
-
-    with pytest.raises(RunnerCallError) as during:
-        await drain()
-    assert received == [b"x"]
-    assert during.value.payment_sent and during.value.manifest_ids == ("m-2",)
-    assert during.value.kind == "http"
-
-
 def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
     entries = [
         {
@@ -442,69 +282,6 @@ def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
     assert (second.version, second.metadata, second.gpu, second.capacity_available) == (None, None, None, 0)
 
 
-async def test_open_gives_up_after_first_byte_timeout_and_keeps_the_signed_session() -> None:
-    async def signs_then_hangs(url: str, **kwargs: object) -> _FakeLiveStream:
-        await kwargs["on_payment_session"](_Session("m-3"))  # type: ignore[operator]
-        await asyncio.sleep(5)  # the runner took the payment and never sent its headers
-        raise AssertionError("unreachable")
-
-    transport = SdkRunnerTransport("https://signer.example", call=signs_then_hangs)
-    with pytest.raises(RunnerCallError) as timed_out:
-        await transport.open(_runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), "lpg_k")
-    assert timed_out.value.kind == "timeout" and "0.05s" in str(timed_out.value)
-    assert timed_out.value.payment_sent and timed_out.value.manifest_ids == ("m-3",)
-
-
-@pytest.mark.parametrize(("signer_url", "credential"), [("https://signer.example", "lpg_k"), (None, None)])
-async def test_open_timeout_or_signing_failure_before_callback_leaves_payment_sent_false(
-    signer_url: str | None, credential: str | None
-) -> None:
-    async def hangs_while_signing(url: str, **kwargs: object) -> _FakeLiveStream:
-        await asyncio.sleep(5)  # cancelled inside signing: no on_payment_session, no payment sent
-        raise AssertionError("unreachable")
-
-    with pytest.raises(RunnerCallError) as timed_out:
-        await SdkRunnerTransport(signer_url, call=hangs_while_signing).open(
-            _runner(), JobRequest(app="a/b", first_byte_timeout_s=0.05), credential
-        )
-    assert (timed_out.value.kind, timed_out.value.payment_sent, timed_out.value.manifest_ids) == (
-        "timeout",
-        False,
-        (),
-    )
-
-    async def invalid_signer_reply(url: str, **kwargs: object) -> _FakeLiveStream:
-        raise PaymentError("GetPayment error: invalid 'segCreds' in response")
-
-    with pytest.raises(RunnerCallError) as payment_failed:
-        await SdkRunnerTransport(signer_url, call=invalid_signer_reply).open(
-            _runner(), JobRequest(app="a/b"), credential
-        )
-    assert (
-        payment_failed.value.kind,
-        payment_failed.value.payment_sent,
-        payment_failed.value.manifest_ids,
-    ) == ("payment", False, ())
-
-
-@pytest.mark.parametrize(("payload", "sent"), [(None, {}), ({"prompt": "hi"}, {"prompt": "hi"})])
-async def test_a_missing_payload_is_sent_as_an_empty_json_object(
-    payload: dict[str, str] | None, sent: dict[str, str]
-) -> None:
-    seen: list[object] = []
-
-    async def records(url: str, **kwargs: object) -> object:
-        seen.append(kwargs["payload"])
-        if kwargs.get("stream"):
-            return _FakeLiveStream([])
-        return SimpleNamespace(content=b"{}", data={}, content_type="application/json", session_id="")
-
-    transport = SdkRunnerTransport("https://signer.example", call=records)
-    await transport.call(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
-    await transport.open(_runner(), JobRequest(app="a/b", payload=payload), "lpg_k")
-    assert seen == [sent, sent]
-
-
 async def test_usage_feed_is_unfiltered_by_default() -> None:
     seen: list[dict[str, str]] = []
 
@@ -517,20 +294,3 @@ async def test_usage_feed_is_unfiltered_by_default() -> None:
     )
     await source.page(None, limit=10)
     assert seen == [{"limit": "10"}]  # iss-04: no filters, so desk-created grants still reconcile
-
-
-async def test_each_signed_session_reaches_on_signed_before_the_paid_request() -> None:
-    order: list[str] = []
-
-    async def paid(url: str, **kwargs: object) -> SimpleNamespace:
-        await kwargs["on_payment_session"](_Session("m-7"))  # type: ignore[operator]
-        order.append("request sent")
-        return SimpleNamespace(content=b"{}", data=None, content_type="application/json")
-
-    async def on_signed(manifest_id: str) -> None:
-        order.append(f"stored {manifest_id}")
-
-    transport = SdkRunnerTransport("https://signer.example", call=paid)
-    reply = await transport.call(_runner(), JobRequest(app="a/b"), "lpg_k", on_signed=on_signed)
-    assert order == ["stored m-7", "request sent"]  # evidence first (D42)
-    assert reply.payment_sent and reply.manifest_ids == ("m-7",)

@@ -3,17 +3,26 @@ before the first chunk, idle_timeout_s between chunks, and the engine's backstop
 ignores its deadline."""
 
 import asyncio
-from types import SimpleNamespace
+from collections.abc import AsyncIterator
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
+from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, JobRequest
+from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import JobFailed
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
+from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_streaming import APP, collect, provisioned, read_all
+
+
+@pytest.fixture
+async def net() -> AsyncIterator[Net]:
+    async for value in start():
+        yield value
 
 
 def test_defaults_and_limits() -> None:
@@ -61,50 +70,48 @@ async def test_the_engine_stops_a_transport_that_ignores_its_deadline(
     assert engine.admission.running == 0
 
 
-class _HangsDuringOpen:
-    """An SDK ``call_runner`` that hangs while opening, optionally after the signer signed."""
-
-    def __init__(self, manifest_id: str | None) -> None:
-        self.manifest_id = manifest_id
-        self.called: list[str] = []
-
-    async def __call__(self, url: str, **kwargs: object) -> object:
-        self.called.append(url)
-        if self.manifest_id is not None:
-            await kwargs["on_payment_session"](SimpleNamespace(manifest_id=self.manifest_id))  # type: ignore[operator]
-        await asyncio.sleep(5)
-        raise AssertionError("unreachable")
-
-
-_UNPAID, _PAID = _HangsDuringOpen(None), _HangsDuringOpen("m-1")
-
-
 @pytest.mark.parametrize(
-    ("transport", "call", "paid", "state", "manifests"),
-    [
-        (SdkRunnerTransport("https://signer.example", call=_UNPAID), _UNPAID, False, "failed", ()),
-        (SdkRunnerTransport("https://signer.example", call=_PAID), _PAID, True, "uncertain", ("m-1",)),
-    ],
+    ("hang", "paid", "state", "manifests"),
+    [("signer", False, "uncertain", ("m-1",)), ("runner", True, "uncertain", ("m-1",))],
+    ids=["while-signing", "after-payment"],
 )
-async def test_sdk_open_timeout_follows_whether_on_payment_session_ran(
+async def test_the_live_transport_times_out_by_whether_signing_finished(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
-    call: _HangsDuringOpen,
+    net: Net,
+    hang: str,
     paid: bool,
     state: str,
     manifests: tuple[str, ...],
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    """The real transport against a loopback runner and signer: a timeout while signing leaves the
+    payment unknown with its manifest already on the attempt (D53), one after the signer's payment was
+    validated is paid (D41). Either may have charged, so both are uncertain, and neither fails over."""
+    if hang == "signer":
+        net.sign = [5.0]
+    else:
+        net.replies = [Reply(hang_s=5)]
+    runners = (net.runner(), net.runner(orchestrator_url="https://other-orch.example"))
+    engine = await make_engine(runners=runners, supply=EngineSupply(transport=SdkRunnerTransport(net.url)))
+    request = ProvisionRequest(
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(5), currency="USD"),
+        grant_id="g",
+    )
+    await engine.payments.provision(admin, request)
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.1))
     job = failed.value.job
-    assert job.state == state and job.failure is not None and job.failure.kind == "timeout"
+    expected_kind = "payment_unknown" if hang == "signer" else "timeout"
+    assert job.state == state and job.failure is not None and job.failure.kind == expected_kind
     assert job.failure.payment_sent is paid
-    assert len(call.called) == 1 and len(job.attempts) == 1  # the second runner is never tried
+    assert len(job.attempts) == 1  # a timeout never fails over, paid or not
     attempt = job.attempts[0]
+    outcome = "timeout" if paid else "payment_unknown"  # stored, so a restart still sees it may have paid
     assert (attempt.outcome, attempt.payment_sent, tuple(s.manifest_id for s in attempt.sessions)) == (
-        "timeout",
+        outcome,
         paid,
         manifests,
     )

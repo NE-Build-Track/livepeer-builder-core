@@ -79,7 +79,7 @@ async def test_payment_evidence_is_written_before_the_first_byte(
     await read_all(stream)
 
 
-async def test_open_fails_over_only_before_payment(
+async def test_open_fails_over_before_the_first_byte(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await provisioned(make_engine, admin)
@@ -93,8 +93,39 @@ async def test_open_fails_over_only_before_payment(
     ]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
+    # r2 shares the orchestrator that took the payment, so it is not paid again
     assert failed.value.job.state == "failed" and len(failed.value.job.attempts) == 1
     assert engine.admission.running == 0  # released when open fails
+
+
+async def test_a_paid_refusal_at_open_fails_over_to_another_orchestrator(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await make_engine(
+        runners=(
+            runner(APP, url="https://a1", orchestrator_url="https://orch-a.example"),
+            runner(APP, url="https://b1", orchestrator_url="https://orch-b.example"),
+        )
+    )
+    provision = ProvisionRequest(
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(5), currency="USD"),
+        grant_id="g",
+    )
+    await engine.payments.provision(admin, provision)
+    transport.opens = [
+        RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-1",), status_code=503),
+        StreamScript(events=[b"ok"], manifest_ids=("m-2",)),
+    ]
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
+    assert await read_all(stream) == b"ok"
+    job = await engine.jobs.get(alice, stream.job.id)
+    assert job.state == "succeeded"
+    assert [(a.outcome, a.payment_sent, a.runner_url) for a in job.attempts] == [
+        ("refused", True, "https://a1"),
+        ("succeeded", True, "https://b1"),
+    ]
 
 
 async def test_runner_failure_mid_stream_ends_the_job_uncertain(

@@ -16,7 +16,8 @@ from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorCha
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
-from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerStream, SdkRunnerTransport
+from livepeer_builder.adapters.runner_call import SdkRunnerStream
+from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (

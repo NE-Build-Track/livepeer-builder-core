@@ -1,12 +1,9 @@
-"""Adapter edge cases: Batteries routes and errors, SDK error classification and parsing, secret stores."""
+"""Adapter edge cases: Batteries routes and errors, network error classification, discovery parsing, secret stores."""
 
 from decimal import Decimal
-from types import SimpleNamespace
 
-import aiohttp
 import httpx
 import pytest
-from livepeer_gateway.errors import PaymentError
 
 from livepeer_builder import generate_secret_key
 from livepeer_builder.adapters.batteries import (
@@ -16,21 +13,15 @@ from livepeer_builder.adapters.batteries import (
     error_message,
     usage_row_from_item,
 )
-from livepeer_builder.adapters.sdk import (
-    HttpDiscoverySource,
-    SdkRunnerTransport,
-    call_error,
-    network_kind,
-    runners_from_entries,
-)
+from livepeer_builder.adapters.runner_call import network_kind
+from livepeer_builder.adapters.sdk import HttpDiscoverySource, runners_from_entries
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
-from livepeer_builder.contracts import JobRequest, Money, NetworkRate, Runner, SecretRef
+from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
     ProviderError,
     ProviderUnavailable,
-    RunnerCallError,
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
@@ -164,26 +155,6 @@ def test_network_errors_are_classified_through_their_causes() -> None:
         "unreachable",
         "http",
     )
-    assert call_error(PaymentError("signer said no"), "https://r", payment_sent=False).kind == "payment"
-
-
-async def test_transport_maps_client_errors_and_passes_rates() -> None:
-    runner = Runner(
-        url="https://r", app="a", runner_id=None, mode=None, orchestrator_url=None, capacity=None,
-        capacity_available=None, rate=NetworkRate(amount=Decimal("0.1"), currency="usd", unit="request"),
-    )  # fmt: skip
-    seen: dict[str, object] = {}
-
-    async def unreachable(url: str, **kwargs: object) -> SimpleNamespace:
-        seen.update(kwargs)
-        raise aiohttp.ClientConnectionError("no route")
-
-    with pytest.raises(RunnerCallError) as failed:
-        await SdkRunnerTransport("https://signer", call=unreachable).call(
-            runner, JobRequest(app="a"), "lpg_k"
-        )
-    assert (failed.value.kind, failed.value.payment_sent) == ("unreachable", False)
-    assert seen["runner"].price_info.price == "0.1"  # type: ignore[attr-defined]
 
 
 # -- secret stores ---------------------------------------------------------------------------------------

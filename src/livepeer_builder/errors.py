@@ -94,10 +94,13 @@ class UnsupportedForBackend(EngineError):
 class RunnerCallError(EngineError):
     """One runner call failed. Raised by a RunnerTransport.
 
-    ``payment_sent`` is True once tickets went out with the request: the job is then bound to this
-    runner and must not fail over. ``manifest_ids`` lists the orchestrator sessions the signer
-    signed, one per session in signing order. It can be non-empty even when ``payment_sent`` is
-    False, because the signer charges when it signs.
+    ``payment_sent`` is True once the signer's payment for the call was validated, before the paid
+    request goes out (D41, D53): the allocation is charged, whatever happens next. The job may then
+    fail over only to another orchestrator, and only when the failure did not run the work (D52).
+    ``manifest_ids`` lists the orchestrator sessions the signer signed, one per session in signing
+    order; with the Live Runner transport, a non-empty list means ``payment_sent``.
+    ``payment_unknown`` is True when the signer was asked and gave no validated answer (a lost or
+    malformed reply, a 5xx, a cancel): it may have charged, so the job must not pay anyone else.
     """
 
     def __init__(
@@ -109,6 +112,7 @@ class RunnerCallError(EngineError):
         manifest_ids: tuple[str, ...] = (),
         status_code: int | None = None,
         body: str | None = None,
+        payment_unknown: bool = False,
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -116,3 +120,4 @@ class RunnerCallError(EngineError):
         self.manifest_ids = manifest_ids
         self.status_code = status_code
         self.body = body
+        self.payment_unknown = payment_unknown

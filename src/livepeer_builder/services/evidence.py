@@ -7,6 +7,11 @@ in-memory attempt first, so the engine's error path has it too, then writes it w
 off half way. A failed write is logged, not raised: the signer has already charged, so the call goes
 on, and the write after the call (``finish_attempt``), or the close after an error or cancel
 (``record_payment_evidence`` again), stores the same sessions.
+
+Before ``get_payment``, the transport calls ``remember`` (D53) with ``LivePaymentSession.manifest_id``.
+The recorder holds that id and does not write yet. ``on_signed`` writes the row and marks the attempt
+paid. A refusal drops the id. Any other signing error keeps it on the attempt, unpaid, and
+``finish_attempt`` or the shielded close persists that row.
 """
 
 import logging
@@ -28,11 +33,27 @@ class SignedSessionRecorder:
         self._store = store
         self._attempts = attempts
         self._index = len(attempts) - 1
+        self._remembered: str | None = None
 
     async def __call__(self, manifest_id: str) -> None:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
         self._attempts[self._index] = attempt
         await run_shielded(_write(self._store, attempt))
+
+    async def remember(self, manifest_id: str) -> None:
+        """Before ``get_payment``: hold this manifest id. No session on the attempt and no write."""
+        self._remembered = manifest_id
+
+    def keep_unconfirmed(self) -> None:
+        """The signer was asked and did not refuse. The in-memory attempt keeps the id, unpaid."""
+        manifest_id = self._remembered
+        if manifest_id is None:
+            return
+        self._attempts[self._index] = with_evidence(
+            self._attempts[self._index],
+            (manifest_id,),
+            payment_sent=False,
+        )
 
 
 async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:
@@ -58,7 +79,10 @@ def with_evidence(attempt: Attempt, manifest_ids: Sequence[str], payment_sent: b
     """The attempt with the manifests not recorded yet, in order. ``payment_sent`` never goes back to
     ``False``: a transport that reports otherwise after the signer signed does not unpay the call."""
     known = {session.manifest_id for session in attempt.sessions}
-    added = sessions_from(tuple(m for m in dict.fromkeys(manifest_ids) if m not in known))
+    fresh = tuple(m for m in dict.fromkeys(manifest_ids) if m not in known)
     return attempt.model_copy(
-        update={"sessions": attempt.sessions + added, "payment_sent": attempt.payment_sent or payment_sent}
+        update={
+            "sessions": attempt.sessions + sessions_from(fresh),
+            "payment_sent": attempt.payment_sent or payment_sent,
+        }
     )

@@ -43,6 +43,7 @@ from livepeer_builder.contracts import (
     ResourceRef,
     ResultRef,
     Runner,
+    SignedSession,
 )
 from livepeer_builder.errors import (
     InvalidRequest,
@@ -54,6 +55,7 @@ from livepeer_builder.errors import (
 )
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
+from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.policy import DefaultPolicy
@@ -109,7 +111,9 @@ class FakeJobs:
                 body=scripted.body,
                 payment_sent=scripted.payment_sent,
             )
-            paid_unknown = scripted.payment_sent and attempt_outcome(scripted.kind) in UNCERTAIN_OUTCOMES
+            outcome = attempt_outcome(scripted.kind)  # a paid 502 or 504 may have run, as in the engine
+            may_have_run = attempt_verdict(outcome, scripted.status_code, True) == "uncertain"
+            paid_unknown = scripted.payment_sent and (outcome in UNCERTAIN_OUTCOMES or may_have_run)
             raise JobFailed(self.record(actor, request, "uncertain" if paid_unknown else "failed", failure))
         return scripted
 
@@ -150,6 +154,8 @@ class FakeJobs:
         status = (
             reply.status_code if reply is not None else failure.status_code if failure is not None else None
         )
+        paid = failure is None or failure.payment_sent
+        sessions = (SignedSession(manifest_id="manifest-1"),) if failure is None else ()
         attempts = tuple(
             Attempt(
                 job_id=job_id,
@@ -157,8 +163,8 @@ class FakeJobs:
                 runner_url=runner.url,
                 orchestrator_url=runner.orchestrator_url,
                 allocation_id=None,
-                sessions=(),
-                payment_sent=failure is None or failure.payment_sent,
+                sessions=sessions,
+                payment_sent=paid,
                 outcome=outcome,
                 status_code=status,
                 started_at=now,

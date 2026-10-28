@@ -65,7 +65,7 @@ Step = RunnerReply | RunnerCallError | Callable[[Runner, JobRequest, str | None]
 
 
 async def report_signed(on_signed: OnSigned | None, manifest_ids: Sequence[str], paid: bool) -> None:
-    """What the SDK's ``on_payment_session`` does for a paid call: report each signed session first."""
+    """What the Live Runner transport does for a paid call: report each signed session first (D42)."""
     if on_signed is None or not paid:
         return
     for manifest_id in manifest_ids or ("",):
@@ -80,7 +80,11 @@ class ScriptedTransport:
     calls: list[tuple[str, str | None]] = field(default_factory=list)
 
     async def call(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> RunnerReply:
         self.calls.append((runner.url, credential))
         if not self.steps:
@@ -174,7 +178,11 @@ class ScriptedStreamTransport(ScriptedTransport):
     streams: list[ScriptedStream] = field(default_factory=list)
 
     async def open(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> ScriptedStream:
         self.calls.append((runner.url, credential))
         if not self.opens:

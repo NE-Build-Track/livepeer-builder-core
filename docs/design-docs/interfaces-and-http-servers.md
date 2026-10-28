@@ -317,7 +317,7 @@ classDiagram
     }
     class MostCapacityFirst
     class SdkRunnerTransport {
-        SDK call_runner, signer bearer lpg_
+        own paid call, SDK signer client, signer bearer lpg_
     }
     class SdkRunnerStream
     RunnerTransport <|-- StreamingRunnerTransport
@@ -908,6 +908,7 @@ classDiagram
 | `not_provisioned` | 402 | |
 | `no_capacity`, `refused`, `unreachable` | 503 | 5 |
 | `payment` | 503 | 10 |
+| `payment_unknown` | 503 | |
 | `timeout` | 504 | |
 | `runner_rejected` | the runner's own status, else 422 | |
 | `runner_error`, `interrupted`, anything else | 502 | |

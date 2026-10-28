@@ -382,6 +382,30 @@ async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
     assert [session.manifest_id for session in kept.sessions] == ["m1", "m2"]  # appended once each
 
 
+async def test_an_intent_recorded_before_signing_is_not_a_payment(sql: SqlStore, clock: FixedClock) -> None:
+    """A session stored unpaid is not a payment. Signing marks it paid, and a later unpaid copy does not
+    unmark it. The job path does not write this row before the signer is asked."""
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="a1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await sql.start_attempt(attempt)
+    intent = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),)})
+    await sql.record_payment_evidence(intent)
+
+    async def kept() -> Attempt:
+        stored = await sql.get_job(job.id)
+        assert stored is not None
+        return stored.attempts[0]
+
+    assert ((await kept()).payment_sent, [s.manifest_id for s in (await kept()).sessions]) == (False, ["m1"])
+    await sql.record_payment_evidence(intent.model_copy(update={"payment_sent": True}))  # the signer signed
+    await sql.record_payment_evidence(intent)  # a stale unpaid copy arrives late
+    assert (await kept()).payment_sent and [s.manifest_id for s in (await kept()).sessions] == ["m1"]
+
+
 async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of_date(
     sql: SqlStore, clock: FixedClock
 ) -> None:  # a projection stored before the report would serve none for a paid job

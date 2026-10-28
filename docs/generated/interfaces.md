@@ -170,7 +170,7 @@ classDiagram
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
-| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.sdk` |
+| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

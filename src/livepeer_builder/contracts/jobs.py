@@ -13,6 +13,8 @@ ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, imple
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 SessionMatch = Literal["unmatched", "matched", "ambiguous"]
+# D54: ``unknown`` before the signer answers (it may have charged), then ``paid`` or ``unpaid`` (refused).
+PaymentState = Literal["unknown", "paid", "unpaid"]
 
 
 class JobRequest(Contract):
@@ -71,17 +73,22 @@ AttemptOutcome = Literal[
 
 
 class SignedSession(Contract):
-    """One session the signer signed for an attempt.
+    """One manifest an attempt asked the signer to sign, stored before the signer is asked (D54).
 
     ``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to
     the Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays
     ``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session
     and one log entry share the key, and ``ambiguous`` when they do not.
+
+    ``payment_state`` is ``unknown`` until the signer answers: it may have charged. A validated
+    reply makes it ``paid`` and a refusal ``unpaid``; unique usage also confirms an ``unknown`` one
+    as ``paid``. ``paid`` is final, and an ``unpaid`` manifest is never matched to usage.
     """
 
     manifest_id: str
     payment_session_id: str | None = None
     match: SessionMatch = "unmatched"
+    payment_state: PaymentState = "paid"  # rows from before D54 are signatures the signer confirmed
 
 
 class Attempt(Contract):
@@ -92,7 +99,7 @@ class Attempt(Contract):
     runner_url: str | None
     orchestrator_url: str | None
     allocation_id: str | None  # the allocation whose key paid; None when the call was unpaid
-    sessions: tuple[SignedSession, ...]  # one entry per signed session, in signing order
+    sessions: tuple[SignedSession, ...]  # one entry per manifest asked for, in signing order
     payment_sent: bool
     outcome: AttemptOutcome
     status_code: int | None

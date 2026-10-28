@@ -78,8 +78,8 @@ class RemembersManifest(Protocol):
 
 
 @runtime_checkable
-class KeepsUnconfirmed(Protocol):
-    def keep_unconfirmed(self) -> None: ...
+class RefusesManifest(Protocol):
+    async def refused(self, manifest_id: str) -> None: ...
 
 
 class PaymentEvents:
@@ -96,6 +96,8 @@ class PaymentEvents:
         return tuple(self.manifest_ids)
 
     async def remember(self, manifest_id: str) -> None:
+        """Before the signer is asked: the recorder stores the manifest as ``unknown`` (D54). Its failure
+        propagates, and nothing is signed."""
         callback = self._on_signed
         if isinstance(callback, RemembersManifest):
             await callback.remember(manifest_id)
@@ -106,15 +108,18 @@ class PaymentEvents:
         if self._on_signed is not None:
             await self._on_signed(manifest_id)
 
-    def note_failure(self, error: BaseException) -> None:
+    async def note_failure(self, manifest_id: str, error: Exception) -> None:
+        """A refusal makes the stored manifest ``unpaid``. Anything else leaves it ``unknown``: the
+        signer may have charged."""
         refused = isinstance(error, (SignerRefreshRequired, SkipPaymentCycle)) or (
             isinstance(error, LivepeerHTTPError) and error.status_code in _SIGNER_REFUSALS
         )
         if not refused:
             self.unknown = True
-            callback = self._on_signed
-            if isinstance(callback, KeepsUnconfirmed):
-                callback.keep_unconfirmed()
+            return
+        callback = self._on_signed
+        if isinstance(callback, RefusesManifest):
+            await callback.refused(manifest_id)
 
     def error(
         self, kind: AttemptOutcome, message: str, *, status_code: int | None = None, body: str | None = None
@@ -244,17 +249,21 @@ class PaidRequest:
     async def _sign(self, session: LivePaymentSession) -> GetPaymentResponse:
         """``manifest_id`` is known before ``get_payment`` returns."""
         manifest_id = session.manifest_id
-        await self._events.remember(manifest_id)
+        try:
+            await self._events.remember(manifest_id)
+        except Exception as error:  # fail closed: nothing is signed without the intent on record (D54)
+            raise self._events.error("payment", f"could not record payment intent: {error}") from error
         try:
             signed = await session.get_payment()
-        except SignerRefreshRequired:
+        except SignerRefreshRequired as error:
+            await self._events.note_failure(manifest_id, error)
             raise
         except Exception as error:
-            self._events.note_failure(error)
-            self._log_signer_error(manifest_id, error)
+            self._log_signer_error(manifest_id, error)  # before the write: a cancel there skips the rest
+            await self._events.note_failure(manifest_id, error)
             raise
         except BaseException as error:  # cancelled while signing: the signer may have charged
-            self._events.note_failure(error)
+            self._events.unknown = True
             self._log_signer_error(manifest_id, error)
             raise
         await self._events.confirmed(manifest_id)

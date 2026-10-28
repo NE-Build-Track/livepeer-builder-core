@@ -10,6 +10,7 @@ from sqlalchemy import insert, inspect, text
 
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder.contracts import SignedSession
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import (
     SqlStore,
@@ -218,3 +219,64 @@ async def test_retention_keeps_uncertain_and_recent_jobs(database_url: str, cloc
     await store.close()
     assert report.jobs_deleted == 1
     assert remaining == {recent.id, unresolved.id}
+
+
+# -- payment intent before signing (D54) ----------------------------------------------------------------
+
+
+async def test_the_payment_intent_migration_keeps_every_old_session_paid(
+    database_url: str, clock: FixedClock
+) -> None:
+    """Rows written before 0006 are signatures the signer confirmed: they read as ``paid``."""
+    engine = create_engine(database_url)
+    await upgrade(engine, "0005")
+    job = make_job(clock)
+    store = SqlStore(engine)
+    await store.create_job(job, None)
+    await store.start_attempt(make_attempt(job.id, clock, manifest_ids=("old",)))
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_payment_sessions (job_id, attempt_number, seq, manifest_id, match_status) "
+                "VALUES (:id, 1, 0, 'old', 'unmatched')"
+            ),
+            {"id": str(job.id)},
+        )
+    await upgrade(engine)
+    loaded = await store.get_job(job.id)
+    assert loaded is not None and loaded.attempts[0].payment_sent
+    assert loaded.attempts[0].sessions[0].payment_state == "paid"
+    await store.close()
+
+
+async def test_a_crash_while_signing_leaves_the_cost_pending(database_url: str, clock: FixedClock) -> None:
+    """What the database holds when the engine dies during ``get_payment``: the intent, written first.
+    After a real restart the job is ``uncertain`` and its cost ``pending``, never ``none`` at 0 (#61)."""
+    store = await SqlStore.connect(database_url)
+    job = make_job(clock, state="running")
+    attempt = make_attempt(job.id, clock, allocation_id="alloc").model_copy(
+        update={
+            "outcome": "in_flight",
+            "ended_at": None,
+            "payment_sent": False,
+            "sessions": (SignedSession(manifest_id="maybe-paid", payment_state="unknown"),),
+        }
+    )
+    await store.create_job(job, None)
+    await store.start_attempt(attempt)
+    await store.record_payment_evidence(attempt)
+    await store.close()
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=database_url, log_json=False),
+        supply=EngineSupply(clock=clock, discovery_source=StaticDiscoverySource()),
+    )
+    await engine.start()
+    try:
+        recovered = await engine.store.get_job(job.id)
+        assert recovered is not None and recovered.state == "uncertain"
+        assert [s.payment_state for s in recovered.attempts[0].sessions] == ["unknown"]
+        assert not recovered.attempts[0].payment_sent
+        cost = await engine.costs.refresh_projection(job.id)
+        assert cost is not None and cost.status == "pending"
+    finally:
+        await engine.stop()

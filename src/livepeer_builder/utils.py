@@ -28,7 +28,12 @@ async def run_shielded[T](work: Coroutine[Any, Any, T]) -> T:
     plain asyncio and under anyio cancel scopes (Starlette, FastAPI), which cancel every await of the
     host task again until it leaves the scope.
     """
+    return await asyncio.shield(spawn_shielded(work))
+
+
+def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
+    """Start ``work`` as a task no cancellation reaches, and keep it referenced until it ends."""
     task = asyncio.ensure_future(work)
     _SHIELDED.add(task)
     task.add_done_callback(_SHIELDED.discard)
-    return await asyncio.shield(task)
+    return task

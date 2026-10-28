@@ -92,6 +92,13 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    - **`failure.payment_sent`** is true when any attempt of the job was paid, not only the last.
    - **A restart or an engine error** leaves the job `uncertain` only when its last attempt was still in
      flight, ended `payment_unknown`, or was paid and did not fail over. Attempts it failed over from ended with a known outcome.
+     An attempt still in flight whose stored manifests were all refused, with nothing paid, is the
+     exception (D54): the job is `failed`. An attempt in flight with no stored manifest stays
+     `uncertain`, because it may predate D54.
+   - **A cancel while a refusal is being stored** (the caller went away just after the signer refused)
+     ends the job `failed`, its cost `none` and the manifest `unpaid`, which is all correct. The
+     job's `failure` still reads `runner_error` ("engine error: CancelledError"), and the attempt stays
+     `in_flight`, because the refusal never reached the attempt's own record.
    - **No runner selected.** A `SelectionPolicy` that returns no runner fails the job `no_offering`,
      before any payment.
    - **`payment_refused`:** the signer refused to pay *this orchestrator*. The signer statuses are 400
@@ -100,26 +107,29 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
      challenge and does not fail the attempt. Another orchestrator may succeed.
    - **`payment`:** caller- or signer-side refusals, such as 402 (allowance exhausted) and 403.
-     These omit the manifest and end the job `failed`. They do **not** fail over, because every
-     orchestrator would fail the same way. A signer 502 or 503 is not that refusal: it is
-     `payment_unknown`, the manifest stays on the attempt unpaid, and the job ends `uncertain`.
-     The cost stays `pending` until usage matches it.
+     The stored manifest becomes `unpaid` (D54), so it is never matched or billed, and the job
+     ends `failed`. They do **not** fail over, because every orchestrator would fail the same way.
+     A failed write of the manifest before signing is also `payment`: nothing was signed. A signer
+     502 or 503 is not a refusal: it is `payment_unknown`, the manifest stays `unknown`, and the job
+     ends `uncertain`. The cost stays `pending` until usage matches it.
 2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
    most once (see [idempotency](#idempotency)).
-3. **The attempt row is written before the call** (`in_flight`) and updated after it. **`remember` is in
-   memory only, before `get_payment`** (D53): the Live Runner transport calls the recorder's
-   `remember(manifest_id)` with `LivePaymentSession.manifest_id`. That call does not insert a session
-   row. **`on_signed` writes the session row** once the signer validates the manifest, before the paid
-   request goes out, and the engine stores `payment_sent` and the session on the attempt then (D42).
-   An expired challenge (a 480 refresh) and a signer 400 or 481 are not stored; a debit on that
-   omitted manifest stays unattributed on the allocation. A lost reply, a signer 5xx, or a cancel
-   during `get_payment` is not a refusal: the remembered manifest stays on the attempt, unpaid, and
-   `finish_attempt` or the shielded close persists it. The job pays no other orchestrator. The cost
-   stays `pending` until usage matches that manifest, then the attempt is `uncertain` with the fee.
-   **That holds only while the engine runs.** The remembered manifest is not stored until the signer
-   answers, so if the engine dies during `get_payment`, the restarted job is `uncertain` but its cost
-   is `none` with fee 0, and a debit on that manifest stays unattributed on the allocation. A
-   follow-up stores the manifest before signing.
+3. **The attempt row is written before the call** (`in_flight`) and updated after it. **The manifest is stored before
+   signing** (D54): the Live Runner transport calls the recorder's `remember(manifest_id)` with
+   `LivePaymentSession.manifest_id`, which stores it on the attempt as a session whose `payment_state` is
+   `unknown`, in a write the caller cannot cancel. If that write fails, nothing is signed: the attempt
+   ends unpaid (`payment`) and the job is `failed`. A cancel or the open deadline during that write
+   signs nothing either: once the write ends, the session is stored `unpaid`, so the job is `failed`
+   with no cost. **`on_signed` makes the session `paid`** once the
+   signer validates the manifest, before the paid request goes out, and the engine stores
+   `payment_sent` then (D42). An expired challenge (a 480 refresh), `SkipPaymentCycle`, and a signer
+   400, 401, 402, 403 or 481 make it `unpaid`: it is never matched to usage and costs nothing, so a
+   debit on it stays unattributed on the allocation and is never billed. A lost reply, a signer 5xx,
+   or a cancel during `get_payment` is not a refusal: the session stays `unknown`, and the job pays no
+   other orchestrator. The cost stays `pending` until usage matches that manifest, which confirms it
+   `paid`; then the attempt is `uncertain` with the fee. This holds across a crash, because the
+   `unknown` session is stored before the signer is asked: a restarted job is `uncertain` with its
+   cost `pending`, never `none` at 0.
    A cancel, a disconnect or a crash during
    the paid request, after `on_signed`, keeps the charge attributed to its job. If that write fails, the call goes on, and the write after the call, or the
    close after an error or cancel, stores the same sessions again. A report that arrives after the job
@@ -153,7 +163,7 @@ unique index, so concurrent duplicates are also refused.
 | `no_capacity` | no | 503 + `Retry-After` |
 | `not_provisioned` | no | 402 |
 | `refused`, `unreachable` (all runners) | no | 503 + `Retry-After` |
-| `payment` (402 or 403: the signer refused and omitted the manifest) | no | 503 + `Retry-After` |
+| `payment` (402 or 403: the signer refused, and the manifest is `unpaid`; or the manifest could not be stored, so nothing was signed) | no | 503 + `Retry-After` |
 | `payment_unknown` (the signer was asked and did not refuse) | maybe | 503, no `Retry-After` |
 | `timeout` | maybe → `uncertain` when paid, else `failed` | 504 |
 | `runner_rejected` (4xx) | yes | the runner's own 4xx |
@@ -204,9 +214,10 @@ The admission slot is held until the stream ends.
 the caller waits for data; a slow reader is not the runner's fault. A timeout never fails over to
 another runner, paid or not, exactly as for `run`. The Live Runner transport enforces the first-byte
 limit itself and keeps the sessions signed so far: a timeout after the signer's payment was validated
-has `payment_sent=True` (job `uncertain`). A timeout or other non-refusal during signing keeps the
-remembered manifest on the attempt, unpaid, and the cost stays `pending` until usage matches it; the
-job is `uncertain` (D53). Only an explicit signer refusal omits the manifest. The engine
+has `payment_sent=True` (job `uncertain`). A timeout or other non-refusal during signing leaves the
+stored manifest `unknown`, and the cost stays `pending` until usage matches it; the job is
+`uncertain` (D53, D54). An explicit signer refusal makes it `unpaid`, which costs nothing, and so
+does a timeout while the manifest is being stored, before the signer is asked (job `failed`). The engine
 stops a transport that
 runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
 cannot know.

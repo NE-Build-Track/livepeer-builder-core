@@ -103,7 +103,9 @@ class RunnerTransport(Protocol):
 
     A paying transport awaits ``on_signed(manifest_id)`` for each session the signer signs, before the
     paid request goes out (D42): the engine stores that evidence there, so a cancel or a crash during
-    the paid request keeps the charge attributed to its job.
+    the paid request keeps the charge attributed to its job. The engine's recorder also has
+    ``remember(manifest_id)``, which a transport awaits before asking the signer and signs nothing if it
+    raises, and ``refused(manifest_id)`` for a refusal (D54; ``adapters/runner_call.py``).
     """
 
     async def call(
@@ -251,15 +253,19 @@ class JobRepo(Protocol):
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
     async def record_payment_evidence(self, attempt: Attempt) -> None:
-        """Mark the attempt paid and add its signed sessions not stored yet, while the call is still
-        going (D42). Leaves its outcome, status and timing alone, so a late report never reopens it."""
+        """Store the attempt's payment evidence while the call is still going (D42, D54): add sessions not
+        stored yet, move a stored session's ``payment_state`` on unless it is ``paid`` (final), and mark
+        the attempt paid when ``payment_sent`` is set, never unpaid. An ``unknown`` session stored before
+        signing is not a payment. Leaves outcome, status, timing and the match columns alone, so a late
+        report never reopens the attempt."""
         ...
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         """Update the attempt after the call. May run more than once (a stream writes at open and end).
 
-        Signed sessions are append-only: add the manifests not stored yet and leave stored rows as they
-        are, because cost sync owns their match columns (D39).
+        Sessions are stored as in ``record_payment_evidence``: add the manifests not stored yet and move
+        a stored session's ``payment_state`` on unless it is ``paid``. Never clear ``payment_sent``, and
+        never write the match columns, which cost sync owns (D39, D54).
         """
 
     async def finish_job(

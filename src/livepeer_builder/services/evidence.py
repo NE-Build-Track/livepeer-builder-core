@@ -14,16 +14,21 @@ the caller cannot cancel. That write is strict: if it fails, the transport signs
 charge the engine could not attribute must not happen. A crash during signing then leaves the
 ``unknown`` manifest for cost sync, so the cost stays ``pending`` instead of ``none`` at 0.
 ``on_signed`` makes it ``paid`` and marks the attempt paid; a refusal makes it ``unpaid``, which cost
-sync never matches. Any other signing error leaves it ``unknown``.
+sync never matches. Any other signing error leaves it ``unknown``. A cancel during the intent write
+(the caller left, or the open deadline passed) stores it ``unpaid`` once that write ends: the signer
+was never asked.
 """
 
+import asyncio
+import contextlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
+from typing import Any
 
 from livepeer_builder.contracts import Attempt, PaymentState
 from livepeer_builder.protocols import JobRepo
 from livepeer_builder.services.streams import sessions_from
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.utils import run_shielded, spawn_shielded
 
 _LOG = logging.getLogger(__name__)
 
@@ -38,9 +43,7 @@ class SignedSessionRecorder:
         self._index = len(attempts) - 1
 
     async def __call__(self, manifest_id: str) -> None:
-        attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
-        self._attempts[self._index] = attempt
-        await run_shielded(_write(self._store, attempt))
+        await self._record(manifest_id, payment_sent=True, state="paid")
 
     async def remember(self, manifest_id: str) -> None:
         """Before ``get_payment``: store the manifest as ``unknown`` (D54). Raises when the write fails,
@@ -48,21 +51,25 @@ class SignedSessionRecorder:
         attempt = with_evidence(
             self._attempts[self._index], (manifest_id,), payment_sent=False, state="unknown"
         )
+        write = spawn_shielded(self._store.record_payment_evidence(attempt))
         try:
-            await run_shielded(self._store.record_payment_evidence(attempt))
-        except Exception:
-            raise  # nothing stored and nothing signed: the attempt keeps no intent
-        except BaseException:
-            self._attempts[self._index] = attempt  # cancelled: the shielded write may still land
+            await asyncio.shield(write)  # a failure propagates: nothing stored and nothing signed
+        except asyncio.CancelledError:
+            # The write may still land, but the signer was never asked: once it ends, store the
+            # manifest ``unpaid``, so a cancel or an open deadline never leaves a cost pending forever.
+            unasked = with_evidence(attempt, (manifest_id,), payment_sent=False, state="unpaid")
+            self._attempts[self._index] = unasked
+            spawn_shielded(_after(write, _write(self._store, unasked)))
             raise
         self._attempts[self._index] = attempt
 
     async def refused(self, manifest_id: str) -> None:
         """The signer refused this manifest: ``unpaid``. Logged, never raised: the stored row stays
         ``unknown`` if this write fails, which keeps the cost ``pending``, never 0."""
-        attempt = with_evidence(
-            self._attempts[self._index], (manifest_id,), payment_sent=False, state="unpaid"
-        )
+        await self._record(manifest_id, payment_sent=False, state="unpaid")
+
+    async def _record(self, manifest_id: str, *, payment_sent: bool, state: PaymentState) -> None:
+        attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent, state)
         self._attempts[self._index] = attempt
         await run_shielded(_write(self._store, attempt))
 
@@ -73,6 +80,13 @@ async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:
     for attempt in attempts:
         if attempt.payment_sent or attempt.sessions:
             await _write(store, attempt)
+
+
+async def _after(first: "asyncio.Future[None]", then: Coroutine[Any, Any, None]) -> None:
+    """Run ``then`` once ``first`` has ended, however it ended (``first``'s failure is the caller's)."""
+    with contextlib.suppress(Exception):
+        await first
+    await then
 
 
 async def _write(store: JobRepo, attempt: Attempt) -> None:

@@ -8,18 +8,21 @@ are real; only the network is local (tests/unit/livepeer_net.py). The job passes
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, Attempt, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, Attempt, Job, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import JobFailed
 from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeUsageSource
+from livepeer_builder.utils import _SHIELDED
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_costs import row
@@ -27,6 +30,28 @@ from tests.unit.test_costs import row
 
 def states(attempt: Attempt) -> Sequence[tuple[str, str]]:
     return [(session.manifest_id, session.payment_state) for session in attempt.sessions]
+
+
+async def settled(store: SqlStore) -> Job:
+    """The job once it ended and every shielded write finished: the close runs in a task (D34)."""
+    ended: list[Job] = []
+    for _ in range(100):
+        ended = [job for state in ("failed", "uncertain") for job in await store.jobs_in_state(state)]
+        if ended and not _SHIELDED:
+            break
+        await asyncio.sleep(0.01)
+    ended = [job for state in ("failed", "uncertain") for job in await store.jobs_in_state(state)]
+    assert ended, "the job never ended"
+    return ended[0]
+
+
+@pytest.fixture
+async def store(tmp_path: Path) -> AsyncIterator[SqlStore]:
+    """A file database, not the shared in-memory connection: these tests overlap evidence writes, and
+    only separate connections keep one write's rollback from undoing another's, as in production."""
+    opened = await SqlStore.connect(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}")
+    yield opened
+    await opened.close()
 
 
 @pytest.fixture
@@ -281,7 +306,7 @@ async def test_a_failed_intent_write_signs_nothing(
     assert (await engine.costs.for_job(alice, job.id)).status == "none"  # never pending forever
 
 
-async def test_a_cancel_during_the_intent_write_keeps_the_intent_and_signs_nothing(
+async def test_a_cancel_during_the_intent_write_stores_the_manifest_unpaid(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
@@ -289,8 +314,9 @@ async def test_a_cancel_during_the_intent_write_keeps_the_intent_and_signs_nothi
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The write cannot be cancelled half way, so the intent lands and the attempt keeps it. The signer
-    was never asked; the engine stays conservative and leaves the manifest ``unknown``."""
+    """The write cannot be cancelled half way, so the intent may land. The signer was never asked, so
+    the manifest is then stored ``unpaid``: the job is ``failed`` with no cost, never ``pending``
+    forever (#64 review)."""
     engine, _ = await paid_engine(make_engine, admin, net)
     writing, release = asyncio.Event(), asyncio.Event()
     write = store.record_payment_evidence
@@ -306,17 +332,52 @@ async def test_a_cancel_during_the_intent_write_keeps_the_intent_and_signs_nothi
     async with asyncio.timeout(2):
         await writing.wait()
     task.cancel()
-    release.set()
     with pytest.raises(asyncio.CancelledError):
         async with asyncio.timeout(2):
             await task
-    for _ in range(100):  # the close runs in a task the caller cannot cancel (D34)
-        if await store.jobs_in_state("uncertain"):
+    for _ in range(100):  # the close ends the job before the intent write lands, which overwrites it
+        if not await store.jobs_in_state("running"):
             break
         await asyncio.sleep(0.01)
-    [job] = await store.jobs_in_state("uncertain")
-    assert states(job.attempts[0]) == [("m-1", "unknown")] and not job.attempts[0].payment_sent
+    release.set()
+    job = await settled(store)
+    assert job.state == "failed"
+    assert states(job.attempts[0]) == [("m-1", "unpaid")] and not job.attempts[0].payment_sent
     assert not any(entry.startswith("sign ") for entry in net.log)
+    assert (await engine.costs.for_job(alice, job.id)).status == "none"
+
+
+async def test_a_first_byte_timeout_during_the_intent_write_stores_the_manifest_unpaid(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The open deadline cancels the call while the intent is being stored, before the signer is asked.
+    As for a cancel, the manifest is ``unpaid`` and the cost ``none`` (#64 review)."""
+    engine, _ = await paid_engine(make_engine, admin, net)
+    writing = asyncio.Event()
+    write = store.record_payment_evidence
+
+    async def slow_first_write(attempt: Attempt) -> None:
+        if not writing.is_set():
+            writing.set()
+            await asyncio.sleep(0.3)  # past the first-byte deadline
+        await write(attempt)
+
+    monkeypatch.setattr(store, "record_payment_evidence", slow_first_write)
+    streaming = engine.jobs.streaming
+    assert streaming is not None
+    with pytest.raises(JobFailed):
+        await streaming.stream(alice, JobRequest(app="example/echo", first_byte_timeout_s=0.1))
+    job = await settled(store)
+    assert job.state == "failed"
+    assert [(a.outcome, a.payment_sent) for a in job.attempts] == [("timeout", False)]
+    assert states(job.attempts[0]) == [("m-1", "unpaid")]
+    assert not any(entry.startswith("sign ") for entry in net.log)
+    assert (await engine.costs.for_job(alice, job.id)).status == "none"
 
 
 async def test_a_cancel_while_storing_a_refusal_leaves_the_job_failed(
@@ -326,9 +387,10 @@ async def test_a_cancel_while_storing_a_refusal_leaves_the_job_failed(
     net: Net,
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The signer refused, and the caller went away while ``unpaid`` was being stored. Nothing was paid,
-    so the job is ``failed``, not ``uncertain`` (#64 review)."""
+    so the job is ``failed``, not ``uncertain``, and the signer error is still logged (#64 review)."""
     engine, _ = await paid_engine(make_engine, admin, net)
     net.sign = [403]  # the signer refuses this payer
     writing, release = asyncio.Event(), asyncio.Event()
@@ -341,6 +403,7 @@ async def test_a_cancel_while_storing_a_refusal_leaves_the_job_failed(
         await write(attempt)
 
     monkeypatch.setattr(store, "record_payment_evidence", slow_refusal)
+    caplog.set_level(logging.WARNING, logger="livepeer_builder.adapters.runner_call")
     task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app="example/echo")))
     async with asyncio.timeout(2):
         await writing.wait()
@@ -356,3 +419,5 @@ async def test_a_cancel_while_storing_a_refusal_leaves_the_job_failed(
     assert not await store.jobs_in_state("uncertain")
     [job] = await store.jobs_in_state("failed")
     assert states(job.attempts[0]) == [("m-1", "unpaid")] and not job.attempts[0].payment_sent
+    [logged] = [record for record in caplog.records if record.message == "signer error"]
+    assert logged.manifest_id == "m-1"

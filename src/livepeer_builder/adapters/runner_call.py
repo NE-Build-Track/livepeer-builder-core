@@ -259,8 +259,8 @@ class PaidRequest:
             await self._events.note_failure(manifest_id, error)
             raise
         except Exception as error:
+            self._log_signer_error(manifest_id, error)  # before the write: a cancel there skips the rest
             await self._events.note_failure(manifest_id, error)
-            self._log_signer_error(manifest_id, error)
             raise
         except BaseException as error:  # cancelled while signing: the signer may have charged
             self._events.unknown = True

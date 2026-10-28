@@ -17,7 +17,8 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
 4. The engine's runner call (`adapters/runner_call.py`, D53) answers the orchestrator's 402 itself
    and signs through the SDK's signer client. Before `get_payment`, `remember` stores
    `LivePaymentSession.manifest_id` on the attempt as an `unknown` session (D54); if that write fails,
-   nothing is signed. `on_signed` makes it `paid` once the signer validates the manifest, and marks
+   nothing is signed, and a cancel during it stores the session `unpaid`, since the signer was never
+   asked. `on_signed` makes it `paid` once the signer validates the manifest, and marks
    the attempt paid before the paid request goes out. Batteries' `payment_session_id` is not known at
    sign time; cost sync fills it on `(allocation_id, manifest_id)`. An expired challenge (a signer
    480) and a 400, 401, 402, 403 or 481 refusal make the session `unpaid`. If the signer charged an
@@ -95,7 +96,8 @@ not stored `observed` with a zero bill. If more than one Batteries session or mo
 entry shares the key, the entry is `ambiguous` and those rows stay `unattributed`. An ambiguous
 signed session makes the attempt `uncertain` once nothing on that attempt is still waiting for
 usage; a sibling session that already matched keeps its fee on the attempt.
-Reconciliation still balances. A later sync can turn a `matched` entry into `ambiguous`.
+Reconciliation still balances. A later sync can turn a `matched` entry into `ambiguous`, and every
+sync checks `ambiguous` keys again: when the signer refuses one of the entries, the one left matches.
 
 `manifest_id` is the lookup, not the cost key. The 7 October run showed a client can put any string
 there ([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). A manifest on another

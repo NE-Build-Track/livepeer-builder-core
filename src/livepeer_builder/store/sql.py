@@ -416,20 +416,23 @@ async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
         t.payment_sessions.c.job_id == str(attempt.job_id),
         t.payment_sessions.c.attempt_number == attempt.number,
     )
-    known = [
-        row[0] for row in await conn.execute(select(t.payment_sessions.c.manifest_id).where(session_key))
-    ]
+    stored = await conn.execute(
+        select(t.payment_sessions.c.manifest_id, t.payment_sessions.c.payment_state).where(session_key)
+    )
+    known: dict[str, str] = {manifest: state for manifest, state in stored}
     for session in attempt.sessions:
-        if session.manifest_id in known:
-            await conn.execute(
-                update(t.payment_sessions)
-                .where(
-                    session_key,
-                    t.payment_sessions.c.manifest_id == session.manifest_id,
-                    t.payment_sessions.c.payment_state != "paid",
-                )
-                .values(payment_state=session.payment_state)
+        current = known.get(session.manifest_id)
+        if current is None or current in (session.payment_state, "paid"):
+            continue  # new (inserted below), unchanged, or final: no write (#64 review)
+        await conn.execute(
+            update(t.payment_sessions)
+            .where(
+                session_key,
+                t.payment_sessions.c.manifest_id == session.manifest_id,
+                t.payment_sessions.c.payment_state != "paid",  # cost sync may have confirmed it since
             )
+            .values(payment_state=session.payment_state)
+        )
     new = [s for s in attempt.sessions if s.manifest_id not in known]
     for seq, session in enumerate(new, start=len(known)):
         await conn.execute(

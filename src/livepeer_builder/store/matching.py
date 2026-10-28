@@ -2,6 +2,7 @@
 
 A key is (allocation_id, manifest_id). One Batteries payment session and one log entry match.
 Anything else is ambiguous: the entries keep no payment_session_id, and the rows stay unattributed.
+Every sync checks unmatched and ambiguous keys again, since a refusal (D54) can leave one entry.
 """
 
 from collections.abc import Iterable, Sequence
@@ -116,7 +117,8 @@ async def match_payment_sessions(conn: AsyncConnection, rows: Sequence[UsageRow]
             ),
         )
         .where(
-            t.payment_sessions.c.match_status == "unmatched",
+            # ambiguous too: a refusal can leave one entry for its key, and no new usage may come (D54)
+            t.payment_sessions.c.match_status.in_(("unmatched", "ambiguous")),
             t.payment_sessions.c.payment_state != "unpaid",  # a refused manifest is never matched (D54)
             t.attempts.c.allocation_id.is_not(None),
         )

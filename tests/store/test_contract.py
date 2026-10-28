@@ -506,6 +506,40 @@ async def test_a_refused_intent_is_never_matched(sql: SqlStore, clock: FixedCloc
     assert await sql.unattributed_usage("alloc_1") == []
 
 
+async def test_a_refusal_lets_the_next_sync_resolve_an_ambiguous_manifest(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """Two attempts on one allocation name the same manifest, so its usage is ambiguous. When the signer
+    then refuses one, the next sync matches the other, with no new usage (#64 review)."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    await sql.create_job(job, None)
+    attempts = []
+    for number, state in [(1, "unknown"), (2, "paid")]:
+        attempt = make_attempt(job.id, clock, number, allocation_id="alloc_1").model_copy(
+            update={"sessions": (SignedSession(manifest_id="m", payment_state=state),)}
+        )
+        await sql.start_attempt(attempt)
+        await sql.record_payment_evidence(attempt)
+        attempts.append(attempt)
+    rows = [row("u", "s", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    await sql.match_sessions(rows)
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None and [a.sessions[0].match for a in loaded.attempts] == ["ambiguous", "ambiguous"]
+    refused = attempts[0].model_copy(
+        update={"sessions": (SignedSession(manifest_id="m", payment_state="unpaid"),)}
+    )
+    await sql.record_payment_evidence(refused)
+    assert await sql.match_sessions([]) == {job.id}
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    paid = loaded.attempts[1].sessions[0]
+    assert (paid.payment_state, paid.match, paid.payment_session_id) == ("paid", "matched", "s")
+    assert loaded.attempts[0].sessions[0].payment_state == "unpaid"
+
+
 async def test_matching_keeps_a_confirmation_that_arrived_after_its_read(
     sql: SqlStore, clock: FixedClock
 ) -> None:

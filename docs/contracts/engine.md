@@ -118,7 +118,9 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    signing** (D54): the Live Runner transport calls the recorder's `remember(manifest_id)` with
    `LivePaymentSession.manifest_id`, which stores it on the attempt as a session whose `payment_state` is
    `unknown`, in a write the caller cannot cancel. If that write fails, nothing is signed: the attempt
-   ends unpaid (`payment`) and the job is `failed`. **`on_signed` makes the session `paid`** once the
+   ends unpaid (`payment`) and the job is `failed`. A cancel or the open deadline during that write
+   signs nothing either: once the write ends, the session is stored `unpaid`, so the job is `failed`
+   with no cost. **`on_signed` makes the session `paid`** once the
    signer validates the manifest, before the paid request goes out, and the engine stores
    `payment_sent` then (D42). An expired challenge (a 480 refresh), `SkipPaymentCycle`, and a signer
    400, 401, 402, 403 or 481 make it `unpaid`: it is never matched to usage and costs nothing, so a
@@ -214,7 +216,8 @@ another runner, paid or not, exactly as for `run`. The Live Runner transport enf
 limit itself and keeps the sessions signed so far: a timeout after the signer's payment was validated
 has `payment_sent=True` (job `uncertain`). A timeout or other non-refusal during signing leaves the
 stored manifest `unknown`, and the cost stays `pending` until usage matches it; the job is
-`uncertain` (D53, D54). An explicit signer refusal makes it `unpaid`, which costs nothing. The engine
+`uncertain` (D53, D54). An explicit signer refusal makes it `unpaid`, which costs nothing, and so
+does a timeout while the manifest is being stored, before the signer is asked (job `failed`). The engine
 stops a transport that
 runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
 cannot know.

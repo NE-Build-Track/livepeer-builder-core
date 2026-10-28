@@ -5,7 +5,7 @@ stack remains [deploy/dev-stack](../dev-stack/README.md). [compose.yaml](compose
 services for a local Docker run. CI checks that file with `docker compose config` and does not start it.
 
 The engine image is this checkout (`pip install ".[server,postgres]"`), not a pinned clone of the
-repository. Batteries is [NE-Build-Track/clearinghouse-batteries](https://github.com/NE-Build-Track/clearinghouse-batteries)
+repository. Batteries is [livepeer/clearinghouse-batteries](https://github.com/livepeer/clearinghouse-batteries)
 `ca09e47`. The signer is [livepeer/node](https://github.com/livepeer/node) `406b248` (v1.0.2), the same
 commit the dev stack builds.
 

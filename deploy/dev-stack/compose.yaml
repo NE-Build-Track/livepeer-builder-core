@@ -10,7 +10,7 @@ services:
   clearinghouse:
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/clearinghouse:ca09e47
     build:
-      context: https://github.com/NE-Build-Track/clearinghouse-batteries.git#ca09e47c067682fb48c3f15425546fb6aa5b6659
+      context: https://github.com/livepeer/clearinghouse-batteries.git#ca09e47c067682fb48c3f15425546fb6aa5b6659
       dockerfile: examples/compose/Dockerfile
     command: [serve, --config-file, /etc/clearinghouse.toml]
     volumes:

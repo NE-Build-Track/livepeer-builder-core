@@ -239,3 +239,84 @@ async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
             assert not [t for t in tokens if token_hash(t) in text], (
                 f"a token hash reached the log: {record.name}"
             )
+
+
+# -- the auditor: a read-only admin (#52, D46) ------------------------------------------------------------
+
+AUDITOR = ActorContext(actor_id="dashboard", application_id="app-1", credential_kind="auditor")
+
+
+def theirs(kind: str = "job", application_id: str = "app-1") -> ResourceRef:
+    return ResourceRef(kind=kind, application_id=application_id, owner_actor_id="alice")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        Operation.ADMIN_READ,
+        Operation.DISCOVER,
+        Operation.JOBS_READ,
+        Operation.COSTS_READ,
+        Operation.EVENTS_READ,
+    ],
+)
+def test_an_auditor_reads_every_actor_in_its_application(operation: Operation) -> None:
+    DefaultPolicy().check(AUDITOR, operation, theirs())  # another actor's record: allowed
+    DefaultPolicy().check(AUDITOR, operation)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        Operation.JOBS_RUN,
+        Operation.ADMIN_KEYS,
+        Operation.ADMIN_ALLOCATIONS,
+        Operation.ADMIN_COSTS,
+        Operation.ACTORS_ASSERT,
+    ],
+)
+def test_an_auditor_never_writes(operation: Operation) -> None:
+    with pytest.raises(AccessDenied, match="read"):
+        DefaultPolicy().check(AUDITOR, operation)
+
+
+def test_an_auditor_stays_in_its_application() -> None:
+    with pytest.raises(AccessDenied, match="another application"):
+        DefaultPolicy().check(AUDITOR, Operation.JOBS_READ, theirs(application_id="app-2"))
+
+
+def test_admin_read_is_an_admin_operation_for_everyone_else(alice: ActorContext, admin: ActorContext) -> None:
+    loaded = alice.model_copy(update={"permissions": alice.permissions | {"admin.read"}})
+    with pytest.raises(AccessDenied, match="admin credential"):
+        DefaultPolicy().check(
+            loaded, Operation.ADMIN_READ
+        )  # a permission string on an actor key is not enough
+    DefaultPolicy().check(admin, Operation.ADMIN_READ, theirs(application_id="any"))
+
+
+async def test_an_auditor_key_is_issued_without_permissions_and_authenticates_as_one(
+    store: SqlStore, clock: FixedClock, admin: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    issued = await keys.issue(admin, kind="auditor", actor_id="dashboard", application_id="app-1")
+    assert issued.key.permissions == ()
+    actor = await ApiKeyAuthenticator(store).authenticate(bearer(issued.token))
+    assert actor is not None and actor.credential_kind == "auditor"
+    with pytest.raises(AccessDenied):
+        await keys.issue(actor, kind="actor", actor_id="mallory")  # an auditor cannot issue keys
+    assert [k.key_id for k in await keys.list_keys(actor)] != []  # but can read them
+
+
+async def test_an_auditor_reads_only_its_own_applications_keys(
+    store: SqlStore, clock: FixedClock, admin: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    own = await keys.issue(admin, kind="actor", actor_id="alice", application_id="app-1")
+    other = await keys.issue(admin, kind="actor", actor_id="bob", application_id="app-2")
+    assert {k.key_id for k in await keys.list_keys(AUDITOR)} == {own.key.key_id}
+    assert (await keys.get(AUDITOR, own.key.key_id)).actor_id == "alice"
+    with pytest.raises(NotFound):
+        await keys.get(AUDITOR, other.key.key_id)  # another application's key reads as missing
+    with pytest.raises(AccessDenied, match="another application"):
+        await keys.list_keys(AUDITOR, "app-2")
+    assert {k.key_id for k in await keys.list_keys(admin)} >= {own.key.key_id, other.key.key_id}

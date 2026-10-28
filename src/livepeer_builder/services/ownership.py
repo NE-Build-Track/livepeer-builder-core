@@ -20,6 +20,11 @@ def check_owner(
         raise NotFound(missing) from exc
 
 
+def sees_every_actor(actor: ActorContext) -> bool:
+    """An admin or an auditor reads every actor's records (in an auditor's case, of its application)."""
+    return actor.credential_kind in ("admin", "auditor")
+
+
 def job_resource(job: Job) -> ResourceRef:
     return ResourceRef(
         kind="job", application_id=job.application_id, owner_actor_id=job.actor_id, id=str(job.id)

@@ -18,6 +18,9 @@ from livepeer_builder.testing import (
     runner,
 )
 
+# FakeEngine checks permissions before a job, as the engine does
+BUILDER = ActorContext(actor_id="a", permissions=frozenset({"jobs.run", "jobs.read"}))
+
 
 def raw_request(**changes):
     return JobRequest(
@@ -103,8 +106,7 @@ async def test_raw_identity_and_headers_through_real_engine():
 
 async def test_fake_engine_exposes_headers():
     engine = FakeEngine(streaming=True, replies={("chat", ""): Reply(headers=(("X-Trace", "fake"),))})
-    actor = ActorContext(actor_id="a")
-    stream = await engine.jobs.streaming.stream(actor, raw_request())
+    stream = await engine.jobs.streaming.stream(BUILDER, raw_request())
     assert stream.headers == (("X-Trace", "fake"),)
     await stream.aclose()
 
@@ -157,9 +159,7 @@ async def test_fake_native_error_matches_engine_failure(status, kind):
         runners=[runner("chat")],
         replies={("chat", ""): Reply(status_code=status, chunks=(b"error",))},
     )
-    stream = await engine.jobs.streaming.stream(
-        ActorContext(actor_id="a"), raw_request(return_http_errors=True)
-    )
+    stream = await engine.jobs.streaming.stream(BUILDER, raw_request(return_http_errors=True))
     assert b"".join([c async for c in stream]) == b"error"
     assert stream.job.state == "failed"
     assert stream.job.failure.status_code == status

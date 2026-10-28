@@ -143,6 +143,18 @@ actors = Table(
     Column("status", String(16), nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
+    Column("label", String(ID), nullable=False, server_default=""),  # readable beside an opaque actor_id
+)
+
+# People an identity provider signed in as actors, before or after an allocation (#52, D48).
+actor_sightings = Table(
+    "lpb_actor_sightings",
+    metadata,
+    Column("application_id", String(ID), primary_key=True),
+    Column("actor_id", String(ID), primary_key=True),
+    Column("name", String(ID), nullable=False, server_default=""),
+    Column("first_seen_at", UTCDateTime, nullable=False),
+    Column("last_seen_at", UTCDateTime, nullable=False),
 )
 
 secrets = Table(

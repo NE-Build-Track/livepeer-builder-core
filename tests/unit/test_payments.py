@@ -3,14 +3,15 @@
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
-from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned
+from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest, SeenActor
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, NotProvisioned
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
-from livepeer_builder.testing import FakeAllocationManager
+from livepeer_builder.testing import FakeAllocationManager, FixedClock
 from tests.conftest import EngineFactory
 
 
@@ -19,13 +20,19 @@ def usd(amount: str) -> Money:
 
 
 def provision_request(
-    actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1"
+    actor_id: str = "alice",
+    amount: str = "5",
+    grant_id: str = "grant_1",
+    *,
+    application_id: str = "default",
+    label: str = "",
 ) -> ProvisionRequest:
     return ProvisionRequest(
-        application_id="default",
+        application_id=application_id,
         actor_id=actor_id,
         amount=usd(amount),
         grant_id=grant_id,
+        label=label,
     )
 
 
@@ -130,6 +137,29 @@ async def test_operator_lists_and_creates_grants(
     assert await desk.list_grants(admin) == [created]
 
 
+async def test_an_auditor_never_sees_the_operators_grants(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """Grants are the operator's money for every application and carry none, so an auditor bound to
+    one application cannot read them (John, #53 review). Admins still list them."""
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    await desk.create_grant(admin, "another application's pool", usd("5"))
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")
+    with pytest.raises(AccessDenied):
+        await desk.list_grants(auditor)
+    assert len(await desk.list_grants(admin)) == 1
+
+
+def test_a_provisioning_label_is_capped_where_it_is_stored() -> None:
+    """``ProvisionedActor.label`` holds 200 characters, so the request refuses more before any provider
+    call (John, #53 review)."""
+    with pytest.raises(ValidationError):
+        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), label="x" * 201)
+    assert ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), label="x" * 200)
+
+
 async def test_funding_a_named_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
@@ -218,3 +248,94 @@ async def test_allowance_is_read_from_the_provider(
     assert allowance.granted == usd("5") and allowance.available == usd("5")
     with pytest.raises(AccessDenied):
         await engine.payments.allowance(bob, "alice")
+
+
+# -- the actor collection (#52, D46) ------------------------------------------------------------------------
+
+
+async def test_provisioning_stores_the_label_and_admins_list_the_actors(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+) -> None:
+    engine = await make_engine()
+    opaque = "4f6c2a1e-9b3d-4c8e-a1f0-7d2e5b9c3a10"  # an identity provider's sub
+    await engine.payments.provision(admin, provision_request(actor_id=opaque, label="Alice Smith"))
+    await engine.payments.provision(admin, provision_request(actor_id="bob", application_id="app-2"))
+    listed = await engine.payments.list_actors(admin)
+    assert [(a.application_id, a.actor_id, a.label) for a in listed] == [
+        ("app-2", "bob", ""), ("default", opaque, "Alice Smith"),
+    ]  # fmt: skip
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, application_id="app-2")] == ["bob"]
+    assert (await engine.payments.get_actor(admin, "default", opaque)).label == "Alice Smith"
+    with pytest.raises(NotFound):
+        await engine.payments.get_actor(admin, "default", "nobody")
+    with pytest.raises(AccessDenied):
+        await engine.payments.list_actors(alice)  # admin reads need an admin or auditor credential
+
+
+async def test_the_actor_list_filters_by_status_and_limits(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await make_engine()
+    for name in ("a", "b", "c"):
+        await engine.payments.provision(admin, provision_request(actor_id=name))
+    await engine.payments.set_status(admin, "default", "b", "paused")
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, status="paused")] == ["b"]
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, limit=2)] == ["a", "b"]
+
+
+async def test_people_who_signed_in_are_listed_before_provisioning_and_by_name_after(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:
+    """Registration on first sign-in (D48): the operator provisions people it can name."""
+    engine = await make_engine()
+    alice_sub, bob_sub = "3c446b40-7123-45f1", "14a5c7ce-7de4-44a0"
+    for sub, name in ((alice_sub, "alice"), (bob_sub, "bob")):
+        await store.save_sighting(
+            SeenActor(application_id="default", actor_id=sub, name=name, first_seen_at=clock.now(), last_seen_at=clock.now())
+        )  # fmt: skip
+    await engine.payments.provision(admin, provision_request(actor_id=bob_sub, label="Bob B."))
+    await engine.payments.provision(
+        admin, provision_request(actor_id="carol")
+    )  # provisioned, never signed in
+    listed = {a.actor_id: a for a in await engine.payments.list_actors(admin)}
+    alice, bob, carol = listed[alice_sub], listed[bob_sub], listed["carol"]
+    assert (alice.provisioned, alice.allocation, alice.name, alice.label) == (False, None, "alice", "alice")
+    assert alice.first_seen_at == clock.now()
+    assert (bob.provisioned, bob.name, bob.label) == (True, "bob", "Bob B.")  # the operator's label wins
+    assert bob.allocation is not None and bob.allocation.status == "active"
+    assert (carol.provisioned, carol.name, carol.first_seen_at) == (True, None, None)
+    unprovisioned = await engine.payments.list_actors(admin, provisioned=False)
+    assert [a.actor_id for a in unprovisioned] == [alice_sub]
+    assert alice_sub not in [a.actor_id for a in await engine.payments.list_actors(admin, status="active")]
+
+
+async def test_provisioning_a_person_takes_their_name_as_the_label(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, clock: FixedClock
+) -> None:
+    engine = await make_engine()
+    seen = SeenActor(
+        application_id="default",
+        actor_id="3c446b40",
+        name="alice",
+        first_seen_at=clock.now(),
+        last_seen_at=clock.now(),
+    )
+    await store.save_sighting(seen)
+    provisioned = await engine.payments.provision(admin, provision_request(actor_id="3c446b40"))
+    assert provisioned.label == "alice"  # unless the operator gives one
+
+
+async def test_an_auditor_lists_only_its_applications_actors(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await make_engine()
+    await engine.payments.provision(admin, provision_request(actor_id="alice"))
+    await engine.payments.provision(admin, provision_request(actor_id="bob", application_id="app-2"))
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # application "default"
+    assert [a.actor_id for a in await engine.payments.list_actors(auditor)] == ["alice"]
+    with pytest.raises(AccessDenied, match="another application"):
+        await engine.payments.list_actors(auditor, application_id="app-2")
+    with pytest.raises(AccessDenied, match="another application"):
+        await engine.payments.get_actor(auditor, "app-2", "bob")
+    with pytest.raises(AccessDenied):
+        await engine.payments.provision(auditor, provision_request(actor_id="carol"))

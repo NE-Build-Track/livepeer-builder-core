@@ -180,6 +180,16 @@ async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) ->
             engine.discovery.runners(no_discover, APP)
 
 
+async def test_an_auditor_reads_every_actor_and_runs_nothing(side: Side) -> None:
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")
+    async with side() as engine:
+        job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        assert [listed.id for listed in await engine.jobs.list_jobs(auditor)] == [job.id]
+        assert (await engine.jobs.get(auditor, job.id)).id == job.id
+        with pytest.raises(AccessDenied):
+            await engine.jobs.run(auditor, JobRequest(app=APP))
+
+
 async def test_another_actors_job_is_not_found(side: Side) -> None:
     async with side() as engine:
         job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job

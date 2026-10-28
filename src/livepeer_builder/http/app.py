@@ -35,6 +35,7 @@ from livepeer_builder.contracts import (
     IssuedKey,
     Job,
     JobCost,
+    KnownActor,
     Money,
     Offering,
     ProvisionedActor,
@@ -102,7 +103,7 @@ class IssueKeyBody(BaseModel):
 
 class ProvisionBody(BaseModel):
     amount: Money
-    label: str = ""
+    label: str = Field(default="", max_length=200)  # ProvisionedActor.label; a 422 before money moves
     grant_id: str = ""
 
 
@@ -326,7 +327,24 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
             await keys.revoke(actor, key_id)
             return Response(status_code=204)
 
+    @app.get("/v1/admin/actors", response_model=list[KnownActor])
+    async def list_actors(
+        actor: Actor,
+        application_id: str | None = None,
+        status: AllocationStatus | None = None,
+        provisioned: bool | None = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    ) -> list[KnownActor]:
+        """Provisioned actors and people an identity provider signed in (D46, D48)."""
+        return await engine.payments.list_actors(
+            actor, application_id=application_id, status=status, provisioned=provisioned, limit=limit
+        )
+
     base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"
+
+    @app.get(base, response_model=ProvisionedActor)
+    async def get_actor(actor: Actor, application_id: str, actor_id: str) -> ProvisionedActor:
+        return await engine.payments.get_actor(actor, application_id, actor_id)
 
     @app.post(base, response_model=ProvisionedActor, status_code=201)
     async def provision(

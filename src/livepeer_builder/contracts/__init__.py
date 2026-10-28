@@ -52,11 +52,13 @@ from livepeer_builder.contracts.payments import (
     Allowance,
     FundRequest,
     GrantRecord,
+    KnownActor,
     NewAllocationKey,
     PaymentCredential,
     ProvisionedActor,
     ProvisionRequest,
     SecretRef,
+    SeenActor,
 )
 from livepeer_builder.contracts.reserved import EngineEvent, EventPage, Session, SessionRequest
 
@@ -94,6 +96,7 @@ __all__ = [
     "JobRequest",
     "JobResult",
     "JobState",
+    "KnownActor",
     "MeasuredUsage",
     "Money",
     "NetworkRate",
@@ -112,6 +115,7 @@ __all__ = [
     "RunnerGPU",
     "RunnerReply",
     "SecretRef",
+    "SeenActor",
     "Session",
     "SessionMatch",
     "SessionRequest",

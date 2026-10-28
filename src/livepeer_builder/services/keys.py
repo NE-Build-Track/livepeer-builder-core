@@ -16,9 +16,11 @@ from livepeer_builder.contracts import (
     CredentialKind,
     IssuedKey,
     Operation,
+    ResourceRef,
 )
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound
 from livepeer_builder.protocols import AccessPolicy, Clock, KeyRepo
+from livepeer_builder.services.ownership import check_owner
 from livepeer_builder.utils import token_hash
 
 _LOG = logging.getLogger(__name__)
@@ -60,10 +62,12 @@ class KeyService:
 
     async def get(self, admin: ActorContext, key_id: str) -> AccessKey:
         """One key as stored, without its secret: the token is never kept, only its hash, never shown."""
-        self._policy.check(admin, Operation.ADMIN_KEYS)
+        self._policy.check(admin, Operation.ADMIN_READ)
         key = await self._store.get_access_key(key_id)
         if key is None:
             raise NotFound(f"key {key_id!r} not found")
+        resource = ResourceRef(kind="key", application_id=key.application_id, id=key.key_id)
+        check_owner(self._policy, admin, Operation.ADMIN_READ, resource, f"key {key_id!r} not found")
         return key
 
     async def rotate(self, admin: ActorContext, key_id: str, *, label: str | None = None) -> IssuedKey:
@@ -89,8 +93,11 @@ class KeyService:
         _audit("keys.revoked", key, by=admin.actor_id)
 
     async def list_keys(self, admin: ActorContext, application_id: str | None = None) -> list[AccessKey]:
-        self._policy.check(admin, Operation.ADMIN_KEYS)
-        return await self._store.list_access_keys(application_id)
+        """Every application's keys for an admin unless it names one; an auditor's own application's (D46)."""
+        scope = application_id or (None if admin.credential_kind == "admin" else admin.application_id)
+        resource = None if scope is None else ResourceRef(kind="key", application_id=scope)
+        self._policy.check(admin, Operation.ADMIN_READ, resource)
+        return await self._store.list_access_keys(scope)
 
     async def _issue(
         self,
@@ -140,8 +147,8 @@ def _audit(event: str, key: AccessKey, *, by: str, replaced_key_id: str | None =
 
 
 def _validated_permissions(kind: CredentialKind, permissions: Iterable[str] | None) -> set[str]:
-    if kind == "admin":
-        return set()  # admin is a credential kind; it needs no permission strings
+    if kind in ("admin", "auditor"):
+        return set()  # a credential kind, not permission strings, decides what these may do
     granted = set(DEFAULT_ACTOR_PERMISSIONS if permissions is None else permissions)
     known = {operation.value for operation in Operation}
     unknown = granted - known

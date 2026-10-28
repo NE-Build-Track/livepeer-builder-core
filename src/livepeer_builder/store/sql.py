@@ -24,12 +24,12 @@ from livepeer_builder.contracts import (
     MeasuredUsage,
     ProvisionedActor,
     ResultRef,
-    SecretRef,
+    SeenActor,
     SyncCheckpoint,
     UsageRow,
 )
 from livepeer_builder.errors import OperationExists
-from livepeer_builder.store import cost_reads
+from livepeer_builder.store import actors, cost_reads
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
@@ -82,27 +82,28 @@ class SqlStore:
     # -- actors -------------------------------------------------------------------------------------
 
     async def get_actor(self, application_id: str, actor_id: str) -> ProvisionedActor | None:
-        query = select(t.actors).where(
-            t.actors.c.application_id == application_id, t.actors.c.actor_id == actor_id
-        )
         async with self.engine.connect() as conn:
-            row = (await conn.execute(query)).mappings().first()
-        return _actor(row) if row else None
+            return await actors.get_actor(conn, application_id, actor_id)
 
     async def save_actor(self, actor: ProvisionedActor) -> None:
-        values = actor.model_dump(exclude={"secret_ref"}) | {"secret_ref": actor.secret_ref.ref}
-        key = and_(t.actors.c.application_id == actor.application_id, t.actors.c.actor_id == actor.actor_id)
         async with self.engine.begin() as conn:
-            result = await conn.execute(update(t.actors).where(key).values(values))
-            if result.rowcount == 0:
-                await conn.execute(insert(t.actors).values(values))
+            await actors.save_actor(conn, actor)
 
     async def list_actors(self, application_id: str | None = None) -> list[ProvisionedActor]:
-        query = select(t.actors).order_by(t.actors.c.application_id, t.actors.c.actor_id)
-        if application_id is not None:
-            query = query.where(t.actors.c.application_id == application_id)
         async with self.engine.connect() as conn:
-            return [_actor(row) for row in (await conn.execute(query)).mappings()]
+            return await actors.list_actors(conn, application_id)
+
+    async def save_sighting(self, seen: SeenActor) -> None:
+        async with self.engine.begin() as conn:
+            await actors.save_sighting(conn, seen)
+
+    async def get_sighting(self, application_id: str, actor_id: str) -> SeenActor | None:
+        async with self.engine.connect() as conn:
+            return await actors.get_sighting(conn, application_id, actor_id)
+
+    async def list_sightings(self, application_id: str | None = None) -> list[SeenActor]:
+        async with self.engine.connect() as conn:
+            return await actors.list_sightings(conn, application_id)
 
     # -- access keys --------------------------------------------------------------------------------
 
@@ -478,11 +479,6 @@ def _usage_values(row: UsageRow) -> dict[str, Any]:
     for name in ("computed_fee_eth", "computed_fee_usd"):
         values[name] = None if values[name] is None else str(values[name])
     return values
-
-
-def _actor(row: Any) -> ProvisionedActor:
-    data = {key: row[key] for key in ProvisionedActor.model_fields if key != "secret_ref"}
-    return ProvisionedActor.model_validate(data | {"secret_ref": SecretRef(ref=row["secret_ref"])})
 
 
 def _access_key(row: Any) -> AccessKey:

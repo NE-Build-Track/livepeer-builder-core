@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     Runner,
     RunnerReply,
     SecretRef,
+    SeenActor,
     Session,
     SessionRequest,
     SyncCheckpoint,
@@ -213,6 +214,12 @@ class ActorRepo(Protocol):
     async def save_actor(self, actor: ProvisionedActor) -> None: ...
 
     async def list_actors(self, application_id: str | None = None) -> list[ProvisionedActor]: ...
+
+    async def save_sighting(self, seen: SeenActor) -> None: ...  # keeps the first first_seen_at
+
+    async def get_sighting(self, application_id: str, actor_id: str) -> SeenActor | None: ...
+
+    async def list_sightings(self, application_id: str | None = None) -> list[SeenActor]: ...
 
 
 class KeyRepo(Protocol):

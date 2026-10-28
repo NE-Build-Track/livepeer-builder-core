@@ -88,8 +88,10 @@ def test_jwt_settings_come_from_the_environment() -> None:
             "LPB_JWT_AUDIENCE": AUDIENCE,
             "LPB_JWT_ALGORITHMS": "RS256,PS256",
             "LPB_JWT_ADMIN_SCOPE": "livepeer:admin",
+            "LPB_JWT_ADMIN_READ_SCOPE": "livepeer:read",
         }
     )
+    assert (settings.jwt_admin_scope, settings.jwt_admin_read_scope) == ("livepeer:admin", "livepeer:read")
     assert settings.auth == ("jwt", "api_keys")
     assert settings.jwt_algorithms == ("RS256", "PS256")
     assert (settings.jwt_actor_claim, settings.jwt_scope_claim, settings.jwt_leeway_s) == (
@@ -228,6 +230,10 @@ def test_review_defaults_are_strict() -> None:
         ({"jwt_admin_scope": "jobs.run"}, "admin"),
         ({"jwt_admin_scope": "openid"}, "admin"),
         ({"jwt_token_types": ""}, "token_types"),
+        ({"jwt_admin_read_scope": "jobs.read"}, "admin_read"),
+        ({"jwt_admin_read_scope": "profile"}, "admin_read"),
+        ({"jwt_admin_scope": "ops", "jwt_admin_read_scope": "ops"}, "admin_read"),
+        ({"jwt_scope_prefix": "api:", "jwt_admin_read_scope": "api:jobs.read"}, "admin_read"),
         ({"jwt_scope_prefix": "api:", "jwt_admin_scope": "api:jobs.run"}, "admin"),
         ({"jwt_scope_prefix": "api:", "jwt_admin_scope": "api:openid"}, "admin"),
     ],
@@ -237,6 +243,10 @@ def test_review_defaults_are_strict() -> None:
         "admin scope is an operation",
         "admin scope is openid",
         "no token type",
+        "read scope is an operation",
+        "read scope is profile",
+        "read scope is the admin scope",
+        "prefixed read scope is an operation",
         "prefixed admin scope is an operation",
         "prefixed admin scope is openid",
     ],
@@ -259,3 +269,21 @@ def test_the_dev_override_allows_an_http_issuer() -> None:
         auth=("jwt",), jwt_issuer="http://keycloak:8080/", jwt_audience="a", jwt_allow_http=True
     )
     assert settings.jwt_issuer == "http://keycloak:8080/"
+
+
+async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: IdentityProvider) -> None:
+    """Registration on first sign-in (#52, D48): the operator sees alice by name before provisioning her."""
+    async with make_engine(**jwt_settings(idp, jwt_admin_scope="livepeer:admin")) as engine:
+        app = create_app(engine, manage_lifecycle=False)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://engine"
+        ) as client:
+            alice = bearer(idp.token(sub="3c446b40-7123", preferred_username="alice"))
+            assert (await client.get("/v1/jobs", headers=alice)).status_code == 200
+            operator = bearer(
+                idp.token(sub="b715dc36", scope="livepeer:admin", preferred_username="operator")
+            )
+            listed = (await client.get("/v1/admin/actors", headers=operator)).json()
+            assert [(a["actor_id"], a["label"], a["provisioned"]) for a in listed] == [
+                ("3c446b40-7123", "alice", False)
+            ]  # the operator signing in is not an actor, so is not listed

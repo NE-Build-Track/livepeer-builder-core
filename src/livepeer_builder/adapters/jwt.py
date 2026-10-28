@@ -51,10 +51,12 @@ class JwtSettings:
     scope_claim: str = "scope"
     scope_prefix: str = ""
     admin_scope: str | None = None  # None: no token is an admin credential
+    admin_read_scope: str | None = None  # an auditor, a read-only admin (D46); admin_scope wins
     leeway_s: float = 30.0
     realm: str = "livepeer-builder"
     token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")  # lower case; "jwt" is the opt-out
     max_lifetime_s: float = 3600.0  # exp - iat
+    name_claim: str | None = "preferred_username"  # the display name for the operator's actor list (D48)
 
     @property
     def strict(self) -> bool:
@@ -386,9 +388,9 @@ class JwtBearerAuthenticator:
 
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
         settings = self._settings
-        actor_id = _text(claims, settings.actor_claim)
+        actor_id = _identity(claims, settings.actor_claim)
         application_id = (
-            _text(claims, settings.application_claim)
+            _identity(claims, settings.application_claim)
             if settings.application_claim
             else settings.application_id
         )
@@ -399,15 +401,18 @@ class JwtBearerAuthenticator:
             if scope.startswith(settings.scope_prefix)
         }
         admin = settings.admin_scope is not None and settings.admin_scope in scopes
+        auditor = settings.admin_read_scope is not None and settings.admin_read_scope in scopes
         jti = claims.get("jti")
+        name = claims.get(settings.name_claim) if settings.name_claim else None
         return ActorContext(
             actor_id=actor_id,
             application_id=application_id,
             permissions=frozenset(operation.value for operation in GRANTABLE if operation.value in named),
-            credential_kind="admin" if admin else "actor",
+            credential_kind="admin" if admin else "auditor" if auditor else "actor",
             auth=AuthProvenance(
                 method="jwt", issuer=settings.issuer, credential_id=jti if isinstance(jti, str) else None
             ),
+            display_name=name[:200] if isinstance(name, str) and name else None,
         )
 
 
@@ -427,9 +432,11 @@ def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 3.0) -> Jw
         scope_claim=settings.jwt_scope_claim,
         scope_prefix=settings.jwt_scope_prefix,
         admin_scope=settings.jwt_admin_scope,
+        admin_read_scope=settings.jwt_admin_read_scope,
         leeway_s=settings.jwt_leeway_s,
         token_types=settings.jwt_token_types,
         max_lifetime_s=settings.jwt_max_lifetime_s,
+        name_claim=settings.jwt_name_claim,
     )
     client = httpx.AsyncClient(timeout=timeout_s, follow_redirects=False)
     keys = JwksCache(
@@ -462,6 +469,15 @@ def _text(claims: dict[str, Any], name: str) -> str:
     value = claims.get(name)
     if not isinstance(value, str) or not value:
         raise NotAuthenticated(f"the token has no {name} claim")
+    return value
+
+
+def _identity(claims: dict[str, Any], name: str) -> str:
+    """An actor or application id, which every record stores in 200 characters (``store.schema.ID``).
+    A longer one is refused here, not cut: cutting could merge two people (John, #53 review)."""
+    value = _text(claims, name)
+    if len(value) > 200:
+        raise NotAuthenticated(f"the token's {name} claim is longer than 200 characters")
     return value
 
 

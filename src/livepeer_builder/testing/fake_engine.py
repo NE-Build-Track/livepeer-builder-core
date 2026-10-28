@@ -56,7 +56,7 @@ from livepeer_builder.errors import (
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
 from livepeer_builder.services.failover import attempt_verdict
-from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.testing.fake_stream import FakeJobStream
@@ -103,6 +103,7 @@ class FakeJobs:
 
     def reply_for(self, actor: ActorContext, request: JobRequest) -> Reply:
         """The scripted reply, after the checks the engine makes before it dispatches."""
+        self.policy.check(actor, Operation.JOBS_RUN)  # first, as the engine's _admit_request
         self.requests.append((actor, request))
         self._check_operation(actor, request)
         scripted = self.replies.get((request.app, request.path), Reply())
@@ -285,7 +286,7 @@ class FakeJobs:
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
-        target = None if actor.credential_kind == "admin" else actor.actor_id
+        target = None if sees_every_actor(actor) else actor.actor_id
         self.policy.check(
             actor,
             Operation.JOBS_READ,
@@ -343,7 +344,7 @@ class FakeCosts:
     async def summary(
         self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
     ) -> CostSummary:
-        target = actor_id or (None if actor.credential_kind == "admin" else actor.actor_id)
+        target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
         owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
         self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._summary is None:

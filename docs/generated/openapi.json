@@ -26,6 +26,7 @@
             "enum": [
               "actor",
               "admin",
+              "auditor",
               "service"
             ],
             "title": "Kind",
@@ -696,6 +697,7 @@
             "enum": [
               "actor",
               "admin",
+              "auditor",
               "service"
             ],
             "title": "Kind",
@@ -1132,6 +1134,86 @@
         "title": "JobRequest",
         "type": "object"
       },
+      "KnownActor": {
+        "additionalProperties": false,
+        "description": "One row of the operator's actor list (D46, D48): provisioned, signed in, or both.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvisionedActor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "provisioned": {
+            "readOnly": true,
+            "title": "Provisioned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "application_id",
+          "actor_id",
+          "label",
+          "name",
+          "allocation",
+          "first_seen_at",
+          "last_seen_at",
+          "provisioned"
+        ],
+        "title": "KnownActor",
+        "type": "object"
+      },
       "MeasuredUsage": {
         "additionalProperties": false,
         "description": "Work done, in units the capability defines. Retains its source and is never equated with cost.",
@@ -1318,6 +1400,7 @@
           },
           "label": {
             "default": "",
+            "maxLength": 200,
             "title": "Label",
             "type": "string"
           }
@@ -1362,6 +1445,12 @@
           },
           "grant_id": {
             "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
             "type": "string"
           },
           "secret_ref": {
@@ -2029,7 +2118,164 @@
         "summary": "Readyz"
       }
     },
+    "/v1/admin/actors": {
+      "get": {
+        "description": "Provisioned actors and people an identity provider signed in (D46, D48).",
+        "operationId": "list_actors_v1_admin_actors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "application_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Application Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "exhausted",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provisioned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provisioned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KnownActor"
+                  },
+                  "title": "Response List Actors V1 Admin Actors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Actors"
+      }
+    },
     "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation": {
+      "get": {
+        "operationId": "get_actor_v1_admin_applications__application_id__actors__actor_id__allocation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Actor"
+      },
       "post": {
         "operationId": "provision_v1_admin_applications__application_id__actors__actor_id__allocation_post",
         "parameters": [

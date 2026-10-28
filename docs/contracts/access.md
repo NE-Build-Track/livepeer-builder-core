@@ -1,8 +1,9 @@
 # Access contract
 
-**Tickets:** ISS-03, ISS-08 · **Design accepted:** 12 October 2026 (decisions D12–D16); ISS-08 on
-26 October (D44) · **Code:** `contracts/access.py`, `protocols/`, `services/policy.py`,
-`services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/secrets.py`
+**Tickets:** ISS-03, ISS-08, #49 (ISS-33) · **Design accepted:** 12 October 2026 (decisions D12–D16);
+ISS-08 on 26 October (D44); JWT bearer on 26 October (D45) · **Code:** `contracts/access.py`, `protocols/`,
+`services/policy.py`, `services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/jwt.py`,
+`adapters/secrets.py`
 
 The core never authenticates anyone. It consumes a validated `ActorContext` and asks an
 `AccessPolicy` whether an operation is allowed. Everything about *how* identity is established lives
@@ -59,6 +60,13 @@ class AccessPolicy(Protocol):
 - **Another actor's record** reads as missing (404), never 403, so its existence isn't revealed. A
   missing permission is 403. The order of the two checks is in [Answers](#answers).
 
+**Public reads (D51, proposed).** Health (`/livez`, `/readyz`) and the offerings catalog
+(`GET /v1/offerings`, `discovery.offerings`) take no actor and check no permission. The handler
+returns the full `Offering`: modes, the rate range, `runner_count` and `ready_count`. It has no
+runner URL, starts no work and spends nothing from an allocation. Pending Mike's agreement
+([#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)). `discover` gates only
+`GET /v1/runners` (`discovery.runners`), which returns runner URLs.
+
 ## Answers
 
 Every route on a job or its cost answers the same way (D44, `services/ownership.py`):
@@ -90,12 +98,131 @@ enterprise identity provider's concern.
 | Mode | Where it lives | Status |
 | --- | --- | --- |
 | Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/admin/keys` routes are absent and OpenAPI declares no bearer scheme |
-| JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | Defined, M4 |
+| JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | **Implemented** (D45): `LPB_AUTH=jwt` or `jwt,api_keys`. See [JWT bearer](#jwt-bearer) |
 | MCP OAuth (PKCE public clients) | Enterprise authorization server issues; engine verifies with JWT bearer and publishes RFC 9728 protected-resource metadata | Defined, with MCP (M3/M4) |
 | Trusted backend (see [service mode](#service-mode)) | `ServiceCredentialAuthenticator` | Defined, M4 |
 | CIMD and client catalog, device flow, token exchange | Enterprise authorization server or client (appendix) | Not engine work |
 | HTTP Basic for end users | An enterprise-supplied `Authenticator` | Example only |
 | Local gateway (payment key leaves the server) | Per-device allocations | Out of scope |
+
+## JWT bearer
+
+The REST service accepts OAuth 2.0 access tokens from the enterprise's identity provider (D45). The
+engine is the **resource server**: it verifies tokens and never runs a login. Configuration chooses the
+mode, with no code:
+
+| `LPB_AUTH` | Accepted | Engine API keys |
+| --- | --- | --- |
+| `api_keys` (default) | `lpk_` keys | On |
+| `jwt` | The provider's tokens | **Off**: `engine.keys` is `None`, so the key routes and `lpb bootstrap-admin` disappear |
+| `jwt,api_keys` | Both. The order does not matter, because each authenticator recognizes only its own credential | On. The migration mode, for example while the console still signs in with an `lpk_` admin key |
+
+**Setup:**
+- set `LPB_JWT_ISSUER` (matched exactly against `iss`) and `LPB_JWT_AUDIENCE` (must be in `aud`);
+- the keys come from the issuer's metadata (OpenID Discovery, then RFC 8414), or from `LPB_JWT_JWKS_URL`;
+- the issuer and the key URL must be `https`. `LPB_JWT_ALLOW_HTTP=true` allows `http`, for local
+  development only (a Keycloak in a compose stack);
+- the other `LPB_JWT_*` settings are in [RELIABILITY.md](../RELIABILITY.md#configuration).
+- A supplied `EngineSupply.authenticators` still replaces the configured ones.
+
+**Startup refuses risky settings (D47):**
+- an `http` issuer or key URL without the development override;
+- an `LPB_JWT_ADMIN_SCOPE` that ordinary tokens carry: an operation name (`jobs.run`, ...) or a standard
+  OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`), whether written bare or
+  with `LPB_JWT_SCOPE_PREFIX` (`api:jobs.run` with the prefix `api:`, D49). The admin scope makes an
+  engine-wide admin that skips permission and ownership checks in every application, so it must be a scope
+  the provider issues to operators alone;
+  - **This check is a denylist.** It catches the scopes every provider puts on ordinary tokens, not ones
+    a provider invents. Choosing a scope that only operators are ever issued stays the operator's
+    responsibility. A dedicated namespace or a separate admin claim would remove that reliance (a
+    follow-up, not built: [#58](https://github.com/NE-Build-Track/livepeer-builder-core/issues/58), T19);
+- an empty `LPB_JWT_TOKEN_TYPES`.
+
+**Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):
+- **Algorithms:** only `LPB_JWT_ALGORITHMS`, which takes asymmetric algorithms only (`RS256,ES256` by
+  default). `none` and `HS*` are refused, so the published key can never be used as a shared secret.
+- **Token type (RFC 9068, D47):** the header's `typ` must be in `LPB_JWT_TOKEN_TYPES`, compared without
+  case (`at+jwt,application/at+jwt` by default). An ID token (`typ: JWT`) or a logout token with the right
+  audience is refused, as is a token with no `typ`.
+  - **The opt-out:** add `jwt` for a provider that cannot send `at+jwt`. It accepts `typ: JWT` and a missing
+    `typ`, and drops the `client_id` and `jti` requirements. It is weaker: only the audience then tells an
+    access token from an ID token, so `LPB_JWT_AUDIENCE` must be this engine's resource identifier, never a
+    client ID.
+- **Signature:** checked against the issuer's JWKS.
+  - **Which keys:** only asymmetric keys for signatures count (`kty` `RSA`, `EC` or `OKP`). A shared-secret
+    key (`kty: oct`), a key with `use: enc`, or one with `key_ops` that lack `verify`, is skipped; a key
+    that omits `use` counts. A key published with an `alg` verifies only that algorithm (RFC 8725).
+  - **The algorithm must fit the key (D50):** `RS*` and `PS*` need an `RSA` key, `ES*` an `EC` key on the
+    algorithm's curve, and `EdDSA` an `OKP` key. This matters for a key published without `alg`, which
+    RFC 7517 allows: the token's header then names the algorithm, and a mismatch is a 401.
+  - **Key length (D50):** an RSA key shorter than 2048 bits never verifies (NIST SP 800-131A).
+  - **Caching (D47):** keys older than 10 minutes are refreshed in the background while requests keep
+    using them, so a slow provider never stalls a request, and a key the provider withdrew stops verifying
+    within about 10 minutes. Keys older than an hour are not served: the request waits for a fetch. A token
+    that names an unknown `kid` causes a fetch at most once a minute; only a refetch that worked uses up
+    that minute.
+  - **One fetch at a time (D49):** a refresh, a cold start and an unknown-`kid` refetch all share one fetch,
+    and only that fetch updates the cache, so an older response can never put back a key set the provider
+    has since changed. An unknown `kid` first waits for a fetch already in flight (it may predate the
+    rotation that minted the `kid`), then asks again. No lock is held while the provider answers.
+  - **No `kid`:** a token without `kid` is accepted only when the provider publishes exactly one signing key.
+- **Claims:** `iss`, `aud`, `exp` and `iat` are required, plus `client_id` and `jti` unless the opt-out is
+  on (RFC 9068 2.2). `exp`, `nbf` and `iat` are checked with `LPB_JWT_LEEWAY_S` (30 s). `aud` may be a
+  list that contains the engine.
+- **Lifetime (D47):** a token whose `exp - iat` exceeds `LPB_JWT_MAX_LIFETIME_S` (an hour) is refused,
+  however valid its signature. This is what makes the short-lifetime revocation guidance enforceable.
+  `exp` and `iat` must be numbers: a numeric string, which PyJWT accepts, is a 401 (D49).
+- **Sender-constrained tokens are refused.** A token with `cnf` is bound to a client certificate
+  (RFC 8705) or a DPoP key (RFC 9449). This engine verifies neither, so it refuses the token rather than
+  accept it as a plain bearer token.
+- **Reading the keys:** the keys URL comes from the issuer's metadata, which must name the configured issuer
+  and an `https` `jwks_uri` (`http` too with the development override).
+  - **Two metadata URLs (D47):** OpenID Discovery first (`<issuer>/.well-known/openid-configuration`); if
+    that request fails, RFC 8414 (`https://host/.well-known/oauth-authorization-server/<issuer path>`). A
+    document that answers but is wrong is not retried at the other URL.
+  - **Bounded:** each document must arrive whole within 3 s (one deadline, not one per read, so a provider
+    that trickles bytes is cut off, D49), is capped at 1 MiB, and redirects are not followed.
+    The token's own `jku` and `x5u` headers are ignored, so a token cannot choose where its keys come from.
+  - **No host block (a decision, D47):** the metadata comes from the operator's configured issuer over
+    `https`, and a provider in the same cluster (a Keycloak) legitimately sits on a private address, so
+    private, link-local and loopback hosts are allowed. Agreed in the #50 review.
+  - **A bad URL is retried:** a discovered URL is kept only once it has served a usable key set, so a bad
+    one, or one the issuer has moved, is discovered again.
+  - **After a failed fetch,** the provider is left alone for 5 s, counted from when the fetch failed (D49),
+    and token requests answer 503 meanwhile, unknown `kid`s included. Any failure counts, including a key
+    set the parser rejects (a non-text `kty` or `alg` is skipped): it is a 503, never a 500.
+  - **Logging:** the reason, the URL and the client's error are logged as `auth.jwks_unavailable`. The 503
+    body is a fixed message and never carries them.
+- **Answers:**
+
+| The credential | Answer |
+| --- | --- |
+| Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
+| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, a key the algorithm cannot use or one that is too short, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
+| The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503) with a fixed message, because no token can be checked. The details are logged |
+
+**Claims become an `ActorContext`:**
+
+| Field | From |
+| --- | --- |
+| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`) |
+| `application_id` | `LPB_JWT_APPLICATION_CLAIM` when set, otherwise `LPB_JWT_APPLICATION_ID` (`default`) |
+| `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
+| `credential_kind` | `admin` only when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `actor` |
+| `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
+
+**Revocation.** A JWT cannot be revoked before it expires; an `lpk_` key can. Issue short-lived access
+tokens (5 to 15 minutes) and let the provider refresh them. The engine enforces the ceiling: no token
+lives longer than `LPB_JWT_MAX_LIFETIME_S`, and a withdrawn signing key stops verifying within about
+10 minutes (D47).
+
+**OpenAPI.** With keys off, the service declares a JWT bearer scheme, so Swagger UI's Authorize sends a
+token.
+
+**Not here:**
+- opaque tokens (RFC 7662 introspection);
+- RFC 9728 protected-resource metadata for MCP clients (phase 2);
+- the trusted backend, below.
 
 ## Service mode
 

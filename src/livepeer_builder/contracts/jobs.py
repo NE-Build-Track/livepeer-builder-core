@@ -1,5 +1,6 @@
 """Job contracts: requests, attempts, failures, results and measured usage (docs/contracts/engine.md)."""
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -13,6 +14,8 @@ ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, imple
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 SessionMatch = Literal["unmatched", "matched", "ambiguous"]
+# D54: ``unknown`` before the signer answers (it may have charged), then ``paid`` or ``unpaid`` (refused).
+PaymentState = Literal["unknown", "paid", "unpaid"]
 
 
 class JobRequest(Contract):
@@ -58,6 +61,17 @@ class JobRequest(Contract):
     first_byte_timeout_s: float = Field(default=60.0, gt=0, le=3600)
     idle_timeout_s: float | None = Field(default=60.0, gt=0, le=3600)
 
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_json(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The runner receives the payload as JSON, so it is checked here, before any attempt or payment."""
+        if value is not None:
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"payload must be JSON: {error}") from error
+        return value
+
     @model_validator(mode="after")
     def _first_byte_within_total(self) -> "JobRequest":
         if self.raw_body is not None and self.payload is not None:
@@ -69,10 +83,13 @@ class JobRequest(Contract):
         return self
 
 
-# "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment
-# params, price above the session ceiling). Safe to fail over. "payment": any other payment failure.
+# "payment_refused": the signer refused to pay *this orchestrator* (bad payment params, price above the
+# session ceiling). Another orchestrator may succeed, so the job fails over (D26, D52).
+# "payment": any other payment failure.
 # "abandoned": the caller stopped reading a stream before the runner finished
 # (docs/contracts/engine.md#streaming).
+# "payment_unknown": the signer was asked and gave neither a validated payment nor a refusal (a lost or
+# malformed reply, a 5xx, a cancel), so it may have charged; the job is uncertain (D53).
 AttemptOutcome = Literal[
     "in_flight",
     "succeeded",
@@ -83,21 +100,27 @@ AttemptOutcome = Literal[
     "timeout",
     "http",
     "abandoned",
+    "payment_unknown",
 ]
 
 
 class SignedSession(Contract):
-    """One session the signer signed for an attempt.
+    """One manifest an attempt asked the signer to sign, stored before the signer is asked (D54).
 
     ``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to
     the Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays
     ``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session
     and one log entry share the key, and ``ambiguous`` when they do not.
+
+    ``payment_state`` is ``unknown`` until the signer answers: it may have charged. A validated
+    reply makes it ``paid`` and a refusal ``unpaid``; unique usage also confirms an ``unknown`` one
+    as ``paid``. ``paid`` is final, and an ``unpaid`` manifest is never matched to usage.
     """
 
     manifest_id: str
     payment_session_id: str | None = None
     match: SessionMatch = "unmatched"
+    payment_state: PaymentState = "paid"  # rows from before D54 are signatures the signer confirmed
 
 
 class Attempt(Contract):
@@ -108,7 +131,7 @@ class Attempt(Contract):
     runner_url: str | None
     orchestrator_url: str | None
     allocation_id: str | None  # the allocation whose key paid; None when the call was unpaid
-    sessions: tuple[SignedSession, ...]  # one entry per signed session, in signing order
+    sessions: tuple[SignedSession, ...]  # one entry per manifest asked for, in signing order
     payment_sent: bool
     outcome: AttemptOutcome
     status_code: int | None
@@ -123,6 +146,7 @@ FailureKind = Literal[
     "refused",
     "unreachable",
     "payment",
+    "payment_unknown",
     "timeout",
     "runner_rejected",
     "runner_error",

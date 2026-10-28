@@ -130,7 +130,7 @@ resolves it and sends it to the signer. See [SECURITY.md](../SECURITY.md).
 The same methods the REST routes wrap:
 
 ```python
-offerings = engine.discovery.offerings(actor)
+offerings = engine.discovery.offerings()  # public: no actor
 runners = engine.discovery.runners(actor, "livepeer-example/echo")
 
 result = await engine.jobs.run(
@@ -143,7 +143,8 @@ cost = await engine.costs.for_job(actor, result.job.id)
 allowance = await engine.payments.allowance(actor)
 ```
 
-`offerings` and `runners` still require the `discover` permission. Retail pricing stays in your app.
+`offerings` is public and takes no actor; `runners` still requires the `discover` permission. Retail
+pricing stays in your app.
 `cost` is wholesale network cost, and stays `pending` until Batteries reports the charge.
 
 Failures are Python exceptions, not HTTP statuses:

@@ -16,7 +16,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 
 | Interface | Default (simple) | Enterprise version (example) | Wire it with |
 | --- | --- | --- | --- |
-| `Authenticator` | none of your own; engine API keys (`ApiKeys`) after them | `SignedSsoHeaderAuthenticator`: trust a signed SSO-proxy header. Or OIDC/JWT, mTLS, session cookies | supply `authenticators=(...)` (tried **before** API keys); `api_keys=None` turns keys off |
+| `Authenticator` | engine API keys (`ApiKeys`); with `LPB_AUTH=jwt`, the built-in `JwtBearerAuthenticator` for OAuth access tokens ([access.md](../contracts/access.md#jwt-bearer)) | `SignedSsoHeaderAuthenticator`: trust a signed SSO-proxy header. Or mTLS, session cookies | supply `authenticators=(...)` (tried **before** API keys, and replacing the configured JWT one); `api_keys=None` turns keys off |
 | `AccessPolicy` | `DefaultPolicy` (permissions + own records + admin kind) | `TeamReadPolicy`: teammates read each other's jobs. Or org admins, RBAC/ABAC, entitlements | decorate (wrap `parts.policy`) or supply `policy=` |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | `AuditedVaultSecretStore`: HashiCorp Vault, AWS/GCP secret manager, HSM | supply `secret_store=` |
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | supply `selection=` |
@@ -300,11 +300,11 @@ named here show each one.
 | `SelectionPolicy` | Pure and fast: order candidates, don't call the network. The engine applies `max_attempts` and the failover-before-payment rule |
 | `DiscoverySource` | Return contract `Runner`s. Raising keeps the last good snapshot (`discovery_error` in health) |
 | `CredentialResolver` (implemented by `PaymentsService`; not replaceable today) | Return a `PaymentCredential` with the signer bearer and the allocation that bearer spends. `token` is `None` for an unpaid call |
-| `RunnerTransport` | Await **`on_signed(manifest_id)`** for each session the signer signs, before the paid request goes out (`""` when the challenge has none): the engine stores the evidence there, so a cancel or crash mid-request keeps the charge attributed (D42). Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them; a session reported through `on_signed` keeps the attempt paid even if the error says otherwise. Use `payment_refused` only for orchestrator-specific refusals before payment |
+| `RunnerTransport` | Await **`on_signed(manifest_id)`** for each session the signer signs, before the paid request goes out (`""` when the challenge has none): the engine stores the evidence there, so a cancel or crash mid-request keeps the charge attributed (D42). Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them; a session reported through `on_signed` keeps the attempt paid even if the error says otherwise. When the callback has `remember` and `refused` (the engine's recorder does), await `remember(manifest_id)` before asking the signer and sign nothing if it raises, and await `refused(manifest_id)` when the signer refuses (D54). Use `payment_refused` only for orchestrator-specific refusals before payment |
 | `StreamingRunnerTransport` | `open` returns once the runner answered (status, content type), with `payment_sent` and `manifest_ids` already known. It must give up after `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the payment evidence so far; the engine stops an `open` that runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) longer and treats it as paid (D35). Iteration raises `RunnerCallError` mid-stream; `aclose` closes the connection and stops any ongoing funding, and may be called more than once (`tests/unit/test_stream_deadlines.py`) |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result |
 | `UsageSource` | Opaque cursor. Raise `CursorMismatch` on a rejected cursor so the worker resyncs. Rows are immutable per `id` |
-| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` may run twice for one attempt and must only add signed sessions, never rewrite them (D39). `maintenance` may be `None`: the engine then purges nothing and reports no schema revision |
+| `EngineStore` | Pass the store suite (`tests/store/`). Never weaken `operation_ref` uniqueness or the before-call attempt write. `finish_attempt` and `record_payment_evidence` may run more than once for one attempt: add sessions not stored yet, move a stored session's `payment_state` on unless it is `paid` (final), never clear `payment_sent`, and never write the match columns, which belong to cost sync (D39, D54). `maintenance` may be `None`: the engine then purges nothing and reports no schema revision |
 
 ## Testing your implementation
 
@@ -320,7 +320,6 @@ named here show each one.
 
 | Interface | Status |
 | --- | --- |
-| `JwtBearerAuthenticator` (OIDC, MCP OAuth tokens) | Defined in [access.md](../contracts/access.md#modes); built in M4 |
 | `ServiceCredentialAuthenticator` (trusted backend with `actors.assert`) | Defined in [access.md](../contracts/access.md#service-mode); built in M4 |
 | `EventFeed` | Defined in [events.md](../contracts/events.md); built in M3 |
 | `SessionManager` | Defined in [engine.md](../contracts/engine.md#persistent-sessions); built in M4 |

@@ -14,9 +14,18 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
 3. The signer signs and **persists one `create_signed_ticket` event per signing request before
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
-4. The SDK ([#77](https://github.com/livepeer/livepeer-python-gateway/pull/77)) calls
-   `on_payment_session` with each signed session. The engine records that session's `manifest_id`
-   on its own session log, with the allocation whose key paid.
+4. The engine's runner call (`adapters/runner_call.py`, D53) answers the orchestrator's 402 itself
+   and signs through the SDK's signer client. Before `get_payment`, `remember` stores
+   `LivePaymentSession.manifest_id` on the attempt as an `unknown` session (D54); if that write fails,
+   nothing is signed, and a cancel during it stores the session `unpaid`, since the signer was never
+   asked. `on_signed` makes it `paid` once the signer validates the manifest, and marks
+   the attempt paid before the paid request goes out. Batteries' `payment_session_id` is not known at
+   sign time; cost sync fills it on `(allocation_id, manifest_id)`. An expired challenge (a signer
+   480) and a 400, 401, 402, 403 or 481 refusal make the session `unpaid`. If the signer charged an
+   unpaid manifest anyway, the debit is unattributed on the allocation and the customer is not
+   billed. A lost reply, a signer 5xx, a cancel during `get_payment`, or the engine dying then leaves
+   the session `unknown`: the cost stays `pending` until usage matches it, and the job pays no other
+   orchestrator.
 
 ## Allocation modes
 
@@ -75,19 +84,33 @@ them as `Decimal`.
 
 A charge joins an attempt by **`(allocation_id, payment_session_id)`**. The engine does not learn
 `payment_session_id` from the SDK. Each attempt records the allocation whose key paid and one
-session-log entry per signed `manifest_id` (`lpb_payment_sessions`). Cost sync resolves an entry
-when exactly one applied usage row-set and one log entry share `(allocation_id, manifest_id)`, and
-stores that row's `payment_session_id` as `matched`.
+session-log entry per `manifest_id` it asked the signer for (`lpb_payment_sessions`), with its
+`payment_state`: `unknown`, `paid` or `unpaid` (D54). Cost sync resolves an entry when exactly one
+applied usage row-set and one log entry share `(allocation_id, manifest_id)`, and stores that row's
+`payment_session_id` as `matched`; that also confirms an `unknown` entry as `paid`. An `unpaid` entry
+is never matched.
 
 If Batteries has no session for the key yet, the entry stays `unmatched` and the attempt's cost is
-`pending`. If more than one Batteries session or more than one log entry shares the key, every
-entry is `ambiguous`: the attempt is `uncertain`, those rows stay `unattributed`, and reconciliation
-still balances. A later sync can turn a `matched` entry into `ambiguous`.
+`pending`. A signed session whose usage has not arrived keeps the attempt `pending`, so the job is
+not stored `observed` with a zero bill. If more than one Batteries session or more than one log
+entry shares the key, the entry is `ambiguous` and those rows stay `unattributed`. An ambiguous
+signed session makes the attempt `uncertain` once nothing on that attempt is still waiting for
+usage; a sibling session that already matched keeps its fee on the attempt.
+Reconciliation still balances. A later sync can turn a `matched` entry into `ambiguous`, and every
+sync checks `ambiguous` keys again: when the signer refuses one of the entries, the one left matches.
 
 `manifest_id` is the lookup, not the cost key. The 7 October run showed a client can put any string
 there ([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). A manifest on another
-allocation does not attribute. Whether a fresh manifest per challenge is an orchestrator guarantee
-is open (T13, [livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
+allocation does not attribute.
+
+The orchestrator mints a fresh manifest for each 402 challenge and reserves the runner session under it,
+so the orchestrator's session ID is the `manifest_id` the engine records
+([sdk-gateway.md](../references/sdk-gateway.md#runner-session-stop-83)). The manifest is 4 random bytes
+(8 hex characters) from Go's `math/rand`, and the orchestrator refuses a duplicate only while the first
+session is live. Two sessions on one allocation can therefore share a manifest, and the chance grows
+with the allocation's volume: about 1% by 10,000 sessions. The match then turns `ambiguous`, including
+for an older entry that had matched (T13, T16,
+[livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
 
 ## Cost classification
 
@@ -96,12 +119,18 @@ Each attempt that opened a payment session is classified:
 | Class | Rule | Typical enterprise treatment |
 | --- | --- | --- |
 | `delivered` | The attempt succeeded | Bill under its retail policy |
-| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**) | Absorb; don't bill |
-| `uncertain` | The job is `uncertain`, or the attempt never reported back | Hold, then reconcile |
+| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**), including an attempt the job failed over from, even when a later one delivered (D52) | Absorb; don't bill |
+| `uncertain` | The attempt that left the job `uncertain`, or an attempt that never reported back | Hold, then reconcile |
 | `pending` | The job is still running (its fees so far are not final), or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
+
+**`JobCost.fees` and `JobCost.billable`.** `fees` is what every attempt of the job cost the allocation.
+`billable` is only the `delivered` attempts' fees: what the enterprise bills its user for. A job that
+failed has `billable` zero, and a job that failed over and then succeeded bills only the attempt that
+delivered, while its allocation was debited for both (D52). Both are final once the cost status is
+`observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
 `pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
@@ -114,8 +143,8 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 
 ### Job cost status
 
-`none` (the job ended and no attempt was paid), `pending` (the job is still running, or some paid
-attempt lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
+`none` (the job ended and no attempt recorded a session), `pending` (the job is still running, or a
+recorded session lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
 example a metered session that signed again).
 
 Only cost sync stores projections (`lpb_cost_projections`), and only for jobs that have ended: a

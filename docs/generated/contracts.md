@@ -144,6 +144,7 @@ classDiagram
         +AttemptCost[] attempts
         +datetime? first_observed_at
         +datetime? updated_at
+        +Fees billable
     }
     class AttemptCost {
         +int attempt_number
@@ -191,6 +192,7 @@ classDiagram
     Job *-- MeasuredUsage : usage
     Job *-- ResultRef : result
     JobCost *-- AttemptCost : attempts
+    JobCost *-- Fees : billable
     JobCost *-- Fees : fees
     JobResult *-- Job : job
     Offering *-- NetworkRate : rate_high

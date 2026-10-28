@@ -20,6 +20,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | How many times one runner call may retry a 402 payment challenge (≥ 0) |
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
+| `LPB_MAX_PAID_ATTEMPTS` | `2` | Paid attempts a job may fail over from (1 to 10; `1` turns paid failover off). The operator pays for them, so the caller's `max_attempts` cannot raise it (D55) |
 | `LPB_DISCOVERY_INTERVAL_S`, `LPB_COST_SYNC_INTERVAL_S` | `15`, `30` | Background loops |
 | `LPB_STREAM_FINALIZE_TIMEOUT_S` | `10` | The most a stream's closing writes may take; the slot is released regardless (D34) |
 | `LPB_STREAM_DRAIN_TIMEOUT_S` | `30` | On stop, how long open streams may finish before they are abandoned (D36) |
@@ -27,6 +28,16 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_STREAM_OPEN_GRACE_S` | `5` | How far past its first-byte deadline a transport's open may run before the engine stops it |
 | `LPB_RETENTION_JOBS_DAYS`, `LPB_RETENTION_USAGE_DAYS` | unset | See [contracts/persistence.md](contracts/persistence.md#retention) |
 | `LPB_RETENTION_INTERVAL_S` | `21600` (6 h) | How often the retention purge runs when a retention setting is on |
+| `LPB_AUTH` | `api_keys` | `api_keys`, `jwt`, or `jwt,api_keys`: which credentials the REST service accepts ([access.md](contracts/access.md#jwt-bearer)). `jwt` alone turns engine API keys off |
+| `LPB_JWT_ISSUER`, `LPB_JWT_AUDIENCE` | unset | Required with `jwt`: the exact `iss` (`https`), and the value `aud` must contain |
+| `LPB_JWT_JWKS_URL` | unset | The issuer's keys (`https`); unset, found through the issuer's OpenID or RFC 8414 metadata |
+| `LPB_JWT_ALLOW_HTTP` | `false` | Development only: allows an `http` issuer and key URL, such as a local Keycloak |
+| `LPB_JWT_TOKEN_TYPES` | `at+jwt,application/at+jwt` | Accepted `typ` headers (RFC 9068). Adding `jwt` accepts plain JWTs and drops the `client_id` and `jti` requirements: weaker |
+| `LPB_JWT_MAX_LIFETIME_S` | `3600` | A token whose `exp - iat` is longer is refused |
+| `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms, asymmetric only |
+| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_APPLICATION_CLAIM`, `LPB_JWT_APPLICATION_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `application_id` |
+| `LPB_JWT_SCOPE_CLAIM`, `LPB_JWT_SCOPE_PREFIX`, `LPB_JWT_ADMIN_SCOPE` | `scope`, empty, unset | Scopes named after operations become permissions; the admin scope makes an engine-wide admin credential, so it may not be an operation or a standard OpenID scope |
+| `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging |
 
 ## Operations

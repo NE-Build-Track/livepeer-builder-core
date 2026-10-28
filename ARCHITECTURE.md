@@ -16,7 +16,7 @@ flowchart TB
         ST["store: SQLite / PostgreSQL"]
     end
     Disc["discovery service (lpb discovery, its own process)"]
-    SDK["livepeer-python-gateway (pinned cd6ed5e)"]
+    SDK["livepeer-python-gateway (pinned 2017a80)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
     Orch["Orchestrators + Live Runners (on the network)"]
@@ -76,7 +76,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 
 | Protocol | Default implementation | Replace it to… |
 | --- | --- | --- |
-| `Authenticator` | `ApiKeyAuthenticator` in an `AuthenticatorChain` | use SSO, mTLS, enterprise JWTs |
+| `Authenticator` | `ApiKeyAuthenticator`, and `JwtBearerAuthenticator` with `LPB_AUTH=jwt` (D45), in an `AuthenticatorChain` | use SSO, mTLS, another token scheme |
 | `AccessPolicy` | `DefaultPolicy` (permissions + ownership) | add teams, org admins, RBAC |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | use Vault or a cloud secret manager |
 | `DiscoverySource` | `HttpDiscoverySource` (`LPB_DISCOVERY_URL`) / `StaticDiscoverySource` | read another source in-process; or write an `OrchestratorDirectory` for the discovery service ([contract](docs/contracts/discovery.md)) |
@@ -97,7 +97,8 @@ Each third-party package is confined to one module so a dependency change has on
 | Package | Only in |
 | --- | --- |
 | `livepeer_gateway`, `aiohttp` | `adapters/sdk.py` |
-| `httpx` | `adapters/batteries.py`, `discovery/` |
+| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `discovery/` |
+| `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |
 | `fastapi`, `starlette` | `http/` (`starlette` also in `discovery/server.py`) |

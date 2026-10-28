@@ -19,12 +19,14 @@ from livepeer_builder.contracts import (
     ResultRef,
     SignedSession,
     UsageRow,
+    billable_fees,
 )
 from livepeer_builder.store import schema as t
 
 
 def projection(row: Any) -> JobCost:
     fee_usd = row["fee_usd"]
+    attempts = tuple(AttemptCost.model_validate(attempt) for attempt in row["attempts"])
     return JobCost(
         job_id=UUID(row["job_id"]),
         status=row["status"],
@@ -33,9 +35,10 @@ def projection(row: Any) -> JobCost:
             fee_usd=None if fee_usd is None else Decimal(fee_usd),
             row_count=row["row_count"],
         ),
-        attempts=tuple(AttemptCost.model_validate(attempt) for attempt in row["attempts"]),
+        attempts=attempts,
         first_observed_at=row["first_observed_at"],
         updated_at=row["updated_at"],
+        billable=billable_fees(attempts),  # derived, not stored: the attempts carry each class's fees
     )
 
 
@@ -82,6 +85,7 @@ async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
                         manifest_id=session["manifest_id"],
                         payment_session_id=session["payment_session_id"],
                         match=session["match_status"],
+                        payment_state=session["payment_state"],
                     )
                     for session in sessions_by_attempt.get((a["job_id"], a["number"]), ())
                 ),

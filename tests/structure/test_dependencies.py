@@ -20,6 +20,7 @@ DISTRIBUTIONS = {
     "cryptography": "cryptography",
     "fastapi": "fastapi",
     "httpx": "httpx",
+    "jwt": "pyjwt",
     "livepeer_gateway": "livepeer-gateway",
     "pydantic": "pydantic",
     "sqlalchemy": "sqlalchemy",

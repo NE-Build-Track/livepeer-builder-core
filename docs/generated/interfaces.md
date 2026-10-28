@@ -116,6 +116,7 @@ classDiagram
     class DefaultPolicy
     class EncryptedDbSecretStore
     class HttpDiscoverySource
+    class JwtBearerAuthenticator
     class MostCapacityFirst
     class PaymentsService
     class ReservedEventFeed
@@ -131,6 +132,7 @@ classDiagram
     class SystemClock
     Authenticator <|.. ApiKeyAuthenticator
     Authenticator <|.. AuthenticatorChain
+    Authenticator <|.. JwtBearerAuthenticator
     AccessPolicy <|.. DefaultPolicy
     SecretStore <|.. RoutingSecretStore
     SecretStore <|.. SettingsSecretStore
@@ -159,6 +161,7 @@ classDiagram
 | --- | --- | --- |
 | `Authenticator` | `ApiKeyAuthenticator` | `livepeer_builder.adapters.auth` |
 | `Authenticator` | `AuthenticatorChain` | `livepeer_builder.adapters.auth` |
+| `Authenticator` | `JwtBearerAuthenticator` | `livepeer_builder.adapters.jwt` |
 | `AccessPolicy` | `DefaultPolicy` | `livepeer_builder.services.policy` |
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
@@ -168,7 +171,7 @@ classDiagram
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
-| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.sdk` |
+| `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

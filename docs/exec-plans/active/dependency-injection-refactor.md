@@ -38,6 +38,7 @@ Make the change easy, then make the easy change. Today's tests patch module inte
   - **Typed with Protocols** `CallRunner` (both `stream=False` and `stream=True` overloads, only the keyword arguments builder-core uses) and `DiscoverRunners`, in `adapters/sdk.py`, adapter-internal.
   - **SDK drift is caught by a test, not by mypy** (see decision 13). `tests/unit/test_sdk_contract.py` records the keyword arguments the adapter really passes on `call()`, `open()` and `fetch()`, and asserts the real SDK functions accept every one. It was shown to fail when the transport passed a keyword the SDK lacks.
   - The 14 `monkeypatch.setattr(sdk.call_runner / sdk.discover_runners, ...)` sites in `tests/unit/test_adapters.py`, `test_adapter_edges.py` and `test_stream_deadlines.py` pass fakes instead. The parametrized deadline test now carries its fake per parameter.
+  - Since D53 the `call` seam is gone: the engine owns the runner call, and its tests run against a loopback runner and signer (`tests/unit/livepeer_net.py`).
 - [x] **Tuning values live in settings** (decision 8):
   - `jobs._OPEN_BACKSTOP_GRACE_S` becomes `stream_open_grace_s` (`LPB_STREAM_OPEN_GRACE_S`, default `5.0`, `> 0`), carried in `StreamLimits`; `test_stream_deadlines.py` stops patching the module constant.
   - The Batteries HTTP timeout (hard-coded `30.0`) becomes `batteries_timeout_s` (`LPB_BATTERIES_TIMEOUT_S`, default `30.0`, `> 0`).

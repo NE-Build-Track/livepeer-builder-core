@@ -5,6 +5,7 @@ from datetime import UTC, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import event, text
 
 from livepeer_builder.contracts import (
     AccessKey,
@@ -382,6 +383,30 @@ async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
     assert [session.manifest_id for session in kept.sessions] == ["m1", "m2"]  # appended once each
 
 
+async def test_an_intent_recorded_before_signing_is_not_a_payment(sql: SqlStore, clock: FixedClock) -> None:
+    """A session stored unpaid is not a payment. Signing marks it paid, and a later unpaid copy does not
+    unmark it. The job path does not write this row before the signer is asked."""
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="a1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await sql.start_attempt(attempt)
+    intent = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),)})
+    await sql.record_payment_evidence(intent)
+
+    async def kept() -> Attempt:
+        stored = await sql.get_job(job.id)
+        assert stored is not None
+        return stored.attempts[0]
+
+    assert ((await kept()).payment_sent, [s.manifest_id for s in (await kept()).sessions]) == (False, ["m1"])
+    await sql.record_payment_evidence(intent.model_copy(update={"payment_sent": True}))  # the signer signed
+    await sql.record_payment_evidence(intent)  # a stale unpaid copy arrives late
+    assert (await kept()).payment_sent and [s.manifest_id for s in (await kept()).sessions] == ["m1"]
+
+
 async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of_date(
     sql: SqlStore, clock: FixedClock
 ) -> None:  # a projection stored before the report would serve none for a paid job
@@ -407,3 +432,178 @@ async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of
         found = await reads.job_with_projection(job.id)
     assert found is not None and found[1] is None  # computed live: pending, not the stored none
     assert job.id in {selected.id for selected in await sql.jobs_for_projection([])}
+
+
+# -- payment intent before signing (D54) ----------------------------------------------------------------
+
+
+async def test_payment_intent_is_durable_without_asserting_payment(sql: SqlStore, clock: FixedClock) -> None:
+    job = make_job(clock, state="running")
+    attempt = make_attempt(job.id, clock).model_copy(update={"payment_sent": False})
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    intent = attempt.model_copy(
+        update={"sessions": (SignedSession(manifest_id="possibly-charged", payment_state="unknown"),)}
+    )
+    await sql.record_payment_evidence(intent)
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert not loaded.attempts[0].payment_sent
+    assert loaded.attempts[0].sessions[0].payment_state == "unknown"
+
+
+async def test_payment_intent_only_moves_forward(sql: SqlStore, clock: FixedClock) -> None:
+    """``unknown`` may become ``unpaid`` or ``paid``; ``paid`` never goes back (D54)."""
+    job = make_job(clock, state="running")
+    attempt = make_attempt(job.id, clock).model_copy(update={"payment_sent": False})
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    for state, expected in [
+        ("unknown", "unknown"),
+        ("unpaid", "unpaid"),
+        ("unknown", "unknown"),
+        ("paid", "paid"),
+        ("unpaid", "paid"),
+        ("unknown", "paid"),
+    ]:
+        evidence = attempt.model_copy(
+            update={
+                "payment_sent": state == "paid",
+                "sessions": (SignedSession(manifest_id="m", payment_state=state),),
+            }
+        )
+        await sql.record_payment_evidence(evidence)
+        loaded = await sql.get_job(job.id)
+        assert loaded is not None
+        assert loaded.attempts[0].sessions[0].payment_state == expected
+    await sql.finish_attempt(attempt)  # a stale finisher must not erase the confirmed payment
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None and loaded.attempts[0].payment_sent
+
+
+async def test_a_refused_intent_is_never_matched(sql: SqlStore, clock: FixedClock) -> None:
+    """Usage for a manifest the signer refused stays unattributed; it never makes a paid one ambiguous."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    await sql.create_job(job, None)
+    for number, state in [(1, "unpaid"), (2, "unknown")]:
+        attempt = make_attempt(job.id, clock, number, allocation_id="alloc_1").model_copy(
+            update={"sessions": (SignedSession(manifest_id="m", payment_state=state),)}
+        )
+        await sql.start_attempt(attempt)
+        await sql.record_payment_evidence(attempt)
+    rows = [row("u", "s", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    assert await sql.match_sessions(rows) == {job.id}
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert [(a.sessions[0].payment_state, a.sessions[0].match) for a in loaded.attempts] == [
+        ("unpaid", "unmatched"),
+        ("paid", "matched"),  # unique usage confirms an unknown intent
+    ]
+    assert loaded.attempts[1].payment_sent
+    assert await sql.unattributed_usage("alloc_1") == []
+
+
+async def test_a_refusal_lets_the_next_sync_resolve_an_ambiguous_manifest(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """Two attempts on one allocation name the same manifest, so its usage is ambiguous. When the signer
+    then refuses one, the next sync matches the other, with no new usage (#64 review)."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    await sql.create_job(job, None)
+    attempts = []
+    for number, state in [(1, "unknown"), (2, "paid")]:
+        attempt = make_attempt(job.id, clock, number, allocation_id="alloc_1").model_copy(
+            update={"sessions": (SignedSession(manifest_id="m", payment_state=state),)}
+        )
+        await sql.start_attempt(attempt)
+        await sql.record_payment_evidence(attempt)
+        attempts.append(attempt)
+    rows = [row("u", "s", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    await sql.match_sessions(rows)
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None and [a.sessions[0].match for a in loaded.attempts] == ["ambiguous", "ambiguous"]
+    refused = attempts[0].model_copy(
+        update={"sessions": (SignedSession(manifest_id="m", payment_state="unpaid"),)}
+    )
+    await sql.record_payment_evidence(refused)
+    assert await sql.match_sessions([]) == {job.id}
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    paid = loaded.attempts[1].sessions[0]
+    assert (paid.payment_state, paid.match, paid.payment_session_id) == ("paid", "matched", "s")
+    assert loaded.attempts[0].sessions[0].payment_state == "unpaid"
+
+
+async def test_matching_keeps_a_confirmation_that_arrived_after_its_read(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    attempt = make_attempt(job.id, clock, allocation_id="alloc_1").model_copy(
+        update={"sessions": (SignedSession(manifest_id="m", payment_state="unknown"),)}
+    )
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    await sql.record_payment_evidence(attempt)
+    rows = [row("u1", "s1", "1", manifest="m"), row("u2", "s2", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    confirmed = False
+
+    def confirm_before_match_write(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        nonlocal confirmed
+        if not confirmed and statement.startswith("UPDATE lpb_payment_sessions"):
+            confirmed = True
+            # the signer's success callback lands after matching read the unknown intent
+            conn.execute(text("UPDATE lpb_payment_sessions SET payment_state = 'paid'"))
+
+    event.listen(sql.engine.sync_engine, "before_cursor_execute", confirm_before_match_write)
+    try:
+        await sql.match_sessions(rows)
+    finally:
+        event.remove(sql.engine.sync_engine, "before_cursor_execute", confirm_before_match_write)
+    loaded = await sql.get_job(job.id)
+    assert confirmed and loaded is not None
+    assert loaded.attempts[0].sessions[0].match == "ambiguous"
+    assert loaded.attempts[0].sessions[0].payment_state == "paid"
+
+
+async def test_a_refusal_that_lands_during_matching_is_never_billed(sql: SqlStore, clock: FixedClock) -> None:
+    """Matching read the intent as ``unknown``; the signer's refusal commits before matching writes. The
+    refusal stands: the manifest stays ``unpaid`` and unmatched, the attempt unpaid, the usage unattributed."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    attempt = make_attempt(job.id, clock, allocation_id="alloc_1").model_copy(
+        update={"payment_sent": False, "sessions": (SignedSession(manifest_id="m", payment_state="unknown"),)}
+    )
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    await sql.record_payment_evidence(attempt)
+    rows = [row("u1", "s1", "1", manifest="m", allocation="alloc_1")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    refused = False
+
+    def refuse_before_match_write(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        nonlocal refused
+        if not refused and statement.startswith("UPDATE lpb_payment_sessions"):
+            refused = True
+            conn.execute(text("UPDATE lpb_payment_sessions SET payment_state = 'unpaid'"))
+
+    event.listen(sql.engine.sync_engine, "before_cursor_execute", refuse_before_match_write)
+    try:
+        await sql.match_sessions(rows)
+    finally:
+        event.remove(sql.engine.sync_engine, "before_cursor_execute", refuse_before_match_write)
+    loaded = await sql.get_job(job.id)
+    assert refused and loaded is not None
+    session = loaded.attempts[0].sessions[0]
+    assert (session.payment_state, session.match) == ("unpaid", "unmatched")
+    assert not loaded.attempts[0].payment_sent
+    assert [r.computed_fee_eth for r in await sql.unattributed_usage("alloc_1")] == [Decimal(1)]

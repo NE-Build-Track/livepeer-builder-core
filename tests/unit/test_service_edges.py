@@ -205,7 +205,7 @@ async def test_a_second_cursor_rejection_is_raised(store: SqlStore) -> None:
 # -- discovery -----------------------------------------------------------------------------------------
 
 
-async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock, alice: ActorContext) -> None:
+async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock) -> None:
     class Flaky:
         def __init__(self) -> None:
             self.fail = False
@@ -217,12 +217,12 @@ async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock, alice: 
 
     source = Flaky()
     discovery = DiscoveryService(source, DefaultPolicy(), clock, interval_s=0.01)
-    assert discovery.offerings(alice) == []  # nothing observed yet
+    assert discovery.offerings() == []  # nothing observed yet
     await discovery.refresh()
     source.fail = True
     snapshot = await discovery.refresh()
     assert snapshot.last_error == "signer down" and len(snapshot.runners) == 1
-    (offering,) = discovery.offerings(alice)
+    (offering,) = discovery.offerings()
     assert offering.rate_low is None  # no priced runners: no comparable rate
 
     stop = asyncio.Event()
@@ -313,4 +313,4 @@ async def test_payment_refused_after_signing_is_a_payment_failure(
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert failed.value.job.failure is not None and failed.value.job.failure.kind == "payment"
-    assert len(failed.value.job.attempts) == 1  # paid: never failed over
+    assert len(failed.value.job.attempts) == 1  # r2 shares the orchestrator that took the payment

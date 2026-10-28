@@ -6,7 +6,7 @@ services for a local Docker run. CI checks that file with `docker compose config
 
 The engine image is this checkout (`pip install ".[server,postgres]"`), not a pinned clone of the
 repository. Batteries is [NE-Build-Track/clearinghouse-batteries](https://github.com/NE-Build-Track/clearinghouse-batteries)
-`ca09e47`. The signer is [NE-Build-Track/node](https://github.com/NE-Build-Track/node) `406b248` (v1.0.2), the same
+`ca09e47`. The signer is [livepeer/node](https://github.com/livepeer/node) `406b248` (v1.0.2), the same
 commit the dev stack builds.
 
 ## What runs
@@ -34,20 +34,23 @@ stay `OPERATOR_TOKEN`, `ENGINE_TOKEN`, `WEBHOOK_TOKEN`, `KAFKA_READER_TOKEN`, an
 
 ## Environments
 
-The workflow reads `RAILWAY_TOKEN` from a GitHub environment. The token is a Railway project token,
-so the workflow does not pass `--project` or `--environment`. Put the secret on the GitHub
-environment, not on the repository: a repository secret of the same name is used when the
-environment secret is missing.
+[Deploy](../../.github/workflows/deploy.yml) reads `RAILWAY_TOKEN` from a GitHub environment. The token
+is a Railway project token, so the workflow does not pass `--project` or `--environment`. Put the
+secret on the GitHub environment, not on the repository: a repository secret of the same name is used
+when the environment secret is missing.
+
+[Preview](../../.github/workflows/preview.yml) uses the same preview `RAILWAY_TOKEN`, plus
+`NEON_API_KEY` (environment secret) and `NEON_PROJECT_ID` (environment variable).
 
 | Git ref | GitHub environment | Railway token |
 | --- | --- | --- |
 | `main`, `releases/*` | `production` | production project token |
-| any other branch | `preview` | preview project token |
+| a pull request | `preview` | preview project token |
 
 A push to `main` or `releases/*` deploys Batteries, the signer, the discovery service and the engine.
-A push to any other branch deploys the engine only, so a preview branch does not restart the shared
-Batteries, signer and discovery. **Deploy** can also be run by hand for one service or all four, on the
-selected branch.
+A pull request deploys the engine only, so it does not restart Batteries, the signer, or discovery.
+**Deploy** can also be run by hand for one service or all four, on the selected branch. A manual run
+on any other branch deploys the engine only.
 Limit the `production` environment's deployment branches to `main` and `releases/*` so a branch job
 cannot select it. Required reviewers on `production` gate that deploy.
 
@@ -98,12 +101,23 @@ a key, so keep it a sealed variable). Orchestrators with untrusted TLS are left 
 
 ## Engine database
 
-`LPB_DATABASE_URL` may use Railway's `postgresql://` scheme. The entrypoint rewrites it to
-`postgresql+asyncpg://` and does not log the URL. `LPB_AUTO_MIGRATE=false`, so the process does
-not migrate as it starts. Railway runs `entrypoint.py migrate` before the new process starts.
-On preview that command only checks the revision (`RAILWAY_ENVIRONMENT_NAME=preview`) and leaves
-the shared database unchanged. On production it applies the packaged migrations, then checks.
-Either way the deploy stops when the database is not at the package head.
+The engine stores its records in Neon project `builder-engine` (`floral-frog-74114075`), Postgres 18,
+in `aws-eu-central-1`. Production uses the protected `main` branch. A pull request uses
+`preview/pr-<number>`, a copy of `main` created when the PR opens and deleted when it closes. The
+branch expires 14 days after the last update. The live preview URL serves whichever PR deployed last.
+Each PR keeps its own branch, so deploying that PR again returns to its own data. Preview writes stay
+on that branch.
+
+`LPB_DATABASE_URL` is the direct Neon connection string (the hostname has no `-pooler` suffix). The
+entrypoint rewrites `postgresql://` and `postgres://` to `postgresql+asyncpg://`, maps `sslmode` to
+asyncpg's `ssl` parameter, and drops `channel_binding`. It does not log the URL. `LPB_AUTO_MIGRATE=false`,
+so the process does not migrate as it starts. Railway runs `entrypoint.py migrate` before the new
+process starts. Production and preview both apply the packaged migrations, then check the revision.
+The deploy stops when the database is not at the package head.
+
+Neon accepts connections from the public internet, with TLS and the role password. The URL stays a
+sealed Railway variable. The Railway Postgres service is still in both environments so production can
+be pointed back at it. The engine does not use it.
 
 Health is `GET /livez` on the engine's public domain. Swagger is at `/docs`. Authorize sends
 `Authorization: Bearer`. The engine still enforces its own checks.

@@ -1,6 +1,6 @@
 # livepeer/node signer (as relied on by the engine)
 
-Baseline NE-Build-Track/node `406b248` (v1.0.2; was `f970be6`, and `1432123` before that). Since `f970be6` the signer takes the orchestrator's identity from `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`; payment state and the `orch_address` in events are the recipient. Source: `signer/service.go`, `signer/events.go`, `docs/http-api.md`,
+Baseline livepeer/node `406b248` (v1.0.2; was `f970be6`, and `1432123` before that). Since `f970be6` the signer takes the orchestrator's identity from `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`; payment state and the `orch_address` in events are the recipient. Source: `signer/service.go`, `signer/events.go`, `docs/http-api.md`,
 `docs/signer.md`.
 
 - **Authorization webhook:** before signing, the signer POSTs `{headers, state}` to the configured

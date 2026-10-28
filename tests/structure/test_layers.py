@@ -53,9 +53,10 @@ ALLOWED: dict[str, set[str]] = {
 
 # third-party package -> the only modules (path prefixes under src/livepeer_builder) that may import it
 CONFINED: dict[str, tuple[str, ...]] = {
-    "livepeer_gateway": ("adapters/sdk.py",),
-    "aiohttp": ("adapters/sdk.py",),
-    "httpx": ("adapters/batteries.py", "discovery/"),
+    "livepeer_gateway": ("adapters/sdk.py", "adapters/runner_call.py"),
+    "aiohttp": ("adapters/runner_call.py",),
+    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "discovery/"),
+    "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),
     "alembic": ("store/",),

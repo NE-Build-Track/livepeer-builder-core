@@ -1,4 +1,5 @@
 """REST adapter (the ``[server]`` extra). Each route authenticates, then makes one engine call.
+Health and the catalog (``GET /v1/offerings``) are public.
 
 Routes are thin: authorization lives in the services' AccessPolicy checks, not here. Reserved
 contracts (async jobs, sessions, events) answer 501. The generated schema is committed at
@@ -68,6 +69,7 @@ _FAILURE_STATUS = {
     "refused": 503,
     "unreachable": 503,
     "payment": 503,
+    "payment_unknown": 503,
     "timeout": 504,
     "runner_rejected": 422,
     "runner_error": 502,
@@ -118,18 +120,25 @@ def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, Act
     authenticate like the built-in routes: ``Annotated[ActorContext, Depends(actor_dependency(engine))]``.
 
     When the engine accepts API keys, it also declares the ``lpk_`` bearer scheme in OpenAPI, so Swagger
-    UI shows Authorize. With keys off it declares none: the engine cannot know what a supplied
-    authenticator expects, so a service that wants Swagger to send its credential declares it in ``extend``.
+    UI shows Authorize. With keys off it declares a JWT bearer scheme when the authenticator chain announces
+    a ``Bearer`` challenge (``LPB_AUTH=jwt``, D45), and otherwise none: the engine cannot know what another
+    authenticator expects, so a service that wants Swagger to send it declares it in ``extend``.
     """
-    if engine.keys is None:
+    # Declares the scheme only; authentication itself stays with engine.authenticator (raw headers).
+    if engine.keys is not None:
+        bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
+    elif "bearer" in (engine.authenticator.challenge() or "").lower():  # JWT bearer (D45), keys off
+        bearer = HTTPBearer(
+            auto_error=False,
+            bearerFormat="JWT",
+            description="An access token from the engine's identity provider",
+        )
+    else:
 
         async def actor_from(request: Request) -> ActorContext:
             return await _authenticated(engine, request)
 
         return actor_from
-
-    # Declares the scheme only; authentication itself stays with engine.authenticator (raw headers).
-    bearer = HTTPBearer(auto_error=False, bearerFormat="lpk", description="An engine API key: `lpk_...`")
 
     async def actor_from_key(
         request: Request,
@@ -180,10 +189,9 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         return health
 
     @app.get("/v1/offerings", response_model=list[Offering])
-    async def offerings(
-        actor: Actor, app_name: Annotated[str | None, Query(alias="app")] = None
-    ) -> list[Offering]:
-        return engine.discovery.offerings(actor, app=app_name)
+    async def offerings(app_name: Annotated[str | None, Query(alias="app")] = None) -> list[Offering]:
+        # Public (#5): the catalog names no runner URL, starts no work and spends nothing.
+        return engine.discovery.offerings(app=app_name)
 
     @app.get("/v1/runners", response_model=list[Runner])
     async def runners(actor: Actor, app_name: Annotated[str, Query(alias="app")]) -> list[Runner]:

@@ -2,16 +2,22 @@
 
 Classification (accepted 12 October, docs/contracts/payments.md#cost-classification):
   delivered             the attempt succeeded
-  failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors)
-  uncertain             the job is uncertain, or the attempt never reported back
+  failed_after_payment  payment went out and the attempt failed (refused, rejected tickets, errors),
+                        including an attempt the job failed over from (D52)
+  uncertain             the attempt that left the job uncertain, or one that never reported back
   pending               payment went out and no applied usage row has arrived yet (never zero)
 Rows on an allocation that match no recorded attempt are ``unattributed`` (reconciliation only).
+``billable`` is the delivered fees only: what an enterprise bills its user for.
 A job's cost is ``pending`` until the job ends, and only an ended job is projected (#33): only cost
 sync stores projections, and reads compute live any job no projection covers yet (running, or ended
 since its projection was stored), so a paid job never reads as ``none``.
+A signed session whose usage has not arrived stays ``pending``, so the job is not stored
+``observed`` with a zero bill.
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
-entry, is ambiguous: the attempt is uncertain and those rows stay unattributed.
+entry, is ambiguous: once no signed session on the attempt is still waiting, the attempt is
+``uncertain`` and those rows stay unattributed. Fees already matched on a sibling session stay
+on the attempt. A debit whose manifest was never signed is unattributed on the allocation.
 """
 
 import asyncio
@@ -38,6 +44,8 @@ from livepeer_builder.contracts import (
     SyncCheckpoint,
     SyncReport,
     UsageRow,
+    add_fees,
+    billable_fees,
 )
 from livepeer_builder.errors import CursorMismatch, NotFound, ProviderUnavailable
 from livepeer_builder.protocols import (
@@ -308,31 +316,58 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     """Pure classification of one job's charges. Only ``applied`` rows count as cost.
 
     A job that has not ended may still pay, so it is ``pending`` and so is each of its attempts, with the
-    fees matched so far: never ``none``, never a final class.
+    fees matched so far: never ``none``, never a final class. A signed session whose usage has not arrived
+    stays ``pending`` too, including the attempt that left the job uncertain.
     """
     applied = [row for row in rows if row.status == "applied"]
     running = job.state not in _ENDED
+    last = max((attempt.number for attempt in job.attempts), default=0)
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
-        if not attempt.sessions and not attempt.payment_sent:
+        # A manifest the signer refused is no charge (D54); a stored ``unknown`` one may be, so it waits.
+        sessions = tuple(session for session in attempt.sessions if session.payment_state != "unpaid")
+        if not sessions and not attempt.payment_sent:
             continue
-        matched = {
+        matched_ids = {
             session.payment_session_id
-            for session in attempt.sessions
+            for session in sessions
             if session.match == "matched" and session.payment_session_id
         }
-        mine = [row for row in applied if row.payment_session_id in matched]
-        cost_class: CostClass
+        mine = [row for row in applied if row.payment_session_id in matched_ids]
+        last_word = attempt.outcome in ("in_flight", "payment_unknown") or (
+            job.state == "uncertain" and attempt.number == last
+        )
         if running:
-            cost_class = "pending"
-        elif any(session.match == "ambiguous" for session in attempt.sessions):
-            cost_class = "uncertain"
-        elif not mine:
-            cost_class = "pending"
-        elif attempt.outcome == "succeeded":
+            attempts.append(
+                AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
+            )
+            continue
+        arrived = {row.payment_session_id for row in mine}
+        # Unmatched, or matched with no applied row yet: the charge is not in what we can see.
+        # Ambiguous is not waiting: the usage arrived and the join was not unique.
+        waiting = any(
+            session.match == "unmatched"
+            or (session.match == "matched" and session.payment_session_id not in arrived)
+            for session in sessions
+        )
+        if waiting:
+            attempts.append(
+                AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
+            )
+            continue
+        # Pending wins while a sibling is still waiting. Once usage has been seen, an ambiguous
+        # signed session makes the attempt uncertain. Its rows stay unattributed; a sibling's
+        # matched fee stays on the attempt.
+        if any(session.match == "ambiguous" for session in sessions) and not waiting:
+            attempts.append(
+                AttemptCost(attempt_number=attempt.number, cost_class="uncertain", fees=fees_of(mine))
+            )
+            continue
+        cost_class: CostClass
+        if attempt.outcome == "succeeded":
             cost_class = "delivered"
-        elif job.state == "uncertain" or attempt.outcome == "in_flight":
-            cost_class = "uncertain"
+        elif last_word:
+            cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D52)
         else:
             cost_class = "failed_after_payment"
         attempts.append(AttemptCost(attempt_number=attempt.number, cost_class=cost_class, fees=fees_of(mine)))
@@ -352,6 +387,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
         attempts=tuple(attempts),
         first_observed_at=None,
         updated_at=None,
+        billable=billable_fees(attempts),
     )
 
 
@@ -363,16 +399,6 @@ def fees_of(rows: Iterable[UsageRow]) -> Fees:
     if all(row.computed_fee_usd is not None for row in applied):
         usd = sum((row.computed_fee_usd or Decimal(0) for row in applied), Decimal(0))
     return Fees(fee_eth=eth, fee_usd=usd, row_count=len(applied))
-
-
-def add_fees(parts: Iterable[Fees]) -> Fees:
-    items = list(parts)
-    eth = sum((fees.fee_eth for fees in items), Decimal(0))
-    priced = [fees for fees in items if fees.row_count]
-    usd: Decimal | None = Decimal(0) if not priced else None
-    if priced and all(fees.fee_usd is not None for fees in priced):
-        usd = sum((fees.fee_usd or Decimal(0) for fees in priced), Decimal(0))
-    return Fees(fee_eth=eth, fee_usd=usd, row_count=sum(fees.row_count for fees in items))
 
 
 def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:

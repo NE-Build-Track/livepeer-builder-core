@@ -37,7 +37,11 @@ class SignsThenWaits:
         self.release = asyncio.Event()
 
     async def call(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> RunnerReply:
         assert on_signed is not None, "the engine passes a recorder for every paid call"
         await on_signed("m-1")
@@ -106,8 +110,8 @@ async def test_a_cancelled_paid_call_keeps_its_evidence(
 async def test_an_error_after_signing_never_turns_the_attempt_unpaid(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore
 ) -> None:
-    # A transport that reports payment_sent=False after the signer signed must not trigger failover
-    # (the job is bound to the paid runner) or drop the signature.
+    # A transport that reports payment_sent=False after the signer signed must not drop the
+    # signature. Paid unreachable stays uncertain and does not fail over (D52).
     error = RunnerCallError("unreachable", "connection reset", payment_sent=False)
     transport = SignsThenWaits(store, then=error)
     transport.release.set()
@@ -115,7 +119,7 @@ async def test_an_error_after_signing_never_turns_the_attempt_unpaid(
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     job = failed.value.job
-    assert len(job.attempts) == 1 and job.attempts[0].payment_sent  # no failover after payment
+    assert len(job.attempts) == 1 and job.attempts[0].payment_sent  # paid, so the evidence stays
     assert [session.manifest_id for session in job.attempts[0].sessions] == ["m-1"]
     assert job.state == "uncertain"  # paid and unreachable: the runner may have run
 
@@ -124,7 +128,11 @@ class OpensAfterSigning(SignsThenWaits):
     """A streaming transport whose open signs, then waits for the runner's headers."""
 
     async def open(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> RunnerReply:
         return await self.call(runner, request, credential, on_signed)
 

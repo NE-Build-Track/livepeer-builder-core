@@ -416,7 +416,7 @@ class JobStream:
         current = self._attempts[-1]
         self._attempts[-1] = current.model_copy(
             update={
-                "sessions": sessions_from(self._stream.manifest_ids) or current.sessions,
+                "sessions": _sessions_at_end(current.sessions, self._stream.manifest_ids),
                 "payment_sent": self._stream.payment_sent or current.payment_sent,
                 "outcome": outcome,
                 "status_code": status_code if status_code is not None else self._stream.status_code,
@@ -424,6 +424,23 @@ class JobStream:
             }
         )
         await self._store.finish_attempt(self._attempts[-1])
+
+
+def _sessions_at_end(
+    current: tuple[SignedSession, ...], manifest_ids: tuple[str, ...]
+) -> tuple[SignedSession, ...]:
+    """Sessions on the attempt when a stream ends.
+
+    ``current`` is what ``on_signed`` merged. ``manifest_ids`` are validated signatures from the
+    transport. Keep ``current``, and append any id that is not already there. When ``current`` is
+    non-empty, do not replace it with ``manifest_ids``.
+    """
+    signed_ids = tuple(dict.fromkeys(manifest_id for manifest_id in manifest_ids if manifest_id))
+    if not current:
+        return sessions_from(signed_ids)
+    known = {session.manifest_id for session in current}
+    added = tuple(manifest_id for manifest_id in signed_ids if manifest_id not in known)
+    return current + sessions_from(added)
 
 
 def sessions_from(manifest_ids: tuple[str, ...]) -> tuple[SignedSession, ...]:
@@ -435,6 +452,8 @@ def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKin
     if outcome == "http":
         status = status_code or 0
         return "runner_rejected" if 400 <= status < 500 else "runner_error"
+    if outcome == "payment_unknown":
+        return "payment_unknown"
     if outcome == "payment_refused":
         return "payment"
     if outcome in ("in_flight", "succeeded"):

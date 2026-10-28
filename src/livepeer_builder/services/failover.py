@@ -1,12 +1,4 @@
-"""Failover: what a failed attempt means for its job, and which runner is tried next (D52).
-
-A failed attempt either moves the job to the next runner (``failover``), or ends it ``failed`` or
-``uncertain``. Payment alone does not bind a job to a runner: an attempt that was paid and refused
-before the work ran fails over to a runner on another orchestrator. Its charge stays on the allocation
-as ``failed_after_payment`` and is never billable (services/costs.py). What stops a paid job is a
-failure that may have run the work, or a payment whose outcome is unknown (``uncertain``), or one that
-would repeat, and be charged, everywhere (``failed``).
-"""
+"""What a failed attempt means for its job, and which runner is tried next (D52)."""
 
 from collections.abc import Iterator, Sequence
 from typing import Literal
@@ -22,22 +14,16 @@ Verdict = Literal["failover", "failed", "uncertain"]
 FAILOVER_OUTCOMES: frozenset[AttemptOutcome] = frozenset({"refused", "unreachable", "payment_refused"})
 UNCERTAIN_OUTCOMES: frozenset[AttemptOutcome] = frozenset({"unreachable", "timeout"})  # paid: it may have run
 _PAID_FAILOVER_OUTCOMES: frozenset[AttemptOutcome] = frozenset({"refused", "payment_refused"})
-# 404 and 409 come from the orchestrator before the app ran: it lost the runner or its session (a
-# runner stop, livepeer-python-gateway#83), or the session already exists. Another runner may succeed.
+# 404 and 409: the orchestrator refused before the app ran (a runner stop, gateway #83).
 NOT_RUN_STATUSES = frozenset({404, 409})
-# 502 and 504: the orchestrator's proxy lost the runner, before or during its answer, so the work may
-# have run. Any other status is the runner's (a 500 after it ran) or about the request (other 4xx).
+# 502 and 504: the proxy lost the runner, so the work may have run. A 500 ran and failed.
 MAY_HAVE_RUN_STATUSES = frozenset({502, 504})
 
 
 def attempt_verdict(
     outcome: AttemptOutcome, status_code: int | None, paid: bool, *, payment_unknown: bool = False
 ) -> Verdict:
-    """What a failed attempt means for its job (docs/contracts/engine.md#behavior-the-contract-fixes).
-
-    ``payment_unknown``: the signer was asked and never gave a validated answer, so it may have charged.
-    The paid request never left, but a second payment could double the charge: the job stops there.
-    """
+    """``payment_unknown`` stops the job: the signer may have charged, so nobody else is paid."""
     not_run = outcome == "http" and status_code in NOT_RUN_STATUSES
     if payment_unknown or outcome == "payment_unknown":
         return "uncertain"
@@ -49,9 +35,7 @@ def attempt_verdict(
 
 
 def payment_unresolved(attempts: Sequence[Attempt]) -> bool:
-    """A job left unfinished (a restart, an engine error) may hold a payment for work whose outcome is
-    unknown when its last attempt is still in flight, or was paid and did not end in a failover. The
-    attempts it failed over from ended with a known outcome, so they never make it ``uncertain``."""
+    """Only the last attempt can leave a restarted job ``uncertain``."""
     if not attempts:
         return False
     last = max(attempts, key=lambda attempt: attempt.number)
@@ -61,12 +45,7 @@ def payment_unresolved(attempts: Sequence[Attempt]) -> bool:
 
 
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
-    """The failure a job ends with, in the last runner's words. ``tried`` counts the runners it failed on.
-
-    A 404 or 409 from the orchestrator is a refusal before the work ran, so it is ``refused`` (retry
-    later), not ``runner_rejected``: the REST service would otherwise answer the caller 404 or 409.
-    ``status_code`` keeps the orchestrator's own status.
-    """
+    """A 404 or 409 is reported as ``refused``. ``status_code`` keeps the orchestrator's status."""
     not_run = error.kind == "http" and error.status_code in NOT_RUN_STATUSES
     return Failure(
         kind="refused" if not_run else failure_kind(error.kind, error.status_code),
@@ -78,13 +57,7 @@ def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
 
 
 class Candidates:
-    """The runners a job may try, in selection order, at most ``max_attempts`` of them.
-
-    ``exclude`` drops every later runner on an orchestrator, so one that took a payment and failed is
-    never paid again for the same job. A runner is matched to its orchestrator by ``orchestrator_url``,
-    or by its own URL's origin when that is missing: a Live Runner is reached through its
-    orchestrator. A skipped runner does not count as an attempt.
-    """
+    """Selection order, at most ``max_attempts``. ``exclude`` skips that orchestrator's later runners."""
 
     def __init__(self, ordered: Sequence[Runner], max_attempts: int) -> None:
         self.ordered = tuple(ordered)
@@ -106,7 +79,6 @@ class Candidates:
 
 
 def orchestrator_of(runner: Runner) -> str:
-    """``scheme://host:port`` of the runner's orchestrator, lower-cased, with the default port filled in."""
     url = runner.orchestrator_url or runner.url
     try:
         parts = urlsplit(url if "://" in url else f"https://{url}")

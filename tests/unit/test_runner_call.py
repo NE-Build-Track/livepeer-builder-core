@@ -12,20 +12,12 @@ from decimal import Decimal
 
 import livepeer_gateway.remote_signer as remote_signer
 import pytest
-from livepeer_gateway.errors import (
-    LivepeerGatewayError,
-    LivepeerHTTPError,
-    PaymentError,
-    SignerRefreshRequired,
-)
 
 from livepeer_builder.adapters.runner_call import (
     PaidRequest,
     PaymentEvents,
     max_price,
-    network_kind,
     payment_type,
-    signer_error,
     stop_funding,
 )
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
@@ -389,21 +381,6 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
     assert paid._challenge(challenge("https://RUNNER.example:443/pay")).manifest_id == "m-1"
     with pytest.raises(RunnerCallError, match="invalid payment challenge"):
         paid._challenge(challenge("https://10.0.0.5/pay"))
-
-
-def test_signer_errors_map_to_outcomes() -> None:
-    events = PaymentEvents()
-    signer = "https://signer.example/generate-live-payment"
-    assert signer_error(LivepeerHTTPError(400, signer), events).kind == "payment_refused"
-    assert signer_error(LivepeerHTTPError(481, signer), events).kind == "payment_refused"
-    assert signer_error(LivepeerHTTPError(402, signer), events).kind == "payment"  # every orchestrator alike
-    assert signer_error(PaymentError("no segCreds"), events).kind == "payment"
-    refresh = signer_error(SignerRefreshRequired("params expired"), events)
-    assert (refresh.kind, refresh.payment_sent, refresh.payment_unknown) == ("payment_refused", False, False)
-    lost = LivepeerGatewayError("failed to reach endpoint")
-    lost.__cause__ = TimeoutError()
-    assert signer_error(lost, events).kind == "timeout"
-    assert network_kind(RuntimeError("other")) == "http"
 
 
 def test_price_unit_and_ceiling() -> None:

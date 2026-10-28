@@ -1,17 +1,6 @@
-"""The paid runner call, owned by the engine (D53).
+"""The engine's paid runner call (D53).
 
-Adapted from ``call_runner`` and its helpers in livepeer-python-gateway ``live_runner.py`` at ``2017a80``
-(MIT License, Copyright (c) 2026 Livepeer Foundation). The engine sends the runner request and answers
-its 402 itself; signing stays with the SDK's signer client (``get_signer_info``, ``LivePaymentSession``).
-Owning the loop lets the transport report each payment session when cost attribution needs it, with no
-SDK hooks:
-
-- ``remember`` before ``get_payment``, using ``LivePaymentSession.manifest_id``, in memory only:
-  a lost reply, a malformed reply or a cancel does not insert a session row;
-- ``on_signed`` once ``get_payment`` returns, before the paid request, which writes the session row.
-
-tests/unit/test_runner_call.py runs this against a loopback runner and signer, and fails when the pinned
-SDK's ``call_runner`` or its helpers change, so every pin bump reviews this copy.
+Adapted from livepeer-python-gateway ``call_runner`` at ``2017a80`` (MIT).
 """
 
 import asyncio
@@ -50,35 +39,21 @@ PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
 _PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
-# The signer refuses a ceiling below the price it is asked to pay; 1.2% covers most hourly ETH-USD drift.
-_PRICE_PADDING = Decimal("1.012")
+_PRICE_PADDING = Decimal("1.012")  # the signer refuses a ceiling below the price it is asked to pay
 _PAYMENT_ERRORS = (PaymentError, SkipPaymentCycle, RemoteSignerError)
-# Signer statuses about the orchestrator's payment params, not the caller: another orchestrator may
-# succeed, paid or not (D26, D52). 400 = incomplete or expired params; 481 = price ceiling. Caller- or
-# signer-side refusals (402 allowance, 403 forbidden, 502 webhook, 503 outbox) are not here.
+# 400 and 481 are this orchestrator's params (D26). 402, 403, 502 and 503 are the caller's or the signer's.
 _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
-# Signer answers that say it did not sign. A timeout, a lost or malformed reply, or a 5xx does not: the
-# signer may have charged, so the manifest stays ``unknown``.
+# These say the signer did not sign. A timeout, a lost reply or a 5xx may have charged.
 _SIGNER_REFUSALS = frozenset({400, 401, 402, 403, 481})
 
 
 @runtime_checkable
 class RemembersManifest(Protocol):
-    """An ``on_signed`` callback that also keeps a manifest before the signer is asked."""
-
     async def remember(self, manifest_id: str) -> None: ...
 
 
 class PaymentEvents:
-    """What happened to each payment session of one call.
-
-    A session ``get_payment`` validated means the signer charged the allocation and counts as
-    ``payment_sent``: the engine then fails over only to another orchestrator, and only when the failure
-    did not run the work (D52). Each one reaches ``on_signed`` before the paid request goes out, so the
-    engine stores the evidence first (D42). ``unknown`` is set when the signer was asked and gave no
-    validated answer and no refusal: it may have charged, so the job must not pay another orchestrator.
-    That charge is not a session row, because ``on_signed`` did not run.
-    """
+    """Sessions of one call. ``unknown`` is ``payment_unknown``: the signer was asked and may have charged."""
 
     def __init__(self, on_signed: OnSigned | None = None) -> None:
         self.signed = False
@@ -91,20 +66,17 @@ class PaymentEvents:
         return tuple(self.manifest_ids)
 
     async def remember(self, manifest_id: str) -> None:
-        """Before ``get_payment``. Only a recorder that implements ``remember`` is told."""
         callback = self._on_signed
         if isinstance(callback, RemembersManifest):
             await callback.remember(manifest_id)
 
     async def confirmed(self, manifest_id: str) -> None:
-        """``get_payment`` returned: this manifest is a validated payment."""
         self.signed = True
         self.manifest_ids.append(manifest_id)
         if self._on_signed is not None:
             await self._on_signed(manifest_id)
 
     def note_failure(self, error: BaseException) -> None:
-        """A non-refusal may have charged. A signer refusal, including a refresh, did not validate."""
         refused = isinstance(error, (SignerRefreshRequired, SkipPaymentCycle)) or (
             isinstance(error, LivepeerHTTPError) and error.status_code in _SIGNER_REFUSALS
         )
@@ -114,7 +86,6 @@ class PaymentEvents:
     def error(
         self, kind: AttemptOutcome, message: str, *, status_code: int | None = None, body: str | None = None
     ) -> RunnerCallError:
-        """A failed call, carrying what the signer signed for it so far."""
         return RunnerCallError(
             kind,
             message,
@@ -127,9 +98,6 @@ class PaymentEvents:
 
 
 class PaidRequest:
-    """One runner request. A 402 is paid through the signer and the request sent again, up to
-    ``(retries + 1) * 2`` times, as ``call_runner`` does."""
-
     def __init__(
         self,
         url: str,
@@ -147,7 +115,7 @@ class PaidRequest:
         self.url = url
         # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
         origins = {_origin(url), _origin(orchestrator_url) if orchestrator_url else None} - {None}
-        if _origin(url) is None:  # refused before any request, unpaid
+        if _origin(url) is None:  # unpaid, before any request
             raise RunnerCallError("http", f"invalid runner URL {url!r}", payment_sent=False)
         self._payment_origins = origins
         self._method = method.upper()
@@ -161,20 +129,17 @@ class PaidRequest:
         self._max_price = max_price(rate) if signer_url is not None else None
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
-        """The runner's status, body and content type. Each request to the runner (the first, then each
-        paid retry) is bounded by ``timeout_s``; signing has the SDK's own limits."""
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_s)) as session:
             with translated(self._events):
                 response, funding = await self._answered(session)
                 try:
                     body = await response.read()
                 finally:
-                    await stop_funding(funding)  # the request ends here, so the funding ends with it
+                    await stop_funding(funding)
                     response.release()
         return response.status, body, response.content_type
 
     async def open(self, connect_timeout_s: float) -> "PaidStream":
-        """The runner's answered response, unread. Only connecting is bounded; the caller bounds the rest."""
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
         session = aiohttp.ClientSession(timeout=timeout)
         try:
@@ -188,8 +153,6 @@ class PaidRequest:
     async def _answered(
         self, session: aiohttp.ClientSession
     ) -> tuple[aiohttp.ClientResponse, asyncio.Task[Any] | None]:
-        """Send until the runner answers something other than 402. Metered funding starts with the paid
-        request, so it covers the work from its start; the caller stops it."""
         headers = {"Accept": "*/*", "Content-Type": "application/json", "User-Agent": "livepeer-builder"}
         if self._signer_url is not None:
             material = await get_signer_info(self._signer_url, frozenset(self._signer_headers.items()))
@@ -214,14 +177,13 @@ class PaidRequest:
                     )
                     if attempt + 1 >= self._attempts:
                         raise
-                    challenge = None  # the payment params expired: ask the runner for a fresh challenge
+                    challenge = None  # expired params: ask the runner for a fresh challenge
                     continue
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
             funding = start_funding(payment) if self._payment_type == "live" else None
             try:
-                # A redirect would replay the payment headers to another host, and its answer is not
-                # the runner's: a 3xx is a runner error like any other.
+                # A redirect would replay the payment headers to another host.
                 response = await session.request(
                     self._method, self.url, data=self._body, headers=sent, allow_redirects=False
                 )
@@ -247,7 +209,7 @@ class PaidRequest:
         raise self._events.error("http", f"{self.url} kept asking for payment", status_code=402)
 
     async def _sign(self, session: LivePaymentSession) -> GetPaymentResponse:
-        """``session.manifest_id`` is the challenge id, known before ``get_payment`` returns."""
+        """``manifest_id`` is known before ``get_payment`` returns."""
         manifest_id = session.manifest_id
         await self._events.remember(manifest_id)
         try:
@@ -266,7 +228,6 @@ class PaidRequest:
         return signed
 
     def _log_signer_error(self, manifest_id: str, error: BaseException) -> None:
-        """The signer did not return a validated payment. ``paid`` is this call's validated payments."""
         _LOG.warning(
             "signer error",
             extra={
@@ -288,22 +249,18 @@ class PaidRequest:
         )
 
     def _challenge(self, body: str) -> LivePaymentChallenge:
-        """The 402's payment contract: ``payment_params``, ``manifest_id`` and ``payment_url``."""
         with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(body)
             if isinstance(data, dict):
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
                 valid = all(isinstance(value, str) and value for value in fields.values())
-                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:  # None never is
+                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:
                     return LivePaymentChallenge(**fields)
-        # Malformed, or its payment_url names another host: refused before anything is signed.
+        # Malformed, or payment_url names another host: nothing is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
 
 
 class PaidStream:
-    """The runner's live response as a ``RunnerStream``. It owns the HTTP session and any metered
-    funding; mid-stream transport failures become RunnerCallError."""
-
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -337,11 +294,10 @@ class PaidStream:
 
     async def _iterate(self) -> AsyncIterator[bytes]:
         with translated(self._events, prefix="stream failed: "):
-            async for chunk in self._response.content.iter_any():  # never empty: b"" ends it
+            async for chunk in self._response.content.iter_any():  # b"" ends the stream
                 yield chunk
 
     async def aclose(self) -> None:
-        """Stop funding first, so nothing is paid for a stream about to be dropped."""
         try:
             await stop_funding(self._funding)
         finally:
@@ -352,8 +308,7 @@ class PaidStream:
 
 @contextlib.contextmanager
 def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
-    """Signer and network failures as RunnerCallError, each with the payment evidence collected so far.
-    The runner's own answers are already RunnerCallError. ``TimeoutError`` is an ``OSError``."""
+    """Signer and network failures become ``RunnerCallError``. ``TimeoutError`` is an ``OSError``."""
     try:
         yield
     except LivepeerGatewayError as error:
@@ -363,9 +318,7 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
 
 
 def _origin(url: str) -> str | None:
-    """``scheme://host:port`` of an absolute ``http``/``https`` URL, lower-cased, with the default port
-    filled in; ``None`` when the URL is relative, has another scheme, or does not parse (a bad port, a
-    broken IPv6 host)."""
+    """``scheme://host:port``, or ``None`` if it does not parse. Port ``0`` uses the scheme default."""
     try:
         parts = urlsplit(url)
         scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
@@ -377,11 +330,7 @@ def _origin(url: str) -> str | None:
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:
-    """The SDK's signer client failed: an outcome for the attempt, with the evidence so far.
-
-    A refresh that escapes the retry budget is this orchestrator's expired params, like a 400: unpaid
-    ``payment_refused``, so the job fails over. The in-loop refresh never reaches here.
-    """
+    """A refresh past the retry budget is unpaid ``payment_refused``, like a 400."""
     if isinstance(error, SignerRefreshRequired):
         return events.error("payment_refused", str(error))
     if isinstance(error, LivepeerHTTPError):
@@ -405,11 +354,6 @@ def network_kind(error: BaseException) -> AttemptOutcome:
 
 
 def payment_type(rate: NetworkRate | None) -> str:
-    """``fixed`` pays once per request; ``live`` (metered) keeps paying while the work runs.
-
-    A unit the engine cannot pay is about this runner's terms, not the job: ``payment_refused`` fails
-    over to the next runner before anything is signed.
-    """
     unit = rate.unit.strip().lower() if rate is not None else ""
     if not unit:
         return "live"
@@ -421,7 +365,6 @@ def payment_type(rate: NetworkRate | None) -> str:
 
 
 def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
-    """The price ceiling the signer is given: the advertised price, padded for rate drift."""
     if rate is None:
         return None
     return {
@@ -432,13 +375,11 @@ def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
 
 
 def start_funding(payment: LivePaymentSession | None) -> asyncio.Task[Any] | None:
-    """Keep a metered session paid in the background (``run_payments``) until ``stop_funding``."""
     return None if payment is None else asyncio.create_task(payment.run_payments())
 
 
 async def stop_funding(task: asyncio.Task[Any] | None) -> None:
-    """Cancel the funding and wait for it to end. Only the funding's own cancellation is absorbed: a
-    cancel of the caller while it waits still propagates."""
+    """The funding's own cancellation is absorbed. A cancel of the caller still propagates."""
     if task is None:
         return
     task.cancel()
@@ -448,10 +389,6 @@ async def stop_funding(task: asyncio.Task[Any] | None) -> None:
 
 
 def json_object(body: bytes, content_type: str) -> dict[str, Any] | None:
-    """The reply parsed when it is a JSON object (``application/json`` or ``+json``); ``None`` otherwise.
-
-    The runner's bytes are the result either way: a delivered reply is never failed for its shape.
-    """
     mime = content_type.split(";", 1)[0].strip().lower()
     if not (mime.endswith("/json") or mime.endswith("+json")):
         return None

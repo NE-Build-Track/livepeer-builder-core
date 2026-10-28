@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Sequence
 from decimal import Decimal
 from uuid import uuid4
@@ -115,6 +116,85 @@ async def test_a_paid_failure_that_did_not_run_fails_over_to_another_orchestrato
         ("succeeded", True, ORCH_B),
     ]
     assert [[s.manifest_id for s in a.sessions] for a in stored.attempts] == [["m-1"], ["m-2"]]
+
+
+ORCH_C = "https://orch-c.example"
+
+
+def three_orchestrators() -> tuple[Runner, ...]:
+    return (
+        runner(url="https://a1", orchestrator_url=ORCH_A),
+        runner(url="https://b1", orchestrator_url=ORCH_B),
+        runner(url="https://c1", orchestrator_url=ORCH_C),
+    )
+
+
+def paid_refusal(manifest: str) -> RunnerCallError:
+    return RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=(manifest,), status_code=503)
+
+
+async def test_paid_failovers_stop_at_the_operator_cap(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """LPB_MAX_PAID_ATTEMPTS (default 2) bounds the payments a job fails over from, whatever the caller's
+    max_attempts (D55): the operator pays for them, and they are never billable."""
+    caplog.set_level(logging.INFO, logger="livepeer_builder.services.failover")
+    engine = await provisioned(make_engine, admin, "alice", runners=three_orchestrators())
+    transport.steps = [paid_refusal("m-1"), paid_refusal("m-2"), ScriptedTransport.ok(manifest_ids=("m-3",))]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=3))
+    job = failed.value.job
+    assert job.state == "failed"
+    assert [(a.outcome, a.payment_sent) for a in job.attempts] == [("refused", True), ("refused", True)]
+    assert [url for url, _ in transport.calls] == ["https://a1", "https://b1"]  # c1 is never asked
+    assert job.failure is not None and job.failure.kind == "refused"
+    assert any(getattr(r, "event", "") == "jobs.paid_attempt_cap" for r in caplog.records)
+
+
+async def test_a_paid_attempt_cap_of_one_turns_paid_failover_off(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(
+        make_engine, admin, "alice", runners=three_orchestrators(), max_paid_attempts=1
+    )
+    transport.steps = [paid_refusal("m-1"), ScriptedTransport.ok(manifest_ids=("m-2",))]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP))
+    assert len(failed.value.job.attempts) == 1 and [url for url, _ in transport.calls] == ["https://a1"]
+
+
+async def test_unpaid_failovers_do_not_count_toward_the_paid_attempt_cap(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice", runners=three_orchestrators())
+    transport.steps = [
+        RunnerCallError("refused", "busy", payment_sent=False, status_code=503),  # refused before payment
+        paid_refusal("m-1"),
+        ScriptedTransport.ok(manifest_ids=("m-2",)),
+    ]
+    result = await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=3))
+    assert result.job.state == "succeeded"
+    assert [(a.outcome, a.payment_sent) for a in result.job.attempts] == [
+        ("refused", False),
+        ("refused", True),
+        ("succeeded", True),
+    ]
+
+
+async def test_the_caller_s_max_attempts_still_applies_under_the_cap(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(
+        make_engine, admin, "alice", runners=three_orchestrators(), max_paid_attempts=3
+    )
+    transport.steps = [paid_refusal("m-1"), ScriptedTransport.ok(manifest_ids=("m-2",))]
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=1))
+    assert len(failed.value.job.attempts) == 1
 
 
 async def test_a_paid_request_error_does_not_fail_over(

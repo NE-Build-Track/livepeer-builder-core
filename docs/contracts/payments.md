@@ -23,7 +23,9 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    400 or 481 refusal are not stored. If the signer charged an omitted manifest anyway, the debit is
    unattributed on the allocation and the customer is not billed. A lost reply, a signer 5xx, or a
    cancel during `get_payment` keeps the remembered manifest on the attempt, unpaid. The cost stays
-   `pending` until usage matches it. The job pays no other orchestrator.
+   `pending` until usage matches it. The job pays no other orchestrator. If the engine dies during
+   `get_payment`, the remembered manifest is lost: the job is `uncertain`, its cost `none`, and the
+   debit unattributed, until a follow-up stores the manifest before signing.
 
 ## Allocation modes
 

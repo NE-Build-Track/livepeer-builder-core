@@ -110,6 +110,10 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    during `get_payment` is not a refusal: the remembered manifest stays on the attempt, unpaid, and
    `finish_attempt` or the shielded close persists it. The job pays no other orchestrator. The cost
    stays `pending` until usage matches that manifest, then the attempt is `uncertain` with the fee.
+   **That holds only while the engine runs.** The remembered manifest is not stored until the signer
+   answers, so if the engine dies during `get_payment`, the restarted job is `uncertain` but its cost
+   is `none` with fee 0, and a debit on that manifest stays unattributed on the allocation. A
+   follow-up stores the manifest before signing.
    A cancel, a disconnect or a crash during
    the paid request, after `on_signed`, keeps the charge attributed to its job. If that write fails, the call goes on, and the write after the call, or the
    close after an error or cancel, stores the same sessions again. A report that arrives after the job

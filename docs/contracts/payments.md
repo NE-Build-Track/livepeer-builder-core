@@ -15,12 +15,14 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    returning payment** (livepeer/node durable outbox, at-least-once delivery). Batteries
    de-duplicates events by ID and debits the allocation.
 4. The engine's runner call (`adapters/runner_call.py`, D53) answers the orchestrator's 402 itself
-   and signs through the SDK's signer client. Before the signer is asked, the engine stores the
-   session's `manifest_id` on its own session log, unpaid, with the allocation whose key would pay; if
-   that write fails nothing is signed. A validated payment marks the attempt paid before the paid
-   request goes out. An explicit refusal leaves an unpaid manifest that costs nothing. A lost,
-   malformed or cancelled reply leaves the job `uncertain` and its cost `pending` until usage matches
-   the manifest, which then attributes the charge to the job.
+   and signs through the SDK's signer client. `remember` keeps `LivePaymentSession.manifest_id` in
+   memory only, before `get_payment`, and does not insert a session row. `on_signed` writes that row
+   once the signer validates the manifest, and marks the attempt paid before the paid request goes
+   out. Batteries' `payment_session_id` is not known at sign time; cost sync fills it on
+   `(allocation_id, manifest_id)`. An expired challenge (a signer 480 inside the retry budget) is not
+   stored. If the signer charged it anyway, the debit is unattributed on the allocation and the
+   customer is not billed. A lost reply, a signer 5xx, or a cancel during `get_payment` finishes the
+   in-process attempt as `uncertain` with no session row. The job pays no other orchestrator.
 
 ## Allocation modes
 
@@ -84,9 +86,12 @@ when exactly one applied usage row-set and one log entry share `(allocation_id, 
 stores that row's `payment_session_id` as `matched`.
 
 If Batteries has no session for the key yet, the entry stays `unmatched` and the attempt's cost is
-`pending`. If more than one Batteries session or more than one log entry shares the key, every
-entry is `ambiguous`: the attempt is `uncertain`, those rows stay `unattributed`, and reconciliation
-still balances. A later sync can turn a `matched` entry into `ambiguous`.
+`pending`. A signed session whose usage has not arrived keeps the attempt `pending`, so the job is
+not stored `observed` with a zero bill. If more than one Batteries session or more than one log
+entry shares the key, the entry is `ambiguous` and those rows stay `unattributed`. An ambiguous
+signed session makes the attempt `uncertain` once nothing on that attempt is still waiting for
+usage; a sibling session that already matched keeps its fee on the attempt.
+Reconciliation still balances. A later sync can turn a `matched` entry into `ambiguous`.
 
 `manifest_id` is the lookup, not the cost key. The 7 October run showed a client can put any string
 there ([evidence](../references/evidence/2026-10-07-arbitrum-run.md)). A manifest on another

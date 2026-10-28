@@ -106,6 +106,50 @@ def test_only_delivered_attempts_are_billable() -> None:
     assert (failed.billable.fee_eth, failed.billable.row_count) == (Decimal(0), 0)  # the user pays nothing
 
 
+def test_an_ambiguous_signed_session_is_uncertain() -> None:
+    job = job_with(("succeeded", (), True))
+    attempt = job.attempts[0].model_copy(
+        update={
+            "sessions": (
+                SignedSession(
+                    manifest_id="m-ok",
+                    payment_session_id=None,
+                    match="ambiguous",
+                ),
+            )
+        }
+    )
+    cost = classify(job.model_copy(update={"attempts": (attempt,)}), [])
+    assert [(item.cost_class, item.fees.fee_eth) for item in cost.attempts] == [("uncertain", Decimal(0))]
+    assert cost.billable.fee_eth == 0
+
+
+def test_a_signed_session_without_usage_stays_pending_beside_an_ambiguous_sibling() -> None:
+    job = job_with(("succeeded", (), True))
+    attempt = job.attempts[0].model_copy(
+        update={
+            "sessions": (
+                SignedSession(manifest_id="m-wait", payment_session_id="s-wait", match="matched"),
+                SignedSession(manifest_id="m-amb", payment_session_id=None, match="ambiguous"),
+            )
+        }
+    )
+    waiting = classify(job.model_copy(update={"attempts": (attempt,)}), [])
+    assert waiting.status == "pending"
+    assert [(item.cost_class, item.fees.fee_eth) for item in waiting.attempts] == [("pending", Decimal(0))]
+    assert waiting.billable.fee_eth == 0
+
+    settled = classify(
+        job.model_copy(update={"attempts": (attempt,)}),
+        [row("1", "s-wait", "0.004", usd="0.4")],
+    )
+    assert [(item.cost_class, item.fees.fee_eth) for item in settled.attempts] == [
+        ("uncertain", Decimal("0.004"))
+    ]
+    assert settled.status == "observed"
+    assert settled.billable.fee_eth == 0
+
+
 def test_only_the_attempt_that_left_a_job_uncertain_is_uncertain() -> None:
     job = job_with(("refused", ("a-503",), True), ("timeout", ("a-late",), True), state="uncertain")
     cost = classify(job, [row("1", "a-503", "2"), row("2", "a-late", "1")])

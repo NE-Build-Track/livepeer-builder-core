@@ -50,10 +50,6 @@ classDiagram
         +__aiter__() AsyncIterator
         +async aclose() None
     }
-    class PaymentIntentRecorder {
-        <<interface>>
-        +async payment_state(manifest_id, state) None
-    }
     class CredentialResolver {
         <<interface>>
         +async credential(actor) PaymentCredential
@@ -128,7 +124,6 @@ classDiagram
     class RoutingSecretStore
     class SdkRunnerTransport
     class SettingsSecretStore
-    class SignedSessionRecorder
     class SqlCostSnapshot
     class SqlMaintenance
     class SqlStore
@@ -147,7 +142,6 @@ classDiagram
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
     RunnerStream <|.. PaidStream
-    PaymentIntentRecorder <|.. SignedSessionRecorder
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
@@ -177,7 +171,6 @@ classDiagram
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `RunnerStream` | `PaidStream` | `livepeer_builder.adapters.runner_call` |
-| `PaymentIntentRecorder` | `SignedSessionRecorder` | `livepeer_builder.services.evidence` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

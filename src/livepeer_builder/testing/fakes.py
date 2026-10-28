@@ -80,7 +80,11 @@ class ScriptedTransport:
     calls: list[tuple[str, str | None]] = field(default_factory=list)
 
     async def call(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> RunnerReply:
         self.calls.append((runner.url, credential))
         if not self.steps:
@@ -174,7 +178,11 @@ class ScriptedStreamTransport(ScriptedTransport):
     streams: list[ScriptedStream] = field(default_factory=list)
 
     async def open(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> ScriptedStream:
         self.calls.append((runner.url, credential))
         if not self.opens:

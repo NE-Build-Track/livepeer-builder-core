@@ -383,8 +383,8 @@ async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
 
 
 async def test_an_intent_recorded_before_signing_is_not_a_payment(sql: SqlStore, clock: FixedClock) -> None:
-    """D53: the manifest is stored before the signer is asked, unpaid; signing marks it paid, and a later
-    unpaid report never unmarks it."""
+    """A session stored unpaid is not a payment. Signing marks it paid, and a later unpaid copy does not
+    unmark it. The job path does not write this row before the signer is asked."""
     job = make_job(clock, state="running")
     await sql.create_job(job, None)
     attempt = Attempt(

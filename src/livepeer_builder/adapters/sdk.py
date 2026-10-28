@@ -16,7 +16,6 @@ from livepeer_builder.adapters.runner_call import (
     PaidRequest,
     PaidStream,
     PaymentEvents,
-    Signer,
     json_object,
 )
 from livepeer_builder.contracts import (
@@ -26,7 +25,7 @@ from livepeer_builder.contracts import (
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.protocols import OnPaymentState, OnSigned, PaymentIntentRecorder
+from livepeer_builder.protocols import OnSigned
 
 
 class DiscoverRunners(Protocol):
@@ -56,10 +55,9 @@ class HttpDiscoverySource:
 class SdkRunnerTransport:
     """The Live Runner call with the actor's credential as the signer bearer. Unpaid when there is none.
 
-    ``on_signed`` gets each session the signer signed, before the paid request goes out (D42).
-    ``on_payment_state`` gets each manifest as ``unknown`` before the signer is asked, and ``unpaid`` when
-    the signer refused it. When it is not given, an ``on_signed`` that is a ``PaymentIntentRecorder``
-    (the engine's ``SignedSessionRecorder``) supplies it, so the job path records intent (D53).
+    ``on_signed`` gets each session the signer signed, before the paid request goes out (D42). A recorder
+    that implements ``remember`` is told the manifest, from ``LivePaymentSession.manifest_id``, before
+    ``get_payment`` (D53).
     """
 
     def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
@@ -69,9 +67,7 @@ class SdkRunnerTransport:
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents
     ) -> PaidRequest:
-        signer = None
-        if credential is not None and self._signer_url is not None:
-            signer = Signer(self._signer_url, {"Authorization": f"Bearer {credential}"})
+        signer_url = self._signer_url if credential is not None else None
         return PaidRequest(
             runner.url.rstrip("/") + request.path,
             method=request.method,
@@ -79,7 +75,8 @@ class SdkRunnerTransport:
             payload={} if request.payload is None else request.payload,
             app=runner.app,
             rate=runner.rate,
-            signer=signer,
+            signer_url=signer_url,
+            signer_headers={"Authorization": f"Bearer {credential}"} if signer_url is not None else None,
             retries=self._retries,
             events=events,
             orchestrator_url=runner.orchestrator_url,
@@ -91,10 +88,8 @@ class SdkRunnerTransport:
         request: JobRequest,
         credential: str | None,
         on_signed: OnSigned | None = None,
-        *,
-        on_payment_state: OnPaymentState | None = None,
     ) -> RunnerReply:
-        events = _events(on_signed, on_payment_state)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
@@ -112,8 +107,6 @@ class SdkRunnerTransport:
         request: JobRequest,
         credential: str | None,
         on_signed: OnSigned | None = None,
-        *,
-        on_payment_state: OnPaymentState | None = None,
     ) -> PaidStream:
         """The paid request, answered: the 402 is paid before the first byte, so payment is known here.
 
@@ -121,7 +114,7 @@ class SdkRunnerTransport:
         keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
         validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        events = _events(on_signed, on_payment_state)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):
@@ -129,12 +122,6 @@ class SdkRunnerTransport:
         except TimeoutError as error:  # the deadline; the call's own timeouts are already RunnerCallError
             message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
             raise events.error("timeout", message) from error
-
-
-def _events(on_signed: OnSigned | None, on_payment_state: OnPaymentState | None) -> PaymentEvents:
-    if on_payment_state is None and isinstance(on_signed, PaymentIntentRecorder):
-        on_payment_state = on_signed.payment_state
-    return PaymentEvents(on_signed, on_payment_state)
 
 
 def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:

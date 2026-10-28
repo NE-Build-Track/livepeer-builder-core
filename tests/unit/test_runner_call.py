@@ -6,12 +6,18 @@ order the parties saw: the intent before the signer, the evidence before the pai
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
 import livepeer_gateway.remote_signer as remote_signer
 import pytest
-from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError, PaymentError
+from livepeer_gateway.errors import (
+    LivepeerGatewayError,
+    LivepeerHTTPError,
+    PaymentError,
+    SignerRefreshRequired,
+)
 
 from livepeer_builder.adapters.runner_call import (
     PaidRequest,
@@ -37,32 +43,28 @@ async def net() -> AsyncIterator[Net]:
 
 
 class Recorder:
-    """The engine's two callbacks, writing to the network log so the order is visible."""
+    """The engine's recorder: ``remember`` before ``get_payment``, ``__call__`` once it returns."""
 
-    def __init__(self, net: Net, fail_intent: bool = False) -> None:
+    def __init__(self, net: Net) -> None:
         self.net = net
-        self.fail_intent = fail_intent
 
-    async def on_signed(self, manifest_id: str) -> None:
+    async def remember(self, manifest_id: str) -> None:
+        self.net.log.append(f"intent {manifest_id}")
+
+    async def __call__(self, manifest_id: str) -> None:
         self.net.log.append(f"stored {manifest_id}")
-
-    async def on_payment_state(self, manifest_id: str, state: str) -> None:
-        if self.fail_intent:
-            raise RuntimeError("the store is down")
-        self.net.log.append(f"intent {manifest_id} {state}")
 
 
 async def call(
     net: Net, request: JobRequest | None = None, *, credential: str | None = "lpg_k", **kw: object
 ):  # type: ignore[no-untyped-def]
-    recorder = Recorder(net, fail_intent=bool(kw.pop("fail_intent", False)))
+    recorder = Recorder(net)
     transport = SdkRunnerTransport(net.url)
     return await transport.call(
         kw.pop("runner", net.runner()),  # type: ignore[arg-type]
         request or JobRequest(app=APP, path="/run"),
         credential,
-        on_signed=recorder.on_signed,
-        on_payment_state=recorder.on_payment_state,
+        on_signed=recorder,
     )
 
 
@@ -75,7 +77,7 @@ async def test_a_paid_call_records_the_intent_signs_then_sends(net: Net) -> None
     assert net.log == [
         "signer info",
         "challenge m-1",
-        "intent m-1 unknown",  # on record before the signer is asked
+        "intent m-1",  # LivePaymentSession.manifest_id, before get_payment
         "sign m-1",
         "stored m-1",  # the evidence before the paid request (D42)
         "request pay-m-1",
@@ -106,17 +108,17 @@ async def test_an_unpaid_call_never_reaches_the_signer(net: Net) -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "kind", "seen"),
+    ("status", "kind", "unknown"),
     [
-        (402, "payment", ["unknown", "unpaid"]),  # allowance: the caller's refusal
-        (403, "payment", ["unknown", "unpaid"]),
-        (400, "payment_refused", ["unknown", "unpaid"]),  # this orchestrator's params (D26)
-        (481, "payment_refused", ["unknown", "unpaid"]),  # price above the ceiling
-        (503, "payment", ["unknown"]),  # the outbox: the signer may have charged
+        (402, "payment", False),  # allowance: the caller's refusal
+        (403, "payment", False),
+        (400, "payment_refused", False),  # this orchestrator's params (D26)
+        (481, "payment_refused", False),  # price above the ceiling
+        (503, "payment", True),  # the outbox: the signer may have charged
     ],
 )
 async def test_a_signer_refusal_is_unpaid_only_when_the_signer_says_so(
-    net: Net, status: int, kind: str, seen: list[str]
+    net: Net, status: int, kind: str, unknown: bool
 ) -> None:
     net.sign = [status]
     with pytest.raises(RunnerCallError) as refused:
@@ -128,9 +130,22 @@ async def test_a_signer_refusal_is_unpaid_only_when_the_signer_says_so(
         False,
         (),
     )
-    assert error.payment_unknown is (seen == ["unknown"])  # only a refusal says nothing was charged
-    assert states(net) == [f"intent m-1 {state}" for state in seen]
+    assert error.payment_unknown is unknown  # a refusal did not validate; a 503 may have charged
+    assert states(net) == ["intent m-1"]
     assert not any(entry.startswith("request") for entry in net.log)  # the runner never got paid work
+
+
+async def test_a_signer_error_logs_its_type_and_whether_the_attempt_was_paid(
+    net: Net, caplog: pytest.LogCaptureFixture
+) -> None:
+    net.sign = [481]
+    with (
+        caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.runner_call"),
+        pytest.raises(RunnerCallError),
+    ):
+        await call(net)
+    [record] = [item for item in caplog.records if item.message == "signer error"]
+    assert (record.error_type, record.paid, record.manifest_id) == ("LivepeerHTTPError", False, "m-1")
 
 
 @pytest.mark.parametrize(("step", "kind"), [("malformed", "payment"), ("drop", "unreachable")])
@@ -142,7 +157,7 @@ async def test_a_lost_or_malformed_signer_reply_leaves_the_manifest_unknown(
         await call(net)
     assert (failed.value.kind, failed.value.payment_sent, failed.value.manifest_ids) == (kind, False, ())
     assert failed.value.payment_unknown  # it may have charged, so the job pays nobody else
-    assert states(net) == ["intent m-1 unknown"]  # cost sync settles it later
+    assert states(net) == ["intent m-1"]  # asked, not validated: cost sync has no session to match
 
 
 async def test_a_refresh_is_unpaid_and_asks_for_a_fresh_challenge(net: Net) -> None:
@@ -151,22 +166,14 @@ async def test_a_refresh_is_unpaid_and_asks_for_a_fresh_challenge(net: Net) -> N
     assert reply.manifest_ids == ("m-2",) and reply.payment_sent
     assert net.log[1:] == [
         "challenge m-1",
-        "intent m-1 unknown",
+        "intent m-1",
         "sign m-1",
-        "intent m-1 unpaid",
         "challenge m-2",
-        "intent m-2 unknown",
+        "intent m-2",
         "sign m-2",
         "stored m-2",
         "request pay-m-2",
     ]
-
-
-async def test_nothing_is_signed_when_the_intent_cannot_be_recorded(net: Net) -> None:
-    with pytest.raises(RunnerCallError) as failed:
-        await call(net, fail_intent=True)
-    assert (failed.value.kind, failed.value.payment_sent) == ("payment", False)
-    assert "intent" in str(failed.value) and not any(entry.startswith("sign m") for entry in net.log)
 
 
 @pytest.mark.parametrize(
@@ -227,7 +234,11 @@ async def test_payment_retries_are_bounded(net: Net) -> None:
     net.sign = [480]
     with pytest.raises(RunnerCallError) as refreshing:
         await transport.call(net.runner(), JobRequest(app=APP), "lpg_k")
-    assert (refreshing.value.kind, refreshing.value.payment_sent) == ("payment", False)
+    assert (refreshing.value.kind, refreshing.value.payment_sent, refreshing.value.payment_unknown) == (
+        "payment_refused",
+        False,
+        False,
+    )
 
     net.challenge_paid = True  # the runner takes the payment and asks again
     with pytest.raises(RunnerCallError) as asking:
@@ -275,7 +286,7 @@ async def test_a_stream_delivers_the_runner_s_bytes_and_closes(net: Net) -> None
     net.replies = [Reply(content_type="text/event-stream", chunks=(b"data: a\n\n", b"", b"data: b\n\n"))]
     recorder = Recorder(net)
     stream = await SdkRunnerTransport(net.url).open(
-        net.runner(), JobRequest(app=APP, path="/v1/chat"), "lpg_k", on_signed=recorder.on_signed
+        net.runner(), JobRequest(app=APP, path="/v1/chat"), "lpg_k", on_signed=recorder
     )
     assert (stream.status_code, stream.content_type) == (200, "text/event-stream")
     assert (stream.manifest_ids, stream.payment_sent) == (("m-1",), True)
@@ -318,14 +329,14 @@ async def test_opening_is_bounded_by_first_byte_timeout_whether_or_not_it_paid(n
             net.runner(),
             JobRequest(app=APP, first_byte_timeout_s=0.1),
             "lpg_k",
-            on_payment_state=recorder.on_payment_state,
+            on_signed=recorder,
         )
     assert (during.value.kind, during.value.payment_sent, during.value.payment_unknown) == (
         "timeout",
         False,
         True,
     )
-    assert states(net) == ["intent m-2 unknown"]  # cancelled while signing: still on record
+    assert states(net) == ["intent m-2"]  # remembered before get_payment, then the deadline fired
 
 
 async def test_metered_funding_runs_while_the_work_runs_and_is_not_a_new_session(
@@ -337,7 +348,7 @@ async def test_metered_funding_runs_while_the_work_runs_and_is_not_a_new_session
     await asyncio.sleep(0.05)  # a renewal already on the wire when funding stopped still lands
     renewals = net.log.count("renewal m-1")
     assert renewals >= 2 and reply.manifest_ids == ("m-1",)
-    assert net.log.count("stored m-1") == 1 and net.log.count("intent m-1 unknown") == 1  # renewals are quiet
+    assert net.log.count("stored m-1") == 1 and net.log.count("intent m-1") == 1  # renewals are quiet
     await asyncio.sleep(0.1)
     assert net.log.count("renewal m-1") == renewals  # the funding stopped with the call
 
@@ -368,7 +379,8 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
 
     paid = PaidRequest(
         "https://runner.example/apps/r1/run", method="POST", payload={}, app=APP, rate=None,
-        signer=None, retries=0, events=PaymentEvents(), orchestrator_url="https://orch.example:8935",
+        signer_url=None, signer_headers=None, retries=0, events=PaymentEvents(),
+        orchestrator_url="https://orch.example:8935",
     )  # fmt: skip
     assert (
         paid._challenge(challenge("https://orch.example:8935/apps/r1/session/m-1/payment")).manifest_id
@@ -386,6 +398,8 @@ def test_signer_errors_map_to_outcomes() -> None:
     assert signer_error(LivepeerHTTPError(481, signer), events).kind == "payment_refused"
     assert signer_error(LivepeerHTTPError(402, signer), events).kind == "payment"  # every orchestrator alike
     assert signer_error(PaymentError("no segCreds"), events).kind == "payment"
+    refresh = signer_error(SignerRefreshRequired("params expired"), events)
+    assert (refresh.kind, refresh.payment_sent, refresh.payment_unknown) == ("payment_refused", False, False)
     lost = LivepeerGatewayError("failed to reach endpoint")
     lost.__cause__ = TimeoutError()
     assert signer_error(lost, events).kind == "timeout"

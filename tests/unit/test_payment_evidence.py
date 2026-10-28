@@ -37,7 +37,11 @@ class SignsThenWaits:
         self.release = asyncio.Event()
 
     async def call(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> RunnerReply:
         assert on_signed is not None, "the engine passes a recorder for every paid call"
         await on_signed("m-1")
@@ -124,7 +128,11 @@ class OpensAfterSigning(SignsThenWaits):
     """A streaming transport whose open signs, then waits for the runner's headers."""
 
     async def open(
-        self, runner: Runner, request: JobRequest, credential: str | None, on_signed: OnSigned | None = None
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
     ) -> RunnerReply:
         return await self.call(runner, request, credential, on_signed)
 

@@ -11,11 +11,13 @@ Rows on an allocation that match no recorded attempt are ``unattributed`` (recon
 A job's cost is ``pending`` until the job ends, and only an ended job is projected (#33): only cost
 sync stores projections, and reads compute live any job no projection covers yet (running, or ended
 since its projection was stored), so a paid job never reads as ``none``.
-A manifest recorded before signing (D53) that never confirmed counts only once usage matches it, or
-while the job may still have been charged (it is running, or its last attempt left it uncertain).
+A signed session whose usage has not arrived stays ``pending``, so the job is not stored
+``observed`` with a zero bill.
 Join key: (allocation_id, payment_session_id) after cost sync resolves each signed session's
 manifest_id. A manifest that maps to more than one Batteries session, or to more than one log
-entry, is ambiguous: the attempt is uncertain and those rows stay unattributed.
+entry, is ambiguous: once no signed session on the attempt is still waiting, the attempt is
+``uncertain`` and those rows stay unattributed. Fees already matched on a sibling session stay
+on the attempt. A debit whose manifest was never signed is unattributed on the allocation.
 """
 
 import asyncio
@@ -314,7 +316,8 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     """Pure classification of one job's charges. Only ``applied`` rows count as cost.
 
     A job that has not ended may still pay, so it is ``pending`` and so is each of its attempts, with the
-    fees matched so far: never ``none``, never a final class.
+    fees matched so far: never ``none``, never a final class. A signed session whose usage has not arrived
+    stays ``pending`` too, unless this attempt is the uncertain last word.
     """
     applied = [row for row in rows if row.status == "applied"]
     running = job.state not in _ENDED
@@ -323,25 +326,43 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     for attempt in job.attempts:
         if not attempt.sessions and not attempt.payment_sent:
             continue
-        matched = {
+        matched_ids = {
             session.payment_session_id
             for session in attempt.sessions
             if session.match == "matched" and session.payment_session_id
         }
-        mine = [row for row in applied if row.payment_session_id in matched]
+        mine = [row for row in applied if row.payment_session_id in matched_ids]
         last_word = attempt.outcome in ("in_flight", "payment_unknown") or (
             job.state == "uncertain" and attempt.number == last
         )
-        if not attempt.payment_sent and not mine and not (running or last_word):
-            continue  # a manifest recorded before signing (D53) that was refused or failed over: no charge
-        cost_class: CostClass
         if running:
-            cost_class = "pending"
-        elif any(session.match == "ambiguous" for session in attempt.sessions):
-            cost_class = "uncertain"
-        elif not mine:
-            cost_class = "pending"
-        elif attempt.outcome == "succeeded":
+            attempts.append(
+                AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
+            )
+            continue
+        arrived = {row.payment_session_id for row in mine}
+        # Unmatched, or matched with no applied row yet: the charge is not in what we can see.
+        # Ambiguous is not waiting: the usage arrived and the join was not unique.
+        waiting = any(
+            session.match == "unmatched"
+            or (session.match == "matched" and session.payment_session_id not in arrived)
+            for session in attempt.sessions
+        )
+        if waiting and not last_word:
+            attempts.append(
+                AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
+            )
+            continue
+        # Pending wins while a sibling is still waiting. Once usage has been seen, an ambiguous
+        # signed session makes the attempt uncertain. Its rows stay unattributed; a sibling's
+        # matched fee stays on the attempt.
+        if any(session.match == "ambiguous" for session in attempt.sessions) and not waiting:
+            attempts.append(
+                AttemptCost(attempt_number=attempt.number, cost_class="uncertain", fees=fees_of(mine))
+            )
+            continue
+        cost_class: CostClass
+        if attempt.outcome == "succeeded":
             cost_class = "delivered"
         elif last_word:
             cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D52)

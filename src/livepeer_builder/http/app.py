@@ -6,6 +6,7 @@ contracts (async jobs, sessions, events) answer 501. The generated schema is com
 docs/generated/openapi.json and checked for drift in CI.
 """
 
+import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -15,8 +16,9 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
+from livepeer_builder import contracts
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
     AccessKey,
@@ -33,7 +35,6 @@ from livepeer_builder.contracts import (
     IssuedKey,
     Job,
     JobCost,
-    JobRequest,
     Money,
     Offering,
     ProvisionedActor,
@@ -76,6 +77,19 @@ _FAILURE_STATUS = {
     "interrupted": 502,
 }
 _RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
+
+
+_BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
+
+
+# The contract's JobRequest as a REST body, under the same schema name (no docstring: it would become
+# the schema's description). FastAPI validates the parsed JSON as Python, where ``raw_body`` takes only
+# bytes, so its URL-safe base64 is decoded here, exactly as ``JobRequest.model_validate_json`` would (#55).
+class JobRequest(contracts.JobRequest):
+    @field_validator("raw_body", mode="before")
+    @classmethod
+    def _decoded(cls, value: object) -> object:
+        return _BASE64.validate_json(json.dumps(value)) if isinstance(value, str) else value
 
 
 class IssueKeyBody(BaseModel):

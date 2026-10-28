@@ -86,6 +86,13 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    - **`failure.payment_sent`** is true when any attempt of the job was paid, not only the last.
    - **A restart or an engine error** leaves the job `uncertain` only when its last attempt was still in
      flight, ended `payment_unknown`, or was paid and did not fail over. Attempts it failed over from ended with a known outcome.
+     An attempt still in flight whose stored manifests were all refused, with nothing paid, is the
+     exception (D54): the job is `failed`. An attempt in flight with no stored manifest stays
+     `uncertain`, because it may predate D54.
+   - **A cancel while a refusal is being stored** (the caller went away just after the signer refused)
+     ends the job `failed`, its cost `none` and the manifest `unpaid`, which is all correct. The
+     job's `failure` still reads `runner_error` ("engine error: CancelledError"), and the attempt stays
+     `in_flight`, because the refusal never reached the attempt's own record.
    - **No runner selected.** A `SelectionPolicy` that returns no runner fails the job `no_offering`,
      before any payment.
    - **`payment_refused`:** the signer refused to pay *this orchestrator*. The signer statuses are 400

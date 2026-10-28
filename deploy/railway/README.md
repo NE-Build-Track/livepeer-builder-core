@@ -6,7 +6,7 @@ services for a local Docker run. CI checks that file with `docker compose config
 
 The engine image is this checkout (`pip install ".[server,postgres]"`), not a pinned clone of the
 repository. Batteries is [NE-Build-Track/clearinghouse-batteries](https://github.com/NE-Build-Track/clearinghouse-batteries)
-`ca09e47`. The signer is [NE-Build-Track/node](https://github.com/NE-Build-Track/node) `406b248` (v1.0.2), the same
+`ca09e47`. The signer is [livepeer/node](https://github.com/livepeer/node) `406b248` (v1.0.2), the same
 commit the dev stack builds.
 
 ## What runs

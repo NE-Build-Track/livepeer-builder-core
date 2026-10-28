@@ -25,7 +25,7 @@ services:
   signer:
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:406b248
     build:
-      context: https://github.com/NE-Build-Track/node.git#406b248f6cb8728e6e7eba1809901f589060bc6b
+      context: https://github.com/livepeer/node.git#406b248f6cb8728e6e7eba1809901f589060bc6b
       dockerfile: docker/Dockerfile
     user: "0:0"  # dev only: lets the container read bind-mounted secrets regardless of host uid
     network_mode: service:clearinghouse  # Kafka and the webhook listen on this namespace's loopback

@@ -27,8 +27,9 @@ An engine running with `LPB_AUTH=jwt` has no engine keys. An admin console must 
 - [x] **A label on the actor record:** `ProvisionedActor.label` stores the provisioning label. Migration
   `0007` adds `lpb_actors.label`.
 - [x] **A read operation:** `Operation.ADMIN_READ` (`admin.read`) is checked by every admin read: the key
-  list and key inspection, the grant list, reconciliation, and the two actor reads. Admin writes keep
-  `admin.keys`, `admin.allocations` and `admin.costs`.
+  list and key inspection, reconciliation, and the two actor reads. Admin writes keep
+  `admin.keys`, `admin.allocations` and `admin.costs`. The grant list is `admin.allocations`, so an
+  auditor never reads it (John, #53 review).
 - [x] **The `auditor` kind:** a new `CredentialKind` that holds `admin.read`, plus `discover`,
   `jobs.read`, `costs.read` and `events.read`, across every actor of its own application. Every write is
   `AccessDenied`. Wherever the engine lets an admin see every actor (jobs, cost projections and summary,

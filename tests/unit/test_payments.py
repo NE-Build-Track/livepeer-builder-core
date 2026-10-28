@@ -136,6 +136,21 @@ async def test_operator_lists_and_creates_grants(
     assert await desk.list_grants(admin) == [created]
 
 
+async def test_an_auditor_never_sees_the_operators_grants(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """Grants are the operator's money for every application and carry none, so an auditor bound to
+    one application cannot read them (John, #53 review). Admins still list them."""
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    await desk.create_grant(admin, "another application's pool", usd("5"))
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")
+    with pytest.raises(AccessDenied):
+        await desk.list_grants(auditor)
+    assert len(await desk.list_grants(admin)) == 1
+
+
 async def test_funding_a_named_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:

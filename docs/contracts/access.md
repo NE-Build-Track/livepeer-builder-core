@@ -21,9 +21,10 @@ in adapters.
 | `auth` | Provenance (method, issuer, credential id), for audit only |
 
 **Operations:** `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`, `admin.keys`,
-`admin.allocations`, `admin.costs`, `admin.read`, `actors.assert`. `admin.read` is every admin read: the
-key list and key inspection, the grant list, the actor list and one actor's allocation, and
-reconciliation. The other `admin.*` operations are the writes.
+`admin.allocations`, `admin.costs`, `admin.read`, `actors.assert`. `admin.read` is every admin read of one
+application: the key list and key inspection, the actor list and one actor's allocation, and
+reconciliation. The other `admin.*` operations are the writes. The grant list is `admin.allocations`:
+grants fund every application and carry none, so only an admin reads them, never an auditor.
 
 ## Protocols
 

@@ -55,7 +55,9 @@ class GrantDesk:
         self._currency = currency
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        self._policy.check(admin, Operation.ADMIN_READ)
+        # The provisioning catalog: grants fund every application and carry none, so an auditor bound
+        # to one application never reads them (John, #53 review).
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         return await self._manager.list_grants()
 
     async def create_grant(self, admin: ActorContext, name: str, amount: Money) -> GrantRecord:

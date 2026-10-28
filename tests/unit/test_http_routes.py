@@ -339,6 +339,9 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
     auditor = await engine.keys.issue(operator, kind="auditor", actor_id="dashboard")
     as_auditor = {"Authorization": f"Bearer {auditor.token}"}
     assert (await client.get("/v1/admin/actors", headers=as_auditor)).status_code == 200
+    assert (
+        await client.get("/v1/admin/grants", headers=as_auditor)
+    ).status_code == 403  # every application's
     funded = await client.post(
         ALLOCATION + "/fund",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},

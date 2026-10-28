@@ -20,7 +20,7 @@ class Operation(StrEnum):
     ADMIN_KEYS = "admin.keys"
     ADMIN_ALLOCATIONS = "admin.allocations"
     ADMIN_COSTS = "admin.costs"
-    ADMIN_READ = "admin.read"  # every admin read: keys, grants, actors, reconciliation (D46)
+    ADMIN_READ = "admin.read"  # admin reads of one application: keys, actors, reconciliation (D46)
     ACTORS_ASSERT = "actors.assert"
 
 

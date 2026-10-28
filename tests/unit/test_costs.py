@@ -85,6 +85,9 @@ def test_classification_covers_every_class() -> None:
     waiting = classify(job_with(("succeeded", ("a-late",), True)), [])
     assert waiting.status == "pending" and waiting.attempts[0].cost_class == "pending"
 
+    held = classify(job_with(("timeout", ("a-late",), True), state="uncertain"), [])
+    assert held.status == "pending" and held.attempts[0].cost_class == "pending"
+
     unpaid = classify(job_with(("refused", (), False)), [])
     assert unpaid.status == "none" and unpaid.attempts == ()
 

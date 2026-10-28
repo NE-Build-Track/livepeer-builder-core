@@ -52,6 +52,11 @@ class RemembersManifest(Protocol):
     async def remember(self, manifest_id: str) -> None: ...
 
 
+@runtime_checkable
+class KeepsUnconfirmed(Protocol):
+    def keep_unconfirmed(self) -> None: ...
+
+
 class PaymentEvents:
     """Sessions of one call. ``unknown`` is ``payment_unknown``: the signer was asked and may have charged."""
 
@@ -82,6 +87,9 @@ class PaymentEvents:
         )
         if not refused:
             self.unknown = True
+            callback = self._on_signed
+            if isinstance(callback, KeepsUnconfirmed):
+                callback.keep_unconfirmed()
 
     def error(
         self, kind: AttemptOutcome, message: str, *, status_code: int | None = None, body: str | None = None
@@ -149,6 +157,7 @@ class PaidRequest:
             await session.close()
             raise
         return SdkRunnerStream(session, response, funding, self._events)
+
     async def _answered(
         self, session: aiohttp.ClientSession
     ) -> tuple[aiohttp.ClientResponse, asyncio.Task[Any] | None]:
@@ -220,7 +229,7 @@ class PaidRequest:
             self._log_signer_error(manifest_id, error)
             raise
         except BaseException as error:  # cancelled while signing: the signer may have charged
-            self._events.unknown = True
+            self._events.note_failure(error)
             self._log_signer_error(manifest_id, error)
             raise
         await self._events.confirmed(manifest_id)
@@ -259,8 +268,8 @@ class PaidRequest:
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
 
 
-class PaidStream:
 class SdkRunnerStream:
+    def __init__(
         self,
         session: aiohttp.ClientSession,
         response: aiohttp.ClientResponse,
@@ -317,15 +326,20 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
 
 
 def _origin(url: str) -> str | None:
-    """``scheme://host:port``, or ``None`` if it does not parse. Port ``0`` uses the scheme default."""
+    """``scheme://host:port``, or ``None`` when the URL or its port is not one aiohttp would request.
+
+    An empty port is the scheme default. A stated port counts only in ``1..65535``: ``0`` is not ``443``.
+    """
     try:
         parts = urlsplit(url)
         scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
     except (ValueError, UnicodeError):
         return None
-    if scheme not in ("http", "https") or not host:
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
         return None
-    return f"{scheme}://{host.lower()}:{port or (443 if scheme == 'https' else 80)}"
+    return f"{scheme}://{host.lower()}:{port}"
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:

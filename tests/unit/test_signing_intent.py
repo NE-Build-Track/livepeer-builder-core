@@ -1,7 +1,7 @@
-"""D53: a payment-session row is inserted only when ``on_signed`` runs.
+"""D53: ``on_signed`` writes a paid session. A non-refusal keeps the remembered manifest, unpaid.
 
-``remember`` keeps the manifest id in memory and does not insert a row. An expired challenge, a lost
-reply and a cancel leave no session. The engine, the Live Runner transport and the SDK's signer client
+An expired challenge and a signer refusal leave no session. A lost reply and a cancel keep the
+manifest the signer was asked for. The engine, the Live Runner transport and the SDK's signer client
 are real; only the network is local (tests/unit/livepeer_net.py). The job passes the recorder as
 ``on_signed``; nothing passes a second callback.
 """
@@ -55,7 +55,7 @@ async def paid_engine(
 
 
 @pytest.mark.parametrize("step", [503, "drop", "malformed"])
-async def test_a_signer_that_gives_no_answer_leaves_no_session_and_an_uncertain_job(
+async def test_a_signer_that_gives_no_answer_keeps_the_manifest_and_an_uncertain_job(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
@@ -74,21 +74,24 @@ async def test_a_signer_that_gives_no_answer_leaves_no_session_and_an_uncertain_
     stored = await engine.jobs.get(alice, job.id)
     attempt = stored.attempts[0]
     assert attempt.outcome == "payment_unknown"
-    assert attempt.sessions == () and not attempt.payment_sent
+    assert [s.manifest_id for s in attempt.sessions] == ["m-1"] and not attempt.payment_sent
+    assert (await engine.costs.for_job(alice, job.id)).status == "pending"  # until usage says
 
     usage.rows = [row("u1", "s1", "0.002", usd="0.2", allocation=allocation, manifest="m-1")]
     await engine.costs.sync_once()
     cost = await engine.costs.for_job(alice, job.id)
-    assert cost.status == "none" and cost.attempts == ()  # no session to match, so the fee is not on the job
-    assert cost.fees.fee_eth == 0 and cost.billable.fee_eth == 0
-    unattributed = await engine.store.unattributed_usage(allocation)
-    assert [item.computed_fee_eth for item in unattributed] == [Decimal("0.002")]
+    assert cost.status == "observed" and cost.fees.fee_eth == Decimal("0.002")
+    assert cost.attempts[0].cost_class == "uncertain" and cost.billable.fee_eth == 0
 
 
 async def test_a_refused_signing_stores_only_the_delivered_session(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    usage: FakeUsageSource,
 ) -> None:
-    engine, _allocation = await paid_engine(make_engine, admin, net)
+    engine, allocation = await paid_engine(make_engine, admin, net)
     net.sign = [481]  # this orchestrator's price is above the ceiling: another orchestrator may succeed
     result = await engine.jobs.run(alice, JobRequest(app="example/echo"))
     job = await engine.jobs.get(alice, result.job.id)
@@ -98,9 +101,22 @@ async def test_a_refused_signing_stores_only_the_delivered_session(
     ]
     assert [s.manifest_id for s in job.attempts[0].sessions] == []
     assert [s.manifest_id for s in job.attempts[1].sessions] == ["m-2"]
+    waiting = await engine.costs.for_job(alice, job.id)
+    assert waiting.status == "pending"  # the signed session has no usage yet
+    assert [a.cost_class for a in waiting.attempts] == ["pending"]
+    assert waiting.billable.fee_eth == 0
+
+    usage.rows = [row("u1", "s1", "0.002", usd="0.2", allocation=allocation, manifest="m-1")]
+    await engine.costs.sync_once()
+    matched = await engine.costs.for_job(alice, job.id)
+    assert matched.status == "pending"
+    assert [a.cost_class for a in matched.attempts] == ["pending"]
+    assert matched.fees.fee_eth == 0 and matched.billable.fee_eth == 0
+    unattributed = await engine.store.unattributed_usage(allocation)
+    assert [item.computed_fee_eth for item in unattributed] == [Decimal("0.002")]
 
 
-async def test_a_cancel_during_signing_leaves_no_session(
+async def test_a_cancel_during_signing_keeps_the_manifest_unpaid(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net, store: SqlStore
 ) -> None:
     net.sign = [30.0]  # the signer accepts the request and does not answer
@@ -117,19 +133,64 @@ async def test_a_cancel_during_signing_leaves_no_session(
         async with asyncio.timeout(2):
             await task
     [job] = await store.jobs_in_state("uncertain")
-    assert job.attempts[0].sessions == ()
+    assert [s.manifest_id for s in job.attempts[0].sessions] == ["m-1"]
     assert not job.attempts[0].payment_sent
 
 
 async def test_a_refresh_stores_only_the_signed_manifest(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    usage: FakeUsageSource,
 ) -> None:
-    engine, _allocation = await paid_engine(make_engine, admin, net)
+    engine, allocation = await paid_engine(make_engine, admin, net)
     net.sign = [480]  # params expired: the same attempt asks for a fresh challenge and pays that
     result = await engine.jobs.run(alice, JobRequest(app="example/echo"))
     job = await engine.jobs.get(alice, result.job.id)
     assert [(a.outcome, a.payment_sent) for a in job.attempts] == [("succeeded", True)]
     assert [s.manifest_id for s in job.attempts[0].sessions] == ["m-2"]
+    usage.rows = [
+        row("u1", "s1", "0.001", usd="0.1", allocation=allocation, manifest="m-1"),
+        row("u2", "s2", "0.004", usd="0.4", allocation=allocation, manifest="m-2"),
+    ]
+    await engine.costs.sync_once()
+    cost = await engine.costs.for_job(alice, result.job.id)
+    assert [(attempt.cost_class, attempt.fees.fee_eth) for attempt in cost.attempts] == [
+        ("delivered", Decimal("0.004"))
+    ]
+    assert cost.fees.fee_eth == Decimal("0.004") and cost.billable.fee_eth == Decimal("0.004")
+    unattributed = await engine.store.unattributed_usage(allocation)
+    assert [item.computed_fee_eth for item in unattributed] == [Decimal("0.001")]
+
+
+async def test_a_signed_session_without_usage_keeps_the_job_pending(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    net: Net,
+    usage: FakeUsageSource,
+) -> None:
+    engine, allocation = await paid_engine(make_engine, admin, net)
+    net.sign = [480]
+    result = await engine.jobs.run(alice, JobRequest(app="example/echo"))
+    usage.rows = [row("u1", "s1", "0.001", usd="0.1", allocation=allocation, manifest="m-1")]
+    await engine.costs.sync_once()
+    waiting = await engine.costs.for_job(alice, result.job.id)
+    assert waiting.status == "pending"  # the signed payment has not shown up: not observed at 0
+    assert [(attempt.cost_class, attempt.fees.fee_eth) for attempt in waiting.attempts] == [
+        ("pending", Decimal(0))
+    ]
+    assert waiting.billable.fee_eth == 0
+
+    usage.rows.append(row("u2", "s2", "0.004", usd="0.4", allocation=allocation, manifest="m-2"))
+    await engine.costs.sync_once()
+    cost = await engine.costs.for_job(alice, result.job.id)
+    assert [(attempt.cost_class, attempt.fees.fee_eth) for attempt in cost.attempts] == [
+        ("delivered", Decimal("0.004"))
+    ]
+    assert cost.status == "observed"
+    assert cost.fees.fee_eth == Decimal("0.004") and cost.billable.fee_eth == Decimal("0.004")
 
 
 async def test_a_refreshed_stream_stores_only_the_signed_manifest(

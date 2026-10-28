@@ -19,10 +19,11 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    memory only, before `get_payment`, and does not insert a session row. `on_signed` writes that row
    once the signer validates the manifest, and marks the attempt paid before the paid request goes
    out. Batteries' `payment_session_id` is not known at sign time; cost sync fills it on
-   `(allocation_id, manifest_id)`. An expired challenge (a signer 480 inside the retry budget) is not
-   stored. If the signer charged it anyway, the debit is unattributed on the allocation and the
-   customer is not billed. A lost reply, a signer 5xx, or a cancel during `get_payment` finishes the
-   in-process attempt as `uncertain` with no session row. The job pays no other orchestrator.
+   `(allocation_id, manifest_id)`. An expired challenge (a signer 480 inside the retry budget) and a
+   400 or 481 refusal are not stored. If the signer charged an omitted manifest anyway, the debit is
+   unattributed on the allocation and the customer is not billed. A lost reply, a signer 5xx, or a
+   cancel during `get_payment` keeps the remembered manifest on the attempt, unpaid. The cost stays
+   `pending` until usage matches it. The job pays no other orchestrator.
 
 ## Allocation modes
 
@@ -137,8 +138,8 @@ Settlement (winning-ticket redemption) is a separate operator-level figure and n
 
 ### Job cost status
 
-`none` (the job ended and no attempt was paid), `pending` (the job is still running, or some paid
-attempt lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
+`none` (the job ended and no attempt recorded a session), `pending` (the job is still running, or a
+recorded session lacks rows), `observed`, `corrected` (the total changed after it was first observed, for
 example a metered session that signed again).
 
 Only cost sync stores projections (`lpb_cost_projections`), and only for jobs that have ended: a

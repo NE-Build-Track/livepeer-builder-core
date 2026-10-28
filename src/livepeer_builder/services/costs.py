@@ -317,7 +317,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
 
     A job that has not ended may still pay, so it is ``pending`` and so is each of its attempts, with the
     fees matched so far: never ``none``, never a final class. A signed session whose usage has not arrived
-    stays ``pending`` too, unless this attempt is the uncertain last word.
+    stays ``pending`` too, including the attempt that left the job uncertain.
     """
     applied = [row for row in rows if row.status == "applied"]
     running = job.state not in _ENDED
@@ -348,7 +348,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             or (session.match == "matched" and session.payment_session_id not in arrived)
             for session in attempt.sessions
         )
-        if waiting and not last_word:
+        if waiting:
             attempts.append(
                 AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
             )

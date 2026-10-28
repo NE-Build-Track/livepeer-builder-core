@@ -85,4 +85,8 @@ def orchestrator_of(runner: Runner) -> str:
         scheme, host, port = parts.scheme.lower(), (parts.hostname or "").lower(), parts.port
     except (ValueError, UnicodeError):  # a URL that does not parse is its own orchestrator
         return url.strip().lower()
-    return f"{scheme}://{host}:{port or (443 if scheme == 'https' else 80)}"
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
+        return url.strip().lower()
+    return f"{scheme}://{host}:{port}"

@@ -103,9 +103,12 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    `remember(manifest_id)` with `LivePaymentSession.manifest_id`. That call does not insert a session
    row. **`on_signed` writes the session row** once the signer validates the manifest, before the paid
    request goes out, and the engine stores `payment_sent` and the session on the attempt then (D42).
-   An expired challenge is not stored. A lost reply or a cancel during `get_payment` finishes the
-   in-process attempt as `uncertain` without a session row; the job pays no other orchestrator, and a
-   debit the signer took is unattributed on the allocation. A cancel, a disconnect or a crash during
+   An expired challenge (a 480 refresh) and a signer 400 or 481 are not stored; a debit on that
+   omitted manifest stays unattributed on the allocation. A lost reply, a signer 5xx, or a cancel
+   during `get_payment` is not a refusal: the remembered manifest stays on the attempt, unpaid, and
+   `finish_attempt` or the shielded close persists it. The job pays no other orchestrator. The cost
+   stays `pending` until usage matches that manifest, then the attempt is `uncertain` with the fee.
+   A cancel, a disconnect or a crash during
    the paid request, after `on_signed`, keeps the charge attributed to its job. If that write fails, the call goes on, and the write after the call, or the
    close after an error or cancel, stores the same sessions again. A report that arrives after the job
    ended increments the job's evidence version, so its stored cost projection is out of date and the
@@ -188,9 +191,9 @@ The admission slot is held until the stream ends.
 the caller waits for data; a slow reader is not the runner's fault. A timeout never fails over to
 another runner, paid or not, exactly as for `run`. The Live Runner transport enforces the first-byte
 limit itself and keeps the sessions signed so far: a timeout after the signer's payment was validated
-has `payment_sent=True` (job `uncertain`). A timeout or failure during signing leaves the payment
-unknown: the manifest kept on the attempt before the signer was asked stays there, `payment_sent` is
-`False`, and the job is `uncertain` (D53). Only an explicit signer refusal ends it unpaid. The engine
+has `payment_sent=True` (job `uncertain`). A timeout or other non-refusal during signing keeps the
+remembered manifest on the attempt, unpaid, and the cost stays `pending` until usage matches it; the
+job is `uncertain` (D53). Only an explicit signer refusal omits the manifest. The engine
 stops a transport that
 runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) past the limit and treats the payment as sent, because it
 cannot know.

@@ -85,6 +85,8 @@ def test_a_runner_without_an_orchestrator_is_matched_by_its_own_origin() -> None
         candidates.exclude(candidate)
     assert tried == ["https://orch.example/apps/a", "https://other.example:8935/apps/c"]
     assert orchestrator_of(other) == "https://other.example:8935"
+    zero = runner(url="https://orch.example:0/apps/z", orchestrator_url=None)
+    assert orchestrator_of(zero) != orchestrator_of(known)
 
 
 def _attempt(number: int, outcome: AttemptOutcome, paid: bool, status: int | None = None) -> Attempt:

@@ -9,8 +9,9 @@ on, and the write after the call (``finish_attempt``), or the close after an err
 (``record_payment_evidence`` again), stores the same sessions.
 
 Before ``get_payment``, the transport calls ``remember`` (D53) with ``LivePaymentSession.manifest_id``.
-The recorder keeps that id in memory. It does not append a session and it does not write. A row means
-``on_signed`` ran. An expired challenge, a lost reply and a cancel leave no session row.
+The recorder holds that id and does not write yet. ``on_signed`` writes the row and marks the attempt
+paid. A refusal drops the id. Any other signing error keeps it on the attempt, unpaid, and
+``finish_attempt`` or the shielded close persists that row.
 """
 
 import logging
@@ -32,7 +33,7 @@ class SignedSessionRecorder:
         self._store = store
         self._attempts = attempts
         self._index = len(attempts) - 1
-        self._remembered: list[str] = []
+        self._remembered: str | None = None
 
     async def __call__(self, manifest_id: str) -> None:
         attempt = with_evidence(self._attempts[self._index], (manifest_id,), payment_sent=True)
@@ -40,9 +41,19 @@ class SignedSessionRecorder:
         await run_shielded(_write(self._store, attempt))
 
     async def remember(self, manifest_id: str) -> None:
-        """Before ``get_payment``: keep the manifest id here. No session on the attempt and no write."""
-        if manifest_id not in self._remembered:
-            self._remembered.append(manifest_id)
+        """Before ``get_payment``: hold this manifest id. No session on the attempt and no write."""
+        self._remembered = manifest_id
+
+    def keep_unconfirmed(self) -> None:
+        """The signer was asked and did not refuse. The in-memory attempt keeps the id, unpaid."""
+        manifest_id = self._remembered
+        if manifest_id is None:
+            return
+        self._attempts[self._index] = with_evidence(
+            self._attempts[self._index],
+            (manifest_id,),
+            payment_sent=False,
+        )
 
 
 async def store_evidence(store: JobRepo, attempts: Sequence[Attempt]) -> None:

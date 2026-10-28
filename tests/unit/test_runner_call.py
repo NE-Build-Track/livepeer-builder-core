@@ -379,6 +379,19 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
         == "m-1"
     )
     assert paid._challenge(challenge("https://RUNNER.example:443/pay")).manifest_id == "m-1"
+    assert paid._challenge(challenge("https://runner.example:/pay")).manifest_id == "m-1"
+    for payment_url in (
+        "https://runner.example:0/pay",
+        "https://runner.example:00/pay",
+        "https://runner.example:nope/pay",
+    ):
+        with pytest.raises(RunnerCallError, match="invalid payment challenge") as refused:
+            paid._challenge(challenge(payment_url))
+        assert (refused.value.kind, refused.value.status_code, refused.value.payment_sent) == (
+            "http",
+            402,
+            False,
+        )
     with pytest.raises(RunnerCallError, match="invalid payment challenge"):
         paid._challenge(challenge("https://10.0.0.5/pay"))
 

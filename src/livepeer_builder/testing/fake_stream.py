@@ -7,7 +7,8 @@ from types import TracebackType
 from typing import Protocol
 
 from livepeer_builder.contracts import AttemptOutcome, Failure, Job, ResultRef
-from livepeer_builder.errors import JobFailed
+from livepeer_builder.errors import JobFailed, RunnerCallError
+from livepeer_builder.services.failover import failure_of
 from livepeer_builder.testing.scripts import Fails, Reply
 
 
@@ -22,6 +23,7 @@ class StreamEndings(Protocol):
         *,
         result: ResultRef | None = None,
         failure: Failure | None = None,
+        http_error: bool = False,
     ) -> Job: ...
 
     def broke(self, job: Job, fails: Fails, stream_status: int) -> Job: ...
@@ -39,8 +41,11 @@ class FakeJobStream:
     caller's calls.
     """
 
-    def __init__(self, job: Job, reply: Reply, jobs: StreamEndings) -> None:
+    def __init__(
+        self, job: Job, reply: Reply, jobs: StreamEndings, *, return_http_errors: bool = False
+    ) -> None:
         self._job, self._reply, self._jobs = job, reply, jobs
+        self._return_http_errors = return_http_errors
         self._next = 0  # the next scripted chunk
         self._read = hashlib.sha256()
         self._size = 0
@@ -55,6 +60,10 @@ class FakeJobStream:
     @property
     def status_code(self) -> int:
         return self._reply.status_code
+
+    @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        return self._reply.headers
 
     @property
     def content_type(self) -> str:
@@ -80,7 +89,16 @@ class FakeJobStream:
                     raise JobFailed(self._job)
                 self._count(chunk)
                 yield chunk
-            if self._job.state != "succeeded" and not self.closed:
+            if (
+                self._job.state != "succeeded"
+                and not self.closed
+                and not (
+                    self._return_http_errors
+                    and self._reply.status_code >= 300
+                    and self._job.failure
+                    and self._job.failure.message == "Runner returned HTTP error"
+                )
+            ):
                 raise JobFailed(self._job)  # iterating a stream that already failed
         except GeneratorExit:  # the iterator was closed or dropped: the caller stopped
             self._abandon()
@@ -125,6 +143,18 @@ class FakeJobStream:
         self._size += len(chunk)
 
     def _succeed(self) -> None:
+        if self._return_http_errors and self._reply.status_code >= 300:
+            if not self._ended:
+                self._ended = True
+                status = self._reply.status_code
+                outcome: AttemptOutcome = "refused" if status == 503 else "http"  # as the engine records it
+                paid = any(a.payment_sent for a in self._job.attempts)
+                answer = RunnerCallError(
+                    outcome, "Runner returned HTTP error", payment_sent=paid, status_code=status
+                )
+                failure = failure_of(answer, paid)
+                self._job = self._jobs.ended(self._job, outcome, status, failure=failure, http_error=True)
+            return
         if not self._ended:
             self._ended = True
             result = ResultRef(

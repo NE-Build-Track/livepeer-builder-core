@@ -125,6 +125,9 @@ class RunnerStream(Protocol):
     def status_code(self) -> int: ...
 
     @property
+    def headers(self) -> tuple[tuple[str, str], ...]: ...
+
+    @property
     def content_type(self) -> str: ...
 
     @property

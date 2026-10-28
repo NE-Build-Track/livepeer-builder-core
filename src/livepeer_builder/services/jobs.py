@@ -20,7 +20,6 @@ import asyncio
 import contextlib
 import functools
 import hashlib
-import json
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -73,8 +72,10 @@ from livepeer_builder.services.failover import (
     failure_of,
     payment_unresolved,
     recover_interrupted,
+    returned_failover,
 )
 from livepeer_builder.services.ownership import check_owner, job_resource
+from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
 from livepeer_builder.utils import run_shielded
 
@@ -114,6 +115,8 @@ class JobService:
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
         """Dispatch one immediate job and wait for its result. Raises JobFailed, OperationExists."""
+        if request.return_http_errors:
+            raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
         fingerprint = await self._admit_request(actor, request)
         async with self._admission.admit(request.app):
             job = self._new_job(actor, request)
@@ -399,6 +402,12 @@ class JobService:
                 unknown = RunnerCallError("timeout", "no answer within first_byte_timeout", payment_sent=True)
                 failed = await self._attempt_failed(job, attempts, unknown, runner, candidates)
                 raise cast(JobFailed, failed) from error
+            if request.return_http_errors and (answer := returned_failover(opened, runner, candidates)):
+                with contextlib.suppress(Exception):
+                    await run_shielded(opened.aclose())  # stops any funding
+                await self._attempt_failed(job, attempts, answer, runner, candidates)  # fails over
+                last = answer
+                continue
             # Payment evidence is recorded now, so a restart mid-stream resolves the job as uncertain.
             attempts[-1] = with_evidence(attempts[-1], opened.manifest_ids, opened.payment_sent).model_copy(
                 update={"status_code": opened.status_code}
@@ -473,15 +482,6 @@ class JobService:
             created_at=self._clock.now(),
             completed_at=None,
         )
-
-
-def request_fingerprint(request: JobRequest) -> str:
-    """Stable hash of what a retry must repeat exactly. Limits and timeouts may differ between retries."""
-    fields = request.model_dump(
-        mode="json", include={"app", "path", "method", "payload", "capability", "model"}
-    )
-    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _result_ref(reply: RunnerReply) -> ResultRef:

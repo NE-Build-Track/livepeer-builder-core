@@ -124,6 +124,7 @@ class StreamScript:
 
     events: list[StreamEvent] = field(default_factory=list)
     status_code: int = 200
+    headers: tuple[tuple[str, str], ...] = ()
     content_type: str = "text/event-stream"
     manifest_ids: tuple[str, ...] = ("manifest-1",)
     payment_sent: bool = True
@@ -140,6 +141,10 @@ class ScriptedStream:
     @property
     def status_code(self) -> int:
         return self._script.status_code
+
+    @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        return self._script.headers
 
     @property
     def content_type(self) -> str:

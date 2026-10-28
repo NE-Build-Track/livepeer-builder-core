@@ -48,6 +48,7 @@ class Reply:
 
     content: bytes = b'{"ok": true}'
     status_code: int = 200
+    headers: tuple[tuple[str, str], ...] = ()
     content_type: str = "application/json"
     chunks: tuple[bytes | Fails, ...] = (b'{"ok": true}',)
     data: dict[str, Any] | None = None

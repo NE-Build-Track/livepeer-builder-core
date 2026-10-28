@@ -56,9 +56,9 @@ from livepeer_builder.errors import (
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
 from livepeer_builder.services.failover import attempt_verdict
-from livepeer_builder.services.jobs import request_fingerprint
 from livepeer_builder.services.ownership import check_owner, job_resource
 from livepeer_builder.services.policy import DefaultPolicy
+from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
@@ -76,7 +76,12 @@ class FakeStreaming:
 
     async def stream(self, actor: ActorContext, request: JobRequest) -> FakeJobStream:
         reply = self._jobs.reply_for(actor, request)
-        return FakeJobStream(self._jobs.record(actor, request, "running", None), reply, self._jobs)
+        return FakeJobStream(
+            self._jobs.record(actor, request, "running", None),
+            reply,
+            self._jobs,
+            return_http_errors=request.return_http_errors,
+        )
 
 
 class FakeJobs:
@@ -211,6 +216,7 @@ class FakeJobs:
         *,
         result: ResultRef | None = None,
         failure: Failure | None = None,
+        http_error: bool = False,
     ) -> Job:
         """Record how a stream ended: the attempt's outcome, then ``succeeded``, or ``uncertain`` when
         a paid call did not finish (``failed`` when it was not paid)."""
@@ -220,7 +226,9 @@ class FakeJobs:
             for attempt in job.attempts
         )
         paid = any(attempt.payment_sent for attempt in attempts)
-        state: JobState = "succeeded" if failure is None else "uncertain" if paid else "failed"
+        # A returned HTTP error is the caller's answer; a paid 502 or 504 may still run (D52).
+        may_run = not http_error or attempt_verdict(outcome, status_code, True) == "uncertain"
+        state: JobState = "succeeded" if failure is None else "uncertain" if paid and may_run else "failed"
         done = job.model_copy(
             update={
                 "state": state,
@@ -248,6 +256,8 @@ class FakeJobs:
         return self.ended(job, attempt_outcome(fails.kind), status, failure=failure)
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
+        if request.return_http_errors:
+            raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
         reply = self.reply_for(actor, request)
         job = self.record(actor, request, "succeeded", None, reply=reply)
         result = JobResult(

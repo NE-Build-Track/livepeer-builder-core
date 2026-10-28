@@ -23,14 +23,13 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Literal, cast
+from typing import Literal
 
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
     AttemptOutcome,
     Failure,
-    FailureKind,
     Job,
     JobRequest,
     JobState,
@@ -39,6 +38,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
+from livepeer_builder.services.failover import attempt_verdict, failure_kind, failure_of
 from livepeer_builder.utils import BODY_LIMIT, run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -121,6 +121,8 @@ class JobStream:
         self._job = job.model_copy(update={"attempts": tuple(attempts)})
         self._attempts = attempts
         self._stream = stream
+        self._return_http_errors = request.return_http_errors
+        self._returned_http_error = False
         self._idle = request.idle_timeout_s
         self._slot = slot
         self._limits = limits
@@ -149,6 +151,10 @@ class JobStream:
     @property
     def status_code(self) -> int:
         return self._stream.status_code
+
+    @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        return self._stream.headers
 
     @property
     def content_type(self) -> str:
@@ -245,7 +251,7 @@ class JobStream:
         """Iterating a stream that already ended: nothing more, or the failure that ended it."""
         assert self._final is not None
         await run_shielded(self._wait(self._final))
-        if self._job.state != "succeeded" and not self._caller_stopped:
+        if self._job.state != "succeeded" and not self._caller_stopped and not self._returned_http_error:
             raise JobFailed(self._job)
 
     async def _next(self) -> bytes | Exception:
@@ -370,6 +376,12 @@ class JobStream:
                 await self._stream.aclose()
 
     async def _record(self, ending: _Ending) -> None:
+        if ending.outcome == "succeeded" and self._return_http_errors and self._stream.status_code >= 300:
+            self._returned_http_error = True
+            status = self._stream.status_code
+            ending = _Ending(
+                "refused" if status == 503 else "http", "Runner returned HTTP error", status_code=status
+            )
         await self._stop_runner()
         await self._store_attempt(ending.outcome, ending.status_code)
         if ending.outcome == "succeeded":
@@ -382,15 +394,25 @@ class JobStream:
             state: JobState = "succeeded"
             self._job = await self._finish(self._job, state, None, result, self._attempts)
         else:
-            paid = self._attempts[-1].payment_sent
+            paid = self._attempts[-1].payment_sent  # only the last attempt decides the state
+            any_paid = any(attempt.payment_sent for attempt in self._attempts)  # earlier ones too
             failure = Failure(
                 kind=failure_kind(ending.outcome, ending.status_code),
                 message=ending.message,
                 status_code=ending.status_code,
                 body=ending.body[:BODY_LIMIT] if ending.body else None,
-                payment_sent=paid,
+                payment_sent=any_paid,
             )
-            state = "uncertain" if paid else "failed"
+            if self._returned_http_error:  # a paid 502 or 504 may still be running behind the proxy (D52)
+                # recorded as a raised runner error would be: a 404 or 409 that ends a job is ``refused``
+                answer = RunnerCallError(
+                    ending.outcome, ending.message, payment_sent=paid, status_code=ending.status_code
+                )
+                failure = failure_of(answer, any_paid)
+                verdict = attempt_verdict(ending.outcome, ending.status_code, paid)
+                state = "uncertain" if verdict == "uncertain" else "failed"
+            else:
+                state = "uncertain" if paid else "failed"
             self._job = await self._finish(self._job, state, failure, None, self._attempts)
         _LOG.info(
             "stream ended",
@@ -436,20 +458,6 @@ def _sessions_at_end(
 
 def sessions_from(manifest_ids: tuple[str, ...]) -> tuple[SignedSession, ...]:
     return tuple(SignedSession(manifest_id=manifest_id) for manifest_id in manifest_ids if manifest_id)
-
-
-def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKind:
-    """Attempt outcome → failure kind, for a call that failed or a stream that ended early."""
-    if outcome == "http":
-        status = status_code or 0
-        return "runner_rejected" if 400 <= status < 500 else "runner_error"
-    if outcome == "payment_unknown":
-        return "payment_unknown"
-    if outcome == "payment_refused":
-        return "payment"
-    if outcome in ("in_flight", "succeeded"):
-        return "runner_error"
-    return cast(FailureKind, outcome)
 
 
 class Streaming:

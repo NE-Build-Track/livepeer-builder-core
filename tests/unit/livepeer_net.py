@@ -15,6 +15,7 @@ from typing import Any
 
 from aiohttp import web
 from aiohttp.test_utils import TestServer
+from multidict import CIMultiDict
 
 from livepeer_builder.contracts import NetworkRate, Runner
 
@@ -33,7 +34,9 @@ class Reply:
     chunks: tuple[bytes, ...] = ()  # streamed with a pause between them, after the headers
     hang_s: float = 0.0  # before the headers
     drop_after_chunks: bool = False
+    drop_before_headers: bool = False  # the connection closes before any answer
     headers: dict[str, str] = field(default_factory=dict)
+    header_pairs: tuple[tuple[str, str], ...] = ()  # repeated names allowed, on every kind of reply
 
 
 @dataclass
@@ -46,7 +49,9 @@ class Net:
     sign: list[SignStep] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
-    bodies: list[Any] = field(default_factory=list)  # what each runner request carried
+    bodies: list[Any] = field(default_factory=list)  # what each runner request carried, as JSON
+    raw: list[bytes] = field(default_factory=list)  # ... and as the bytes on the wire
+    headers: list[CIMultiDict[str]] = field(default_factory=list)  # ... and its request headers
     signer_requests: list[dict[str, Any]] = field(default_factory=list)
     release: asyncio.Event = field(default_factory=asyncio.Event)  # ends every hang at teardown
     _challenges: int = 0
@@ -99,7 +104,12 @@ class Net:
 
     async def _app(self, request: web.Request) -> web.StreamResponse:
         raw = await request.read()
-        self.bodies.append(json.loads(raw) if raw else None)
+        self.raw.append(raw)
+        self.headers.append(CIMultiDict(request.headers))
+        try:
+            self.bodies.append(json.loads(raw) if raw else None)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.bodies.append(None)
         payment = request.headers.get("Livepeer-Payment")
         if self.paid and (not payment or self.challenge_paid):
             if self.challenge_body is not None:
@@ -117,10 +127,16 @@ class Net:
         reply = self.replies.pop(0) if self.replies else Reply()
         if reply.hang_s:
             await self.hang(reply.hang_s)
+        if reply.drop_before_headers:
+            assert request.transport is not None
+            request.transport.close()
+            return web.Response()
+        headers = CIMultiDict(
+            [("Content-Type", reply.content_type), *reply.headers.items(), *reply.header_pairs]
+        )
         if not reply.chunks:
-            headers = {"Content-Type": reply.content_type, **reply.headers}
             return web.Response(status=reply.status, body=reply.body, headers=headers)
-        response = web.StreamResponse(status=reply.status, headers={"Content-Type": reply.content_type})
+        response = web.StreamResponse(status=reply.status, headers=headers)
         await response.prepare(request)
         for chunk in reply.chunks:
             await response.write(chunk)

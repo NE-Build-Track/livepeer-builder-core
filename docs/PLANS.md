@@ -43,3 +43,6 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | Neon Postgres, with a database branch per pull request | [active/neon-preview-branches.md](exec-plans/active/neon-preview-branches.md) | John |
 
 Nothing closes without Mike's review. Josh reviews engine code.
+
+- [Native HTTP transport](exec-plans/active/native-http-transport.md): bounded raw bodies,
+  operation identity and stream headers; remaining SDK dependencies are explicit.

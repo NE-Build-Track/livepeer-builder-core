@@ -370,7 +370,7 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
         return json.dumps({"payment_params": "p", "manifest_id": "m-1", "payment_url": payment_url})
 
     paid = PaidRequest(
-        "https://runner.example/apps/r1/run", method="POST", payload={}, app=APP, rate=None,
+        "https://runner.example/apps/r1/run", method="POST", body=b"{}", app=APP, rate=None,
         signer_url=None, signer_headers=None, retries=0, events=PaymentEvents(),
         orchestrator_url="https://orch.example:8935",
     )  # fmt: skip

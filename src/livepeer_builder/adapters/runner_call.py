@@ -141,7 +141,7 @@ class PaidRequest:
         url: str,
         *,
         method: str,
-        payload: dict[str, Any],
+        body: bytes,
         app: str,
         rate: NetworkRate | None,
         signer_url: str | None,
@@ -149,6 +149,9 @@ class PaidRequest:
         retries: int,
         events: PaymentEvents,
         orchestrator_url: str | None = None,
+        content_type: str = "application/json",
+        headers: tuple[tuple[str, str], ...] = (),
+        return_http_errors: bool = False,
     ) -> None:
         self.url = url
         # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
@@ -157,7 +160,11 @@ class PaidRequest:
             raise RunnerCallError("http", f"invalid runner URL {url!r}", payment_sent=False)
         self._payment_origins = origins
         self._method = method.upper()
-        self._body = json.dumps(payload).encode()
+        self._body = body
+        self._content_type = content_type
+        self._headers = headers  # validated by the contract: no credentials, framing or Livepeer headers
+        # Opt in (#55): every non-402 answer is the caller's, unchanged and undecoded.
+        self._return_http_errors = return_http_errors
         self._app = app
         self._signer_url = signer_url
         self._signer_headers = signer_headers or {}
@@ -167,7 +174,7 @@ class PaidRequest:
         self._max_price = max_price(rate) if signer_url is not None else None
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_s)) as session:
+        async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
             with translated(self._events):
                 response, funding = await self._answered(session)
                 try:
@@ -179,7 +186,7 @@ class PaidRequest:
 
     async def open(self, connect_timeout_s: float) -> "SdkRunnerStream":
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
-        session = aiohttp.ClientSession(timeout=timeout)
+        session = self._session(timeout)
         try:
             with translated(self._events):
                 response, funding = await self._answered(session)
@@ -188,10 +195,22 @@ class PaidRequest:
             raise
         return SdkRunnerStream(session, response, funding, self._events)
 
+    def _session(self, timeout: aiohttp.ClientTimeout) -> aiohttp.ClientSession:
+        session = aiohttp.ClientSession(timeout=timeout, auto_decompress=not self._return_http_errors)
+        # aiohttp sends an idempotent request again when a reused connection drops; a paid request
+        # carries a payment, so it goes out once (tests/unit/test_native_runner_call.py).
+        session._retry_connection = False
+        return session
+
     async def _answered(
         self, session: aiohttp.ClientSession
     ) -> tuple[aiohttp.ClientResponse, asyncio.Task[Any] | None]:
-        headers = {"Accept": "*/*", "Content-Type": "application/json", "User-Agent": "livepeer-builder"}
+        headers = {"Accept": "*/*", "Content-Type": self._content_type, "User-Agent": "livepeer-builder"}
+        if self._return_http_errors:
+            headers["Accept-Encoding"] = "identity"
+        # The caller's replace a default of the same name (aiohttp merges names case-insensitively, the
+        # last one winning); the payment headers below are never the caller's (contracts/http.py).
+        headers.update(self._headers)
         if self._signer_url is not None:
             material = await get_signer_info(self._signer_url, frozenset(self._signer_headers.items()))
             headers[PAYER_ADDRESS_HEADER] = str(material.address)
@@ -228,7 +247,7 @@ class PaidRequest:
             except BaseException:
                 await stop_funding(funding)
                 raise
-            if response.status < 300:
+            if response.status < 300 or (self._return_http_errors and response.status != 402):
                 return response, funding
             await stop_funding(funding)
             text = (await response.read()).decode(errors="replace")
@@ -322,6 +341,11 @@ class SdkRunnerStream:
     @property
     def content_type(self) -> str:
         return self._response.content_type or "application/octet-stream"
+
+    @property
+    def headers(self) -> tuple[tuple[str, str], ...]:
+        """Every response header pair, repeated names included, as the runner sent them."""
+        return tuple(self._response.headers.items())
 
     @property
     def manifest_ids(self) -> tuple[str, ...]:

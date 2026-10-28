@@ -979,12 +979,43 @@
             ],
             "title": "Capability"
           },
+          "content_type": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
           "first_byte_timeout_s": {
             "default": 60.0,
             "exclusiveMinimum": 0.0,
             "maximum": 3600.0,
             "title": "First Byte Timeout S",
             "type": "number"
+          },
+          "headers": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Headers",
+            "type": "array"
           },
           "idle_timeout_s": {
             "anyOf": [
@@ -1067,6 +1098,25 @@
               }
             ],
             "title": "Payload"
+          },
+          "raw_body": {
+            "anyOf": [
+              {
+                "contentEncoding": "base64",
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 11184812,
+            "title": "Raw Body"
+          },
+          "return_http_errors": {
+            "default": false,
+            "title": "Return Http Errors",
+            "type": "boolean"
           },
           "timeout_s": {
             "default": 300.0,

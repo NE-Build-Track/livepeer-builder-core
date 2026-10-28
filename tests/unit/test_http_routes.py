@@ -1,5 +1,6 @@
 """The REST surface: every admin route, every error mapping, and the app lifespan."""
 
+import base64
 from collections.abc import AsyncIterator
 
 import httpx
@@ -7,7 +8,7 @@ import pytest
 
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
-from livepeer_builder.contracts import ActorContext
+from livepeer_builder.contracts import ActorContext, JobRequest
 from livepeer_builder.errors import NoCapacity, ProviderError, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
@@ -275,3 +276,39 @@ async def test_a_missing_permission_is_403_and_another_actors_job_404_over_rest(
     usage = {"quantities": {"tokens": 1}}
     assert (await client.post(f"/v1/jobs/{job_id}/usage", json=usage, headers=as_bob)).status_code == 404
     assert (await client.post(f"/v1/jobs/{job_id}/usage", json=usage, headers=as_runner)).status_code == 200
+
+
+async def test_a_raw_body_arrives_as_base64_over_rest(  # type: ignore[no-untyped-def]
+    api, transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The REST envelope carries ``raw_body`` as URL-safe base64 (#55); the runner gets the bytes."""
+    client, _engine, admin, alice = api
+    await client.post(
+        ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"}, headers=admin
+    )
+    seen: list[JobRequest] = []
+    call = transport.call
+
+    async def capture(runner, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
+        seen.append(request)
+        return await call(runner, request, credential, on_signed)
+
+    monkeypatch.setattr(transport, "call", capture)
+    transport.steps = [ScriptedTransport.ok()]
+    body = b' \x00\xff{"a": 1} '
+    job = {
+        "app": APP,
+        "raw_body": base64.urlsafe_b64encode(body).decode(),
+        "content_type": "application/octet-stream",
+        "headers": [["x-trace", "t1"]],
+    }
+    ran = await client.post("/v1/jobs", json=job, headers=alice)
+    assert ran.status_code == 200, ran.text
+    [request] = seen
+    assert (request.raw_body, request.content_type, request.headers) == (
+        body,
+        "application/octet-stream",
+        (("x-trace", "t1"),),
+    )
+    bad = await client.post("/v1/jobs", json=job | {"raw_body": "not base64!"}, headers=alice)
+    assert bad.status_code == 422

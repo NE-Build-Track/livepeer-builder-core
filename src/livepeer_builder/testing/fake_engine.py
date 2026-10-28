@@ -43,6 +43,7 @@ from livepeer_builder.contracts import (
     ResourceRef,
     ResultRef,
     Runner,
+    SignedSession,
 )
 from livepeer_builder.errors import (
     InvalidRequest,
@@ -153,6 +154,8 @@ class FakeJobs:
         status = (
             reply.status_code if reply is not None else failure.status_code if failure is not None else None
         )
+        paid = failure is None or failure.payment_sent
+        sessions = (SignedSession(manifest_id="manifest-1"),) if failure is None else ()
         attempts = tuple(
             Attempt(
                 job_id=job_id,
@@ -160,8 +163,8 @@ class FakeJobs:
                 runner_url=runner.url,
                 orchestrator_url=runner.orchestrator_url,
                 allocation_id=None,
-                sessions=(),
-                payment_sent=failure is None or failure.payment_sent,
+                sessions=sessions,
+                payment_sent=paid,
                 outcome=outcome,
                 status_code=status,
                 started_at=now,

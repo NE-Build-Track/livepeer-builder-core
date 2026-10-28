@@ -135,7 +135,7 @@ mode, with no code:
   - **This check is a denylist.** It catches the scopes every provider puts on ordinary tokens, not ones
     a provider invents. Choosing a scope that only operators are ever issued stays the operator's
     responsibility. A dedicated namespace or a separate admin claim would remove that reliance (a
-    follow-up, not built);
+    follow-up, not built: [#58](https://github.com/NE-Build-Track/livepeer-builder-core/issues/58), T19);
 - an empty `LPB_JWT_TOKEN_TYPES`.
 
 **Verification** (`JwtBearerAuthenticator`, `adapters/jwt.py`):

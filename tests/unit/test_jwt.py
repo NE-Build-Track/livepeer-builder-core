@@ -748,6 +748,20 @@ async def test_the_name_claim_becomes_the_display_name(make: Make, provider: Pro
     assert missing is not None and missing.display_name is None  # not text: no name, never a 401
 
 
+@pytest.mark.parametrize("claim", ["sub", "tenant"])
+async def test_an_identity_longer_than_the_engine_stores_is_a_401(
+    make: Make, provider: Provider, claim: str
+) -> None:
+    """Actor and application ids are stored in 200 characters on every record. A longer subject or
+    application claim is refused when the token is checked, not on each write: cutting it would merge
+    two people (John, #53 review)."""
+    authenticator = make(application_claim="tenant")
+    with pytest.raises(NotAuthenticated, match=f"{claim} claim is longer than 200"):
+        await authenticator.authenticate(bearer(provider.token(**{"tenant": "acme", claim: "x" * 201})))
+    fits = await authenticator.authenticate(bearer(provider.token(**{"tenant": "acme", claim: "x" * 200})))
+    assert fits is not None
+
+
 # -- PR #50 review, round 2 (D49) ----------------------------------------------------------------------------
 
 

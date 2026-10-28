@@ -388,9 +388,9 @@ class JwtBearerAuthenticator:
 
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
         settings = self._settings
-        actor_id = _text(claims, settings.actor_claim)
+        actor_id = _identity(claims, settings.actor_claim)
         application_id = (
-            _text(claims, settings.application_claim)
+            _identity(claims, settings.application_claim)
             if settings.application_claim
             else settings.application_id
         )
@@ -469,6 +469,15 @@ def _text(claims: dict[str, Any], name: str) -> str:
     value = claims.get(name)
     if not isinstance(value, str) or not value:
         raise NotAuthenticated(f"the token has no {name} claim")
+    return value
+
+
+def _identity(claims: dict[str, Any], name: str) -> str:
+    """An actor or application id, which every record stores in 200 characters (``store.schema.ID``).
+    A longer one is refused here, not cut: cutting could merge two people (John, #53 review)."""
+    value = _text(claims, name)
+    if len(value) > 200:
+        raise NotAuthenticated(f"the token's {name} claim is longer than 200 characters")
     return value
 
 

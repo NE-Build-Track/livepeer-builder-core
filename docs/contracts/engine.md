@@ -43,9 +43,9 @@ invents nothing:
 | `price_info` | `Runner.rate` | `Runner.rate_error` |
 | --- | --- | --- |
 | absent or `null` (off-chain) | `None` | `None` |
-| complete | the rate; `price_usd` too when it is a finite, nonnegative decimal | `None` |
-| not an object, a bad price, no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` |
-| complete, but `price_usd` is present and not a finite, nonnegative number | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
+| complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
+| not an object, a bad price (negative, not finite, or `1e300` or more, which no float ceiling holds), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` |
+| complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
 
 Before ISS-10 a price with no currency or unit was labelled `usd` per `hour`. No released livepeer-node
 or go-livepeer advertises such a price, so the label only ever hid a malformed inventory.

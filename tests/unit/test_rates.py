@@ -74,6 +74,15 @@ def test_an_unreadable_price_says_why() -> None:
     ]
 
 
+def test_a_price_too_large_for_a_float_ceiling_is_not_a_rate() -> None:
+    """max_price pads the amount into a float; 1E+1000000 overflowed before the signer was asked."""
+    huge = Decimal("1E+1000000")
+    (runner,) = runners_from_entries(inventory(price=huge, currency="wei", unit="seconds"))
+    assert (runner.rate, runner.rate_error) == (None, "price is not a nonnegative number")
+    (runner,) = runners_from_entries(inventory(price="10", price_usd=huge, currency="wei", unit="seconds"))
+    assert runner.rate is not None and runner.rate.price_usd is None
+
+
 def test_a_node_on_chain_price_is_kept_as_advertised() -> None:
     """livepeer-node converts a registered 0.01 USD/hour into wei per second and keeps the USD figure per second."""
     payload = (

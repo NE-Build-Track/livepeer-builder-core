@@ -201,10 +201,11 @@ class PaymentsService:
     ) -> ProvisionedActor:
         existing = await self._store.get_actor(request.application_id, request.actor_id)
         if existing is not None and existing.status != "revoked":
-            # An earlier run of this command that got a key back (its secret is in the context) reached the
-            # provider under the actor-derived key, so the actor's allocation is that run's: its result.
-            # Otherwise the actor is another reference's, and this amount would be silently dropped.
-            if "new_secret_ref" not in run.context:
+            # The actor is this command's result only if it holds the key an earlier run of it got back (the
+            # provider key is actor-derived, so another reference may have had that same key replayed).
+            # Otherwise it is another reference's, or a re-provision after a revoke under a new key, and
+            # this amount would be silently dropped.
+            if run.context.get("new_secret_key_id") != existing.api_key_id:
                 raise AlreadyProvisioned(existing)
             own = SecretRef(ref=run.context["new_secret_ref"])
             if own != existing.secret_ref:  # another reference saved the actor with its own copy

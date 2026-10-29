@@ -442,6 +442,35 @@ def test_the_stale_window_must_outlast_a_commands_batteries_calls() -> None:
     assert EngineSettings(operation_stale_s=120, batteries_timeout_s=30).operation_stale_s == 120
 
 
+async def test_a_run_that_outlives_half_the_stale_window_is_cancelled_and_left_for_a_resume(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor, #76 review: a resumed grant create lists every page before it creates, so a run could still
+    be calling Batteries when the next resume starts. Every run gets half the stale window: past it, the
+    run's provider call is cancelled and its outcome is unknown, so no run is alive when a resume begins."""
+    engine = await make_engine(operation_stale_s=0.4, batteries_timeout_s=0.1)  # a run gets 0.2 s
+    await engine.payments.provision(admin, provision_request(amount="0"))
+    cancelled = asyncio.Event()
+
+    async def hangs(*args: object) -> None:
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(manager, "fund_allocation", hangs)
+    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    with pytest.raises(ProviderUnavailable, match=r"0\.2 s"):
+        await asyncio.wait_for(engine.payments.fund(admin, "default", "alice", request), timeout=2)
+    assert cancelled.is_set()
+    with pytest.raises(OperationInProgress):  # unknown outcome: the record stays started, for a resume
+        await engine.payments.fund(admin, "default", "alice", request)
+
+
 async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
@@ -784,6 +813,37 @@ async def test_a_resumed_provisioning_that_gets_a_new_key_stores_that_keys_secre
     clock.advance(120)
     again = await engine.payments.provision(admin, provision_request())
     assert (await engine.payments.credential(alice)).token == manager.keys[again.api_key_id][1]
+
+
+async def test_a_resumed_provisioning_does_not_claim_an_actor_re_provisioned_under_another_ref(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor, #76 review: A saved its actor (key K1) and died before completing; the actor was revoked and
+    provisioned again under B (key K2, a new provider key since the revoke). A's retry must not answer with
+    B's actor as its own: K2 is not A's allocation. It is refused, and A's reference is freed."""
+    engine = await make_engine()
+    complete = store.complete_operation
+
+    async def lost(*args: object) -> bool:
+        monkeypatch.setattr(store, "complete_operation", complete)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "complete_operation", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.provision(admin, provision_request(amount="5", ref="p-a"))
+    await engine.payments.revoke(admin, "default", "alice")
+    b = await engine.payments.provision(admin, provision_request(amount="7", ref="p-b"))
+    clock.advance(120)
+    with pytest.raises(AlreadyProvisioned) as refused:
+        await engine.payments.provision(admin, provision_request(amount="5", ref="p-a"))
+    assert refused.value.actor == b
+    with pytest.raises(AlreadyProvisioned):  # freed, so refused again at once, not in progress
+        await engine.payments.provision(admin, provision_request(amount="5", ref="p-a"))
 
 
 async def test_a_provisioning_resumed_after_its_actor_was_saved_returns_that_actor(

@@ -106,10 +106,12 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   repeat that loses the race to resume answers from the record as it is then: the result once done,
   else 409 with `Retry-After` counted from the winner's start.
 - **A resume is a lease, not a lock.** Fencing guards the engine's records, not a provider call already
-  in flight. Grant creation has no provider idempotency key, so the engine refuses to start unless
-  `LPB_OPERATION_STALE_S` is at least four times `LPB_BATTERIES_TIMEOUT_S`: the longest command makes
-  two Batteries calls, and each call has one deadline of that timeout for the whole request (httpx alone
-  times each phase separately), so a run presumed dead has none in flight. Its limit is a process paused
+  in flight, and grant creation has no provider idempotency key. So every run of a command is cancelled
+  at half `LPB_OPERATION_STALE_S` (its outcome then unknown, the record `started`), and no run is still
+  calling Batteries when a repeat resumes it. Each Batteries call has one deadline of
+  `LPB_BATTERIES_TIMEOUT_S` for the whole request (httpx alone times each phase separately), and the
+  engine refuses to start unless `LPB_OPERATION_STALE_S` is at least four of them, so the longest
+  ordinary command (two calls) fits in a run's half. Its limit is a process paused
   longer than the window, which only a provider idempotency key on grant creation would close.
 - **Rotating the payment key** records the old key's id and secret reference when it begins, and every
   step reads them from there, never from the actor as it is now. A resume after the new key was stored

@@ -7,6 +7,7 @@ derived idempotency keys, so a resumed command replays them at the provider. An 
 an extension point: an enterprise replaces the store, not the ledger.
 """
 
+import asyncio
 import hashlib
 import json
 import math
@@ -25,6 +26,7 @@ from livepeer_builder.errors import (
     OperationConflict,
     OperationInProgress,
     ProviderError,
+    ProviderUnavailable,
 )
 from livepeer_builder.protocols import Clock, OperationRepo
 
@@ -148,14 +150,25 @@ class OperationLedger:
                 return await self._recorded(held, answer)
             record = taken
         running = RunningOperation(self._repo, record)
+        # A run never outlives half the stale window, so none is still calling a provider when a repeat
+        # resumes it: fencing guards the records, not a call in flight (grant creation has no provider
+        # idempotency key). Past the budget the call is cancelled and the outcome is unknown.
+        budget = asyncio.timeout(self._stale_s / 2)
         try:
-            result = await steps(running)
+            async with budget:
+                result = await steps(running)
         except TakenOver:
             return await self._recorded(record, answer)
         except Exception as refused:
+            if budget.expired():
+                raise ProviderUnavailable(
+                    f"{command} ran past its {self._stale_s / 2:g} s budget; repeat it to resume"
+                ) from refused
             # Freed only when nothing was applied: a step noted in the context (by this run or an earlier
-            # one) means the command is half done, and a resume must finish it from that context.
-            if definite_refusal(refused) and running.record.context == record.context == dict(context or {}):
+            # one) means the command is half done, and a resume must finish it from that context. An actor
+            # already provisioned is refused for good: the earlier run's actor was revoked or is another's.
+            untouched = running.record.context == record.context == dict(context or {})
+            if definite_refusal(refused) and (untouched or isinstance(refused, AlreadyProvisioned)):
                 await self._repo.abandon_operation(record)
             raise  # otherwise the record stays started, for a resume
         if await self._repo.complete_operation(

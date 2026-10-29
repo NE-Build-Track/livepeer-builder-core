@@ -4,13 +4,14 @@ import asyncio
 import logging
 from collections import Counter
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from livepeer_builder.contracts import (
     ActorContext,
     DiscoverySnapshot,
     JobRequest,
     NetworkRate,
+    ObservedRate,
     Offering,
     Operation,
     Runner,
@@ -18,6 +19,9 @@ from livepeer_builder.contracts import (
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
 
 _LOG = logging.getLogger(__name__)
+# livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).
+# The engine is deliberately looser: such a rate is kept, with the poll time instead of the stamp.
+_CLOCK_SKEW = timedelta(seconds=30)
 
 
 class MostCapacityFirst:
@@ -35,11 +39,13 @@ class DiscoveryService:
         policy: AccessPolicy,
         clock: Clock,
         interval_s: float = 15.0,
+        rate_max_age_s: float = 600.0,
     ) -> None:
         self._source = source
         self._policy = policy
         self._clock = clock
         self._interval_s = interval_s
+        self._rate_max_age = timedelta(seconds=rate_max_age_s)
         self._snapshot = DiscoverySnapshot(
             runners=(), observed_at=None, last_attempt_at=None, last_error=None
         )
@@ -97,19 +103,31 @@ class DiscoveryService:
         offerings = []
         for name in sorted(by_app):
             group = by_app[name]
-            rates = _comparable_rates(group)
+            advertised = [
+                _observed(runner.rate, runner.observed_at, observed)
+                for runner in group
+                if runner.rate is not None
+            ]
+            rates = _comparable_rates(advertised)
             offerings.append(
                 Offering(
                     app=name,
                     modes=tuple(sorted({runner.mode for runner in group if runner.mode})),
                     rate_low=rates[0] if rates else None,
                     rate_high=rates[-1] if rates else None,
+                    rate_status="available" if rates else "missing",
+                    stale=not self.is_fresh() or self._too_old(rates),
+                    rates_excluded=len(advertised) - len(rates),
                     runner_count=len(group),
                     ready_count=sum(1 for runner in group if _is_ready(runner)),
                     observed_at=observed,
                 )
             )
         return offerings
+
+    def _too_old(self, rates: list[ObservedRate]) -> bool:
+        """The oldest rate in the range is older than the max age: its source missed refreshes."""
+        return any(self._clock.now() - rate.observed_at > self._rate_max_age for rate in rates)
 
 
 def _free_capacity(runner: Runner) -> int:
@@ -120,9 +138,15 @@ def _is_ready(runner: Runner) -> bool:
     return runner.capacity_available is None or runner.capacity_available > 0
 
 
-def _comparable_rates(group: list[Runner]) -> list[NetworkRate]:
+def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) -> ObservedRate:
+    """A rate with when it was last known: its orchestrator's stamp, else the poll that read it."""
+    if stamp is None or stamp > polled_at + _CLOCK_SKEW:
+        return ObservedRate(**rate.model_dump(), observed_at=polled_at, observed_by="engine")
+    return ObservedRate(**rate.model_dump(), observed_at=stamp, observed_by="orchestrator")
+
+
+def _comparable_rates(rates: list[ObservedRate]) -> list[ObservedRate]:
     """Rates in the group's most common (currency, unit), cheapest first; other units do not compare."""
-    rates = [runner.rate for runner in group if runner.rate is not None]
     if not rates:
         return []
     common, _ = Counter((rate.currency, rate.unit) for rate in rates).most_common(1)[0]

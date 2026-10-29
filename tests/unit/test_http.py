@@ -53,11 +53,26 @@ async def test_offerings_are_public_and_name_no_runner(api: tuple[httpx.AsyncCli
             "modes",
             "rate_low",
             "rate_high",
+            "rate_status",
+            "stale",
+            "rates_excluded",
             "runner_count",
             "ready_count",
             "observed_at",
         }
     assert (await client.get("/v1/offerings", params={"app": "other/app"})).json() == []
+
+
+async def test_offered_rates_carry_their_source_and_age(api: tuple[httpx.AsyncClient, BuilderEngine]) -> None:
+    """ISS-10: a caller can inspect units, currency, source and age before invoking anything."""
+    client, _ = api
+    (offering,) = (await client.get("/v1/offerings")).json()
+    assert set(offering["rate_low"]) == {
+        "amount", "currency", "unit", "price_usd", "source", "observed_at", "observed_by",
+    }  # fmt: skip
+    assert (offering["rate_low"]["source"], offering["rate_low"]["observed_by"]) == ("orchestrator", "engine")
+    assert (offering["rate_status"], offering["stale"], offering["rates_excluded"]) == ("available", False, 0)
+    assert offering["rate_low"]["observed_at"] == offering["observed_at"]  # the fixture runner has no stamp
 
 
 async def test_job_round_trip_and_admin_boundary(

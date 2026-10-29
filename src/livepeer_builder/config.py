@@ -132,6 +132,19 @@ class EngineSettings(Contract):
         return tuple(kind.lower() for kind in value)
 
     @model_validator(mode="after")
+    def _stale_outlasts_batteries_calls(self) -> "EngineSettings":
+        # A resume is a lease, not a lock (D57): it must not start while the presumed-dead run may still have
+        # a Batteries call in flight. The longest command makes two (create grant then read it back; rotate:
+        # create, then revoke), each up to the timeout; four of them leaves margin. Grant creation has no
+        # provider idempotency key, so an overlap there would create a second funded grant.
+        if self.operation_stale_s < 4 * self.batteries_timeout_s:
+            raise ValueError(
+                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
+                f"LPB_BATTERIES_TIMEOUT_S ({self.batteries_timeout_s:g})"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _jwt_is_configured(self) -> "EngineSettings":
         if "jwt" in self.auth:
             for name in ("jwt_issuer", "jwt_audience"):

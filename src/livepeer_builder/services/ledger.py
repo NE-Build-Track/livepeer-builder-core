@@ -143,15 +143,21 @@ class OperationLedger:
                 raise OperationConflict(held)  # before any provider call
             if held.state == "done":
                 return _replayed(held, answer)
-            record = await self._resume(held)
+            taken = await self._resume(held)
+            if taken is None:  # another repeat resumed it first: answer as the record is now
+                return await self._recorded(held, answer)
+            record = taken
+        running = RunningOperation(self._repo, record)
         try:
-            result = await steps(RunningOperation(self._repo, record))
+            result = await steps(running)
         except TakenOver:
             return await self._recorded(record, answer)
         except Exception as refused:
-            if definite_refusal(refused):  # nothing applied: the caller may fix the request and repeat it
+            # Freed only when nothing was applied: a step noted in the context (by this run or an earlier
+            # one) means the command is half done, and a resume must finish it from that context.
+            if definite_refusal(refused) and running.record.context == record.context == dict(context or {}):
                 await self._repo.abandon_operation(record)
-            raise  # otherwise the outcome is unknown: the record stays started, for a resume
+            raise  # otherwise the record stays started, for a resume
         if await self._repo.complete_operation(
             record, answer.dump_python(result, mode="json"), self._clock.now()
         ):
@@ -170,16 +176,14 @@ class OperationLedger:
         age = (self._clock.now() - held.started_at).total_seconds()
         return max(1, math.ceil(self._stale_s - age))
 
-    async def _resume(self, held: OperationRecord) -> OperationRecord:
+    async def _resume(self, held: OperationRecord) -> OperationRecord | None:
         """Take over a run older than ``LPB_OPERATION_STALE_S``: it is presumed dead, and every step is safe
-        to repeat. A younger one may still run. Taking over is a compare-and-set on the fencing token."""
+        to repeat. A younger one may still run. Taking over is a compare-and-set on the fencing token;
+        ``None`` when another repeat took it over first."""
         now = self._clock.now()
         if (now - held.started_at).total_seconds() < self._stale_s:
             raise OperationInProgress(held, self._until_stale(held))
-        taken = await self._repo.resume_operation(held, now)
-        if taken is None:  # another repeat resumed it first
-            raise OperationInProgress(held)
-        return taken
+        return await self._repo.resume_operation(held, now)
 
 
 def _replayed[T](held: OperationRecord, answer: TypeAdapter[T]) -> T:

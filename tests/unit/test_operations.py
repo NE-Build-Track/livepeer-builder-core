@@ -85,7 +85,14 @@ def test_unreachable_and_unpaid_timeout_are_not_retried_q2() -> None:
 def test_a_running_job_or_one_with_no_failure_is_not_retried() -> None:
     assert not never_reached_a_runner(job("running", None))
     assert not never_reached_a_runner(job("failed", None, "refused"))  # no failure recorded
-    assert not never_reached_a_runner(job("failed", "interrupted"))  # no attempt says what happened
+    # an interrupted attempt may have reached the runner: the call can start once the attempt is written
+    assert not never_reached_a_runner(job("failed", "interrupted", "in_flight"))
+
+
+def test_a_job_interrupted_before_its_first_attempt_never_reached_a_runner() -> None:
+    """Cursor, #76 review: a crash after the job is written but before ``start_attempt`` leaves no attempt;
+    the attempt is written before any runner call (buffered and streamed), so a repeat may run it again."""
+    assert never_reached_a_runner(job("failed", "interrupted"))
 
 
 def test_only_a_failed_job_is_retried_whatever_its_failure_says() -> None:

@@ -154,6 +154,12 @@ From the tickets and the 21 October M3 plan:
 - **29 October (slice 4, Mike):** the guide's `token_replayed` would always be `false` (a token is never
   stored), so it is `replayed` instead: `true` on a replay, which has `token: null`, and `false` on the
   first answer. Embedded callers, who see no `Idempotent-Replayed` header, tell the two apart by it.
+- **29 October (Cursor's #76 review, Mike):** five fixes, each test-first: a job interrupted before its
+  first attempt re-runs; a refusal after a step applied keeps the record `started` (a refused revoke
+  after the new key was stored left two live payment keys); a resumed provisioning claims an existing
+  actor only if its own run got a key; a lost resume race answers from the record as it is (it said
+  `Retry-After: 1`); `LPB_OPERATION_STALE_S` must be at least four `LPB_BATTERIES_TIMEOUT_S` (a resumed
+  grant create could overlap the original POST).
 - **29 October (review, Mike):** an admin command still `started` answers `Retry-After` with the
   seconds until a repeat may resume it (it was always 1, so a client polled for two minutes). Job
   in-progress keeps 1. Provisioning an actor already provisioned under another reference is 409

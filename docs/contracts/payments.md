@@ -94,21 +94,31 @@ no `Livepeer-Job-Id`. In embedded mode the replay is the return value; `OPERATIO
 variable in `livepeer_builder.contracts`) is `True` right after a call answered from the ledger.
 
 - **Refused or unknown.** A command refused outright (an invalid request, an unknown actor or grant, a
-  provider 4xx other than 408) applied nothing: the engine deletes its record, so the caller may fix
-  the request and repeat it under the same reference. A timeout, a transport error, a provider 5xx or a
+  provider 4xx other than 408) before any step applied anything: the engine deletes its record, so the
+  caller may fix the request and repeat it under the same reference. A refusal after a step applied (a
+  rotation's new key stored, then the old key's revoke refused) leaves the record `started`, so a resume
+  finishes the command from what the record noted. A timeout, a transport error, a provider 5xx or a
   crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
   new reference.
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
   Every later write of the slower run (its context, its result, its abandonment) checks the token and
-  is refused, so a run presumed dead that was only slow answers with the recorded result instead.
+  is refused, so a run presumed dead that was only slow answers with the recorded result instead. A
+  repeat that loses the race to resume answers from the record as it is then: the result once done,
+  else 409 with `Retry-After` counted from the winner's start.
+- **A resume is a lease, not a lock.** Fencing guards the engine's records, not a provider call already
+  in flight. Grant creation has no provider idempotency key, so the engine refuses to start unless
+  `LPB_OPERATION_STALE_S` is at least four times `LPB_BATTERIES_TIMEOUT_S`: the longest command makes
+  two Batteries calls, each bounded by that timeout, so a run presumed dead has none in flight.
 - **Rotating the payment key** records the old key's id and secret reference when it begins, and every
   step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
   reference is recorded before the actor points at it, so a resume reuses that copy.
 - **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
   409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
-  instead). The refusal frees the reference. A resumed run that finds the actor its earlier run saved
-  answers with it. Re-provisioning after a revoke is a new command: it needs a new reference.
+  instead). The refusal frees the reference. A resumed run answers with the actor only if its earlier
+  run got a key from Batteries (its secret is on the record): the provider key is derived from the
+  actor, so that allocation is this command's. A resume that never got that far is refused the same
+  way. Re-provisioning after a revoke is a new command: it needs a new reference.
 - **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
   grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
   reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A

@@ -37,10 +37,11 @@ def retry_of(holder: Job, *, same_request: bool) -> UUID:
 def never_reached_a_runner(job: Job) -> bool:
     """A failed job that provably never had a runner accept the work, so a repeat may dispatch it again.
 
-    A closed list (D57): the job failed before dispatch, or every attempt was refused before the app ran
-    (``refused``, or a 404 or 409 from the orchestrator) or by the signer (``payment``, ``payment_refused``),
-    and nothing was paid. ``unreachable`` and an unpaid ``timeout`` are not on it: a disconnect after the
-    request went out is ``unreachable``, and a free runner may have run the work (Q2).
+    A closed list (D57): the job failed before dispatch or was interrupted before its first attempt, or every
+    attempt was refused before the app ran (``refused``, or a 404 or 409 from the orchestrator) or by the
+    signer (``payment``, ``payment_refused``), and nothing was paid. ``unreachable`` and an unpaid
+    ``timeout`` are not on it: a disconnect after the request went out is ``unreachable``, and a free runner
+    may have run the work (Q2).
     """
     if job.state != "failed" or job.failure is None:
         return False
@@ -48,6 +49,8 @@ def never_reached_a_runner(job: Job) -> bool:
         return False
     if job.failure.kind in BEFORE_DISPATCH:
         return True
+    if job.failure.kind == "interrupted" and not job.attempts:
+        return True  # crashed before its first attempt, which is written before any runner is called
     return bool(job.attempts) and all(_refused_before_the_app_ran(a) for a in job.attempts)
 
 

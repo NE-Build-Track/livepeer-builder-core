@@ -166,7 +166,8 @@ grants, rotations, keys) use the same codes, with the command in the body instea
 a caller that catches `OperationExists` keeps working; branch on `code` to tell them apart.
 
 **Never reached a runner** is a closed list. The job failed before dispatch (`no_offering`,
-`no_capacity`, `not_provisioned`), or every attempt was refused before the app ran: `refused` (the
+`no_capacity`, `not_provisioned`), or was `interrupted` by a restart before its first attempt (an attempt
+is written before any runner is called), or every attempt was refused before the app ran: `refused` (the
 orchestrator answered 503), an orchestrator 404 or 409, or a signer refusal (`payment`, or
 `payment_refused` for this orchestrator). No attempt has `payment_sent`. `unreachable` and an unpaid
 `timeout` are **not** on the list: a disconnect after the request went out is `unreachable`, and a free

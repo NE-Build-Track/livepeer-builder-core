@@ -21,6 +21,7 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     OperationRecord,
+    ProvisionedActor,
     ProvisionRequest,
 )
 from livepeer_builder.errors import (
@@ -149,9 +150,14 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
     answers = await asyncio.gather(
         *(engine.payments.fund(admin, "default", "alice", request) for _ in range(2)), return_exceptions=True
     )
-    assert sorted(type(answer).__name__ for answer in answers) == ["OperationInProgress", "ProvisionedActor"]
     assert manager.calls.count("fund_allocation") == 2  # the timed-out call and one resume
     assert manager.allocations[actor.allocation_id].granted == Decimal(10)
+    # The loser answers from the record as it is now: the winner's result once done, else in progress
+    # with a full stale window, since the winner restarted it now (Cursor, #76 review: it said 1 s).
+    assert any(isinstance(answer, ProvisionedActor) for answer in answers)
+    lost = [answer for answer in answers if isinstance(answer, OperationInProgress)]
+    assert [answer.retry_after_s for answer in lost] in ([], [120])
+    assert lost, "the race should leave the loser in progress here: the winner is still funding"
 
 
 async def test_funding_a_grant_with_one_ref_and_another_grant_is_a_conflict(
@@ -223,6 +229,42 @@ async def test_a_rotation_that_died_before_revoking_the_old_key_is_finished_by_a
     assert manager.keys[rotated.api_key_id][2] is False
     assert len(manager.keys) == 2  # provisioning's key and one rotation
     assert (await engine.payments.credential(alice)).token == manager.keys[rotated.api_key_id][1]
+
+
+async def test_a_rotation_refused_after_its_new_key_was_stored_stays_resumable(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+) -> None:
+    """Cursor, #76 review: a 4xx is a definite refusal, but here a step was already applied (the new key is
+    stored and live). Freeing the reference would lose the old key from the ledger's context, and a repeat
+    would take the new key for the old one: two live payment keys. The record stays started instead."""
+    engine = await make_engine()
+    before = await engine.payments.provision(admin, provision_request())
+    manager.fail_once("revoke_key", ProviderError(409, "key busy"))
+    with pytest.raises(ProviderError):
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.keys[before.api_key_id][2] is False  # the old key is still live
+    clock.advance(120)
+    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
+    assert manager.keys[rotated.api_key_id][2] is False
+    assert len(manager.keys) == 2
+
+
+async def test_a_command_refused_before_any_step_applied_still_frees_its_reference(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """The other side of the rule: nothing was applied, so the caller may fix the request and repeat it."""
+    engine = await make_engine()
+    await engine.payments.provision(admin, provision_request(amount="0"))
+    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("fund_allocation", ProviderError(400, "bad amount"))
+    with pytest.raises(ProviderError):
+        await engine.payments.fund(admin, "default", "alice", request)
+    await engine.payments.fund(admin, "default", "alice", request)  # not in progress: the record was freed
+    assert manager.calls.count("fund_allocation") == 2
 
 
 async def test_a_rotation_resumed_after_storing_the_secret_failed_revokes_the_old_key_once(
@@ -391,12 +433,22 @@ async def test_a_slow_run_whose_resume_is_still_going_is_told_it_is_in_progress(
         await first
 
 
+def test_the_stale_window_must_outlast_a_commands_batteries_calls() -> None:
+    """Cursor, #76 review: a resume is a lease, not a lock. Grant creation has no provider idempotency key,
+    so a resume must not start while the presumed-dead run's calls may still be in flight: its two calls
+    (create, then read back) each take up to LPB_BATTERIES_TIMEOUT_S. The window is four of them."""
+    with pytest.raises(ValidationError, match="LPB_OPERATION_STALE_S"):
+        EngineSettings(operation_stale_s=60, batteries_timeout_s=30)
+    assert EngineSettings(operation_stale_s=120, batteries_timeout_s=30).operation_stale_s == 120
+
+
 async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
     assert EngineSettings().operation_stale_s == 120  # Q3
-    assert EngineSettings.from_env({"LPB_OPERATION_STALE_S": "30"}).operation_stale_s == 30
-    engine = await make_engine(operation_stale_s=30)
+    shorter = {"LPB_OPERATION_STALE_S": "30", "LPB_BATTERIES_TIMEOUT_S": "5"}
+    assert EngineSettings.from_env(shorter).operation_stale_s == 30
+    engine = await make_engine(operation_stale_s=30, batteries_timeout_s=5)
     await engine.payments.provision(admin, provision_request(amount="0"))
     request = FundRequest(amount=usd("10"), operation_ref="topup-1")
     manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
@@ -655,6 +707,55 @@ async def test_provisioning_an_actor_already_provisioned_under_a_new_ref_is_refu
     assert refused.value.actor == first and manager.calls == ["create_key_for_grant"]
     bob = await engine.payments.provision(admin, provision_request("bob", ref="p-2"))
     assert bob.actor_id == "bob"
+
+
+async def test_a_resumed_provisioning_that_never_reached_the_provider_does_not_claim_another_refs_actor(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """Cursor, #76 review: reference B dies before its provider call; reference A then provisions the actor
+    with another amount. B's resume must not answer with A's actor as its own result (B's amount would be
+    silently dropped): it is refused, applied nothing, and frees B's reference."""
+    engine = await make_engine()
+    manager.fail_once("create_key_for_grant", ProviderUnavailable("Batteries unreachable: refused"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.provision(admin, provision_request(amount="5", ref="p-b"))
+    a = await engine.payments.provision(admin, provision_request(amount="7", ref="p-a"))
+    clock.advance(120)
+    with pytest.raises(AlreadyProvisioned) as refused:
+        await engine.payments.provision(admin, provision_request(amount="5", ref="p-b"))
+    assert refused.value.actor == a
+    with pytest.raises(AlreadyProvisioned):  # freed, so not in progress: refused again at once
+        await engine.payments.provision(admin, provision_request(amount="5", ref="p-b"))
+
+
+async def test_a_resumed_provisioning_that_reached_the_provider_answers_with_the_shared_allocation(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B got its key and stored its secret, then died before saving the actor; A then provisioned the same
+    actor. The provider key is actor-derived, so A got B's allocation replayed: B's command did apply, and
+    its resume answers with the actor, dropping B's now unused copy of the secret."""
+    engine = await make_engine()
+    save_actor = store.save_actor
+
+    async def lost(actor: object) -> None:
+        monkeypatch.setattr(store, "save_actor", save_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "save_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.provision(admin, provision_request(ref="p-b"))
+    a = await engine.payments.provision(admin, provision_request(ref="p-a"))
+    clock.advance(120)
+    assert await engine.payments.provision(admin, provision_request(ref="p-b")) == a
+    assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]  # one allocation, replayed
+    async with store.engine.connect() as conn:
+        refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
+    assert refs == {a.secret_ref.ref}
 
 
 async def test_a_provisioning_resumed_after_its_actor_was_saved_returns_that_actor(

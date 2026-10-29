@@ -23,7 +23,7 @@ From the 21 October M3 plan and the guide's "Done when":
 
 - [x] Every rate carries amount, currency, unit, source and age: `ObservedRate` (`amount`, `currency`,
   `unit`, `price_usd`, `source`, `observed_at`, `observed_by`) on `Offering.rate_low`/`rate_high`.
-- [x] Missing and stale rates are explicit: `Offering.rate_status`, `stale`, `rates_excluded`;
+- [x] Unpaid and stale rates are explicit: one `Offering` per app and `(currency, unit)`, `rate_status`, `stale`;
   `Runner.rate_error` says why an advertised price is not a rate.
 - [x] A network rate is not represented as a total-job quote or a retail price: no defaults, no
   conversion, no job total; [payments.md](../../contracts/payments.md#pricing-assumptions).
@@ -45,7 +45,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 | --- | --- | --- |
 | Parse | `adapters/sdk.py::_rate`, `_stamp` | A rate exactly as advertised, or a reason. No `usd`/`hour` defaults. `price_usd` kept when it is a finite, nonnegative decimal. `observed_at` read as [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) in UTC |
 | Age | `services/discovery.py::_observed` | The orchestrator's stamp when present and at most 30 s ahead of the poll, else the poll time; `observed_by` names the clock |
-| Status | `DiscoveryService.offerings` | `rate_status`, `stale` (snapshot not fresh, or oldest rate older than `LPB_RATE_MAX_AGE_S`), `rates_excluded` |
+| Status | `DiscoveryService.offerings` | One offering per app and `(currency, unit)`; `rate_status` (the engine pays the unit), `stale` (snapshot not fresh, or oldest rate older than `LPB_RATE_MAX_AGE_S`) |
 | Money | `adapters/runner_call.py::PaidRequest._answered` | A 402 for a runner with no ceiling is refused before the signer is asked |
 
 ### Why the plan departs from the guide
@@ -123,7 +123,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
     reason), no `price_info`, a livepeer-node on-chain price with `price_usd`, a bad `price_usd`, and
     `observed_at` in UTC.
   - **Catalog:** orchestrator stamp, engine poll, the 30 s skew bound on both sides, `rate_status`,
-    `stale` from the snapshot and from the max age at its boundary, `rates_excluded`, and
+    `stale` from the snapshot and from the max age at its boundary, one offering per unit, and
     `LPB_RATE_MAX_AGE_S` through `EngineSettings` and assembly.
   - **Money** (`tests/unit/test_runner_call.py`): a runner with no usable price that answers 402 is
     refused before the signer is asked; seen red without the guard (the engine signed uncapped).
@@ -131,7 +131,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   - **go-livepeer** (`tests/unit/test_go_livepeer_compat.py`): three characterization tests, each shown
     to fail under a mutation (guard removed; `720p-pixel-seconds` made payable).
   - **One existing test changed:** `test_offerings_are_public_and_name_no_runner` pins the offering's
-    top-level keys; the set gains `rate_status`, `stale` and `rates_excluded`. Its runner-URL checks are
+    top-level keys; the set gains `rate_status` and `stale`. Its runner-URL checks are
     unchanged.
   - **Results:** 1338 passed, 31 skipped; coverage 97.59 % (diff coverage 100 % against
     `origin/releases/m3`); ruff, mypy (strict), `check_docs.py`, `lpb gen-docs` and `lpb smoke` clean.
@@ -158,3 +158,6 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   PR #74 merges, not on Mike's branch.
 - 29 October (John): keep `price_usd` exact on this side of the gateway. Discovery JSON is parsed here
   until livepeer-python-gateway#88 parses it as `Decimal`. The gateway issue is the upstream fix.
+- 29 October (John, PR #77 review): an app advertised in two units is two offerings, not one range with
+  the minority unit excluded, so an unpaid unit never hides a paid one. Runners with no rate are not
+  listed, and `rates_excluded` is gone.

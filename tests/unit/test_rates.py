@@ -151,27 +151,19 @@ async def test_a_stamp_from_the_future_is_trusted_only_within_30_seconds(clock: 
     assert (offering.rate_high.observed_at, offering.rate_high.observed_by) == (clock.now(), "engine")
 
 
-async def test_an_offering_says_when_no_runner_advertises_a_usable_rate(clock: FixedClock) -> None:
+async def test_an_app_with_no_usable_rate_is_not_listed(clock: FixedClock) -> None:
     unpriced = priced("10", name="free").model_copy(update={"app": "c/d", "rate": None})
     unreadable = unpriced.model_copy(
         update={"rate_error": "price_info has no currency", "url": "https://o/x"}
     )
-    available, missing = await catalog(clock, priced("10"), unpriced, unreadable)
+    (available,) = await catalog(clock, priced("10"), unpriced, unreadable)
     assert (available.app, available.rate_status) == ("a/b", "available")
-    assert (missing.app, missing.rate_status, missing.rate_low, missing.runner_count) == (
-        "c/d",
-        "missing",
-        None,
-        2,
-    )
 
 
 async def test_every_offering_is_stale_once_the_snapshot_is(clock: FixedClock) -> None:
     """The snapshot counts as stale after three missed polls (15 s each here), whatever the rates say."""
-    unpriced = priced("10").model_copy(update={"app": "c/d", "rate": None})
-    discovery = DiscoveryService(
-        StaticDiscoverySource([priced("10"), unpriced]), DefaultPolicy(), clock, 15.0
-    )
+    other = priced("10").model_copy(update={"app": "c/d"})
+    discovery = DiscoveryService(StaticDiscoverySource([priced("10"), other]), DefaultPolicy(), clock, 15.0)
     await discovery.refresh()
     clock.advance(45)
     assert [offering.stale for offering in discovery.offerings()] == [False, False]
@@ -196,13 +188,27 @@ async def test_an_offering_is_stale_when_its_oldest_rate_is_older_than_the_max_a
     assert await stale(past_limit, priced("30", clock.now(), name="r3")) is True
 
 
-async def test_rates_in_another_unit_are_counted_but_not_ranged(clock: FixedClock) -> None:
-    (offering,) = await catalog(
+async def test_each_unit_of_an_app_is_its_own_offering(clock: FixedClock) -> None:
+    fixed, seconds = await catalog(
         clock, priced("10", name="r1"), priced("30", name="r2"), priced("1", unit="fixed", name="r3")
     )
-    assert offering.rate_low is not None and offering.rate_high is not None
-    assert (offering.rate_low.amount, offering.rate_high.amount) == (Decimal(10), Decimal(30))
-    assert offering.rates_excluded == 1  # the fixed rate: per request does not compare with per second
+    assert (seconds.rate_low.unit, seconds.rate_low.amount, seconds.rate_high.amount) == ("seconds", 10, 30)
+    assert (fixed.rate_low.unit, fixed.rate_low.amount, fixed.runner_count) == ("fixed", 1, 1)
+
+
+async def test_an_unpaid_unit_does_not_hide_a_paid_one(clock: FixedClock) -> None:
+    pixels, seconds = await catalog(
+        clock,
+        priced("1", unit="720p-pixel-seconds", name="p1"),
+        priced("2", unit="720p-pixel-seconds", name="p2"),
+        priced("10", name="s1"),
+    )
+    assert (seconds.rate_low.unit, seconds.rate_status, seconds.runner_count) == ("seconds", "available", 1)
+    assert (pixels.rate_low.unit, pixels.rate_status, pixels.runner_count) == (
+        "720p-pixel-seconds",
+        "missing",
+        2,
+    )
 
 
 async def test_lpb_rate_max_age_s_sets_the_max_age(clock: FixedClock) -> None:

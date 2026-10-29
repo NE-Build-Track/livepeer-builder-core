@@ -1,7 +1,9 @@
 """The discovery service's settings, HTTP routes and composition root (#45)."""
 
 import asyncio
+import json
 import socket
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,7 @@ import pytest
 from livepeer_builder.discovery import Catalog, OnChainDirectory, Orchestrator, Probe, StaticDirectory
 from livepeer_builder.discovery.server import create_app, directory_from, serve
 from livepeer_builder.discovery.settings import DiscoverySettings
+from livepeer_builder.utils import dumps_json_numbers
 
 
 def test_settings_come_from_lpd_variables_with_defaults() -> None:
@@ -104,6 +107,27 @@ async def test_discovery_serves_the_inventory_and_readiness_follows_the_catalog(
         assert (await http.get("/discovery")).json() == [
             {"address": "https://a.example", "runners": [runner]}
         ]
+
+
+async def test_discovery_reserves_a_decimal_price_as_the_same_json_number() -> None:
+    price_usd = Decimal("0.0000027777777777777777777777777777")
+    runner = {
+        "url": "https://a.example/apps/r1/app",
+        "app": "example/echo",
+        "price_info": {"price_usd": price_usd},
+    }
+    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed(runner))
+    await catalog.load_directory()
+    await catalog.probe()
+    async with client(catalog) as http:
+        body = (await http.get("/discovery")).content
+    assert b'"price_usd":0.0000027777777777777777777777777777' in body  # a JSON number, every digit
+    (entry,) = json.loads(body, parse_float=Decimal)
+    assert entry["runners"][0]["price_info"]["price_usd"] == price_usd
+
+
+def test_a_decimal_is_written_as_sent_not_padded_to_its_exponent() -> None:
+    assert dumps_json_numbers({"p": Decimal("1e-999999")}) == '{"p":1E-999999}'
 
 
 def free_port() -> int:

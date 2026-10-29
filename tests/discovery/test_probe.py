@@ -27,7 +27,6 @@ def answering(body: object, status: int = 200) -> Handler:
 
 
 async def test_a_node_price_usd_stays_a_decimal_through_the_probe(serve: Serve, tls: Tls) -> None:
-    """aiohttp's JSON helper would round this. The body is the node's JSON number (gateway#88)."""
     payload = (
         b'[{"address":"https://claims-elsewhere","runners":[{"url":"https://orch/apps/r1/app",'
         b'"app":"example/echo","price_info":{"price":4492197255,'

@@ -67,16 +67,15 @@ class DiscoverySnapshot(Contract):
 
 
 class Offering(Contract):
-    """One runner app, as a builder sees it."""
+    """One runner app in one (currency, unit), as a builder sees it. Runners with no rate are not listed."""
 
     app: str
     modes: tuple[str, ...]
-    rate_low: ObservedRate | None
-    rate_high: ObservedRate | None
-    rate_status: Literal["available", "missing"]  # missing: no runner advertises a usable rate
+    rate_low: ObservedRate  # the range's currency and unit are the offering's
+    rate_high: ObservedRate
+    rate_status: Literal["available", "missing"]  # missing: the engine does not pay this unit
     # the snapshot is not fresh, or the oldest rate in the range is older than LPB_RATE_MAX_AGE_S
     stale: bool
-    rates_excluded: int  # advertised rates outside the range: not the group's most common (currency, unit)
     runner_count: int
     ready_count: int
     observed_at: datetime

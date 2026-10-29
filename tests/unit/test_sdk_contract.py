@@ -78,5 +78,3 @@ def test_the_signer_client_accepts_what_the_call_path_passes() -> None:
     for method in ("get_payment", "run_payments"):
         assert inspect.iscoroutinefunction(getattr(LivePaymentSession, method))
     assert isinstance(inspect.getattr_static(LivePaymentSession, "manifest_id"), property)
-
-

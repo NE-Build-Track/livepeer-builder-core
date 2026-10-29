@@ -7,11 +7,10 @@ directory=...)``; logging is the caller's (the CLI configures it).
 
 import asyncio
 import logging
-from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from livepeer_builder.discovery.catalog import Catalog, Probes
@@ -26,24 +25,13 @@ from livepeer_builder.utils import dumps_json_numbers
 _LOG = logging.getLogger(__name__)
 
 
-class _InventoryResponse(JSONResponse):
-    """The inventory, with a Decimal price still a JSON number.
-
-    ``JSONResponse`` uses ``json.dumps``, which cannot write a ``Decimal`` without making it a
-    float. The probe kept ``price_usd`` exact (livepeer/livepeer-python-gateway#88); this hop
-    must not round it on the way back out.
-    """
-
-    def render(self, content: Any) -> bytes:
-        return dumps_json_numbers(content).encode("utf-8")
-
-
 def create_app(catalog: Catalog, *, refresh: "asyncio.Task[None] | None" = None) -> Starlette:
     """The HTTP surface. With ``refresh``, readiness also needs that task alive: a stopped refresh would
     serve a frozen inventory, so it must not look ready (#46 review)."""
 
-    async def discovery(_: Request) -> _InventoryResponse:
-        return _InventoryResponse(catalog.inventory())
+    async def discovery(_: Request) -> Response:
+        # Not JSONResponse: json.dumps cannot write the probe's Decimal price_usd as a number.
+        return Response(dumps_json_numbers(catalog.inventory()), media_type="application/json")
 
     async def healthz(_: Request) -> JSONResponse:
         return JSONResponse({"ok": True})

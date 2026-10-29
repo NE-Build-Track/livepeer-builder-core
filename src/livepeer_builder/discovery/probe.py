@@ -189,8 +189,6 @@ class Prober:
                 body += chunk
                 if len(body) > self._max_bytes:
                     raise ValueError(f"inventory larger than {self._max_bytes} bytes")
-        # parse_float=Decimal. The gateway's json.loads would turn price_usd into a float
-        # (livepeer/livepeer-python-gateway#88). The service re-serves these records.
         entries = loads_json_numbers(body)
         if not isinstance(entries, list):
             raise ValueError("inventory is not a JSON list")

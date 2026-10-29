@@ -36,6 +36,7 @@ from livepeer_builder.contracts import (
     MeasuredUsage,
     Money,
     NetworkRate,
+    ObservedRate,
     Offering,
     ProvisionedActor,
     ResourceRef,
@@ -79,7 +80,7 @@ REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "CostRepo", "SecretRepo")
 CONTRACTS: tuple[type[BaseModel], ...] = (
     AuthRequest, ActorContext, AuthProvenance, ResourceRef,
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
-    Runner, RunnerGPU, NetworkRate, Offering,
+    Runner, RunnerGPU, NetworkRate, ObservedRate, Offering,
     JobCost, AttemptCost, Fees,
     ProvisionedActor, SecretRef, Allowance, Money,
 )  # fmt: skip

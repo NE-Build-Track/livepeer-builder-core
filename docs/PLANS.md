@@ -42,6 +42,7 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | JWT bearer, chosen by `LPB_AUTH` (#49, ISS-33 in M4) | [completed/jwt-bearer.md](exec-plans/completed/jwt-bearer.md) | Mike (John reviews) |
 | Neon Postgres, with a database branch per pull request | [active/neon-preview-branches.md](exec-plans/active/neon-preview-branches.md) | John |
 | Actor collection and read-only admin (#52) | [active/admin-read-and-actors.md](exec-plans/active/admin-read-and-actors.md) | Mike (John reviews) |
+| ISS-10 Network rates and pricing assumptions | [active/iss-10-rates.md](exec-plans/active/iss-10-rates.md) | John (Mike reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.
 

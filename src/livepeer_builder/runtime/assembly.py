@@ -282,7 +282,11 @@ class EngineServices:
 def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     """Build every service from the final parts. No I/O: it opens nothing, so it leaves nothing open."""
     discovery = DiscoveryService(
-        parts.discovery_source, parts.policy, parts.clock, settings.discovery_interval_s
+        parts.discovery_source,
+        parts.policy,
+        parts.clock,
+        settings.discovery_interval_s,
+        rate_max_age_s=settings.rate_max_age_s,
     )
     payments = PaymentsService(
         mode=settings.allocation_mode,

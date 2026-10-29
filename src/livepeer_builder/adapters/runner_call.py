@@ -262,6 +262,12 @@ class PaidRequest:
                 raise self._events.error(
                     "http", f"{self.url} asks for payment; the call is unpaid", status_code=402
                 )
+            if self._max_price is None:  # the signer checks no ceiling without one: never sign uncapped
+                raise self._events.error(
+                    "payment_refused",
+                    f"{self.url} asks for payment but advertised no usable price",
+                    status_code=402,
+                )
             challenge = self._challenge(text)
         raise self._events.error("http", f"{self.url} kept asking for payment", status_code=402)
 

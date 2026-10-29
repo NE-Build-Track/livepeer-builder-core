@@ -43,6 +43,9 @@ class EngineSettings(Contract):
     signer_url: str | None = None
     discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
     discovery_interval_s: float = Field(default=15.0, gt=0)
+    # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node discovery's
+    # default 5-minute refreshes. lpb discovery evicts a failing orchestrator sooner (30 s probes, 6 failures)
+    rate_max_age_s: float = Field(default=600.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)
 
     # admission (checked before any payment)

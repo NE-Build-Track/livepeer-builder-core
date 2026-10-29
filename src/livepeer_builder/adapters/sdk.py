@@ -8,6 +8,7 @@ a callback that a lost signer reply would skip (docs/references/sdk-gateway.md).
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
@@ -153,6 +154,7 @@ def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None
     reported = raw.get("capacity_available")
     if isinstance(reported, int) and not isinstance(reported, bool):
         available = reported  # the node reports it directly; session_ids is the older form
+    rate, rate_error = _rate(raw.get("price_info"))
     return Runner(
         url=url,
         app=app,
@@ -161,7 +163,9 @@ def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None
         orchestrator_url=orchestrator_url,
         capacity=capacity,
         capacity_available=available,
-        rate=_rate(raw.get("price_info")),
+        rate=rate,
+        rate_error=rate_error,
+        observed_at=_stamp(raw.get("observed_at")),
         version=_text(raw.get("version")),
         metadata=_text(raw.get("metadata")),
         gpu=_gpu(raw.get("gpu")),
@@ -180,20 +184,48 @@ def _gpu(value: object) -> RunnerGPU | None:
     return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
 
 
-def _rate(value: object) -> NetworkRate | None:
+def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
+    """The rate exactly as advertised, or why the advertised ``price_info`` is not one. No defaults."""
+    if value is None:
+        return None, None  # off-chain: livepeer-node advertises no price
     if not isinstance(value, dict):
-        return None
-    try:
-        amount = Decimal(str(value.get("price")))
-    except InvalidOperation:
-        return None
-    if not amount.is_finite() or amount < 0:
-        return None
+        return None, "price_info is not an object"
+    amount = _decimal(value.get("price"))
+    if amount is None:
+        return None, "price is not a nonnegative number"
+    currency = _text(value.get("currency"))
+    if currency is None:
+        return None, "price_info has no currency"
+    unit = _text(value.get("unit"))
+    if unit is None:
+        return None, "price_info has no unit"
     return NetworkRate(
         amount=amount,
-        currency=str(value.get("currency") or "usd").lower(),
-        unit=str(value.get("unit") or "hour").lower(),
-    )
+        currency=currency.lower(),
+        unit=unit.lower(),
+        price_usd=_decimal(value.get("price_usd")),
+    ), None
+
+
+def _stamp(value: object) -> datetime | None:
+    """An RFC 3339 time in UTC (Go's nanoseconds truncate to microseconds), or None. A time with no offset is
+    not RFC 3339."""
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return stamp.astimezone(UTC) if stamp.tzinfo is not None else None
+
+
+def _decimal(value: object) -> Decimal | None:
+    """A finite, nonnegative decimal, or None."""
+    try:
+        amount = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return amount if amount.is_finite() and amount >= 0 else None
 
 
 def _text(value: object) -> str | None:

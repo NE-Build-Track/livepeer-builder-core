@@ -99,6 +99,18 @@ async def test_an_unpaid_call_never_reaches_the_signer(net: Net) -> None:
     assert not any(entry.startswith("sign") for entry in net.log)
 
 
+async def test_a_runner_with_no_usable_price_is_never_signed_for(net: Net) -> None:
+    """No rate means no maxPrice, and the signer checks no ceiling then: the engine refuses instead (ISS-10)."""
+    unpriced = net.runner().model_copy(update={"rate": None, "rate_error": "price_info has no currency"})
+    with pytest.raises(RunnerCallError) as refused:
+        await call(net, runner=unpriced)
+    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
+    assert not any(
+        entry.startswith(("intent ", "sign ")) for entry in net.log
+    )  # "signer info" is not signing
+    assert net.signer_requests == []
+
+
 @pytest.mark.parametrize(
     ("status", "kind", "unknown"),
     [

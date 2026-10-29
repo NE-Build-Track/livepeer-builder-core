@@ -80,6 +80,46 @@ key of `base64url(sha256(engine_id:operation:step))`.
 priced). Batteries amounts are exact decimal strings; the engine stores them as strings and sums
 them as `Decimal`.
 
+## Wholesale and retail
+
+Two prices exist, and the engine handles one of them.
+
+| | Wholesale (network) | Retail |
+| --- | --- | --- |
+| What it is | What the Livepeer network charged: tickets the signer signed for orchestrators | What an application charges its own users |
+| Who sets it | Orchestrators advertise rates; Batteries accounts the charges | The application |
+| Where the engine shows it | Before a job: `Offering.rate_low`/`rate_high` ([engine.md](engine.md#rates-iss-10)). After: `JobCost.fees` and `billable`, from Batteries accounting ([Cost classification](#cost-classification)) | Nowhere. The engine never computes, stores or applies a retail price, margin or invoice (core belief 1) |
+
+An application turns a delivered job's `billable` fees, or its own price list, into a retail charge in
+its own records. The engine's figures are inputs to that decision, not the decision.
+
+## Pricing assumptions
+
+What a rate means, and what it does not:
+
+1. **A rate is a price per unit, exactly as advertised.** It is not a quote for a job, and the engine
+   derives no other price from it: no currency conversion, no job total, no margin.
+2. **The unit decides the total.** A metered rate (`seconds`) costs the rate times the time the session
+   is funded, so a job's total is known only after it ends. A `fixed` rate costs one price per paid
+   request.
+3. **Failover can pay more than once.** A job may pay up to `LPB_MAX_PAID_ATTEMPTS` orchestrators (D52,
+   D55); the attempts it failed over from are `failed_after_payment`.
+4. **The ceiling is the advertised rate plus 1.2 %.** The engine asks the signer to pay at most the
+   runner's advertised wei rate times 1.012 (`_PRICE_PADDING` in `adapters/runner_call.py`), and the
+   signer refuses a higher price (481).
+5. **The engine never signs without a ceiling.** A runner that asks for payment but advertised no usable
+   price (none, or an unreadable `price_info`: `Runner.rate_error`) is refused before the signer is asked
+   (`payment_refused`, nothing paid; the job fails over). The node signer checks no price at all when it
+   gets no ceiling.
+6. **Tickets are probabilistic.** The reported cost is the expected value at signing. A single job's
+   settled on-chain cost can differ; settlement is an operator-level figure.
+7. **`price_usd` is the advertiser's figure, not a conversion.** livepeer-node advertises the runner's
+   registered USD price per the same unit. It is shown for reading only: the wei `amount` is what is paid.
+   go-livepeer advertises no `price_usd`, so it is `null` for its runners.
+8. **A rate has an age.** Each served rate carries `observed_at` and `observed_by`; an offering is
+   `stale` when its snapshot or its oldest rate is too old (`LPB_RATE_MAX_AGE_S`). Staleness is
+   information, never a payment gate.
+
 ## Correlation
 
 A charge joins an attempt by **`(allocation_id, payment_session_id)`**. The engine does not learn

@@ -1304,7 +1304,7 @@
       },
       "NetworkRate": {
         "additionalProperties": false,
-        "description": "A rate as the orchestrator advertises it (wholesale network price, not retail).",
+        "description": "A rate exactly as advertised: a wholesale network price per unit, not a job quote or a retail price.",
         "properties": {
           "amount": {
             "title": "Amount",
@@ -1312,6 +1312,23 @@
           },
           "currency": {
             "title": "Currency",
+            "type": "string"
+          },
+          "price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Usd"
+          },
+          "source": {
+            "const": "orchestrator",
+            "default": "orchestrator",
+            "title": "Source",
             "type": "string"
           },
           "unit": {
@@ -1325,6 +1342,63 @@
           "unit"
         ],
         "title": "NetworkRate",
+        "type": "object"
+      },
+      "ObservedRate": {
+        "additionalProperties": false,
+        "description": "A rate as the catalog serves it: when it was last known, and whose clock says so.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "observed_by": {
+            "enum": [
+              "orchestrator",
+              "engine"
+            ],
+            "title": "Observed By",
+            "type": "string"
+          },
+          "price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Usd"
+          },
+          "source": {
+            "const": "orchestrator",
+            "default": "orchestrator",
+            "title": "Source",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency",
+          "unit",
+          "observed_at",
+          "observed_by"
+        ],
+        "title": "ObservedRate",
         "type": "object"
       },
       "Offering": {
@@ -1350,7 +1424,7 @@
           "rate_high": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/NetworkRate"
+                "$ref": "#/components/schemas/ObservedRate"
               },
               {
                 "type": "null"
@@ -1360,12 +1434,24 @@
           "rate_low": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/NetworkRate"
+                "$ref": "#/components/schemas/ObservedRate"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "rate_status": {
+            "enum": [
+              "available",
+              "missing"
+            ],
+            "title": "Rate Status",
+            "type": "string"
+          },
+          "rates_excluded": {
+            "title": "Rates Excluded",
+            "type": "integer"
           },
           "ready_count": {
             "title": "Ready Count",
@@ -1374,6 +1460,10 @@
           "runner_count": {
             "title": "Runner Count",
             "type": "integer"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1381,6 +1471,9 @@
           "modes",
           "rate_low",
           "rate_high",
+          "rate_status",
+          "stale",
+          "rates_excluded",
           "runner_count",
           "ready_count",
           "observed_at"
@@ -1700,6 +1793,18 @@
             ],
             "title": "Mode"
           },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
           "orchestrator_url": {
             "anyOf": [
               {
@@ -1720,6 +1825,17 @@
                 "type": "null"
               }
             ]
+          },
+          "rate_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Error"
           },
           "runner_id": {
             "anyOf": [

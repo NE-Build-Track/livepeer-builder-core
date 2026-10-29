@@ -2,7 +2,8 @@
 
 One aiohttp server plays the runner behind its orchestrator (a 402 challenge until a request carries a
 payment) and the remote signer, so the engine's own call path (adapters/runner_call.py) and the SDK's
-signer client run for real. ``log`` records what each party saw, in order.
+signer client run for real. ``log`` records what each party saw, in order. ``Target`` is a second origin
+that a renewal or refresh may be redirected to; it records every request it receives.
 """
 
 import asyncio
@@ -46,6 +47,10 @@ class Net:
     challenge_paid: bool = False  # answer 402 even to a paid request
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
+    renewal_drops: int = 0  # the first renewals lose their connection before any answer
+    refresh_status: int = 200  # /refresh-payment answers fresh params ("params-<n>") with 200
+    refresh_body: bytes | None = None  # replaces that answer
+    location: str | None = None  # sent as ``Location`` with a renewal's or a refresh's answer
     sign: list[SignStep] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
@@ -100,7 +105,24 @@ class Net:
 
     async def _renewal(self, request: web.Request) -> web.Response:
         self.log.append(f"renewal {request.match_info['manifest']}")
-        return web.Response(status=self.renewal_status)
+        if self.renewal_drops:
+            self.renewal_drops -= 1
+            assert request.transport is not None
+            request.transport.close()
+            return web.Response()
+        headers = {"Location": self.location} if self.location else None
+        return web.Response(status=self.renewal_status, headers=headers)
+
+    async def _refresh(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        self.log.append(f"refresh {payload['manifest_id']}")
+        headers = {"Location": self.location} if self.location else None
+        if self.refresh_status != 200:
+            return web.Response(status=self.refresh_status, headers=headers)
+        if self.refresh_body is not None:
+            return web.Response(body=self.refresh_body, content_type="application/json", headers=headers)
+        refreshed = sum(entry.startswith("refresh ") for entry in self.log)
+        return web.json_response({"payment_params": f"params-{refreshed}"}, headers=headers)
 
     async def _app(self, request: web.Request) -> web.StreamResponse:
         raw = await request.read()
@@ -163,6 +185,7 @@ async def start() -> AsyncIterator[Net]:
     app.router.add_post("/sign-orchestrator-info", route("_sign_info"))
     app.router.add_post("/generate-live-payment", route("_generate"))
     app.router.add_post("/pay/{manifest}", route("_renewal"))
+    app.router.add_post("/refresh-payment", route("_refresh"))
     app.router.add_route("*", "/app{path:.*}", route("_app"))
     async with TestServer(app) as server:
         holder.append(Net(server))
@@ -170,3 +193,33 @@ async def start() -> AsyncIterator[Net]:
             yield holder[0]
         finally:
             holder[0].release.set()
+
+
+@dataclass
+class Target:
+    """Another origin, where a redirect points: it answers anything 200 and records what it received."""
+
+    server: TestServer
+    requests: list[tuple[str, str, CIMultiDict[str]]] = field(default_factory=list)  # method, path, headers
+
+    @property
+    def url(self) -> str:
+        return str(self.server.make_url("")).rstrip("/")
+
+    async def _any(self, request: web.Request) -> web.Response:
+        await request.read()
+        self.requests.append((request.method, request.path, CIMultiDict(request.headers)))
+        return web.json_response({"payment_params": "target-params"})
+
+
+async def start_target() -> AsyncIterator[Target]:
+    app = web.Application()
+    holder: list[Target] = []
+
+    async def handle(request: web.Request) -> web.Response:
+        return await holder[0]._any(request)
+
+    app.router.add_route("*", "/{path:.*}", handle)
+    async with TestServer(app) as server:
+        holder.append(Target(server))
+        yield holder[0]

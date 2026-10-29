@@ -4,16 +4,21 @@ Baseline `44df061`. Pinned to `2017a80`, the head of [livepeer/livepeer-python-g
 
 The engine's paid runner call is its own (`adapters/runner_call.py`, D53), adapted from
 `live_runner.call_runner` at `2017a80` (MIT). It sends the runner request over aiohttp, answers the 402
-itself and signs through the SDK's signer client. `tests/unit/test_sdk_contract.py` fails when the
-pinned SDK's `call_runner` path changes, so a pin bump reviews the copy.
+itself and signs through the SDK's signer client. Since #72, metered funding is the engine's too
+(`adapters/payment_funding.py`, D58): `EnginePaymentSession` subclasses `LivePaymentSession` and
+overrides the renewal and the refresh, and `fund()` replaces `run_payments()`, so no request in the
+payment plane follows a redirect. `tests/unit/test_sdk_contract.py` fails when the pinned SDK's
+`call_runner` path, or a `LivePaymentSession` method the override replaces or relies on, changes, so a
+pin bump reviews both.
 
 | SDK surface | Engine use |
 | --- | --- |
 | `discovery.discover_runners(discovery_url=…)` | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`, with no signer and no credential (#45) |
 | `remote_signer.get_signer_info(signer_url, headers)` | The payer address for the runner request (`Livepeer-Payer-Address`). The SDK caches it per signer and bearer |
-| `remote_signer.LivePaymentSession(signer_url, signer_headers=…, type, challenge, app, max_price)` | One per 402 challenge. `type` comes from the runner's price unit (`fixed`, or `live` for `seconds`/`hour`) and `max_price` is the advertised price padded by 1.2%, as `call_runner` does |
+| `remote_signer.LivePaymentSession(signer_url, signer_headers=…, type, challenge, app, max_price)` | One per 402 challenge, built as the engine's subclass `EnginePaymentSession` with the challenge's payment origins (D58). `type` comes from the runner's price unit (`fixed`, or `live` for `seconds`/`hour`) and `max_price` is the advertised price padded by 1.2%, as `call_runner` does |
 | `LivePaymentSession.manifest_id` / `get_payment()` | The challenge id, known before `get_payment` returns. The transport calls `remember(manifest_id)`, which stores the manifest as an `unknown` session before the signer is asked (D54); if that write fails, nothing is signed. `on_signed(manifest_id)` runs once `get_payment` returns, before the paid request (D41, D42, D53), and makes the session `paid` and the attempt paid. A lost or malformed reply, a 5xx or a cancel leaves it `unknown`, and the cost stays `pending` until usage matches it. A 480 refresh, `SkipPaymentCycle` and a 400, 401, 402, 403 or 481 make it `unpaid`: never matched, never billed, and a debit on it is unattributed on the allocation. A 480 that uses up the retry budget is `payment_refused` (unpaid, not `payment_unknown`) and the job fails over |
-| `LivePaymentSession.run_payments()` | Metered funding while the work runs: from the paid request until the buffered call returns or the stream closes. Renewals are not new sessions and are not reported |
+| `LivePaymentSession.run_payments()` | **Not called** since #72 (D58): it retries a `PaymentError` every cycle, so it would keep minting tickets against a redirecting endpoint. The engine's `fund()` funds the session while the work runs, from the paid request until the buffered call returns or the stream closes, with the SDK's cadence (`PAYMENT_INTERVAL_S`, imported) and 4xx rules, and stops on a 3xx. Why it stopped (`cancelled`, `released`, `refused`, `redirected`) is logged as `runner.funding_stopped`. Renewals are not new sessions and are not reported |
+| `LivePaymentSession.send_payment()`, `._refresh_payment_params()` | **Overridden** since #72 (D58). The SDK posts both through `http._post_empty` and `http.post_json`, which follow redirects: a 3xx replayed `Livepeer-Payment` and `Livepeer-Segment` to the `Location` host, or replaced the orchestrator's ticket params, recipient included, with another host's. The engine sends them on one payment client per funding task, never follows a redirect or resends, refuses a URL off the challenge's origins before a ticket is minted, and raises `PaymentRedirected` on any 3xx. `get_payment()` stays the SDK's and calls the overridden refresh after a signer 480 |
 | `LivePaymentSession.manifest_id` | The manifest ID from the 402 challenge. The SDK does not read the signer's state |
 | `LivepeerHTTPError.status_code` | Signer refusals: 400/481 → `payment_refused` (failover, paid or not: D26, D52), others → `payment`. An exhausted `SignerRefreshRequired` (480) is `payment_refused` too. The runner's own refusals are mapped by the engine, which knows they came from the runner URL |
 | `call_runner(...)` | **Not called** since D53; the copy follows it at `2017a80`. A missing `payload` is still sent as `{}` (T15) |

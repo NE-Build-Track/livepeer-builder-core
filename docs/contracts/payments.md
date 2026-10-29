@@ -26,6 +26,12 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    billed. A lost reply, a signer 5xx, a cancel during `get_payment`, or the engine dying then leaves
    the session `unknown`: the cost stays `pending` until usage matches it, and the job pays no other
    orchestrator.
+5. **No request in the payment plane follows a redirect** (D53, D58). The paid request, each metered
+   renewal and each `/refresh-payment` go only to the runner's or its orchestrator's origin, the ones
+   the 402 challenge was checked against; a 3xx is never followed, and aiohttp never sends them twice.
+   A redirected renewal or refresh stops the funding (`runner.funding_stopped`, reason `redirected`)
+   and mints no further ticket, but does not fail the call: the orchestrator ends the session, as it
+   does whenever funding stops. Requests to the operator's own signer are not covered yet (T23).
 
 ## Allocation modes
 

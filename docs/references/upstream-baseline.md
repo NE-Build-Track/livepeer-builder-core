@@ -41,7 +41,8 @@ The 22 October pin was `76a1a1c` (#81). `call_runner`, `discover_runners`, `open
 **What the engine uses (D53).** The engine no longer calls `call_runner`. Its own runner call
 (`adapters/runner_call.py`) is adapted from `call_runner` at `2017a80` (MIT): it sends the runner
 request, answers the 402, and signs through the SDK's signer client (`get_signer_info`,
-`LivePaymentSession.get_payment()` and, for metered prices, `run_payments()`). That lets it record each
+`LivePaymentSession.get_payment()`; for metered prices, the session's renewal, refresh and loop are the
+engine's own since #72, D58, in `adapters/payment_funding.py`). That lets it record each
 session's `manifest_id` before the signer is asked, which no SDK callback allows.
 `LivePaymentSession.manifest_id` is the manifest from the 402 challenge. The SDK does not decode
 signer state. `tests/unit/test_sdk_contract.py` holds the copy to the pinned SDK: it fails when

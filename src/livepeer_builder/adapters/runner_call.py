@@ -25,7 +25,8 @@
 
 """The engine's paid runner call (D53).
 
-Adapted from livepeer-python-gateway ``call_runner`` at ``2017a80`` (MIT; the notice above).
+Adapted from livepeer-python-gateway ``call_runner`` at ``2017a80`` (MIT; the notice above). Metered
+funding is in ``payment_funding.py`` (D58).
 """
 
 import asyncio
@@ -35,7 +36,6 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urlsplit
 
 import aiohttp
 from livepeer_gateway.errors import (
@@ -53,6 +53,14 @@ from livepeer_gateway.remote_signer import (
     get_signer_info,
 )
 
+from livepeer_builder.adapters.payment_funding import (
+    PAYMENT_HEADER,
+    SEGMENT_HEADER,
+    EnginePaymentSession,
+    FundingEnd,
+    fund,
+    origin,
+)
 from livepeer_builder.contracts import AttemptOutcome, NetworkRate
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
@@ -60,8 +68,6 @@ from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
 
-PAYMENT_HEADER = "Livepeer-Payment"
-SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
 _PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
 _PRICE_PADDING = Decimal("1.012")  # the signer refuses a ceiling below the price it is asked to pay
@@ -90,6 +96,7 @@ class PaymentEvents:
         self.unknown = False
         self.manifest_ids: list[str] = []
         self._on_signed = on_signed
+        self.funding_end: FundingEnd | None = None
 
     @property
     def ids(self) -> tuple[str, ...]:
@@ -155,8 +162,9 @@ class PaidRequest:
     ) -> None:
         self.url = url
         # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
-        origins = {_origin(url), _origin(orchestrator_url) if orchestrator_url else None} - {None}
-        if _origin(url) is None:  # unpaid, before any request
+        candidates = (origin(url), origin(orchestrator_url) if orchestrator_url else None)
+        origins = frozenset(found for found in candidates if found is not None)
+        if origin(url) is None:  # unpaid, before any request
             raise RunnerCallError("http", f"invalid runner URL {url!r}", payment_sent=False)
         self._payment_origins = origins
         self._method = method.upper()
@@ -217,7 +225,7 @@ class PaidRequest:
         challenge: LivePaymentChallenge | None = None
         for attempt in range(self._attempts):
             sent = dict(headers)
-            payment: LivePaymentSession | None = None
+            payment: EnginePaymentSession | None = None
             if challenge is not None and self._signer_url is not None:
                 payment = self._payment_session(challenge)
                 try:
@@ -238,7 +246,7 @@ class PaidRequest:
                     continue
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
-            funding = start_funding(payment) if self._payment_type == "live" else None
+            funding = start_funding(payment, self._events) if self._payment_type == "live" else None
             try:
                 # A redirect would replay the payment headers to another host.
                 response = await session.request(
@@ -299,9 +307,10 @@ class PaidRequest:
             },
         )
 
-    def _payment_session(self, challenge: LivePaymentChallenge) -> LivePaymentSession:
-        return LivePaymentSession(
+    def _payment_session(self, challenge: LivePaymentChallenge) -> EnginePaymentSession:
+        return EnginePaymentSession(
             self._signer_url,
+            payment_origins=self._payment_origins,
             signer_headers=self._signer_headers,
             type=self._payment_type,
             challenge=challenge,
@@ -315,7 +324,7 @@ class PaidRequest:
             if isinstance(data, dict):
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
                 valid = all(isinstance(value, str) and value for value in fields.values())
-                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:
+                if valid and origin(str(fields["payment_url"])) in self._payment_origins:
                     return LivePaymentChallenge(**fields)
         # Malformed, or payment_url names another host: nothing is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
@@ -383,23 +392,6 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
         raise events.error(network_kind(error), f"{prefix}{error}") from error
 
 
-def _origin(url: str) -> str | None:
-    """``scheme://host:port``, or ``None`` when the URL or its port is not one aiohttp would request.
-
-    An empty port is the scheme default. A stated port counts only in ``1..65535``: ``0`` is not ``443``.
-    """
-    try:
-        parts = urlsplit(url)
-        scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
-    except (ValueError, UnicodeError):
-        return None
-    if port is None:
-        port = 443 if scheme == "https" else 80
-    if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
-        return None
-    return f"{scheme}://{host.lower()}:{port}"
-
-
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:
     """A refresh past the retry budget is unpaid ``payment_refused``, like a 400."""
     if isinstance(error, SignerRefreshRequired):
@@ -445,8 +437,19 @@ def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
     }
 
 
-def start_funding(payment: LivePaymentSession | None) -> asyncio.Task[Any] | None:
-    return None if payment is None else asyncio.create_task(payment.run_payments())
+def start_funding(payment: EnginePaymentSession | None, events: PaymentEvents) -> asyncio.Task[Any] | None:
+    return None if payment is None else asyncio.create_task(_funded(payment, events))
+
+
+async def _funded(payment: EnginePaymentSession, events: PaymentEvents) -> FundingEnd:
+    """Why the funding ended is recorded on the call and logged. It never fails the call itself (D58)."""
+    end = await fund(payment)
+    events.funding_end = end
+    _LOG.info(
+        "metered funding stopped",
+        extra={"event": "runner.funding_stopped", "reason": end, "manifest_id": payment.manifest_id},
+    )
+    return end
 
 
 async def stop_funding(task: asyncio.Task[Any] | None) -> None:

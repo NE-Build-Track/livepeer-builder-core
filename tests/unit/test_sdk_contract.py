@@ -1,8 +1,10 @@
-"""The SDK pieces the engine still calls, and the ones it copied (D53).
+"""The SDK pieces the engine still calls, and the ones it copied (D53, D58).
 
 The SDK ships no type information, so mypy cannot hold it to the adapters. These tests check that the SDK
 functions the engine calls accept what it passes, and fail when the pinned SDK's own ``call_runner`` path
-changes: adapters/runner_call.py is the engine's copy of it, so every pin bump reviews that copy.
+or its payment session changes: adapters/runner_call.py is the engine's copy of the first, and
+adapters/payment_funding.py overrides the session's renewal and refresh and replaces its loop, so every
+pin bump reviews both.
 """
 
 import hashlib
@@ -11,7 +13,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from livepeer_gateway import http, live_runner
+from livepeer_gateway import http, live_runner, remote_signer
 from livepeer_gateway.discovery import discover_runners
 from livepeer_gateway.remote_signer import (
     GetPaymentResponse,
@@ -20,7 +22,7 @@ from livepeer_gateway.remote_signer import (
     get_signer_info,
 )
 
-from livepeer_builder.adapters import runner_call
+from livepeer_builder.adapters import payment_funding, runner_call
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
 
 COPIED_AT = "2017a80"
@@ -36,8 +38,17 @@ COPIED = {
     "live_runner._is_json_content_type": "5e8dad829aed9d1f",
     "http._open_request": "c523ab00c1072621",
     "http._request_parts": "9b572a482cc870b0",
+    # D58: EnginePaymentSession overrides send_payment and _refresh_payment_params and fund() replaces
+    # run_payments; get_payment calls the refresh, __init__ sets what the overrides read, and renewal
+    # errors are raised by _raise_http_json_error.
+    "remote_signer.LivePaymentSession.__init__": "a16e3f978e6a251d",
+    "remote_signer.LivePaymentSession.get_payment": "fcf2e8befd22498d",
+    "remote_signer.LivePaymentSession.send_payment": "de84259d1c7cfe55",
+    "remote_signer.LivePaymentSession.run_payments": "e6692417a9cffb83",
+    "remote_signer.LivePaymentSession._refresh_payment_params": "b7a2a53c68f02338",
+    "http._raise_http_json_error": "5baaf95e296f86bb",
 }
-_MODULES = {"live_runner": live_runner, "http": http}
+_MODULES = {"live_runner": live_runner, "http": http, "remote_signer": remote_signer}
 
 
 def _accepts(function: Callable[..., Any], *keywords: str, positional: int = 0) -> bool:
@@ -49,8 +60,11 @@ def _accepts(function: Callable[..., Any], *keywords: str, positional: int = 0) 
 
 @pytest.mark.parametrize("name", sorted(COPIED))
 def test_the_copied_sdk_call_path_is_unchanged(name: str) -> None:
-    module, function = name.split(".")
-    source = inspect.getsource(getattr(_MODULES[module], function))
+    module, path = name.split(".", 1)
+    target: Any = _MODULES[module]
+    for part in path.split("."):  # "Class.method" too
+        target = getattr(target, part)
+    source = inspect.getsource(target)
     digest = hashlib.sha256(source.encode()).hexdigest()[:16]
     assert digest == COPIED[name], (
         f"livepeer_gateway {name} changed since {COPIED_AT}: review the diff, update "
@@ -58,9 +72,10 @@ def test_the_copied_sdk_call_path_is_unchanged(name: str) -> None:
     )
 
 
-def test_the_copy_keeps_the_sdk_s_mit_notice() -> None:
+@pytest.mark.parametrize("copy", [runner_call, payment_funding], ids=lambda module: module.__name__)
+def test_the_copy_keeps_the_sdk_s_mit_notice(copy: Any) -> None:
     """MIT asks every copy of a substantial portion to carry the copyright and permission notice."""
-    source = inspect.getsource(runner_call)
+    source = inspect.getsource(copy)
     assert "Copyright (c) 2026 Livepeer Foundation" in source
     assert "The above copyright notice and this permission notice shall be included in all" in source
 

@@ -471,7 +471,8 @@ async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(
     manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 503
     running = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
-    assert running.status_code == 409 and running.headers["Retry-After"] == "1"
+    # a repeat may resume it once it is LPB_OPERATION_STALE_S (120 s) old, not before
+    assert running.status_code == 409 and running.headers["Retry-After"] == "120"
     assert running.json()["code"] == "operation_in_progress"
     assert running.json()["operation"] == {"command": "fund", "operation_ref": "t1", "state": "started"}
 
@@ -555,3 +556,14 @@ async def test_replayed_provisioning_and_grant_creation_say_so(api) -> None:  # 
         again = await client.post(path, json=sent, headers=admin)
         assert (again.status_code, again.json()) == (first.status_code, first.json()) == (201, first.json())
         assert again.headers.get("Idempotent-Replayed") == "true", path
+
+
+async def test_provisioning_an_actor_already_provisioned_is_409_already_provisioned(api) -> None:  # type: ignore[no-untyped-def]
+    """Under a new reference nothing is applied, so the amount is not silently dropped: fund it instead."""
+    client, _engine, admin, _alice = api
+    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    first = await client.post(ALLOCATION, json=body, headers=admin)
+    refused = await client.post(ALLOCATION, json=body | {"operation_ref": "p2"}, headers=admin)
+    assert refused.status_code == 409 and refused.json()["code"] == "already_provisioned"
+    assert refused.json()["actor"] == first.json()
+    assert "Idempotent-Replayed" not in refused.headers

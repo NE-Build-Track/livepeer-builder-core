@@ -154,6 +154,11 @@ From the tickets and the 21 October M3 plan:
 - **29 October (slice 4, Mike):** the guide's `token_replayed` would always be `false` (a token is never
   stored), so it is `replayed` instead: `true` on a replay, which has `token: null`, and `false` on the
   first answer. Embedded callers, who see no `Idempotent-Replayed` header, tell the two apart by it.
+- **29 October (review, Mike):** an admin command still `started` answers `Retry-After` with the
+  seconds until a repeat may resume it (it was always 1, so a client polled for two minutes). Job
+  in-progress keeps 1. Provisioning an actor already provisioned under another reference is 409
+  `already_provisioned` with the actor instead of the actor as a result: the amount was silently
+  dropped. A resumed run still answers with the actor its earlier run saved. Found by the console.
 - **29 October (review):** `create_grant` reads the grant back (`GET /v1/grants/{id}`): Batteries answers
   the create with its id only, so the ledger recorded and replayed a grant with no name, status or total.
   A failed read after the create is `ProviderUnavailable`, an unknown outcome, so it never frees the

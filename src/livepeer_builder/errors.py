@@ -1,6 +1,6 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from livepeer_builder.contracts import AttemptOutcome, Job, OperationRecord
+from livepeer_builder.contracts import AttemptOutcome, Job, OperationRecord, ProvisionedActor
 
 
 class EngineError(Exception):
@@ -41,11 +41,13 @@ class OperationInProgress(OperationExists):
 
     An ``OperationExists``, so callers that catch that keep working."""
 
-    def __init__(self, holder: Job | OperationRecord) -> None:
+    def __init__(self, holder: Job | OperationRecord, retry_after_s: int = 1) -> None:
         EngineError.__init__(
             self, f"operation_ref {holder.operation_ref!r} is still running as {_name(holder)}"
         )
         self.job, self.operation = _held(holder)
+        # A job may end any second; a stuck admin command can be resumed only once it is stale.
+        self.retry_after_s = retry_after_s
 
 
 class OperationConflict(EngineError):
@@ -85,6 +87,18 @@ class NoCapacity(EngineError):
 
 class NotProvisioned(EngineError):
     """per_actor mode and this actor has no allocation. Provisioning is always explicit."""
+
+
+class AlreadyProvisioned(EngineError):
+    """Provisioning an actor that already has an allocation, under a new reference (409; D57). Nothing is
+    applied, the amount included: funding an existing actor is ``fund``."""
+
+    def __init__(self, actor: ProvisionedActor) -> None:
+        super().__init__(
+            f"actor {actor.actor_id!r} is already provisioned (allocation {actor.allocation_id}); "
+            "fund it instead"
+        )
+        self.actor = actor
 
 
 class ProviderUnavailable(EngineError):

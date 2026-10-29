@@ -35,6 +35,7 @@ from livepeer_builder.contracts import (
     SeenActor,
 )
 from livepeer_builder.errors import (
+    AlreadyProvisioned,
     InvalidRequest,
     NotFound,
     NotProvisioned,
@@ -175,7 +176,8 @@ class PaymentsService:
     async def provision(self, admin: ActorContext, request: ProvisionRequest) -> ProvisionedActor:
         """Create the actor's allocation and key in one atomic provider call, on the ledger (D57).
 
-        A repeat of the reference gets the first answer. An actor already provisioned is returned as it is.
+        A repeat of the reference gets the first answer. An actor already provisioned under another
+        reference is ``AlreadyProvisioned``: nothing is applied, the amount included.
         """
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         if self.mode != "per_actor":
@@ -199,7 +201,9 @@ class PaymentsService:
     ) -> ProvisionedActor:
         existing = await self._store.get_actor(request.application_id, request.actor_id)
         if existing is not None and existing.status != "revoked":
-            return existing  # provisioned already, or by this command's earlier run
+            if run.resumed:  # this command's earlier run may have provisioned it: that is its result
+                return existing
+            raise AlreadyProvisioned(existing)  # the amount would be silently dropped
         grant_id = await self._resolved_grant(admin, request.grant_id)
         if not grant_id:
             raise InvalidRequest("choose a grant")

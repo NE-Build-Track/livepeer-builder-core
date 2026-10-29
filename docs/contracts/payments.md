@@ -45,7 +45,7 @@ key of `base64url(sha256(engine_id:operation:step))`.
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is returned as it is |
+| `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
 | `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
@@ -86,7 +86,7 @@ Provider calls keep their derived idempotency keys, so a resumed command replays
 | is new | Runs the command |
 | was used with another command or request | 409 `OperationConflict`, `code: operation_conflict`, before any provider call |
 | names a command that ended | The recorded result, with the original status and `Idempotent-Replayed: true` |
-| names a command still `started`, for less than `LPB_OPERATION_STALE_S` (120 s) | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After: 1` |
+| names a command still `started`, for less than `LPB_OPERATION_STALE_S` (120 s) | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After`: the seconds until a repeat may resume it |
 | names a command still `started` for longer | **Resumes** it: runs every step again from the top; each step is safe to repeat |
 
 A 409 for an admin command carries `operation: {command, operation_ref, state}` instead of a job, and
@@ -105,8 +105,10 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
   reference is recorded before the actor points at it, so a resume reuses that copy.
-- **Provisioning** returns an actor that is already provisioned (not revoked) and records that as the
-  result. Re-provisioning after a revoke is a new command: it needs a new reference.
+- **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
+  409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
+  instead). The refusal frees the reference. A resumed run that finds the actor its earlier run saved
+  answers with it. Re-provisioning after a revoke is a new command: it needs a new reference.
 - **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
   grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
   reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A

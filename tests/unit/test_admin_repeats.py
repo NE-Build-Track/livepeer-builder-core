@@ -25,6 +25,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import (
     AccessDenied,
+    AlreadyProvisioned,
     InvalidRequest,
     NotFound,
     OperationConflict,
@@ -92,10 +93,15 @@ async def test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress(
     manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
         await engine.payments.fund(admin, "default", "alice", request)
-    clock.advance(119)  # younger than LPB_OPERATION_STALE_S (120 s)
+    clock.advance(30)
+    with pytest.raises(OperationInProgress) as early:
+        await engine.payments.fund(admin, "default", "alice", request)
+    assert early.value.retry_after_s == 90  # the seconds until a repeat may resume it
+    clock.advance(89)  # 119 s: younger than LPB_OPERATION_STALE_S (120 s)
     with pytest.raises(OperationInProgress) as running:
         await engine.payments.fund(admin, "default", "alice", request)
     assert running.value.operation is not None and running.value.operation.state == "started"
+    assert running.value.retry_after_s == 1
     assert manager.calls.count("fund_allocation") == 1
 
 
@@ -636,11 +642,41 @@ async def test_issuing_with_one_ref_and_another_body_is_a_conflict(
     assert len(await engine.keys.list_keys(admin)) == 1
 
 
-async def test_provisioning_an_actor_already_provisioned_under_a_new_ref_returns_it(
+async def test_provisioning_an_actor_already_provisioned_under_a_new_ref_is_refused(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """The guide's plan: an existing allocation is recorded as the new reference's result, not created."""
+    """Mike, 29 October: returning the actor as if provisioned silently dropped the amount, so an operator
+    could believe it was funded. Refused with the actor (409 ``already_provisioned``); funding is ``fund``.
+    Nothing was applied, so the new reference stays free."""
     engine = await make_engine()
     first = await engine.payments.provision(admin, provision_request(ref="p-1"))
-    again = await engine.payments.provision(admin, provision_request(ref="p-2"))
-    assert again == first and manager.calls == ["create_key_for_grant"]
+    with pytest.raises(AlreadyProvisioned) as refused:
+        await engine.payments.provision(admin, provision_request(ref="p-2"))
+    assert refused.value.actor == first and manager.calls == ["create_key_for_grant"]
+    bob = await engine.payments.provision(admin, provision_request("bob", ref="p-2"))
+    assert bob.actor_id == "bob"
+
+
+async def test_a_provisioning_resumed_after_its_actor_was_saved_returns_that_actor(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The actor a resume finds may be its own earlier run's: that is the command's result, not a refusal."""
+    engine = await make_engine()
+    complete = store.complete_operation
+
+    async def lost(*args: object) -> bool:
+        monkeypatch.setattr(store, "complete_operation", complete)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "complete_operation", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.provision(admin, provision_request())
+    saved = await store.get_actor("default", "alice")
+    clock.advance(120)
+    assert await engine.payments.provision(admin, provision_request()) == saved
+    assert manager.calls == ["create_key_for_grant"]

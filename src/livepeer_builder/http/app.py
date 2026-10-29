@@ -44,6 +44,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import (
     AccessDenied,
+    AlreadyProvisioned,
     EngineError,
     InvalidRequest,
     JobFailed,
@@ -85,7 +86,6 @@ _FAILURE_STATUS = {
     "interrupted": 502,
 }
 _RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
-_IN_PROGRESS_RETRY_AFTER = "1"  # a repeat while the operation's job still runs (D57)
 _HELD = {"command", "operation_ref", "state"}  # what a 409 shows of an admin command holding the reference
 
 
@@ -408,7 +408,7 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         headers, held = _holder(exc)
         code = "operation_exists"
         if isinstance(exc, OperationInProgress):
-            headers["Retry-After"] = _IN_PROGRESS_RETRY_AFTER
+            headers["Retry-After"] = str(exc.retry_after_s)
             code = "operation_in_progress"
         return problem(409, str(exc), headers, code=code, **held)
 
@@ -417,6 +417,10 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         headers, held = _holder(exc)
         held.pop("job", None)
         return problem(409, str(exc), headers, code="operation_conflict", **held)
+
+    @app.exception_handler(AlreadyProvisioned)
+    async def _provisioned(_: Request, exc: AlreadyProvisioned) -> Response:
+        return problem(409, str(exc), code="already_provisioned", actor=exc.actor.model_dump(mode="json"))
 
     @app.exception_handler(NoCapacity)
     async def _capacity(_: Request, exc: NoCapacity) -> Response:

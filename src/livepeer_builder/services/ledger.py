@@ -9,6 +9,7 @@ an extension point: an enterprise replaces the store, not the ledger.
 
 import hashlib
 import json
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Any
@@ -18,6 +19,7 @@ from pydantic import TypeAdapter
 from livepeer_builder.contracts import OPERATION_REPLAYED, ActorContext, OperationCommand, OperationRecord
 from livepeer_builder.errors import (
     AccessDenied,
+    AlreadyProvisioned,
     InvalidRequest,
     NotFound,
     OperationConflict,
@@ -37,11 +39,12 @@ def fingerprint(command: OperationCommand, request: Mapping[str, Any]) -> str:
 
 
 def definite_refusal(error: Exception) -> bool:
-    """The command was refused and applied nothing: invalid, not found, denied, or a provider 4xx. A
+    """The command was refused and applied nothing: invalid, not found, denied, already provisioned, or a
+    provider 4xx. A
     timeout, a transport error, a 5xx or a crash is an unknown outcome, never a refusal."""
     if isinstance(error, ProviderError):
         return 400 <= error.status_code < 500 and error.status_code != 408
-    return isinstance(error, InvalidRequest | NotFound | AccessDenied)
+    return isinstance(error, InvalidRequest | NotFound | AccessDenied | AlreadyProvisioned)
 
 
 class TakenOver(Exception):
@@ -159,15 +162,20 @@ class OperationLedger:
         """A resume took this slow run over (its token is fenced off): answer as the record does now."""
         held = await self._repo.get_operation(record.application_id, record.actor_id, record.operation_ref)
         if held is None or held.state != "done":
-            raise OperationInProgress(held or record)
+            raise OperationInProgress(held or record, self._until_stale(held or record))
         return _replayed(held, answer)
+
+    def _until_stale(self, held: OperationRecord) -> int:
+        """Whole seconds until a repeat may resume ``held`` (``Retry-After``), at least 1."""
+        age = (self._clock.now() - held.started_at).total_seconds()
+        return max(1, math.ceil(self._stale_s - age))
 
     async def _resume(self, held: OperationRecord) -> OperationRecord:
         """Take over a run older than ``LPB_OPERATION_STALE_S``: it is presumed dead, and every step is safe
         to repeat. A younger one may still run. Taking over is a compare-and-set on the fencing token."""
         now = self._clock.now()
         if (now - held.started_at).total_seconds() < self._stale_s:
-            raise OperationInProgress(held)
+            raise OperationInProgress(held, self._until_stale(held))
         taken = await self._repo.resume_operation(held, now)
         if taken is None:  # another repeat resumed it first
             raise OperationInProgress(held)

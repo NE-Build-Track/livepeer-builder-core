@@ -57,6 +57,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import (
     AccessDenied,
+    AlreadyProvisioned,
     CursorMismatch,
     EngineError,
     InvalidRequest,
@@ -85,6 +86,7 @@ __all__ = [
     "ActorContext",
     "AdminApi",
     "Allowance",
+    "AlreadyProvisioned",
     "ApiKeys",
     "Attempt",
     "AttemptCost",

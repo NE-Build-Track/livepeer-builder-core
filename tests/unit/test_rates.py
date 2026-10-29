@@ -4,6 +4,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+from pydantic import ValidationError
+
 from livepeer_builder import EngineSettings, EngineSupply
 from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -81,6 +84,16 @@ def test_a_price_too_large_for_a_float_ceiling_is_not_a_rate() -> None:
     assert (runner.rate, runner.rate_error) == (None, "price is not a nonnegative number")
     (runner,) = runners_from_entries(inventory(price="10", price_usd=huge, currency="wei", unit="seconds"))
     assert runner.rate is not None and runner.rate.price_usd is None
+
+
+def test_any_source_s_rate_is_refused_unless_a_float_ceiling_holds_it() -> None:
+    """The contract, not only the JSON adapter: a custom DiscoverySource builds NetworkRate directly."""
+    for bad in ("-1", "1E+300", "1E+1000000"):
+        with pytest.raises(ValidationError):
+            NetworkRate(amount=Decimal(bad), currency="wei", unit="seconds")
+    assert NetworkRate(amount=Decimal("9.99E+299"), currency="wei", unit="seconds").amount == Decimal(
+        "9.99E+299"
+    )
 
 
 def test_a_node_on_chain_price_is_kept_as_advertised() -> None:

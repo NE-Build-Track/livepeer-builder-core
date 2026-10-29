@@ -4,13 +4,18 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
+from pydantic import Field
+
 from livepeer_builder.contracts.common import Contract
+
+# max_price pads a rate into a float ceiling for the signer; a larger price overflows or is no float
+PRICE_LIMIT = Decimal("1e300")
 
 
 class NetworkRate(Contract):
     """A rate exactly as advertised: a wholesale network price per unit, not a job quote or a retail price."""
 
-    amount: Decimal  # livepeer-node's price: wei on-chain
+    amount: Decimal = Field(ge=0, lt=PRICE_LIMIT)  # livepeer-node's price: wei on-chain
     currency: str  # "wei" on-chain
     unit: str  # "seconds" or "fixed"; go-livepeer's "720p-pixel-seconds" is kept but cannot be paid
     # livepeer-node's price_usd: the runner's registered USD per the same unit. Not an engine conversion;

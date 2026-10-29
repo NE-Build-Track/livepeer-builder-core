@@ -119,15 +119,19 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   reference is recorded before the actor points at it, so a resume reuses that copy.
 - **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
   409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
-  instead). The refusal frees the reference. A resumed run answers with the actor only if its earlier
-  run got a key from Batteries (its secret is on the record): the provider key is derived from the
-  actor, so that allocation is this command's. A resume that never got that far is refused the same
-  way. Re-provisioning after a revoke is a new command: it needs a new reference.
+  instead). The refusal frees the reference. A resumed run answers with the actor only if the actor
+  holds the provider key its earlier run recorded: that allocation is this command's (the provider key
+  is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
+  resume that never got that far or an actor revoked and provisioned again under another reference,
+  it is refused the same way and the reference is freed. Re-provisioning after a revoke is a new
+  command: it needs a new reference.
 - **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
   grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
   reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A
-  resumed create lists the grants (every page) and adopts the one carrying its tag instead of creating a
-  second. Grant names stay free-form: two references may create two grants with one name.
+  resumed create reads the grants page by page, oldest first, and adopts the one carrying its tag instead
+  of creating a second. It records the list cursor after each page, so a resume that runs out of its
+  budget in a slow catalog leaves the next one to go on from there; pages already read lacked the tag,
+  and a grant created later is on a later page. Grant names stay free-form: two references may create two grants with one name.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.

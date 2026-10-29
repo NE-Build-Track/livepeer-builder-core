@@ -49,6 +49,13 @@ class GrantRecord(Contract):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class GrantPage(Contract):
+    """One page of grants, oldest first; ``next_cursor`` is ``None`` on the last page (D57)."""
+
+    grants: tuple[GrantRecord, ...]
+    next_cursor: str | None = None
+
+
 class ProvisionedActor(Contract):
     application_id: str
     actor_id: str

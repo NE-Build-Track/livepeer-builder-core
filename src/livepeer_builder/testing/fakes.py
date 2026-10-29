@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     Allowance,
+    GrantPage,
     GrantRecord,
     JobRequest,
     Money,
@@ -248,6 +249,8 @@ class FakeAllocationManager:
         self.calls: list[str] = []
         self.funded_grants: list[tuple[str, Money, str]] = []
         self.grants: list[GrantRecord] = []
+        self.grant_page_size = 1000  # Batteries' largest page
+        self.grant_page_delay_s = 0.0  # each page's latency, for a slow catalog (D57)
         self.last_grant_id = ""
         self._failures: dict[str, Exception] = {}
 
@@ -317,7 +320,26 @@ class FakeAllocationManager:
     async def list_grants(self) -> list[GrantRecord]:
         self.calls.append("list_grants")
         self._fail("list_grants")
-        return list(self.grants)
+        grants: list[GrantRecord] = []
+        cursor: str | None = None
+        while True:
+            page = await self._page(cursor)
+            grants += page.grants
+            if page.next_cursor is None:
+                return grants
+            cursor = page.next_cursor
+
+    async def grant_page(self, cursor: str | None) -> GrantPage:
+        self.calls.append("grant_page")
+        self._fail("grant_page")
+        return await self._page(cursor)
+
+    async def _page(self, cursor: str | None) -> GrantPage:
+        await asyncio.sleep(self.grant_page_delay_s)
+        start = int(cursor or 0)
+        end = start + self.grant_page_size
+        more = end < len(self.grants)
+        return GrantPage(grants=tuple(self.grants[start:end]), next_cursor=str(end) if more else None)
 
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None

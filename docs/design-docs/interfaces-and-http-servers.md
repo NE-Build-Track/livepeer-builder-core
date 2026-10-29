@@ -364,6 +364,7 @@ classDiagram
         +async revoke_key(api_key_id) None
         +async read_allocation(allocation_id) Allowance
         +async list_grants() GrantRecord[]
+        +async grant_page(cursor) GrantPage
         +async create_grant(name, amount, metadata) GrantRecord
     }
     class UsageSource {

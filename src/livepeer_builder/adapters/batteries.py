@@ -19,6 +19,7 @@ from pydantic import SecretStr
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
+    GrantPage,
     GrantRecord,
     Money,
     NewAllocationKey,
@@ -100,21 +101,27 @@ class BatteriesClient:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{allocation_id}"))
 
     async def list_grants(self) -> list[GrantRecord]:
-        """Every grant, page by page: a resumed grant create looks for its tag among them (D57)."""
+        """Every grant, page by page."""
         grants: list[GrantRecord] = []
-        params = {"limit": "1000"}  # Batteries' largest page
+        cursor: str | None = None
         while True:
-            body = await self._request("GET", "/v1/grants", params=params)
-            items = body.get("items")
-            grants += (
-                [grant_from_item(item) for item in items if isinstance(item, dict)]
-                if isinstance(items, list)
-                else []
-            )
-            cursor = body.get("next_cursor")
-            if not cursor:
+            page = await self.grant_page(cursor)
+            grants += page.grants
+            if page.next_cursor is None:
                 return grants
-            params = {"limit": "1000", "cursor": str(cursor)}
+            cursor = page.next_cursor
+
+    async def grant_page(self, cursor: str | None) -> GrantPage:
+        """One page, oldest first: a resumed grant create looks for its tag page by page (D57)."""
+        params = {"limit": "1000"}  # Batteries' largest page
+        if cursor:
+            params["cursor"] = cursor
+        body = await self._request("GET", "/v1/grants", params=params)
+        items = body.get("items")
+        listed = items if isinstance(items, list) else []
+        grants = [grant_from_item(item) for item in listed if isinstance(item, dict)]
+        next_cursor = body.get("next_cursor")
+        return GrantPage(grants=tuple(grants), next_cursor=str(next_cursor) if next_cursor else None)
 
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None

@@ -154,6 +154,11 @@ From the tickets and the 21 October M3 plan:
 - **29 October (slice 4, Mike):** the guide's `token_replayed` would always be `false` (a token is never
   stored), so it is `replayed` instead: `true` on a replay, which has `token: null`, and `false` on the
   first answer. Embedded callers, who see no `Idempotent-Replayed` header, tell the two apart by it.
+- **29 October (Cursor's fourth #76 review, Mike):** a resumed grant create records the list cursor after
+  each page (`AllocationManager.grant_page`), so resumes make progress through a catalog slower than one
+  run's budget; `payments.md` had kept the old provisioning rule (a stored secret is enough). Known edge:
+  the cursor counts as a noted step, so a definite refusal of the resumed create keeps the record
+  `started` rather than freeing it.
 - **29 October (Cursor's third #76 review, Mike):** a resumed provisioning claims an actor only if it holds
   the key the earlier run recorded (a revoke and a re-provision under another reference was claimed);
   every ledger run is cancelled at half the stale window (a resumed grant create's page listing could

@@ -17,6 +17,7 @@ from livepeer_builder.contracts import (
     AuthRequest,
     EventPage,
     Failure,
+    GrantPage,
     GrantRecord,
     Job,
     JobCost,
@@ -188,6 +189,11 @@ class AllocationManager(Protocol):
     async def read_allocation(self, allocation_id: str) -> Allowance: ...
 
     async def list_grants(self) -> list[GrantRecord]: ...
+
+    async def grant_page(self, cursor: str | None) -> GrantPage:
+        """One page of grants, oldest first, from ``cursor`` (``None`` for the first): a resumed grant create
+        records the cursor after each page, so the next resume goes on from there (D57)."""
+        ...
 
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None

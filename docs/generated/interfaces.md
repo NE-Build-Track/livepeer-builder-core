@@ -62,6 +62,7 @@ classDiagram
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
         +async fund_allocation(allocation_id, amount, idempotency_key) None
         +async fund_grant(grant_id, amount, idempotency_key) None
+        +async grant_page(cursor) GrantPage
         +async list_grants() GrantRecord[]
         +async read_allocation(allocation_id) Allowance
         +async revoke_allocation(allocation_id) None

@@ -602,6 +602,62 @@ async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_
     assert adopted.metadata["lpb_operation"]
 
 
+async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_last_resume_stopped(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor, #76 review: a resume lists grants page by page before it adopts or creates, and each run gets
+    half the stale window. When the pages take longer than that, every resume died in the listing and the
+    reference never finished. The list cursor is recorded after each page, so each resume goes on from where
+    the last stopped (pages before it lacked the tag, and a newer grant is always on a later page)."""
+    engine = await make_engine(operation_stale_s=0.4, batteries_timeout_s=0.1)  # a run gets 0.2 s
+    desk = engine.payments.grants
+    assert desk is not None
+    for n in range(6):  # grants made by hand, before the engine's
+        await manager.create_grant(f"by hand {n}", usd("1"))
+    create_grant = manager.create_grant
+
+    async def answer_lost(*args: object, **kwargs: object) -> GrantRecord:
+        monkeypatch.setattr(manager, "create_grant", create_grant)
+        await create_grant(*args, **kwargs)  # type: ignore[arg-type]
+        raise ProviderUnavailable("Batteries unreachable: timed out")
+
+    monkeypatch.setattr(manager, "create_grant", answer_lost)
+    with pytest.raises(ProviderUnavailable):
+        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    manager.grant_page_size, manager.grant_page_delay_s = 1, 0.08  # two pages fit in a run, seven exist
+    for _ in range(6):
+        clock.advance(0.4)
+        try:
+            adopted = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+            break
+        except ProviderUnavailable:  # ran out of its budget in the listing: the next resume goes on
+            continue
+    else:
+        pytest.fail("the resumed grant create never finished")
+    assert adopted.metadata["lpb_operation"] and len(manager.grants) == 7
+    assert manager.calls.count("create_grant") == 7  # six by hand and the engine's one
+
+
+async def test_a_grant_create_resumed_after_the_provider_never_created_it_creates_one(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """The first run's create never reached Batteries: no grant carries the tag, so the resume creates it."""
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    await manager.create_grant("by hand", usd("1"))
+    manager.fail_once("create_grant", ProviderUnavailable("Batteries unreachable: refused"))
+    with pytest.raises(ProviderUnavailable):
+        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    clock.advance(120)
+    created = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    assert created.metadata["lpb_operation"] and [g.name for g in manager.grants] == ["by hand", "ops"]
+
+
 async def test_two_grants_with_one_name_and_different_refs_are_both_created(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:

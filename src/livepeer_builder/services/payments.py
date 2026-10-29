@@ -101,13 +101,29 @@ class GrantDesk:
 
         async def steps(run: RunningOperation) -> GrantRecord:
             if run.resumed:
-                for grant in await self._manager.list_grants():
-                    if grant.metadata.get(GRANT_TAG) == tag:
-                        return grant
+                found = await self._tagged_grant(run, tag)
+                if found is not None:
+                    return found
             return await self._manager.create_grant(name.strip(), amount, {GRANT_TAG: tag})
 
         request = {"name": name.strip(), "amount": amount}
         return await self._ledger.run(admin, "create_grant", operation_ref, request, steps, _GRANT)
+
+    async def _tagged_grant(self, run: RunningOperation, tag: str) -> GrantRecord | None:
+        """The grant an earlier run created, found by its tag, page by page from where the last resume
+        stopped: the cursor is recorded after each page, so a resume that runs out of its budget in a slow
+        catalog leaves the next one less to read. Pages already read lacked the tag, and a grant created
+        later is always on a later page (Batteries lists oldest first)."""
+        cursor = run.context.get("grant_list_cursor")
+        while True:
+            page = await self._manager.grant_page(cursor)
+            for grant in page.grants:
+                if grant.metadata.get(GRANT_TAG) == tag:
+                    return grant
+            if page.next_cursor is None:
+                return None
+            cursor = page.next_cursor
+            await run.remember(grant_list_cursor=cursor)
 
 
 class PaymentsService:

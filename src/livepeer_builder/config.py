@@ -69,6 +69,8 @@ class EngineSettings(Contract):
     shared_allocation_id: str | None = None  # per_application: the allocation behind shared_payment_key
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
+    # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
+    operation_stale_s: float = Field(default=120.0, gt=0)
 
     # access (docs/contracts/access.md#jwt-bearer, D45)
     auth: tuple[AuthMode, ...] = ("api_keys",)  # LPB_AUTH=api_keys | jwt | jwt,api_keys

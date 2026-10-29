@@ -9,7 +9,13 @@ import pytest
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, Job, JobRequest
-from livepeer_builder.errors import NoCapacity, OperationInProgress, ProviderError, RunnerCallError
+from livepeer_builder.errors import (
+    NoCapacity,
+    OperationInProgress,
+    ProviderError,
+    ProviderUnavailable,
+    RunnerCallError,
+)
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
 from tests.conftest import EngineFactory
@@ -397,3 +403,53 @@ async def test_a_label_too_long_to_store_is_refused_before_any_money_moves(  # t
     assert "create_key_for_grant" not in manager.calls
     accepted = await client.post(ALLOCATION, json=body | {"label": "x" * 200}, headers=admin)
     assert accepted.status_code == 201 and accepted.json()["label"] == "x" * 200
+
+
+async def test_an_admin_ref_reused_with_another_body_is_409_operation_conflict(api) -> None:  # type: ignore[no-untyped-def]
+    """D57, ISS-11: the same code as for jobs; an admin command has no job, so no job id header."""
+    client, _engine, admin, _alice = api
+    provisioned = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1"}
+    assert (await client.post(ALLOCATION, json=provisioned, headers=admin)).status_code == 201
+    fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
+    assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 200
+    other = fund | {"amount": {"amount": "6", "currency": "USD"}}
+    conflict = await client.post(ALLOCATION + "/fund", json=other, headers=admin)
+    assert conflict.status_code == 409 and "Livepeer-Job-Id" not in conflict.headers
+    assert conflict.json()["code"] == "operation_conflict"
+    assert conflict.json()["operation"] == {"command": "fund", "operation_ref": "t1", "state": "done"}
+
+
+async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(  # type: ignore[no-untyped-def]
+    api, manager: FakeAllocationManager
+) -> None:
+    client, _engine, admin, _alice = api
+    provisioned = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1"}
+    assert (await client.post(ALLOCATION, json=provisioned, headers=admin)).status_code == 201
+    fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
+    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 503
+    running = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
+    assert running.status_code == 409 and running.headers["Retry-After"] == "1"
+    assert running.json()["code"] == "operation_in_progress"
+    assert running.json()["operation"] == {"command": "fund", "operation_ref": "t1", "state": "started"}
+
+
+async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
+    client, _engine, admin, _alice = api
+    provisioned = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1"}
+    assert (await client.post(ALLOCATION, json=provisioned, headers=admin)).status_code == 201
+    fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
+    first = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
+    again = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
+    assert "Idempotent-Replayed" not in first.headers
+    assert (again.status_code, again.json()) == (first.status_code, first.json())
+    assert again.headers["Idempotent-Replayed"] == "true"
+
+
+async def test_a_replayed_grant_funding_is_204_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
+    client, _engine, admin, _alice = api
+    body = {"amount": {"amount": "10", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
+    first = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    again = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    assert (first.status_code, again.status_code) == (204, 204)
+    assert "Idempotent-Replayed" not in first.headers and again.headers["Idempotent-Replayed"] == "true"

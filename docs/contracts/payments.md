@@ -46,13 +46,13 @@ key of `base64url(sha256(engine_id:operation:step))`.
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
 | `provision(application, actor, amount, grant_id)` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | per actor; a repeat returns the original |
-| `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | per `operation_ref` (required). `grant_id` on this body is ignored |
-| `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
+| `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
+| `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
 | `grants.create_grant(name, amount)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | a repeat creates another grant |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
-| `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | per `operation_ref` |
+| `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
@@ -72,6 +72,42 @@ key of `base64url(sha256(engine_id:operation:step))`.
   `grant_id` filter does not match, so the first sync after this change restarts from the beginning
   and skips rows it already stored.
 
+## Repeat-safe commands
+
+Each admin command that moves money or creates a credential takes a caller-chosen `operation_ref`,
+scoped to the caller `(application_id, actor_id)` (D57, ISS-11). The engine records it in the operation
+ledger (`lpb_operations`, unique per scope and reference) **before the first provider call**, with a
+fingerprint of the command, its target and the validated request (the reference excluded), and stores the
+public result when the command ends. A repeat is answered from that record and never applies twice.
+Provider calls keep their derived idempotency keys, so a resumed command replays them at Batteries.
+
+| The reference… | Answer |
+| --- | --- |
+| is new | Runs the command |
+| was used with another command or request | 409 `OperationConflict`, `code: operation_conflict`, before any provider call |
+| names a command that ended | The recorded result, with the original status and `Idempotent-Replayed: true` |
+| names a command still `started`, for less than `LPB_OPERATION_STALE_S` (120 s) | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After: 1` |
+| names a command still `started` for longer | **Resumes** it: runs every step again from the top; each step is safe to repeat |
+
+A 409 for an admin command carries `operation: {command, operation_ref, state}` instead of a job, and
+no `Livepeer-Job-Id`. In embedded mode the replay is the return value; `OPERATION_REPLAYED` (a context
+variable in `livepeer_builder.contracts`) is `True` right after a call answered from the ledger.
+
+- **Refused or unknown.** A command refused outright (an invalid request, an unknown actor or grant, a
+  provider 4xx other than 408) applied nothing: the engine deletes its record, so the caller may fix
+  the request and repeat it under the same reference. A timeout, a transport error, a provider 5xx or a
+  crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
+  new reference.
+- **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
+  Every later write of the slower run (its context, its result, its abandonment) checks the token and
+  is refused, so a run presumed dead that was only slow answers with the recorded result instead.
+- **Rotating the payment key** records the old key's id and secret reference when it begins, and every
+  step reads them from there, never from the actor as it is now. A resume after the new key was stored
+  still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
+  reference is recorded before the actor points at it, so a resume reuses that copy.
+- **Lifetime.** Ledger records are kept; there is no purge in M3.
+
+## Units
 ## Units
 
 `Money(amount: Decimal, currency: "USD" | "ETH")` everywhere. **USD grants are the default**

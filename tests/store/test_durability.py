@@ -10,7 +10,7 @@ from sqlalchemy import insert, inspect, text
 
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
-from livepeer_builder.contracts import SignedSession
+from livepeer_builder.contracts import OperationRecord, SignedSession
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import (
     SqlStore,
@@ -329,3 +329,26 @@ async def test_a_purged_job_frees_its_reference(database_url: str, clock: FixedC
     holders = [await store.job_by_operation_ref("default", "alice", ref) for ref in ("order-1", "order-2")]
     await store.close()
     assert [found[0].id for found in holders if found] == [again.id, retry.id]
+
+
+async def test_the_operation_ledger_outlives_retention_and_downgrades(
+    database_url: str, clock: FixedClock
+) -> None:
+    """0010 (D57, ISS-11): ledger rows are kept (no purge in M3), so a reference never applies twice; a
+    downgrade drops the table."""
+    engine = create_engine(database_url)
+    await upgrade(engine)
+    store = SqlStore(engine)
+    record = OperationRecord(
+        application_id="default", actor_id="operator", operation_ref="op-1", command="fund",
+        fingerprint="f", state="started", started_at=clock.now(),
+    )  # fmt: skip
+    await store.begin_operation(record)
+    clock.advance(timedelta(days=400).total_seconds())
+    await purge(engine, clock.now(), jobs_days=1, usage_days=1)
+    assert await store.get_operation("default", "operator", "op-1") == record
+    await downgrade(engine, "0009")
+    async with engine.connect() as conn:
+        tables = await conn.run_sync(lambda sync: inspect(sync).get_table_names())
+    assert "lpb_operations" not in tables
+    await store.close()

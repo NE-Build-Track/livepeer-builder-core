@@ -13,6 +13,8 @@ import base64
 import hashlib
 from datetime import datetime
 
+from pydantic import TypeAdapter
+
 from livepeer_builder.contracts import (
     ActorContext,
     AllocationMode,
@@ -23,6 +25,7 @@ from livepeer_builder.contracts import (
     GrantRecord,
     KnownActor,
     Money,
+    NewAllocationKey,
     Operation,
     PaymentCredential,
     ProvisionedActor,
@@ -31,8 +34,17 @@ from livepeer_builder.contracts import (
     SecretRef,
     SeenActor,
 )
-from livepeer_builder.errors import InvalidRequest, NotFound, NotProvisioned, ProviderUnavailable
+from livepeer_builder.errors import (
+    InvalidRequest,
+    NotFound,
+    NotProvisioned,
+    ProviderUnavailable,
+)
 from livepeer_builder.protocols import AccessPolicy, ActorRepo, AllocationManager, Clock, SecretStore
+from livepeer_builder.services.ledger import OperationLedger, RunningOperation, TakenOver
+
+_ACTOR = TypeAdapter(ProvisionedActor)
+_NOTHING = TypeAdapter(type(None))
 
 
 def idempotency_key(engine_id: str, operation: str, step: str) -> str:
@@ -79,6 +91,7 @@ class PaymentsService:
         policy: AccessPolicy,
         clock: Clock,
         engine_id: str,
+        ledger: OperationLedger,
         manager: AllocationManager | None = None,
         grants: AllocationManager | None = None,
         currency: Currency = "USD",
@@ -91,6 +104,7 @@ class PaymentsService:
         self._policy = policy
         self._clock = clock
         self._engine_id = engine_id
+        self._ledger = ledger
         self._manager = manager
         self.grants: GrantDesk | None = GrantDesk(grants, policy, currency) if grants is not None else None
         self._currency = currency
@@ -220,12 +234,19 @@ class PaymentsService:
         actor = await self._require_actor(application_id, actor_id)
         if request.amount.currency != actor.currency or request.amount.amount <= 0:
             raise InvalidRequest(f"funding must be a positive amount in {actor.currency}")
-        await self._require_manager().fund_allocation(
-            actor.allocation_id,
-            request.amount,
-            idempotency_key(self._engine_id, f"fund:{actor.allocation_id}:{request.operation_ref}", "fund"),
-        )
-        return await self._update_status(actor, "active" if actor.status == "exhausted" else actor.status)
+
+        async def steps(_: RunningOperation) -> ProvisionedActor:
+            await self._require_manager().fund_allocation(
+                actor.allocation_id,
+                request.amount,
+                idempotency_key(
+                    self._engine_id, f"fund:{actor.allocation_id}:{request.operation_ref}", "fund"
+                ),
+            )
+            return await self._update_status(actor, "active" if actor.status == "exhausted" else actor.status)
+
+        target = {"application_id": application_id, "actor_id": actor_id, "amount": request.amount}
+        return await self._ledger.run(admin, "fund", request.operation_ref, target, steps, _ACTOR)
 
     async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
         """Add funds to the named grant, or to the grant of the caller's own allocation."""
@@ -235,11 +256,16 @@ class PaymentsService:
         grant_id = await self._resolved_grant(admin, request.grant_id)
         if not grant_id:
             raise InvalidRequest("choose a grant")
-        await self._require_manager().fund_grant(
-            grant_id,
-            request.amount,
-            idempotency_key(self._engine_id, f"fund-grant:{grant_id}:{request.operation_ref}", "fund"),
-        )
+
+        async def steps(_: RunningOperation) -> None:
+            await self._require_manager().fund_grant(
+                grant_id,
+                request.amount,
+                idempotency_key(self._engine_id, f"fund-grant:{grant_id}:{request.operation_ref}", "fund"),
+            )
+
+        target = {"grant_id": grant_id, "amount": request.amount}
+        await self._ledger.run(admin, "fund_grant", request.operation_ref, target, steps, _NOTHING)
 
     async def set_status(
         self, admin: ActorContext, application_id: str, actor_id: str, status: AllocationStatus
@@ -262,29 +288,61 @@ class PaymentsService:
     async def rotate_key(
         self, admin: ActorContext, application_id: str, actor_id: str, operation_ref: str
     ) -> ProvisionedActor:
-        """New key on the same allocation, store it, then revoke the old key.
+        """New key on the same allocation, store it, then revoke the old key, on the ledger (D57).
 
-        A repeat with the same ``operation_ref`` gets the same key back from the provider's replay. The
-        actor already holds it, so the rotation is done: revoking ``actor.api_key_id`` then would revoke
-        the live key (B1, D57)."""
+        The old key and secret are recorded when the rotation begins, and every step reads them from there,
+        never from the actor as it is now: a resume after the new key was stored still revokes the old one,
+        and a repeat never revokes the live key as "the old key" (B1)."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         actor = await self._require_actor(application_id, actor_id)
+        previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
+
+        async def steps(run: RunningOperation) -> ProvisionedActor:
+            return await self._rotate(run, application_id, actor_id, operation_ref)
+
+        target = {"application_id": application_id, "actor_id": actor_id}
+        return await self._ledger.run(
+            admin, "rotate_payment_key", operation_ref, target, steps, _ACTOR, context=previous
+        )
+
+    async def _rotate(
+        self, run: RunningOperation, application_id: str, actor_id: str, operation_ref: str
+    ) -> ProvisionedActor:
+        actor = await self._require_actor(application_id, actor_id)
         manager = self._require_manager()
-        key = await manager.create_key(
+        key = await manager.create_key(  # the provider replays it on a resume
             actor.allocation_id,
             f"{application_id}/{actor_id}",
             idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key"),
         )
-        if key.api_key_id == actor.api_key_id:
-            return actor
+        if actor.api_key_id != key.api_key_id:  # not stored yet
+            ref = await self._stored_secret(run, application_id, actor_id, key)
+            actor = actor.model_copy(
+                update={"api_key_id": key.api_key_id, "secret_ref": ref, "updated_at": self._clock.now()}
+            )
+            await self._store.save_actor(actor)
+        previous_key = run.context["previous_api_key_id"]
+        if previous_key != key.api_key_id:  # never the live key (B1)
+            await manager.revoke_key(previous_key)  # repeat-safe upstream
+        previous_secret = SecretRef(ref=run.context["previous_secret_ref"])
+        if previous_secret != actor.secret_ref:
+            await self._secrets.delete(previous_secret)
+        return actor
+
+    async def _stored_secret(
+        self, run: RunningOperation, application_id: str, actor_id: str, key: NewAllocationKey
+    ) -> SecretRef:
+        """The new key's secret, stored once per operation: its reference goes into the ledger's context
+        before the actor points at it, so a resume reuses that copy instead of leaving it orphaned."""
+        if "new_secret_ref" in run.context:
+            return SecretRef(ref=run.context["new_secret_ref"])
         ref = await self._secrets.put(_secret_name(application_id, actor_id), key.secret.get_secret_value())
-        rotated = actor.model_copy(
-            update={"api_key_id": key.api_key_id, "secret_ref": ref, "updated_at": self._clock.now()}
-        )
-        await self._store.save_actor(rotated)
-        await manager.revoke_key(actor.api_key_id)
-        await self._secrets.delete(actor.secret_ref)
-        return rotated
+        try:
+            await run.remember(new_secret_ref=ref.ref)
+        except TakenOver:  # a resume took over: it stores its own copy
+            await self._secrets.delete(ref)
+            raise
+        return ref
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
         target = actor_id or actor.actor_id

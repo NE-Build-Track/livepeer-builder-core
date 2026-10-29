@@ -80,6 +80,8 @@ async def claim_operation(store: JobRepo, job: Job, fingerprint: str, retrying: 
                 await store.create_job(job, fingerprint, retry_of=retrying)
             return
         except OperationExists as taken:  # the store compared fingerprints (OperationConflict)
+            if taken.job is None:  # a JobRepo raises with the job; anything else is not ours to answer
+                raise
             holder = taken.job
             retrying = retry_of(holder, same_request=True)
     raise OperationInProgress(holder)  # other requests keep re-dispatching it

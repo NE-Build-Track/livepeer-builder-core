@@ -10,7 +10,7 @@
 - **Branch:** `tasks/mz/iss-11-14-idempotency`, off `releases/m3` at `d3df806`.
 - **Design:** the idempotency guide, `docs/design-docs/m3-guides/iss-11-14-idempotency.md` (29 October;
   not on this branch yet). Open questions Q1–Q5 locked by Mike on 29 October.
-- **Progress:** slices 1 and 2 built; slices 3 and 4 to do.
+- **Progress:** slices 1, 2 and 3 built; slice 4 to do.
 - **Decision:** D57.
 
 ## Goal
@@ -37,7 +37,7 @@ From the tickets and the 21 October M3 plan:
 1. [x] **Defects B1 and B2** with their regression tests, and the repeated-provision note pinned.
 2. [x] **Job rules** (Part A): `OperationInProgress`, re-dispatch after a failure that never reached a
    runner, migration `0009`, the compare-and-set, the `code` field, `FakeEngine`, `engine.md`.
-3. [ ] **Operation ledger** (`lpb_operations`) and its store contract tests, wired into fund, fund grant
+3. [x] **Operation ledger** (`lpb_operations`) and its store contract tests, wired into fund, fund grant
    and rotate payment key.
 4. [ ] **Provision, create grant, issue and rotate access key** on the ledger (B4), required references,
    `payments.md`; then the console change.
@@ -78,7 +78,36 @@ From the tickets and the 21 October M3 plan:
     changes no outcome. They stay as the guide designs them, and they keep the old job's
     `superseded_by` from being overwritten before the rollback.
 
+- 29 October: slice 3, test-first; every behavior test seen red before its code.
+  - **Store:** migration `0010` adds `lpb_operations` (primary key: application, actor, reference).
+    `store/operations.py` (`SqlOperations`, mixed into `SqlStore`) implements the new `OperationRepo`
+    port: `begin_operation` returns the holder when the reference is held; `resume_operation`,
+    `remember_operation`, `complete_operation` and `abandon_operation` are compare-and-sets on the
+    `fencing_token`. Store contract tests in `tests/store/test_operation_ledger.py` and a migration and
+    retention test, on SQLite and PostgreSQL 16.
+  - **Service:** `services/ledger.py` (`OperationLedger`, built once in `runtime/assembly.py`): begin,
+    conflict, replay, in progress, resume after `LPB_OPERATION_STALE_S`, abandon on a definite refusal,
+    and the fenced answer of a slow run. `fund`, `fund_grant` and `rotate_key` run on it.
+    `FakeAllocationManager.fail_once` injects a provider fault for the crash-between-steps tests.
+  - **The slice-1 gap is closed:** a rotation whose old-key revoke timed out after the new key was
+    stored left the old key live, and a repeat returned at once (`assert False is True` on the old key's
+    revoked flag). The resume now reads the old key from the ledger's context and revokes it.
+  - **Errors and REST:** the three operation errors carry `job` or `operation`; an admin 409 has the
+    command and no job header; a replay has `Idempotent-Replayed: true` (`OPERATION_REPLAYED`).
+    `http/bodies.py` holds the request bodies (a tidy: `http/app.py` was near the size cap).
+  - **Existing tests changed:** the head revision `0009` became `0010` in `test_packaging.py` and
+    `test_cli.py` (a new migration).
+
 ## Decision log
+
+- **29 October (slice 3):** the ledger record has a `fencing_token` the guide's table does not list.
+  A resume bumps it by a compare-and-set, and every later write checks it, so a run presumed dead that
+  was only slow can neither overwrite the result nor write context. The guide asks for this fencing
+  (`complete` guarded by `state = 'started'`), and the token is what makes the guard per run.
+- **29 October (slice 3):** on a resume, the secret stored by an earlier run is **reused** from the
+  context, not deleted as the guide's provision plan says. Deleting it races a slow original that is
+  about to save the actor with that reference; reusing it is the same value (the provider replays the
+  same key). A run that a resume took over deletes the copy it wrote itself.
 
 - **29 October (Mike):** Q1 a repeat of a job that ran stays 409 `OperationExists`, now final, with a
   stable `code`. Q2 `unreachable` and unpaid `timeout` are not re-dispatched. Q3

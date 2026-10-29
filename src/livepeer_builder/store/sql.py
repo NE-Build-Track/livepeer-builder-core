@@ -40,6 +40,7 @@ from livepeer_builder.store.matching import (
     match_payment_sessions,
 )
 from livepeer_builder.store.migrate import upgrade
+from livepeer_builder.store.operations import SqlOperations
 from livepeer_builder.store.rows import chunks, load_jobs
 
 
@@ -63,7 +64,7 @@ def create_engine(url: str) -> AsyncEngine:
     return engine
 
 
-class SqlStore:
+class SqlStore(SqlOperations):
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
         self.maintenance = SqlMaintenance(engine)

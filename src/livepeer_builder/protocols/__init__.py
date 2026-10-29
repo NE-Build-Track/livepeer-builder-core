@@ -6,7 +6,7 @@ Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from livepeer_builder.contracts import (
@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
     Money,
     NewAllocationKey,
     Operation,
+    OperationRecord,
     PaymentCredential,
     ProvisionedActor,
     PurgeReport,
@@ -300,6 +301,34 @@ class JobRepo(Protocol):
     async def jobs_in_state(self, state: JobState) -> list[Job]: ...
 
 
+class OperationRepo(Protocol):
+    """The operation ledger (D57, ISS-11): one record per caller scope and ``operation_ref``, stored under a
+    unique constraint. Every write after ``begin_operation`` is fenced: it applies only while the record is
+    ``started`` with the caller's ``fencing_token``, and returns ``False`` and writes nothing otherwise."""
+
+    async def begin_operation(self, record: OperationRecord) -> OperationRecord | None:
+        """Insert ``record`` (``started``). ``None`` when inserted; when the reference is held, write nothing
+        and return the record holding it."""
+        ...
+
+    async def resume_operation(self, record: OperationRecord, started_at: datetime) -> OperationRecord | None:
+        """Take over a stale run: a compare-and-set that adds 1 to the token and sets ``started_at``. The
+        record now held, or ``None`` when another run moved it first."""
+        ...
+
+    async def remember_operation(self, record: OperationRecord) -> bool: ...  # store ``record.context``
+
+    async def complete_operation(self, record: OperationRecord, result: Any, completed_at: datetime) -> bool:
+        """``started`` -> ``done`` with the public result (JSON, never a token)."""
+        ...
+
+    async def abandon_operation(self, record: OperationRecord) -> bool: ...  # delete it: a definite refusal
+
+    async def get_operation(
+        self, application_id: str, actor_id: str, operation_ref: str
+    ) -> OperationRecord | None: ...
+
+
 class CostRepo(Protocol):
     async def cost_checkpoint(self) -> SyncCheckpoint | None: ...
 
@@ -366,7 +395,7 @@ class StoreMaintenance(Protocol):
     async def schema_revision(self) -> str | None: ...
 
 
-class EngineStore(ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo, Protocol):
+class EngineStore(ActorRepo, KeyRepo, JobRepo, OperationRepo, CostRepo, SecretRepo, Protocol):
     """Every engine-owned record, behind one interface. SQL implementation: livepeer_builder.store."""
 
     @property

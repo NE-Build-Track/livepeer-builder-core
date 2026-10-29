@@ -6,7 +6,6 @@ contracts (async jobs, sessions, events) answer 501. The generated schema is com
 docs/generated/openapi.json and checked for drift in CI.
 """
 
-import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -16,18 +15,16 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
-from livepeer_builder import contracts
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
+    OPERATION_REPLAYED,
     AccessKey,
     ActorContext,
     AllocationStatus,
     Allowance,
     AuthRequest,
     CostSummary,
-    CredentialKind,
     EngineHealth,
     EventPage,
     FundRequest,
@@ -36,7 +33,6 @@ from livepeer_builder.contracts import (
     Job,
     JobCost,
     KnownActor,
-    Money,
     Offering,
     ProvisionedActor,
     ProvisionRequest,
@@ -62,6 +58,16 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
+from livepeer_builder.http.bodies import (
+    GrantBody,
+    IssueKeyBody,
+    JobRequest,
+    ProvisionBody,
+    RotateBody,
+    RotateKeyBody,
+    StatusBody,
+    UsageBody,
+)
 from livepeer_builder.http.streaming import stream_response
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
@@ -80,54 +86,7 @@ _FAILURE_STATUS = {
 }
 _RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
 _IN_PROGRESS_RETRY_AFTER = "1"  # a repeat while the operation's job still runs (D57)
-
-
-_BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
-
-
-# The contract's JobRequest as a REST body, under the same schema name (no docstring: it would become
-# the schema's description). FastAPI validates the parsed JSON as Python, where ``raw_body`` takes only
-# bytes, so its URL-safe base64 is decoded here, exactly as ``JobRequest.model_validate_json`` would (#55).
-class JobRequest(contracts.JobRequest):
-    @field_validator("raw_body", mode="before")
-    @classmethod
-    def _decoded(cls, value: object) -> object:
-        return _BASE64.validate_json(json.dumps(value)) if isinstance(value, str) else value
-
-
-class IssueKeyBody(BaseModel):
-    kind: CredentialKind = "actor"
-    actor_id: str
-    application_id: str = "default"
-    permissions: list[str] | None = None
-    label: str = ""
-
-
-class ProvisionBody(BaseModel):
-    amount: Money
-    label: str = Field(default="", max_length=200)  # ProvisionedActor.label; a 422 before money moves
-    grant_id: str = ""
-
-
-class GrantBody(BaseModel):
-    name: str
-    amount: Money
-
-
-class StatusBody(BaseModel):
-    status: AllocationStatus
-
-
-class RotateKeyBody(BaseModel):
-    label: str | None = None  # keep the key's label unless given
-
-
-class RotateBody(BaseModel):
-    operation_ref: str = Field(min_length=1, max_length=200)
-
-
-class UsageBody(BaseModel):
-    quantities: dict[str, int]
+_HELD = {"command", "operation_ref", "state"}  # what a 409 shows of an admin command holding the reference
 
 
 def actor_dependency(engine: EngineApi) -> Callable[..., Coroutine[Any, Any, ActorContext]]:
@@ -362,8 +321,10 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         return await engine.payments.provision(actor, request)
 
     @app.post(base + "/fund", response_model=ProvisionedActor)
-    async def fund(actor: Actor, application_id: str, actor_id: str, body: FundRequest) -> ProvisionedActor:
-        return await engine.payments.fund(actor, application_id, actor_id, body)
+    async def fund(
+        actor: Actor, application_id: str, actor_id: str, body: FundRequest, response: Response
+    ) -> ProvisionedActor:
+        return _replay(response, await engine.payments.fund(actor, application_id, actor_id, body))
 
     if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
         desk = engine.payments.grants
@@ -379,7 +340,8 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
     @app.post("/v1/admin/grant/fund", status_code=204)
     async def fund_grant(actor: Actor, body: FundRequest) -> Response:
         await engine.payments.fund_grant(actor, body)
-        return Response(status_code=204)
+        response = Response(status_code=204)
+        return _replay(response, response)
 
     @app.post(base + "/status", response_model=ProvisionedActor)
     async def set_status(
@@ -392,8 +354,11 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         return await engine.payments.revoke(actor, application_id, actor_id)
 
     @app.post(base + "/rotate-key", response_model=ProvisionedActor)
-    async def rotate(actor: Actor, application_id: str, actor_id: str, body: RotateBody) -> ProvisionedActor:
-        return await engine.payments.rotate_key(actor, application_id, actor_id, body.operation_ref)
+    async def rotate(
+        actor: Actor, application_id: str, actor_id: str, body: RotateBody, response: Response
+    ) -> ProvisionedActor:
+        rotated = await engine.payments.rotate_key(actor, application_id, actor_id, body.operation_ref)
+        return _replay(response, rotated)
 
     @app.get("/v1/admin/reconciliation", response_model=Reconciliation)
     async def reconcile(
@@ -434,17 +399,19 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
 
     @app.exception_handler(OperationExists)
     async def _exists(_: Request, exc: OperationExists) -> Response:
-        """Both answers carry the job; one still running asks the caller to come back (D57)."""
-        headers = {JOB_ID_HEADER: str(exc.job.id)}
+        """Both carry what holds the reference; one still running asks the caller to come back (D57)."""
+        headers, held = _holder(exc)
         code = "operation_exists"
         if isinstance(exc, OperationInProgress):
             headers["Retry-After"] = _IN_PROGRESS_RETRY_AFTER
             code = "operation_in_progress"
-        return problem(409, str(exc), headers, code=code, job=exc.job.model_dump(mode="json"))
+        return problem(409, str(exc), headers, code=code, **held)
 
     @app.exception_handler(OperationConflict)
     async def _conflict(_: Request, exc: OperationConflict) -> Response:
-        return problem(409, str(exc), {JOB_ID_HEADER: str(exc.job.id)}, code="operation_conflict")
+        headers, held = _holder(exc)
+        held.pop("job", None)
+        return problem(409, str(exc), headers, code="operation_conflict", **held)
 
     @app.exception_handler(NoCapacity)
     async def _capacity(_: Request, exc: NoCapacity) -> Response:
@@ -468,6 +435,21 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
     async def _provider(_: Request, exc: ProviderError) -> Response:
         status = exc.status_code if exc.status_code in (400, 404, 409, 422) else 502
         return problem(status, str(exc))
+
+
+def _replay[T](response: Response, answer: T) -> T:
+    """Mark an admin command answered from the operation ledger: ``Idempotent-Replayed: true`` (D57)."""
+    if OPERATION_REPLAYED.get():
+        response.headers["Idempotent-Replayed"] = "true"
+    return answer
+
+
+def _holder(exc: OperationExists | OperationConflict) -> tuple[dict[str, str], dict[str, Any]]:
+    """The job holding a reference (its id as a header), or the admin command (D57, ISS-11)."""
+    if exc.job is not None:
+        return {JOB_ID_HEADER: str(exc.job.id)}, {"job": exc.job.model_dump(mode="json")}
+    operation = exc.operation
+    return {}, {} if operation is None else {"operation": operation.model_dump(include=_HELD)}
 
 
 def _status_handler(status: int) -> Any:

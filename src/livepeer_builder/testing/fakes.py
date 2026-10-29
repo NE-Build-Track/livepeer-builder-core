@@ -235,7 +235,11 @@ class _Allocation:
 
 
 class FakeAllocationManager:
-    """Mimics Batteries management semantics, including idempotent replays."""
+    """Mimics Batteries management semantics, including idempotent replays.
+
+    ``fail_once(call, error)`` makes the next call of that method raise ``error`` before it does anything:
+    a provider that timed out or refused, for the crash-between-steps tests (D57).
+    """
 
     def __init__(self) -> None:
         self.allocations: dict[str, _Allocation] = {}
@@ -245,11 +249,20 @@ class FakeAllocationManager:
         self.funded_grants: list[tuple[str, Money, str]] = []
         self.grants: list[GrantRecord] = []
         self.last_grant_id = ""
+        self._failures: dict[str, Exception] = {}
+
+    def fail_once(self, call: str, error: Exception) -> None:
+        self._failures[call] = error
+
+    def _fail(self, call: str) -> None:
+        if call in self._failures:
+            raise self._failures.pop(call)
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
         self.calls.append("create_key_for_grant")
+        self._fail("create_key_for_grant")
         self.last_grant_id = grant_id
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
@@ -262,6 +275,7 @@ class FakeAllocationManager:
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
         self.calls.append("create_key")
+        self._fail("create_key")
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
         key = self._mint(allocation_id)
@@ -270,6 +284,7 @@ class FakeAllocationManager:
 
     async def fund_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         self.calls.append("fund_allocation")
+        self._fail("fund_allocation")
         if idempotency_key in self.replays:
             return
         self.replays[idempotency_key] = True
@@ -280,27 +295,33 @@ class FakeAllocationManager:
 
     async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
         self.calls.append("fund_grant")
+        self._fail("fund_grant")
         if idempotency_key in self.replays:
             return
         self.replays[idempotency_key] = True
         self.funded_grants.append((grant_id, amount, idempotency_key))
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
+        self._fail("set_allocation_status")
         self.allocations[allocation_id].status = status
 
     async def revoke_allocation(self, allocation_id: str) -> None:
+        self._fail("revoke_allocation")
         self.allocations[allocation_id].status = "revoked"
 
     async def revoke_key(self, api_key_id: str) -> None:
+        self._fail("revoke_key")
         allocation, secret, _ = self.keys[api_key_id]
         self.keys[api_key_id] = (allocation, secret, True)
 
     async def list_grants(self) -> list[GrantRecord]:
         self.calls.append("list_grants")
+        self._fail("list_grants")
         return list(self.grants)
 
     async def create_grant(self, name: str, amount: Money) -> GrantRecord:
         self.calls.append("create_grant")
+        self._fail("create_grant")
         grant = GrantRecord(
             id=f"grant_{len(self.grants) + 1}",
             name=name,

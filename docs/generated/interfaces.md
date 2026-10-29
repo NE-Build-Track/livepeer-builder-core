@@ -79,7 +79,7 @@ classDiagram
     }
     class EngineStore {
         <<interface>>
-        +async ...ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo methods() None
+        +async ...ActorRepo, KeyRepo, JobRepo, OperationRepo, CostRepo, SecretRepo methods() None
         +maintenance StoreMaintenance?
         +async close() None
     }
@@ -192,5 +192,6 @@ classDiagram
 | `ActorRepo` | `get_actor`, `save_actor`, `list_actors`, `save_sighting`, `get_sighting`, `list_sightings` |
 | `KeyRepo` | `insert_access_key`, `access_key_by_hash`, `revoke_access_key`, `get_access_key`, `rotate_access_key`, `list_access_keys`, `count_active_admin_keys` |
 | `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `record_payment_evidence`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
+| `OperationRepo` | `begin_operation`, `resume_operation`, `remember_operation`, `complete_operation`, `abandon_operation`, `get_operation` |
 | `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `job_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `cost_snapshot`, `save_projection` |
 | `SecretRepo` | `put_secret`, `get_secret`, `delete_secret` |

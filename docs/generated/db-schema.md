@@ -86,6 +86,19 @@ erDiagram
         string retry_of
         string superseded_by
     }
+    lpb_operations {
+        string application_id PK
+        string actor_id PK
+        string operation_ref PK
+        string command
+        string fingerprint
+        string state
+        integer fencing_token
+        json context
+        json result
+        datetime started_at
+        datetime completed_at
+    }
     lpb_payment_sessions {
         string job_id PK
         integer attempt_number PK
@@ -232,6 +245,22 @@ Indexes:
 - `lpb_jobs_operation_ref` (application_id, actor_id, operation_ref) unique
 - `lpb_jobs_owner_created` (application_id, actor_id, created_at)
 - `lpb_jobs_state` (state)
+
+## `lpb_operations`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `application_id` | VARCHAR(200) | no | PK |
+| `actor_id` | VARCHAR(200) | no | PK |
+| `operation_ref` | VARCHAR(200) | no | PK |
+| `command` | VARCHAR(32) | no |  |
+| `fingerprint` | VARCHAR(64) | no |  |
+| `state` | VARCHAR(16) | no |  |
+| `fencing_token` | INTEGER | no |  |
+| `context` | JSON | no |  |
+| `result` | JSON | yes |  |
+| `started_at` | DATETIME | no |  |
+| `completed_at` | DATETIME | yes |  |
 
 ## `lpb_payment_sessions`
 

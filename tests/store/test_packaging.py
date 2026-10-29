@@ -13,7 +13,7 @@ def test_migrations_live_inside_the_package() -> None:
         Path(__file__).resolve().parents[2] / "src" / "livepeer_builder"
     ) or ("site-packages" in str(MIGRATIONS_DIR))
     assert (MIGRATIONS_DIR / "env.py").exists()
-    assert head_revision() == "0009"
+    assert head_revision() == "0010"
 
 
 def test_built_wheel_contains_migrations() -> None:

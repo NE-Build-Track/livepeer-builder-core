@@ -210,4 +210,24 @@ cost_projections = Table(
     Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # the job's, when computed
 )
 
+# -- 0010: the operation ledger (D57, ISS-11) ----------------------------------------------------------
+
+# One repeat-safe admin command per caller scope and reference: the primary key is the unique
+# constraint the reference is stored under. Never a secret in context or result.
+operations = Table(
+    "lpb_operations",
+    metadata,
+    Column("application_id", String(ID), primary_key=True),
+    Column("actor_id", String(ID), primary_key=True),
+    Column("operation_ref", String(ID), primary_key=True),
+    Column("command", String(32), nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    Column("state", String(16), nullable=False),  # started -> done
+    Column("fencing_token", Integer, nullable=False),  # +1 per resume; every later write checks it
+    Column("context", JSON, nullable=False),
+    Column("result", JSON, nullable=True),
+    Column("started_at", UTCDateTime, nullable=False),
+    Column("completed_at", UTCDateTime, nullable=True),
+)
+
 VERSION_TABLE = "lpb_alembic_version"

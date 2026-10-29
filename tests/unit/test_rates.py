@@ -1,6 +1,7 @@
 """ISS-10 rates: what a livepeer-node inventory advertises, and how the catalog reports its provenance and age."""
 
 import json
+import math
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -8,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import EngineSettings, EngineSupply
+from livepeer_builder.adapters.runner_call import max_price
 from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import NetworkRate, ObservedRate, Offering, Runner
@@ -23,13 +25,18 @@ def inventory(**price_info: object) -> list[dict[str, object]]:
 
 
 def priced(
-    amount: str, observed_at: datetime | None = None, *, unit: str = "seconds", name: str = "r1"
+    amount: str,
+    observed_at: datetime | None = None,
+    *,
+    unit: str = "seconds",
+    name: str = "r1",
+    currency: str = "wei",
 ) -> Runner:
-    """A runner advertising ``amount`` wei per ``unit``, stamped ``observed_at`` by its orchestrator."""
+    """A runner advertising ``amount`` ``currency`` per ``unit``, stamped ``observed_at`` by its orchestrator."""
     return Runner(
         url=f"https://o/apps/{name}/app", app="a/b", runner_id=name, mode="single-shot",
         orchestrator_url="https://o", capacity=1, capacity_available=1,
-        rate=NetworkRate(amount=Decimal(amount), currency="wei", unit=unit), observed_at=observed_at,
+        rate=NetworkRate(amount=Decimal(amount), currency=currency, unit=unit), observed_at=observed_at,
     )  # fmt: skip
 
 
@@ -71,9 +78,9 @@ def test_an_unreadable_price_says_why() -> None:
     ]}]  # fmt: skip
     assert [(r.rate, r.rate_error) for r in runners_from_entries(entries)] == [
         (None, "price_info is not an object"),
-        (None, "price is not a nonnegative number"),
-        (None, "price is not a nonnegative number"),
-        (None, "price is not a nonnegative number"),
+        (None, "price is not a number from 1e-300 to below 1e300"),
+        (None, "price is not a number from 1e-300 to below 1e300"),
+        (None, "price is not a number from 1e-300 to below 1e300"),
     ]
 
 
@@ -81,19 +88,35 @@ def test_a_price_too_large_for_a_float_ceiling_is_not_a_rate() -> None:
     """max_price pads the amount into a float; 1E+1000000 overflowed before the signer was asked."""
     huge = Decimal("1E+1000000")
     (runner,) = runners_from_entries(inventory(price=huge, currency="wei", unit="seconds"))
-    assert (runner.rate, runner.rate_error) == (None, "price is not a nonnegative number")
+    assert (runner.rate, runner.rate_error) == (None, "price is not a number from 1e-300 to below 1e300")
     (runner,) = runners_from_entries(inventory(price="10", price_usd=huge, currency="wei", unit="seconds"))
     assert runner.rate is not None and runner.rate.price_usd is None
 
 
+def test_a_price_too_small_for_a_positive_float_ceiling_is_not_a_rate() -> None:
+    """livepeer/node's signer refuses a ceiling that is not positive (checkMaxPrice).
+
+    0, 1E-400 and 1E-999999 are 0.0 once padded into the float max_price sends.
+    """
+    for tiny in ("0", "1E-400", "1E-999999"):
+        (runner,) = runners_from_entries(inventory(price=tiny, currency="wei", unit="seconds"))
+        assert runner.rate is None, tiny
+        assert runner.rate_error == "price is not a number from 1e-300 to below 1e300", tiny
+
+
 def test_any_source_s_rate_is_refused_unless_a_float_ceiling_holds_it() -> None:
-    """The contract, not only the JSON adapter: a custom DiscoverySource builds NetworkRate directly."""
-    for bad in ("-1", "1E+300", "1E+1000000"):
+    """The contract, not only the JSON adapter: a custom DiscoverySource builds NetworkRate directly.
+
+    9.99E-301 would survive as a float, but it is under the 1e-300 floor: below the normal range the
+    pad can land under the price (7e-324 becomes 5e-324).
+    """
+    for bad in ("-1", "0", "1E-400", "1E-999999", "9.99E-301", "1E+300", "1E+1000000"):
         with pytest.raises(ValidationError):
             NetworkRate(amount=Decimal(bad), currency="wei", unit="seconds")
-    assert NetworkRate(amount=Decimal("9.99E+299"), currency="wei", unit="seconds").amount == Decimal(
-        "9.99E+299"
-    )
+    for bound in ("1E-300", "9.99E+299"):
+        ceiling = max_price(NetworkRate(amount=Decimal(bound), currency="wei", unit="seconds"))
+        assert ceiling is not None and math.isfinite(ceiling["price"]), bound
+        assert Decimal(ceiling["price"]) > Decimal(bound), bound  # padded above the price, as a float
 
 
 def test_a_node_on_chain_price_is_kept_as_advertised() -> None:
@@ -231,6 +254,22 @@ async def test_an_unpaid_unit_does_not_hide_a_paid_one(clock: FixedClock) -> Non
         "missing",
         2,
     )
+
+
+@pytest.mark.parametrize(
+    ("currency", "unit", "status"),
+    [
+        ("wei", "seconds", "available"),  # livepeer/node's signer takes a wei ceiling (checkMaxPrice) ...
+        ("wei", "fixed", "available"),
+        ("wei", "hour", "missing"),  # ... per second for a live payment, per request for a fixed one
+        ("usd", "seconds", "missing"),
+    ],
+)
+async def test_an_offering_is_available_only_in_a_currency_and_unit_the_signer_takes(
+    clock: FixedClock, currency: str, unit: str, status: str
+) -> None:
+    (offering,) = await catalog(clock, priced("10", currency=currency, unit=unit))
+    assert offering.rate_status == status
 
 
 async def test_lpb_rate_max_age_s_sets_the_max_age(clock: FixedClock) -> None:

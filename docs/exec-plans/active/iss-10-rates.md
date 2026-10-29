@@ -43,10 +43,10 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 
 | Concern | Where | Rule |
 | --- | --- | --- |
-| Parse | `adapters/sdk.py::_rate`, `_stamp` | A rate exactly as advertised, or a reason. No `usd`/`hour` defaults. `price_usd` kept when it is a finite, nonnegative decimal. `observed_at` read as [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) in UTC |
+| Parse | `adapters/sdk.py::_rate`, `_stamp` | A rate exactly as advertised, or a reason. No `usd`/`hour` defaults. A `price` from `1e-300` to below `1e300`, so it pads into a positive float ceiling. `price_usd` kept when it is a finite, nonnegative decimal. `observed_at` read as [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) in UTC |
 | Age | `services/discovery.py::_observed` | The orchestrator's stamp when present and at most 30 s ahead of the poll, else the poll time; `observed_by` names the clock |
-| Status | `DiscoveryService.offerings` | One offering per app and `(currency, unit)`; `rate_status` (the engine pays the unit), `stale` (snapshot not fresh, or oldest rate older than `LPB_RATE_MAX_AGE_S`) |
-| Money | `adapters/runner_call.py::PaidRequest._answered` | A 402 for a runner with no ceiling is refused before the signer is asked |
+| Status | `DiscoveryService.offerings` | One offering per app and `(currency, unit)`; `rate_status` (the signer takes a ceiling in the currency and unit: `utils.is_payable`), `stale` (snapshot not fresh, or oldest rate older than `LPB_RATE_MAX_AGE_S`) |
+| Money | `adapters/runner_call.py::PaidRequest._answered`, `max_price` | A 402 for a runner with no ceiling the signer takes is refused before the signer is asked |
 
 ### Why the plan departs from the guide
 
@@ -57,7 +57,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 | `amount_usd` | `price_usd` | livepeer-node's own name; the engine echoes the node's published language |
 | `LPB_RATE_MAX_AGE_S` 300 s (Q2) | 600 s | `lpb discovery` evicts a failing orchestrator after about 3 min, so 300 s never fires there; livepeer-node discovery refreshes every 5 min by default, so 300 s flags healthy rates |
 | "No change to … `max_price()`" | Unchanged, plus the ceiling guard | Dropping the defaults turns an incomplete price into `rate=None`, which sends no `maxPrice`; the node signer then checks no price at all (`signer/service.go::checkMaxPrice`) |
-| "`hour` for older registrations" | `hour` is registration-side only | No released livepeer-node or go-livepeer advertises `hour` in `/discovery` |
+| "`hour` for older registrations" | `hour` is registration-side only, and not paid | No released livepeer-node or go-livepeer advertises `hour` in `/discovery`, and the node signer takes no `hour` ceiling |
 | `testing/fake_engine.py` fills the new fields | No change | `FakeDiscovery` returns the offerings its caller supplies |
 
 ### Upstream evaluation
@@ -69,7 +69,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 | livepeer-node `/discovery` | On-chain `{price: wei (rounded up), price_usd, currency: "wei", unit: "seconds" or "fixed"}`, listed only while the price is available; off-chain no `price_info`; `observed_at` from the `v1.0.3` tag |
 | go-livepeer registration (`normalizeLiveRunnerPriceInfo`, `v0.9.0` to master) | `usd`; `hour`, `720p` or `fixed`; the USD price is kept in `runner.PriceInfo` |
 | go-livepeer `/discovery` (`discoveryRunner`, `convertPrice`) | `{price: wei (rounded down), currency: "wei", unit: "seconds", "fixed" or "720p-pixel-seconds"}`; no `price_usd`, no `observed_at`; no `price_info` off-chain **or while an on-chain runner's price feed is not ready** |
-| Node signer (`checkMaxPrice`) | The ceiling must be wei with the payment type's unit; with no ceiling, no check |
+| Node signer (`checkMaxPrice`) | The ceiling must be a positive wei price in the payment type's unit (`seconds` for `live`, `fixed` for `fixed`), else 400; with no ceiling, no check |
 
 ### go-livepeer upstream request (draft; not filed)
 
@@ -93,7 +93,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
    assumed (see Progress).
 3. The engine is deliberately looser than livepeer-node's collectors, which drop an unstamped runner.
 4. `720p-pixel-seconds` (go-livepeer) is kept as advertised and is not payable; `hour` and `usd` are
-   registration-side only.
+   registration-side only, and not payable either.
 5. `amount_usd` becomes `price_usd`; the raw stamp is `Runner.observed_at`; the catalog type is
    `ObservedRate`; the status is two fields.
 6. go-livepeer's `price_usd` is absent pending the upstream request above.
@@ -146,6 +146,16 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
     brings `price_usd` to it.
   - Not checked live: a stamping (`v1.0.4`+) source; the unit tests cover `observed_by=orchestrator`.
 - 29 October: `price_usd` digits. The SDK's `json.loads` makes a JSON number a float before the adapter sees it ([livepeer-python-gateway#88](https://github.com/livepeer/livepeer-python-gateway/issues/88)). The engine and `lpb discovery` parse and re-serve the body with `Decimal` until that ships. No wei-to-USD conversion.
+- 29 October: PR #77 review, ceilings the signer refuses. livepeer/node `406b248` `checkMaxPrice` takes only
+  a positive `wei` ceiling, per `seconds` for `live` and per `fixed` for `fixed`; anything else is a 400
+  after the intent is recorded. `NetworkRate.amount` is now from `1e-300` (`PRICE_FLOOR`) to below `1e300`:
+  `0`, `1E-400` and `1E-999999` padded to a `0.0` ceiling, and below the normal float range the padding
+  rounds under the price (`7e-324` pads to `5e-324`). `max_price` returns `None` for any currency and unit but `wei` per
+  `seconds` or `fixed`, so the 402 guard refuses first; `hour` left the paid units; the catalog's
+  `rate_status` uses the same rule (`utils.is_payable`). Each new test was seen red for the right reason
+  (the `wei`/`hour` catalog case passed once `hour` left the paid units). Fixtures changed: the test
+  runners in `tests/unit/livepeer_net.py` and `testing.fakes.runner()` advertise `wei`, not `usd`, as
+  livepeer-node does; `test_sdk_contract.py` compares the engine's units with the SDK's minus `hour`.
 
 ## Decision log
 
@@ -161,3 +171,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
 - 29 October (John, PR #77 review): an app advertised in two units is two offerings, not one range with
   the minority unit excluded, so an unpaid unit never hides a paid one. Runners with no rate are not
   listed, and `rates_excluded` is gone.
+- 29 October (John, PR #77 review): the engine pays exactly the ceilings livepeer/node's signer takes,
+  `wei` per `seconds` or `fixed`, and the catalog says `available` for exactly those. A price no positive
+  float ceiling holds is no rate, like one from `1e300`: the floor is `1e-300`, in the normal float range,
+  so padding always lands above the price.

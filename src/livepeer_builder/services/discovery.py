@@ -16,7 +16,7 @@ from livepeer_builder.contracts import (
     Runner,
 )
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
-from livepeer_builder.utils import PAYMENT_TYPES_BY_UNIT
+from livepeer_builder.utils import is_payable
 
 _LOG = logging.getLogger(__name__)
 # livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).
@@ -103,7 +103,7 @@ class DiscoveryService:
                 by_unit.setdefault(key, []).append((runner, runner.rate))
         offerings = []
         for key in sorted(by_unit):
-            name, _, unit = key
+            name, currency, unit = key
             group = [runner for runner, _ in by_unit[key]]
             rates = sorted(
                 (_observed(rate, runner.observed_at, observed) for runner, rate in by_unit[key]),
@@ -115,7 +115,7 @@ class DiscoveryService:
                     modes=tuple(sorted({runner.mode for runner in group if runner.mode})),
                     rate_low=rates[0],
                     rate_high=rates[-1],
-                    rate_status="available" if _is_payable(unit) else "missing",
+                    rate_status="available" if is_payable(currency, unit) else "missing",
                     stale=not self.is_fresh() or self._too_old(rates),
                     runner_count=len(group),
                     ready_count=sum(1 for runner in group if _is_ready(runner)),
@@ -142,8 +142,3 @@ def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) ->
     if stamp is None or stamp > polled_at + _CLOCK_SKEW:
         return ObservedRate(**rate.model_dump(), observed_at=polled_at, observed_by="engine")
     return ObservedRate(**rate.model_dump(), observed_at=stamp, observed_by="orchestrator")
-
-
-def _is_payable(unit: str) -> bool:
-    """The engine signs for this unit (the rule ``payment_type`` applies); any other is refused."""
-    return unit.strip().lower() in PAYMENT_TYPES_BY_UNIT

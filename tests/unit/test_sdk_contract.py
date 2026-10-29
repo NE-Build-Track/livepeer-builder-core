@@ -64,7 +64,11 @@ def test_the_copy_keeps_the_sdk_s_mit_notice() -> None:
 
 
 def test_the_copied_protocol_constants_match() -> None:
-    assert runner_call.PAYMENT_TYPES_BY_UNIT == live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT
+    # The engine pays only units livepeer/node's signer takes a ceiling in (checkMaxPrice): not the SDK's
+    # "hour", which no orchestrator advertises (T23). Every other entry, and any the SDK adds, must match.
+    signer_refuses = {"hour"}
+    paid = {u: t for u, t in live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT.items() if u not in signer_refuses}
+    assert paid == runner_call.PAYMENT_TYPES_BY_UNIT
     assert runner_call.PAYER_ADDRESS_HEADER == live_runner._LIVE_RUNNER_PAYER_ADDRESS_HEADER
 
 

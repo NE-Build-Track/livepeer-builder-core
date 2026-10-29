@@ -1,5 +1,6 @@
 """Adapters: the Batteries wire format, runner discovery, secret stores, and settings."""
 
+import asyncio
 import json
 from decimal import Decimal
 
@@ -375,3 +376,19 @@ async def test_usage_feed_is_unfiltered_by_default() -> None:
     )
     await source.page(None, limit=10)
     assert seen == [{"limit": "10"}]  # iss-04: no filters, so desk-created grants still reconcile
+
+
+async def test_a_batteries_call_has_one_deadline_for_the_whole_request() -> None:
+    """Cursor, #76 review: httpx applies the timeout to each phase (connect, write, read, pool) in turn, so
+    one call could take several times LPB_BATTERIES_TIMEOUT_S. A resume is a lease timed in those calls
+    (D57), so each call is bounded as a whole, and running out is unavailable, an unknown outcome."""
+
+    async def slow(_: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={"items": [], "next_cursor": ""})
+
+    client = BatteriesClient(
+        "https://batteries.test", "t", client=mock_client(httpx.MockTransport(slow)), timeout_s=0.05
+    )
+    with pytest.raises(ProviderUnavailable, match=r"0\.05 s"):
+        await client.list_grants()

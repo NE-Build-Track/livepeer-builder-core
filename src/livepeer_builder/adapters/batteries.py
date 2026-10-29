@@ -6,6 +6,7 @@ credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant
 It has no ``grants.*``.
 """
 
+import asyncio
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -43,6 +44,7 @@ class BatteriesClient:
     ) -> None:
         self._client = client or batteries_http_client(base_url, token, timeout_s=timeout_s)
         self._owns_client = client is None
+        self._timeout_s = timeout_s
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -140,7 +142,12 @@ class BatteriesClient:
     ) -> dict[str, Any]:
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         try:
-            response = await self._client.request(method, path, json=json, headers=headers, params=params)
+            # One deadline for the whole call: httpx times each phase separately, and the operation ledger's
+            # stale window is counted in whole calls (D57).
+            async with asyncio.timeout(self._timeout_s):
+                response = await self._client.request(method, path, json=json, headers=headers, params=params)
+        except TimeoutError as exc:
+            raise ProviderUnavailable(f"Batteries call timed out after {self._timeout_s:g} s") from exc
         except httpx.TransportError as exc:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         if response.status_code >= 400:

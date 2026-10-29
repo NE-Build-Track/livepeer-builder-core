@@ -154,6 +154,10 @@ From the tickets and the 21 October M3 plan:
 - **29 October (slice 4, Mike):** the guide's `token_replayed` would always be `false` (a token is never
   stored), so it is `replayed` instead: `true` on a replay, which has `token: null`, and `false` on the
   first answer. Embedded callers, who see no `Idempotent-Replayed` header, tell the two apart by it.
+- **29 October (Cursor's second #76 review):** three more, test-first: each Batteries call has one
+  deadline (httpx timed each phase, so a call could outlast the stale window's arithmetic); any failed job
+  with no attempt re-runs, not only `interrupted`; a resumed provisioning stores the new key's secret
+  when a re-provision after a revoke got another key (it reused the old, deleted one).
 - **29 October (Cursor's #76 review, Mike):** five fixes, each test-first: a job interrupted before its
   first attempt re-runs; a refusal after a step applied keeps the record `started` (a refused revoke
   after the new key was stored left two live payment keys); a resumed provisioning claims an existing

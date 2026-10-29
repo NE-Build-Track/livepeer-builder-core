@@ -135,8 +135,10 @@ class EngineSettings(Contract):
     def _stale_outlasts_batteries_calls(self) -> "EngineSettings":
         # A resume is a lease, not a lock (D57): it must not start while the presumed-dead run may still have
         # a Batteries call in flight. The longest command makes two (create grant then read it back; rotate:
-        # create, then revoke), each up to the timeout; four of them leaves margin. Grant creation has no
-        # provider idempotency key, so an overlap there would create a second funded grant.
+        # create, then revoke), each under one deadline of the timeout (adapters/batteries.py), so four
+        # timeouts is twice what they can take. Grant creation has no provider idempotency key, so an
+        # overlap there would create a second funded grant. A process paused longer than that (a frozen VM)
+        # is the lease's limit: only a provider idempotency key would close it.
         if self.operation_stale_s < 4 * self.batteries_timeout_s:
             raise ValueError(
                 f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "

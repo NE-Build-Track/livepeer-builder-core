@@ -395,13 +395,14 @@ class PaymentsService:
     async def _stored_secret(
         self, run: RunningOperation, application_id: str, actor_id: str, key: NewAllocationKey
     ) -> SecretRef:
-        """The new key's secret, stored once per operation: its reference goes into the ledger's context
-        before the actor points at it, so a resume reuses that copy instead of leaving it orphaned."""
-        if "new_secret_ref" in run.context:
+        """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
+        key it belongs to, before the actor points at it, so a resume reuses that copy instead of leaving it
+        orphaned. A resume that got another key (a re-provision after a revoke) stores that key's secret."""
+        if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             return SecretRef(ref=run.context["new_secret_ref"])
         ref = await self._secrets.put(_secret_name(application_id, actor_id), key.secret.get_secret_value())
         try:
-            await run.remember(new_secret_ref=ref.ref)
+            await run.remember(new_secret_ref=ref.ref, new_secret_key_id=key.api_key_id)
         except TakenOver:  # a resume took over: it stores its own copy
             await self._secrets.delete(ref)
             raise

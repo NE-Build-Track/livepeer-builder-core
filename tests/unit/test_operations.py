@@ -95,6 +95,15 @@ def test_a_job_interrupted_before_its_first_attempt_never_reached_a_runner() -> 
     assert never_reached_a_runner(job("failed", "interrupted"))
 
 
+def test_a_job_that_failed_with_no_attempt_never_reached_a_runner_whatever_its_failure() -> None:
+    """Cursor, #76 review: a job closed in-process before ``start_attempt`` (cancelled, or an error) is
+    ``runner_error`` with no attempt. The attempt is written before any runner call, so no attempt is the
+    proof, whatever the failure kind says; an ``in_flight`` attempt is not."""
+    assert never_reached_a_runner(job("failed", "runner_error"))
+    assert never_reached_a_runner(job("failed", "timeout"))
+    assert not never_reached_a_runner(job("failed", "runner_error", "in_flight"))
+
+
 def test_only_a_failed_job_is_retried_whatever_its_failure_says() -> None:
     assert not never_reached_a_runner(job("uncertain", "no_capacity"))
 

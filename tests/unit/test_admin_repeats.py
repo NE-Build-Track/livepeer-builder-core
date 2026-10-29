@@ -758,6 +758,34 @@ async def test_a_resumed_provisioning_that_reached_the_provider_answers_with_the
     assert refs == {a.secret_ref.ref}
 
 
+async def test_a_resumed_provisioning_that_gets_a_new_key_stores_that_keys_secret(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor, #76 review: the run saved the actor, then died before completing; the actor was revoked (its
+    secret deleted) before the resume. The resume re-provisions under a new provider key, so the secret on
+    the record belongs to the old key: reusing it would leave the live key's secret unknown to the engine."""
+    engine = await make_engine()
+    complete = store.complete_operation
+
+    async def lost(*args: object) -> bool:
+        monkeypatch.setattr(store, "complete_operation", complete)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "complete_operation", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.provision(admin, provision_request())
+    await engine.payments.revoke(admin, "default", "alice")
+    clock.advance(120)
+    again = await engine.payments.provision(admin, provision_request())
+    assert (await engine.payments.credential(alice)).token == manager.keys[again.api_key_id][1]
+
+
 async def test_a_provisioning_resumed_after_its_actor_was_saved_returns_that_actor(
     make_engine: EngineFactory,
     admin: ActorContext,

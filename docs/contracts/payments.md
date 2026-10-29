@@ -108,7 +108,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
 - **A resume is a lease, not a lock.** Fencing guards the engine's records, not a provider call already
   in flight. Grant creation has no provider idempotency key, so the engine refuses to start unless
   `LPB_OPERATION_STALE_S` is at least four times `LPB_BATTERIES_TIMEOUT_S`: the longest command makes
-  two Batteries calls, each bounded by that timeout, so a run presumed dead has none in flight.
+  two Batteries calls, and each call has one deadline of that timeout for the whole request (httpx alone
+  times each phase separately), so a run presumed dead has none in flight. Its limit is a process paused
+  longer than the window, which only a provider idempotency key on grant creation would close.
 - **Rotating the payment key** records the old key's id and secret reference when it begins, and every
   step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret

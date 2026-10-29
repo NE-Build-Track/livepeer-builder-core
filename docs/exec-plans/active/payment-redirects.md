@@ -29,8 +29,8 @@ stays upstream `2017a80`; nothing is sent upstream.
 - [x] A payment URL off the challenge's origins is refused before a ticket or a request.
 - [x] `tests/unit/test_sdk_contract.py` fingerprints every SDK method the override replaces or relies on.
 - [x] Docs: D58, payments.md, sdk-gateway.md, upstream-baseline.md, tech debt T17, T18, T20 and T23.
-- [ ] A metered paid job on the console's dev stack renews normally (a streamed chat longer than 3 s),
-      recorded in the PR.
+- [x] A metered paid job on the dev stack renews normally (a streamed chat longer than 3 s), recorded in
+      the PR (29 October, below).
 - [ ] #72 closed with a link to the PR, after Mike's review.
 
 ## Progress
@@ -45,6 +45,13 @@ stays upstream `2017a80`; nothing is sent upstream.
   the new module joins `runner_call.py` in the `livepeer_gateway` and `aiohttp` boundary
   (`tests/structure/test_layers.py`). Full suite, coverage gates, diff coverage, lint, types, docs and
   `lpb smoke` pass locally (numbers in the PR). PostgreSQL was not run: no schema change.
+- 2026-10-29: Live on `deploy/dev-stack` (Batteries `ca09e47`, signer `406b248`, Arbitrum One), the
+  engine image built from this branch with a fresh database. A streamed `blueclaw/chat/qwen3.8-27b`
+  chat on hky.eliteencoder.net, priced 4,728,005,481 wei per second: 14.9 s, 892 chunks, job
+  `succeeded`, funding ended `cancelled` when the call ended, no renewal failure logged. Cost sync
+  matched **4 usage rows** to the one paid session, class `delivered`, $0.000244; reconciliation for
+  the actor `balanced`. So renewals on the engine's payment client are accepted by a real orchestrator
+  and attribute as before.
 
 ## Decision log
 

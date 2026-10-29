@@ -68,7 +68,13 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, transport
 
     engine = await make_engine(supply=EngineSupply(transport=transport))  # type: ignore[arg-type]
     amount = Money(amount=Decimal(1), currency="USD")
-    request = ProvisionRequest(application_id="default", actor_id="alice", amount=amount, grant_id="grant_1")
+    request = ProvisionRequest(
+        operation_ref="provision:default:alice",
+        application_id="default",
+        actor_id="alice",
+        amount=amount,
+        grant_id="grant_1",
+    )
     await engine.payments.provision(admin, request)
     return engine
 

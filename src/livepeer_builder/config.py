@@ -69,6 +69,8 @@ class EngineSettings(Contract):
     shared_allocation_id: str | None = None  # per_application: the allocation behind shared_payment_key
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
+    # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
+    operation_stale_s: float = Field(default=120.0, gt=0)
 
     # access (docs/contracts/access.md#jwt-bearer, D45)
     auth: tuple[AuthMode, ...] = ("api_keys",)  # LPB_AUTH=api_keys | jwt | jwt,api_keys
@@ -128,6 +130,22 @@ class EngineSettings(Contract):
         if not value:
             raise ValueError("jwt_token_types needs at least one token type, such as at+jwt")
         return tuple(kind.lower() for kind in value)
+
+    @model_validator(mode="after")
+    def _stale_outlasts_batteries_calls(self) -> "EngineSettings":
+        # A resume is a lease, not a lock (D57): it must not start while the presumed-dead run may still have
+        # a Batteries call in flight. The ledger cancels any run at half the stale window; the longest
+        # ordinary command makes two calls (create grant then read it back; rotate: create, then revoke),
+        # each under one deadline of the timeout (adapters/batteries.py), so they fit in that half. Grant
+        # creation has no provider idempotency key, so an overlap there would create a second funded grant.
+        # A process paused longer than that (a frozen VM) is the lease's limit: only a provider idempotency
+        # key would close it.
+        if self.operation_stale_s < 4 * self.batteries_timeout_s:
+            raise ValueError(
+                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
+                f"LPB_BATTERIES_TIMEOUT_S ({self.batteries_timeout_s:g})"
+            )
+        return self
 
     @model_validator(mode="after")
     def _jwt_is_configured(self) -> "EngineSettings":

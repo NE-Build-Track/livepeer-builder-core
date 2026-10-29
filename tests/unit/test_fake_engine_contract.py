@@ -28,6 +28,7 @@ from livepeer_builder import (
     Money,
     OperationConflict,
     OperationExists,
+    OperationInProgress,
 )
 from livepeer_builder.contracts import AttemptOutcome, FailureKind, ProvisionRequest
 from livepeer_builder.errors import AccessDenied, NotFound, RunnerCallError
@@ -92,7 +93,9 @@ async def real(
 ) -> AsyncIterator[ActorApi]:
     transport: ScriptedTransport
     if error is not None:
-        transport = ScriptedTransport([RunnerCallError(error[0], "boom", payment_sent=error[1])])
+        transport = ScriptedTransport(
+            [RunnerCallError(error[0], "boom", payment_sent=error[1])] * 2
+        )  # a repeat
     elif chunks is not None:
         broken = [RunnerCallError("http", "cut", payment_sent=True)] if fails_mid_stream else []
         transport = ScriptedStreamTransport(opens=[StreamScript(events=[*chunks, *broken])])
@@ -109,7 +112,11 @@ async def real(
     async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport)) as engine:
         amount = Money(amount=Decimal("5"), currency="USD")
         request = ProvisionRequest(
-            application_id="default", actor_id="alice", amount=amount, grant_id="grant_1"
+            operation_ref="provision:default:alice",
+            application_id="default",
+            actor_id="alice",
+            amount=amount,
+            grant_id="grant_1",
         )
         await engine.payments.provision(ADMIN, request)
         yield engine
@@ -290,6 +297,51 @@ async def test_a_repeated_operation_ref_raises_operation_exists_or_conflict(side
         with pytest.raises(OperationConflict) as conflict:
             await engine.jobs.run(ALICE, JobRequest(app=APP, path="/other", operation_ref="op-1"))
     assert exists.value.job.id == first.id and conflict.value.job.id == first.id
+
+
+@pytest.mark.parametrize(
+    ("error", "again"),
+    [
+        (("refused", False), "dispatched"),  # every runner refused before the app ran (D57)
+        (("unreachable", False), "exists"),  # may have run (Q2)
+        (("timeout", False), "exists"),
+        (("timeout", True), "exists"),  # uncertain
+    ],
+)
+async def test_a_repeat_after_a_failure_dispatches_again_only_if_it_never_reached_a_runner(
+    side: Side, error: RunnerError, again: str
+) -> None:
+    async with side(error=error) as engine:
+        with pytest.raises(JobFailed) as first:
+            await engine.jobs.run(ALICE, JobRequest(app=APP, operation_ref="op-1"))
+        with pytest.raises((JobFailed, OperationExists)) as repeat:
+            await engine.jobs.run(ALICE, JobRequest(app=APP, operation_ref="op-1"))
+    if again == "dispatched":  # scripted to fail the same way, so the new job fails too
+        assert type(repeat.value) is JobFailed and repeat.value.job.id != first.value.job.id
+    else:
+        assert type(repeat.value) is OperationExists and repeat.value.job.id == first.value.job.id
+
+
+async def test_a_repeat_after_a_failure_before_dispatch_dispatches_again(side: Side) -> None:
+    async with side() as engine:
+        with pytest.raises(JobFailed) as first:
+            await engine.jobs.run(ALICE, JobRequest(app=NONE, operation_ref="op-1"))
+        with pytest.raises(JobFailed) as repeat:
+            await engine.jobs.run(ALICE, JobRequest(app=NONE, operation_ref="op-1"))
+    assert repeat.value.job.id != first.value.job.id
+
+
+async def test_a_repeat_while_a_stream_is_open_is_in_progress(side: Side) -> None:
+    async with side(chunks=(b"a",)) as engine:
+        assert engine.jobs.streaming is not None
+        stream = await engine.jobs.streaming.stream(ALICE, JobRequest(app=APP, operation_ref="op-1"))
+        with pytest.raises(OperationInProgress) as running:
+            await engine.jobs.streaming.stream(ALICE, JobRequest(app=APP, operation_ref="op-1"))
+        assert running.value.job.id == stream.job.id and running.value.job.state == "running"
+        assert [chunk async for chunk in stream] == [b"a"]
+        with pytest.raises(OperationExists) as ran:
+            await engine.jobs.streaming.stream(ALICE, JobRequest(app=APP, operation_ref="op-1"))
+    assert type(ran.value) is OperationExists and ran.value.job.state == "succeeded"
 
 
 async def test_a_paid_runner_error_fails_the_job_with_the_runner_s_words(side: Side) -> None:

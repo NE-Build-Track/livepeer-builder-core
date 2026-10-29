@@ -3,10 +3,12 @@
 It returns real contract values and raises real engine errors, so code under test cannot tell it from
 the engine for the API's *shape*: run a job, read it back, stream it, see costs and the catalog.
 Like the engine, a run records an attempt on the first runner for the app, a repeated
-``operation_ref`` raises ``OperationExists`` (or ``OperationConflict`` for a different request), and
-a stream that fails part-way leaves the job ``uncertain``. It does not model the money rules
-(admission, failover, payment); script those outcomes with ``Fails`` and ``Raises``, or use
-``make_engine`` when they matter. A contract test runs the same actor-API assertions against both.
+``operation_ref`` follows the engine's rules (D57): ``OperationConflict`` for a different request,
+``OperationInProgress`` while its stream is open, a new job after a failure that never reached a
+runner, ``OperationExists`` otherwise; and a stream that fails part-way leaves the job ``uncertain``.
+It does not model the money rules (admission, failover, payment); script those outcomes with
+``Fails`` and ``Raises``, or use ``make_engine`` when they matter. A contract test runs the same
+actor-API assertions against both.
 
 Script replies per ``(app, path)``::
 
@@ -45,17 +47,11 @@ from livepeer_builder.contracts import (
     Runner,
     SignedSession,
 )
-from livepeer_builder.errors import (
-    InvalidRequest,
-    JobFailed,
-    NotFound,
-    NotProvisioned,
-    OperationConflict,
-    OperationExists,
-)
+from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound, NotProvisioned
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.costs import classify
 from livepeer_builder.services.failover import attempt_verdict
+from livepeer_builder.services.operations import retry_of
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.request_identity import request_fingerprint
@@ -130,10 +126,9 @@ class FakeJobs:
         if found is None:
             return
         fingerprint, job_id = found
-        existing = self._jobs[job_id]
-        if fingerprint != request_fingerprint(request):
-            raise OperationConflict(existing)
-        raise OperationExists(existing)
+        # The engine's repeat rules (D57): conflict, in progress, exists, or dispatch again, in which
+        # case ``record`` gives the reference to the new job.
+        retry_of(self._jobs[job_id], same_request=fingerprint == request_fingerprint(request))
 
     def record(
         self,

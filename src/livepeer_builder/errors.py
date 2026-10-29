@@ -1,6 +1,6 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from livepeer_builder.contracts import AttemptOutcome, Job
+from livepeer_builder.contracts import AttemptOutcome, Job, OperationRecord, ProvisionedActor
 
 
 class EngineError(Exception):
@@ -24,19 +24,48 @@ class InvalidRequest(EngineError):
 
 
 class OperationExists(EngineError):
-    """This (application, actor, operation_ref) already dispatched a job with the same request (409)."""
+    """This (application, actor, operation_ref) already dispatched a job with the same request (409).
 
-    def __init__(self, job: Job) -> None:
-        super().__init__(f"operation_ref {job.operation_ref!r} already used by job {job.id}")
-        self.job = job
+    ``job`` is that job. ``operation`` is set instead when the reference names an admin command (D57,
+    ISS-11); such a repeat is answered with the command's result, so only ``OperationInProgress`` carries one.
+    """
+
+    def __init__(self, holder: Job | OperationRecord) -> None:
+        super().__init__(f"operation_ref {holder.operation_ref!r} already used by {_name(holder)}")
+        self.job, self.operation = _held(holder)
+
+
+class OperationInProgress(OperationExists):
+    """The job or admin command holding this operation_ref is still running (409, ``Retry-After``; D57).
+    Ask again later.
+
+    An ``OperationExists``, so callers that catch that keep working."""
+
+    def __init__(self, holder: Job | OperationRecord, retry_after_s: int = 1) -> None:
+        EngineError.__init__(
+            self, f"operation_ref {holder.operation_ref!r} is still running as {_name(holder)}"
+        )
+        self.job, self.operation = _held(holder)
+        # A job may end any second; a stuck admin command can be resumed only once it is stale.
+        self.retry_after_s = retry_after_s
 
 
 class OperationConflict(EngineError):
-    """The operation_ref was reused with a different request body (409)."""
+    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it."""
 
-    def __init__(self, job: Job) -> None:
-        super().__init__(f"operation_ref {job.operation_ref!r} was used by job {job.id} with another request")
-        self.job = job
+    def __init__(self, holder: Job | OperationRecord) -> None:
+        super().__init__(
+            f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
+        )
+        self.job, self.operation = _held(holder)
+
+
+def _held(holder: Job | OperationRecord) -> tuple[Job | None, OperationRecord | None]:
+    return (holder, None) if isinstance(holder, Job) else (None, holder)
+
+
+def _name(holder: Job | OperationRecord) -> str:
+    return f"job {holder.id}" if isinstance(holder, Job) else f"a {holder.command} command"
 
 
 class JobFailed(EngineError):
@@ -58,6 +87,18 @@ class NoCapacity(EngineError):
 
 class NotProvisioned(EngineError):
     """per_actor mode and this actor has no allocation. Provisioning is always explicit."""
+
+
+class AlreadyProvisioned(EngineError):
+    """Provisioning an actor that already has an allocation, under a new reference (409; D57). Nothing is
+    applied, the amount included: funding an existing actor is ``fund``."""
+
+    def __init__(self, actor: ProvisionedActor) -> None:
+        super().__init__(
+            f"actor {actor.actor_id!r} is already provisioned (allocation {actor.allocation_id}); "
+            "fund it instead"
+        )
+        self.actor = actor
 
 
 class ProviderUnavailable(EngineError):

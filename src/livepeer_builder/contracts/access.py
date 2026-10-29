@@ -89,4 +89,5 @@ class AccessKey(Contract):
 
 class IssuedKey(Contract):
     key: AccessKey
-    token: str  # shown once
+    token: str | None  # shown once; None when a repeat of the operation_ref replays the issue (D57)
+    replayed: bool = False  # a repeat of the operation_ref: the issue is replayed, without its token (D57)

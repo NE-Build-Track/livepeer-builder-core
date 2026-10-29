@@ -95,6 +95,7 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     runners = (net.runner(), net.runner(orchestrator_url="https://other-orch.example"))
     engine = await make_engine(runners=runners, supply=EngineSupply(transport=SdkRunnerTransport(net.url)))
     request = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),

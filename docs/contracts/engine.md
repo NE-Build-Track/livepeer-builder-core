@@ -113,7 +113,8 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      502 or 503 is not a refusal: it is `payment_unknown`, the manifest stays `unknown`, and the job
      ends `uncertain`. The cost stays `pending` until usage matches it.
 2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
-   most once (see [idempotency](#idempotency)).
+   most one job that reaches a runner. A job that failed before any runner accepted the work may be
+   dispatched again under the same reference (see [idempotency](#idempotency)).
 3. **The attempt row is written before the call** (`in_flight`) and updated after it. **The manifest is stored before
    signing** (D54): the Live Runner transport calls the recorder's `remember(manifest_id)` with
    `LivePaymentSession.manifest_id`, which stores it on the attempt as a session whose `payment_state` is
@@ -144,16 +145,53 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 
 ### Idempotency
 
-The semantics are owned by John's PR (decision D11). Until it lands:
+Final rules (D57; they replace D11's interim 409). A repeat is identified by
+`(application_id, actor_id, operation_ref)`. The request's fingerprint covers `app`, `path`, `method`,
+`payload` (or the raw body), `capability`, `model`, `content_type`, `headers` and `return_http_errors`.
+Limits such as `timeout_s` and `max_attempts` may differ between repeats.
 
-| Case | Response |
-| --- | --- |
-| Same `operation_ref`, same request (`app`, `path`, `method`, `payload`, `capability`, `model`) | 409 `OperationExists` with the original job. Nothing is dispatched |
-| Same `operation_ref`, different request | 409 `OperationConflict` |
-| No `operation_ref` | Every call dispatches |
+| The reference names a job that… | Answer | Dispatched? |
+| --- | --- | --- |
+| does not exist | Runs it | yes |
+| exists with a different fingerprint | 409 `OperationConflict`, `code: operation_conflict` | no |
+| is `running` | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After: 1`, the job in the body | no |
+| `succeeded`, or ended `uncertain` | 409 `OperationExists`, `code: operation_exists`, the job in the body | no |
+| `failed`, and never reached a runner (below) | Runs a **new job** under the same reference | yes |
+| `failed` in any other way | 409 `OperationExists`, `code: operation_exists`, the job in the body | no |
+| no reference given | Runs it | yes |
 
-Limits such as `timeout_s` may differ between retries. The store enforces uniqueness with a partial
-unique index, so concurrent duplicates are also refused.
+Every 409 for a job carries the job's id in `Livepeer-Job-Id`. Admin commands (provision, fund,
+grants, rotations, keys) use the same codes, with the command in the body instead of a job: see
+[payments.md](payments.md#repeat-safe-commands). `OperationInProgress` is an `OperationExists`, so
+a caller that catches `OperationExists` keeps working; branch on `code` to tell them apart.
+
+**Never reached a runner** is a closed list. The job failed before dispatch (`no_offering`,
+`no_capacity`, `not_provisioned`), or was `interrupted` by a restart before its first attempt (an attempt
+is written before any runner is called), or every attempt was refused before the app ran: `refused` (the
+orchestrator answered 503), an orchestrator 404 or 409, or a signer refusal (`payment`, or
+`payment_refused` for this orchestrator). No attempt has `payment_sent`. `unreachable` and an unpaid
+`timeout` are **not** on the list: a disconnect after the request went out is `unreachable`, and a free
+runner may have run the work.
+
+**Why a job that ran answers 409, not its result.** Immediate output is returned inline and not
+retained ([results](#results)), so the engine cannot replay the first answer, and a 2xx with another
+body would break a client that parsed the first. Read the job in the body (or `GET /v1/jobs/{id}`)
+instead.
+
+**Streaming** follows the same table. A repeat never streams again: while the stream is open the job
+is `running`, and once it ended the job ran.
+
+**How the store keeps it.** A partial unique index holds one job per reference among the jobs no retry
+superseded, so concurrent duplicates are refused where the job is written, and a duplicate with
+another body is `OperationConflict` there too. A re-dispatch is one transaction: a compare-and-set
+marks the failed job `superseded_by` the new one (only if it is still `failed` and not superseded),
+then inserts the new job with `retry_of` the old one. The old job keeps its reference for history. When
+two repeats race, one wins and the other is answered from the winner (normally
+`OperationInProgress`).
+
+**Lifetime.** A reference lives as long as its job. `LPB_RETENTION_JOBS_DAYS` purges `succeeded` and
+`failed` jobs, which frees their references; `uncertain` jobs are kept. A reference older than the
+retention window may dispatch again, so use UUIDs or ULIDs.
 
 ### Failures
 
@@ -308,7 +346,8 @@ These are the explicit decisions for ISS-02.
 
 - **No HA.** One engine process per database. Neither SQLite nor PostgreSQL implies multi-instance
   scheduling.
-- **No exactly-once.** At-most-once dispatch per `operation_ref`. Paid-but-unknown is `uncertain`;
+- **No exactly-once.** At most one job per `operation_ref` reaches a runner (a job that never did may
+  be dispatched again, see [idempotency](#idempotency)). Paid-but-unknown is `uncertain`;
   the engine never retries it automatically.
 - **No SLA, refunds or financial recourse.** Failures and charges are reported and classified (see
   [payments.md](payments.md#cost-classification)). The enterprise decides what to bill.

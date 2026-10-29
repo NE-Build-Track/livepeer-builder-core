@@ -75,6 +75,7 @@ async def paid_engine(
         ),
     )
     request = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),

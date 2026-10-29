@@ -24,7 +24,7 @@ async def tokens(engine: BuilderEngine) -> tuple[str, str]:
     from livepeer_builder.contracts import ActorContext
 
     operator = ActorContext(actor_id="operator", credential_kind="admin")
-    alice = await engine.keys.issue(operator, kind="actor", actor_id="alice")
+    alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-http-27")
     return admin.token, alice.token
 
 
@@ -70,13 +70,13 @@ async def test_job_round_trip_and_admin_boundary(
 
     forbidden = await client.post(
         "/v1/admin/applications/default/actors/alice/allocation",
-        json={"amount": {"amount": "5", "currency": "USD"}},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p0"},
         headers=as_alice,
     )
     assert forbidden.status_code == 403
     provisioned = await client.post(
         "/v1/admin/applications/default/actors/alice/allocation",
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
         headers=as_admin,
     )
     assert provisioned.status_code == 201

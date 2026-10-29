@@ -83,15 +83,18 @@ jobs = Table(
     Column("created_at", UTCDateTime, nullable=False),
     Column("completed_at", UTCDateTime, nullable=True),
     Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # +1 per evidence change
+    # 0009 (D57): a job re-dispatched under its reference after it never reached a runner
+    Column("retry_of", String(36), nullable=True),  # the failed job this one retries
+    Column("superseded_by", String(36), nullable=True),  # the job that retried this one
 )
-Index(
+Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
     jobs.c.application_id,
     jobs.c.actor_id,
     jobs.c.operation_ref,
     unique=True,
-    sqlite_where=text("operation_ref IS NOT NULL"),
-    postgresql_where=text("operation_ref IS NOT NULL"),
+    sqlite_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
+    postgresql_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
 )
 Index("lpb_jobs_owner_created", jobs.c.application_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
@@ -205,6 +208,26 @@ cost_projections = Table(
     Column("first_observed_at", UTCDateTime, nullable=True),
     Column("updated_at", UTCDateTime, nullable=False),
     Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # the job's, when computed
+)
+
+# -- 0010: the operation ledger (D57, ISS-11) ----------------------------------------------------------
+
+# One repeat-safe admin command per caller scope and reference: the primary key is the unique
+# constraint the reference is stored under. Never a secret in context or result.
+operations = Table(
+    "lpb_operations",
+    metadata,
+    Column("application_id", String(ID), primary_key=True),
+    Column("actor_id", String(ID), primary_key=True),
+    Column("operation_ref", String(ID), primary_key=True),
+    Column("command", String(32), nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    Column("state", String(16), nullable=False),  # started -> done
+    Column("fencing_token", Integer, nullable=False),  # +1 per resume; every later write checks it
+    Column("context", JSON, nullable=False),
+    Column("result", JSON, nullable=True),
+    Column("started_at", UTCDateTime, nullable=False),
+    Column("completed_at", UTCDateTime, nullable=True),
 )
 
 VERSION_TABLE = "lpb_alembic_version"

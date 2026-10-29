@@ -2,7 +2,7 @@
 
 import asyncio
 import secrets
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     Allowance,
+    GrantPage,
     GrantRecord,
     JobRequest,
     Money,
@@ -235,7 +236,11 @@ class _Allocation:
 
 
 class FakeAllocationManager:
-    """Mimics Batteries management semantics, including idempotent replays."""
+    """Mimics Batteries management semantics, including idempotent replays.
+
+    ``fail_once(call, error)`` makes the next call of that method raise ``error`` before it does anything:
+    a provider that timed out or refused, for the crash-between-steps tests (D57).
+    """
 
     def __init__(self) -> None:
         self.allocations: dict[str, _Allocation] = {}
@@ -244,12 +249,23 @@ class FakeAllocationManager:
         self.calls: list[str] = []
         self.funded_grants: list[tuple[str, Money, str]] = []
         self.grants: list[GrantRecord] = []
+        self.grant_page_size = 1000  # Batteries' largest page
+        self.grant_page_delay_s = 0.0  # each page's latency, for a slow catalog (D57)
         self.last_grant_id = ""
+        self._failures: dict[str, Exception] = {}
+
+    def fail_once(self, call: str, error: Exception) -> None:
+        self._failures[call] = error
+
+    def _fail(self, call: str) -> None:
+        if call in self._failures:
+            raise self._failures.pop(call)
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
         self.calls.append("create_key_for_grant")
+        self._fail("create_key_for_grant")
         self.last_grant_id = grant_id
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
@@ -262,6 +278,7 @@ class FakeAllocationManager:
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
         self.calls.append("create_key")
+        self._fail("create_key")
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
         key = self._mint(allocation_id)
@@ -270,6 +287,7 @@ class FakeAllocationManager:
 
     async def fund_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         self.calls.append("fund_allocation")
+        self._fail("fund_allocation")
         if idempotency_key in self.replays:
             return
         self.replays[idempotency_key] = True
@@ -280,33 +298,61 @@ class FakeAllocationManager:
 
     async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
         self.calls.append("fund_grant")
+        self._fail("fund_grant")
         if idempotency_key in self.replays:
             return
         self.replays[idempotency_key] = True
         self.funded_grants.append((grant_id, amount, idempotency_key))
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
+        self._fail("set_allocation_status")
         self.allocations[allocation_id].status = status
 
     async def revoke_allocation(self, allocation_id: str) -> None:
+        self._fail("revoke_allocation")
         self.allocations[allocation_id].status = "revoked"
 
     async def revoke_key(self, api_key_id: str) -> None:
+        self._fail("revoke_key")
         allocation, secret, _ = self.keys[api_key_id]
         self.keys[api_key_id] = (allocation, secret, True)
 
     async def list_grants(self) -> list[GrantRecord]:
         self.calls.append("list_grants")
-        return list(self.grants)
+        self._fail("list_grants")
+        grants: list[GrantRecord] = []
+        cursor: str | None = None
+        while True:
+            page = await self._page(cursor)
+            grants += page.grants
+            if page.next_cursor is None:
+                return grants
+            cursor = page.next_cursor
 
-    async def create_grant(self, name: str, amount: Money) -> GrantRecord:
+    async def grant_page(self, cursor: str | None) -> GrantPage:
+        self.calls.append("grant_page")
+        self._fail("grant_page")
+        return await self._page(cursor)
+
+    async def _page(self, cursor: str | None) -> GrantPage:
+        await asyncio.sleep(self.grant_page_delay_s)
+        start = int(cursor or 0)
+        end = start + self.grant_page_size
+        more = end < len(self.grants)
+        return GrantPage(grants=tuple(self.grants[start:end]), next_cursor=str(end) if more else None)
+
+    async def create_grant(
+        self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
+    ) -> GrantRecord:
         self.calls.append("create_grant")
+        self._fail("create_grant")
         grant = GrantRecord(
             id=f"grant_{len(self.grants) + 1}",
             name=name,
             status="active",
             currency=amount.currency,
             total=format(amount.amount, "f"),
+            metadata=dict(metadata or {}),
         )
         self.grants.append(grant)
         return grant

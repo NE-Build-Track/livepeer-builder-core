@@ -298,12 +298,24 @@ same steps run on the dev stack.
 | Step | Call | Answer |
 | --- | --- | --- |
 | 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
-| 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read` |
-| 3. Fund the user (`per_actor` mode) | `POST /v1/admin/applications/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "..."}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
+| 3. Fund the user (`per_actor` mode) | `POST /v1/admin/applications/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "provision-alice"}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
 | 5. Inspect the key, and who is provisioned | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the provisioned actors | `AccessKey`: kind, actor, application, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
-| 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate`, optionally `{"label": "..."}` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
+| 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
 | 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
+
+### Repeated key commands
+
+Issuing and rotating a key take a required `operation_ref` (D57, Q4; 422 when it is missing), scoped
+to the calling admin. The new key and its operation-ledger record commit in one transaction, so the
+outcome is never unknown. A repeat of the reference with the same request answers `201` with the key
+as it was issued, **`"token": null`** and **`"replayed": true`** (`false` on the first answer), and
+`Idempotent-Replayed: true`:
+the engine keeps only the token's hash, so it cannot show the token again. An admin who lost it
+rotates the key (under a new reference). The same reference with another request, or on another
+command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). Revoking
+a key takes no reference: a repeat cannot revoke twice. `lpb bootstrap-admin` takes none either.
 
 **Audit log.** Each change is one INFO line: `keys.bootstrapped`, `keys.issued`, `keys.rotated` (with
 `replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `application_id` and

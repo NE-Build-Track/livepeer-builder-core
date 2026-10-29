@@ -169,8 +169,8 @@ sequenceDiagram
     H->>Pay: provision(admin, ProvisionRequest)
     Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
     Pay->>DB: get_actor(app, actor)
-    alt already provisioned
-        DB-->>Op: existing ProvisionedActor (no money moves)
+    alt already provisioned (under another reference)
+        Pay-->>Op: 409 already_provisioned, the actor (nothing applied: fund it instead)
     else new
         Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
         Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)

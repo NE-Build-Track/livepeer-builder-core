@@ -47,9 +47,10 @@ listed and serving) and `curl -s http://127.0.0.1:8939/discovery` (the runners t
 docker compose exec engine lpb bootstrap-admin            # prints the admin token once
 ADMIN=lpk_...
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d '{"kind":"actor","actor_id":"alice"}' http://127.0.0.1:8080/v1/admin/keys          # an actor key
+  -d '{"kind":"actor","actor_id":"alice","operation_ref":"dev-key-alice"}' \
+  http://127.0.0.1:8080/v1/admin/keys                                                  # an actor key
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d '{"amount":{"amount":"1","currency":"USD"}}' \
+  -d '{"amount":{"amount":"1","currency":"USD"},"operation_ref":"dev-provision-alice"}' \
   http://127.0.0.1:8080/v1/admin/applications/default/actors/alice/allocation          # explicit funding
 ALICE=lpk_...
 curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key

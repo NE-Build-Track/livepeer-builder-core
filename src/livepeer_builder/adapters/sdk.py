@@ -199,12 +199,16 @@ def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
     unit = _text(value.get("unit"))
     if unit is None:
         return None, "price_info has no unit"
+    price_usd = _decimal(value.get("price_usd"))
+    error = None
+    if price_usd is None and value.get("price_usd") is not None:
+        error = "price_usd is not a nonnegative number"
     return NetworkRate(
         amount=amount,
         currency=currency.lower(),
         unit=unit.lower(),
-        price_usd=_decimal(value.get("price_usd")),
-    ), None
+        price_usd=price_usd,
+    ), error
 
 
 def _stamp(value: object) -> datetime | None:
@@ -222,7 +226,7 @@ def _stamp(value: object) -> datetime | None:
 def _decimal(value: object) -> Decimal | None:
     """A finite, nonnegative decimal, or None."""
     try:
-        amount = Decimal(str(value))
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
     except InvalidOperation:
         return None
     return amount if amount.is_finite() and amount >= 0 else None

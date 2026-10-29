@@ -9,6 +9,8 @@ from typing import Any
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
 
 BODY_LIMIT = 4096  # how much of a runner's or signer's response body an error keeps
+# The price units the engine will pay for, and the Live Runner payment type each is signed as.
+PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
 
 
 def token_hash(token: str) -> str:

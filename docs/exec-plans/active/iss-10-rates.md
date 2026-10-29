@@ -8,7 +8,7 @@
 - **Branch:** `tasks/m3/iss-10-rates`, off `releases/m3` at `d3df806`.
 - **State:** built test-first; awaiting review. The console change (Mike) and the go-livepeer upstream
   request (below) are open.
-- **Decision:** D56 (proposed).
+- **Decision:** D58 (proposed).
 
 ## Goal
 
@@ -30,8 +30,8 @@ From the 21 October M3 plan and the guide's "Done when":
 - [x] `payments.md` has "Wholesale and retail" and "Pricing assumptions".
 - [x] Tests written first, each seen failing for the right reason; characterization tests proved by
   mutation.
-- [x] `engine.md`, `RELIABILITY.md`, `m3-decisions.md` (D56) and the generated docs.
-- [ ] Mike's review of D56 and the contract; Josh's review of the engine code.
+- [x] `engine.md`, `RELIABILITY.md`, `m3-decisions.md` (D58) and the generated docs.
+- [ ] Mike's review of D58 and the contract; Josh's review of the engine code.
 - [ ] Console (Mike): show `price_usd`, source, age and the engine's `stale`; drop the G14 note and its
   own 300 s rule.
 - [ ] The guide amendments below, applied to `iss-10-rates.md` once PR #74 merges.
@@ -100,7 +100,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
 7. The stamp is in the `v1.0.3` tag (first released in `v1.0.4`). Replace the unresolvable `e75e5b6`
    with `a4b68ed` (`main`) or `v1.0.6` (`c7be946`).
 8. `LPB_RATE_MAX_AGE_S` defaults to 600 s (Q2), with the reason above.
-9. The ceiling guard (D56 (5)).
+9. The ceiling guard (D58 (5)).
 
 ## Out of scope
 
@@ -148,7 +148,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
 
 ## Decision log
 
-- 29 October (John, from the guide review and plan): the decisions in D56. Q1: keep the USD figure,
+- 29 October (John, from the guide review and plan): the decisions in D58. Q1: keep the USD figure,
   named `price_usd`. Q2: 600 s. Q3: keep the orchestrator's stamp when present and sane.
 - 29 October (John): go-livepeer compatibility is packaged as fixtures and docs, deleted together when
   go-livepeer is retired (D2). `price_usd` stays absent for go-livepeer until the upstream request lands;

@@ -17,6 +17,7 @@ from livepeer_builder.contracts import (
     Runner,
 )
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
+from livepeer_builder.utils import PAYMENT_TYPES_BY_UNIT
 
 _LOG = logging.getLogger(__name__)
 # livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).
@@ -115,7 +116,7 @@ class DiscoveryService:
                     modes=tuple(sorted({runner.mode for runner in group if runner.mode})),
                     rate_low=rates[0] if rates else None,
                     rate_high=rates[-1] if rates else None,
-                    rate_status="available" if rates else "missing",
+                    rate_status="available" if any(_is_payable(rate) for rate in rates) else "missing",
                     stale=not self.is_fresh() or self._too_old(rates),
                     rates_excluded=len(advertised) - len(rates),
                     runner_count=len(group),
@@ -143,6 +144,11 @@ def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) ->
     if stamp is None or stamp > polled_at + _CLOCK_SKEW:
         return ObservedRate(**rate.model_dump(), observed_at=polled_at, observed_by="engine")
     return ObservedRate(**rate.model_dump(), observed_at=stamp, observed_by="orchestrator")
+
+
+def _is_payable(rate: ObservedRate) -> bool:
+    """The engine signs for this unit (the rule ``payment_type`` applies); any other is refused."""
+    return rate.unit.strip().lower() in PAYMENT_TYPES_BY_UNIT
 
 
 def _comparable_rates(rates: list[ObservedRate]) -> list[ObservedRate]:

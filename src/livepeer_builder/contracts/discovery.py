@@ -47,7 +47,8 @@ class Runner(Contract):
     capacity: int | None
     capacity_available: int | None
     rate: NetworkRate | None
-    # why an advertised price_info is not a rate; None when it parsed or none was advertised
+    # why an advertised price_info is not a rate; None when it parsed or none was advertised. A bad price_usd
+    # alone sets it while rate is still set and payable: only that field was dropped.
     rate_error: str | None = None
     # livepeer-node's observed_at stamp (tagged v1.0.3, released in v1.0.4): the orchestrator's response time,
     # kept by discovery caches. None from older nodes, go-livepeer, or an unreadable stamp.

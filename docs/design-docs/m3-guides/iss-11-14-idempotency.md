@@ -342,6 +342,10 @@ the tech-debt tracker (T2) and the generated OpenAPI updated; consumers' pins an
 
 ## Open questions to lock
 
+**Locked by Mike, 29 October 2026:** Q1 409 `OperationExists` stays final; Q2 `unreachable` excluded;
+Q3 120 s; Q4 references required now (one coordinated console release); Q5 the `metadata.lpb_operation`
+tag. The rules become D57.
+
 - **Q1.** Keep 409 `OperationExists` as the final answer for a job that ran (recommended), or return 200
   with the job record and `Idempotent-Replayed`?
 - **Q2.** Exclude `unreachable` from retryable failures (recommended for M3), or split it into

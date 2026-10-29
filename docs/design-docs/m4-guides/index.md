@@ -14,12 +14,14 @@ around it.
 ## Review agenda
 
 In dependency order. M4 builds on the M3 guides ([../m3-guides/index.md](../m3-guides/index.md)),
-especially idempotency (ISS-11/14), payment failures (ISS-12) and #72.
+especially idempotency (ISS-11/14) and payment failures (ISS-12). #72 moved upstream
+([livepeer-python-gateway#87](https://github.com/livepeer/livepeer-python-gateway/issues/87)): renewals stay
+the SDK's `run_payments()`, and ISS-27 and ISS-28 read its result instead of owning a loop.
 
 | # | Guide | Owner | Depends on | What it decides | Questions |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [iss-26-async-jobs.md](iss-26-async-jobs.md) | John | ISS-14, ISS-15, ISS-19 | A database-backed queue and an in-process worker; stored results with their own retention; polling, no webhooks yet; restart rules | Q1–Q7 |
-| 2 | [iss-27-persistent-endpoints.md](iss-27-persistent-endpoints.md) | John | ISS-14, ISS-19 | Sessions as jobs holding one paid reservation; #73's reserve and relay, narrowed; the engine's funding loop from #72 | Q1–Q8 |
+| 2 | [iss-27-persistent-endpoints.md](iss-27-persistent-endpoints.md) | John | ISS-14, ISS-19 | Sessions as jobs holding one paid reservation; #73's reserve and relay, narrowed; the SDK funding loop's result read, not dropped | Q1–Q8 |
 | 3 | [iss-28-failure-recovery.md](iss-28-failure-recovery.md) | John | ISS-15, ISS-26, ISS-27 | `Failure.kind` stays the fact; derived `category` and `recovery`; one table across all four modes; T17 | Q1–Q4 |
 | 4 | [iss-31-payment-configurations.md](iss-31-payment-configurations.md) | John | ISS-13 | The second configuration is a separately operated payment service (`per_application`, read-only operator credential, no money moves from the engine) | Q1–Q4 |
 | 5 | [iss-29-rest-coverage.md](iss-29-rest-coverage.md) | John | ISS-18, ISS-20, ISS-28 | A `code` on every error; a REST contract with a coverage test; keyset paging; a compatibility check against the last tag | Q1–Q5 |

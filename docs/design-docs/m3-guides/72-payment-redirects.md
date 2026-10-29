@@ -1,6 +1,12 @@
 # #72: Payment renewals and refreshes must not follow redirects
 
-**Status:** proposal for discussion, 29 October 2026.\
+**Status:** superseded, 29 October 2026. John closed #72 as *not planned*: renewal and refresh transport
+belongs to the SDK, and the fix is tracked upstream as
+[livepeer-python-gateway#87](https://github.com/livepeer/livepeer-python-gateway/issues/87) (no redirects on
+renewal and refresh, stop the funding loop on a 3xx). builder-core consumes it through a future SDK pin
+bump and does not own a replacement payment loop. The engine-side design below was built and passed a
+live run (PR [#75](https://github.com/NE-Build-Track/livepeer-builder-core/pull/75), closed; branch
+`tasks/mz/72-payment-redirects`); it is kept for reference only.\
 **Issue:** [#72](https://github.com/NE-Build-Track/livepeer-builder-core/issues/72) (found by John). Affects
 ISS-12 and ISS-13, and the ISS-25 funded run: the representative chat job is priced per second, so it is
 metered and uses the renewal loop.\
@@ -152,6 +158,8 @@ the PR; #72 closed with a link to the PR.
   `segCreds`): both get easier once the loop is the engine's, but each stays its own change.
 
 ## Open questions to lock
+
+**Moot:** #72 was closed as not planned before these were settled into a decision.
 
 - **Q1.** On a redirected renewal, stop funding only (recommended), or also fail the in-flight call as
   `payment` so the caller sees it at once? Stopping funding lets the orchestrator end the session as it

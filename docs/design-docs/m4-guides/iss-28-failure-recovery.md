@@ -18,8 +18,9 @@ livepeer-python-gateway `2017a80`; consumers ChatLPT and inference-gateway at th
 - **Depends on** ISS-15, ISS-26 ([iss-26-async-jobs.md](iss-26-async-jobs.md)) and ISS-27 (persistent
   sessions; #73 is its design). Builds on the M3 guides for ISS-12
   ([iss-12-payment-failures.md](../m3-guides/iss-12-payment-failures.md), `Failure.reason`), ISS-14
-  ([iss-11-14-idempotency.md](../m3-guides/iss-11-14-idempotency.md), the retryable rule) and #72
-  ([72-payment-redirects.md](../m3-guides/72-payment-redirects.md), `FundingEnd`).
+  ([iss-11-14-idempotency.md](../m3-guides/iss-11-14-idempotency.md), the retryable rule). #72's engine funding loop is not
+  coming (closed as not planned; upstream as livepeer-python-gateway#87), so T17 reads the SDK's
+  `run_payments()` result.
 
 "Not promised" does not mean "not done": D52 failover stays, best effort, inside one dispatch.
 
@@ -58,7 +59,7 @@ A failed finishing write leaves the job `running` for the next start (D34).
 | G2 | **Three payment refusals read the same** (401, 402, 403 → `payment`, 503) | ISS-12 guide; `reason` not built yet |
 | G3 | **A failed final save becomes `interrupted` with no trace of why.** If `finish_job` fails after a 2xx, `run` raises, the job stays `running`, and the restart makes it `uncertain`/`interrupted`. The `succeeded` attempt row is the only evidence, and nothing points at it | `services/jobs.py:121-131`, `_close_after_error`; `services/failover.py:41-50` |
 | G4 | **That same job's cost is `delivered`** (billable) although the caller got an error: the class follows the attempt outcome, not the job | `services/costs.py:367-368`; `payments.md#cost-classification` |
-| G5 | **T17:** a metered stream the orchestrator released can end `succeeded` | tech-debt T17; #72 adds `FundingEnd.released` but leaves T17 out |
+| G5 | **T17:** a metered stream the orchestrator released can end `succeeded` | tech-debt T17; the SDK's `run_payments()` already returns `True` on a release, and the engine drops it |
 | G6 | **Unpaid `timeout` and `unreachable` cannot be told apart from "never reached a runner"**, so neither is retryable under ISS-14 (its Q2) | `services/failover.py:18-19`; `network_kind` in `adapters/runner_call.py` |
 | G7 | **Reporting failures have no job-level signal.** Cost sync errors are only `EngineHealth.cost_sync_error`; `quarantined` usage rows and `ambiguous` matches (T13, T16) show only as `pending`/`uncertain` cost | `contracts/health.py`, `contracts/costs.py:17,54` |
 | G8 | **Async and persistent rows do not exist** | ISS-26 reserved; `services/reserved.py` `ReservedSessions` |
@@ -150,7 +151,7 @@ after signing → `uncertain`, `check`; engine restart → the session lapses, `
 | `contracts/jobs.py` | `FailureCategory`, `Recovery`, `FailureReason`; `Failure.reason`; computed `Job.category`, `Job.recovery` |
 | `services/recovery.py` (new, pure) | `classify(job) -> (category, recovery)`; `never_reached_runner(attempts)` (from ISS-14) |
 | `services/failover.py` | `recover_interrupted` sets `reason` (`restart`, `final_save_failed`) and leaves ISS-26 requeue to its caller |
-| `services/streams.py`, `adapters/runner_call.py` | T17: a stream that ends after `FundingEnd.released` (#72) ends `uncertain`, `abandoned`/`released` |
+| `services/streams.py`, `adapters/runner_call.py` | T17: keep the funding task's `run_payments()` result; a stream that ends after a release (`True`) ends `uncertain`, `abandoned`/`released` |
 | `services/costs.py` | Cost class of a `succeeded` attempt on a job that did not succeed: per Q1 |
 | `store/sql.py` | `finish_job` state guard |
 | `http/app.py` | `category` and `recovery` in every problem body; a table test keeps REST status and `Retry-After` consistent with `recovery` (today `unreachable` sends `Retry-After: 5`; it stays only if Q2 makes the connect phase `retry`) |
@@ -168,7 +169,7 @@ each kind through the scripted transport and assert the computed fields; restart
 `test_durability.py`; one HTTP test per category; FakeEngine parity.
 
 **Seams.** The scripted transport and loopback signer (`tests/unit/livepeer_net.py`); a store wrapper
-that fails `finish_job` once (failed final save); `FixedClock`; the #72 funding loop's `interval_s`.
+that fails `finish_job` once (failed final save); `FixedClock`; the SDK's `PAYMENT_INTERVAL_S` (monkeypatched).
 
 **Starter test:** an unpaid `no_offering` job is `capacity` / `retry`.
 
@@ -205,7 +206,7 @@ diff-cover, ruff, mypy strict, `check_docs.py`, `gen-docs`) and `tests/store` on
 | Upstream | Needed? | Why / workaround |
 | --- | --- | --- |
 | livepeer/node | No | The 404/409/503 refusal semantics at `406b248` are what D52 already uses. Not vendorable (server) |
-| livepeer-python-gateway | No (vendored) | T17 needs the funding loop's end reason; #72 already moves `run_payments` into the engine. Q2's connect-phase split is in the engine's own runner call (D53) |
+| livepeer-python-gateway | No (vendored) | T17 needs only `run_payments()`'s return value (`True` = released), which the SDK already gives. Q2's connect-phase split is in the engine's own runner call (D53) |
 | clearinghouse-batteries | No | Reporting categories read what cost sync already stores |
 
 ## Consumer impact
@@ -240,5 +241,5 @@ diff-cover, ruff, mypy strict, `check_docs.py`, `gen-docs`) and `tests/store` on
 
 1. `services/recovery.py`, the computed fields, the table and property tests (immediate and streamed).
 2. Evidence fixes: `finish_job` guard, `final_save_failed`, Q1's cost class.
-3. T17 on top of #72; the stream rows.
+3. T17 from the SDK loop's result; the stream rows.
 4. Async rows with ISS-26; persistent rows with ISS-27; docs and consumers.

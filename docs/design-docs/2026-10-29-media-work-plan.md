@@ -23,8 +23,10 @@
 1. **No upstream changes.** We never open a PR, issue or change request against `livepeer/*`
    (node, the SDK, Batteries), and no work here waits for one. SDK gaps are closed by vendoring into
    builder-core with a fingerprint in `tests/unit/test_sdk_contract.py` (D53, #61). Node and Batteries
-   behavior cannot be vendored: it is pinned, and the engine contains its gaps. The one exception is the
-   private security report the user filed for #72; we follow it, and builder-core fixes #72 itself.
+   behavior cannot be vendored: it is pinned, and the engine contains its gaps. The one exception is #72:
+   after the private security report, John closed it as not planned (the SDK owns renewal and refresh)
+   and the fix is tracked upstream as livepeer-python-gateway#87. builder-core takes it through a future
+   SDK pin bump and owns no funding loop.
 2. **Milestones do not move.** M3's gate comes first. Sessions are ISS-27 (M4). Nothing here rides M3
    without Mike's agreement.
 3. **Guides are where design happens.** This plan points to them and lists what no guide covers yet.
@@ -39,11 +41,11 @@
    #73's realtime speech-to-text and the media-runners team's audio relay (CR-1.3). Handing out channel URLs
    (`direct`, what the Mux team needs for video, R2) is **later**: on node today, `app_url` lets its holder
    use and stop the paid reservation with no other credential, and we cannot change node.
-3. **The payment plane is #72's guide, not a new split.** The engine already owns the paid request (D53).
-   #72 adds an `EnginePaymentSession` subclass and an engine funding loop, `fund()` → `FundingEnd`
-   (`cancelled`, `released`, `refused`, `redirected`). ISS-27 adds an engine-owned reserve over the same
-   `PaidRequest`. That is S1 and S2 done inside the engine. No authorizer and reservation-client refactor
-   is needed first.
+3. **The payment plane stays as it is.** The engine owns the paid request (D53); renewals stay the SDK's
+   `run_payments()` (#72 moved upstream as livepeer-python-gateway#87). ISS-27 adds an engine-owned
+   reserve over the same `PaidRequest` and reads the funding loop's result instead of dropping it
+   (`True` = released). That is S1 done inside the engine; S2 (richer funding outcomes) is what the SDK
+   loop gives: released or not. No authorizer and reservation-client refactor is needed.
 4. **Two of the draft's risks are smaller at our pins than it said.** A 480 refresh keeps the manifest
    *and* the signer state, so one engine session stays one Batteries payment session (verified by
    reading; confirm in the ISS-27 live run). Batteries' accounting-lag gate is not in our pin; it arrives
@@ -86,7 +88,8 @@ runner-side gaps (G5–G8) are for the runner teams to work around in their own 
 
 - The funding loop (`remote_signer.py:175-197`) stops silently on a 4xx other than 408 and 429, retries
   5xx and network errors forever, and reads any 404 as "released". Renewals and refreshes follow
-  redirects (#72). builder-core starts this loop and drops its outcome (T17). #72's guide replaces it.
+  redirects (#72, fixed upstream by livepeer-python-gateway#87, not yet in our pin). builder-core starts
+  this loop and drops its outcome (T17); `True` from it means released.
 - A 480 refresh calls `_refresh_payment_params`, which swaps only `payment_params` and keeps the challenge's
   manifest and `_state`, so the signer's `StateID` survives the refresh.
 - `reserve_session` runs its own discovery, pays the next runner after a paid failure, has no hook before
@@ -143,7 +146,7 @@ runner-side gaps (G5–G8) are for the runner teams to work around in their own 
 | # | Category | Covers | Where it is designed |
 | --- | --- | --- | --- |
 | C1 | **Session lifecycle** | Open, limits, idle, endings, recovery, engine stop, session admission | ISS-27 (M4) |
-| C2 | **Payment plane** | Engine renewals and refreshes, funding outcomes, engine-owned reserve, cost rules for sessions | #72 (M3), ISS-12 (M3), ISS-27 (M4) |
+| C2 | **Payment plane** | Funding outcomes from the SDK loop, engine-owned reserve, cost rules for sessions | ISS-12 (M3), ISS-27 and ISS-28 (M4); #72 upstream |
 | C3 | **Media plane** | Proxy and WebSocket relay; later `direct` grants and a Trickle bridge | ISS-27 for the proxy; the rest unscheduled |
 | C4 | **Request and response shape** | Bodies beyond 8 MiB, sinks, response headers, `MediaStore`, stored results | ISS-26 for stored results; the rest unscheduled |
 | C5 | **Admission and selection** | Selection request, metadata envelope, approvals, hints, 3 KiB metadata | Unscheduled; amends D32 |
@@ -191,21 +194,24 @@ The in-process handle the Mux team (R1) and the media-runners team (`websocket()
 for sits on the embedded `SessionManager`. Its exact surface is part of ISS-27's review; the REST shape
 above is the floor.
 
-### 3.2 The payment plane (#72, ISS-12, ISS-27)
+### 3.2 The payment plane (ISS-12, ISS-27, ISS-28)
 
 | Piece | Guide | Does |
 | --- | --- | --- |
-| `EnginePaymentSession(LivePaymentSession)` | #72 (M3) | Overrides `send_payment` and `_refresh_payment_params`: engine HTTP client, no redirects, origin-checked; a 3xx raises `PaymentRedirected` |
-| `fund(session, interval_s) -> FundingEnd` | #72 (M3) | Replaces `run_payments`; SDK cadence and 4xx rules; ends `cancelled`, `released`, `refused` or `redirected`; logged as `runner.funding_stopped` |
+| The SDK's `run_payments()` | — (upstream) | Renewals every 3 s. Its result is read, not dropped: `True` = released, `False` = stopped on another 4xx (and on a 3xx once the pin includes #87); 5xx and network errors are retried each cycle |
+| T17 | ISS-28 (M4) | A stream that ends after a release ends `uncertain`, from the loop's result |
 | `Failure.reason` | ISS-12 (M3) | `not_authorized`, `allowance_exhausted`, `signer_unavailable`, `signer_unknown`; engine-written messages, no signer URL or upstream text |
 | Engine-owned reserve | ISS-27 (M4) | `adapters/reservation.py` over `PaidRequest`; vendored response parsing and stop, fingerprinted |
 
 Renewals reuse the stored manifest and are **not** evidence writes; a refresh keeps the manifest, so no new
-`SignedSession` row. This closes T17 for sessions by construction.
+`SignedSession` row. Reading the loop's result closes T17 for sessions.
 
-**Open in ISS-27 (Q8):** how many consecutive retryable renewal failures end a session. With about 10 s of
-credit, two failures is the most the engine can wait before node releases it; #72's loop keeps
-retrying until node releases. Either way the session ends; the question is which ending is recorded.
+**Open in ISS-27 (Q8):** the SDK loop retries failed renewals until node releases the session (about two
+missed 3 s renewals), so the ending is `released`. Accept that, or ask for richer funding outcomes
+upstream beside #87. An engine-owned loop is ruled out by #72's closing note.
+
+**Accepted risk until the pin includes #87:** metered renewals and refreshes follow redirects. The paid
+orchestrators come from the deployment's own list or on-chain directory.
 
 **Not pursued (need upstream changes):**
 
@@ -285,13 +291,13 @@ Proposal to carry into a ticket:
 
 ## 4. How it fits builder-core's architecture
 
-Nothing needs a new layer; the rules in `tests/structure/` stay. For M4 (ISS-27 and #72):
+Nothing needs a new layer; the rules in `tests/structure/` stay. For M4 (ISS-27):
 
 | Layer | Adds or changes |
 | --- | --- |
 | `contracts/` | `sessions.py` (moved from `reserved.py`, re-exported): `SessionEnding`, `Session.ending`; `ExecutionMode` gains `session` |
 | `protocols/` | `SessionManager.get/list_sessions/close`; optional `ReservationTransport` beside `RunnerTransport` (like `StreamingRunnerTransport`, D33) |
-| `adapters/` | `runner_call.py` (#72's subclass and `fund()`); `reservation.py` (reserve, proxy HTTP and WebSocket, stop) |
+| `adapters/` | `runner_call.py` (keep the funding loop's result); `reservation.py` (reserve, proxy HTTP and WebSocket, stop) |
 | `services/` | `sessions.py` (state machine, watchers, endings, recovery, drain); jobs skip persistent runners (P1) |
 | `store/` | Migration `0009`, `lpb_sessions`; a matching change only if Q7 needs it |
 | `http/` | `sessions.py`: open, get, list, close, `ANY` + WebSocket on `/v1/sessions/{id}/app/{path}` |
@@ -316,7 +322,7 @@ adapters, each confined to one module.
 6. **Orchestrator capacity is shared:** a relayed session holds one of 256 proxy slots for hours.
 7. **Extension protocols are integrator-implemented:** add beside `SelectionPolicy` and `SessionManager`;
    never change their signatures in place.
-8. **The vendored SDK copy grows** (T18): the reserve parsing, the stop and #72's overrides each get a
+8. **The vendored SDK copy grows** (T18): the reserve parsing and the stop each get a
    fingerprint.
 
 ## 6. Repositories affected
@@ -324,7 +330,7 @@ adapters, each confined to one module.
 | Repository | Changes |
 | --- | --- |
 | **livepeer-builder-core** | Everything in Sections 3–4 |
-| **livepeer-python-gateway** | **None.** Vendored pieces: #72's overrides, the reserve parsing, `stop_runner_session` |
+| **livepeer-python-gateway** | **None from us.** Vendored pieces: the reserve parsing, `stop_runner_session`. #72's fix arrives upstream (#87) with a pin bump |
 | **livepeer/node** | **None.** Contained engine-side: unauthenticated stop and `app_url` as a bearer key (proxy only, secrets off records, redaction); no release reason (only a payment 404 is `released`); oversized `/discovery` answers drop a whole orchestrator (the 3 KiB envelope limit, when built). Pin stays `406b248`; a bump is its own review |
 | **clearinghouse-batteries** | **None.** No holds (spend cap is an engine estimate); no caller id on usage rows (T16 window matching); the #40 lag gate is a pin-bump review item |
 | **livepeer-mux-concept** | Re-pin to `d3df806`; use the embedded `SessionManager`; drain before deploy; S1–S3 are answered by the engine, not upstream |
@@ -336,7 +342,7 @@ adapters, each confined to one module.
 
 | When | Work | Guide |
 | --- | --- | --- |
-| **M3** | Idempotency (incl. 409 on a repeated `operation_ref`); #72 funding loop; ISS-12 failure reasons; discovery forward-compatibility | [m3-guides](m3-guides/index.md) 1, 2, 4, 8 |
+| **M3** | Idempotency (incl. 409 on a repeated `operation_ref`); ISS-12 failure reasons; discovery forward-compatibility | [m3-guides](m3-guides/index.md) 1, 4, 8 |
 | M3, if Mike agrees | ISS-27's P1 fix (jobs skip persistent runners), with its regression test | ISS-27 slice 1 |
 | **M4** | ISS-27 slices 2–5: reserve adapter, `SessionService`, REST and HTTP/SSE proxy with redaction, WebSocket relay and live evidence on `realtime-transcription` | [ISS-27](m4-guides/iss-27-persistent-endpoints.md) |
 | M4 | ISS-26 (async, stored results), ISS-28 (session endings in the recovery table), ISS-29 (error `code`, aliases if adopted), ISS-35 (retention under session volume) | [m4-guides](m4-guides/index.md) |
@@ -354,7 +360,7 @@ Recommendations until the guides are locked.
 | Mux Q3: repeated `operation_ref` on `open` | 409 `OperationExists`, like jobs (`OperationInProgress` while the first is running) | ISS-11/14, ISS-27 Q5 |
 | Mux Q4: `funding_failed` threshold | Open: two failed renewals vs retry until node releases | ISS-27 Q8 |
 | Mux Q5 / media runners Q4: milestone | Sessions with proxy delivery in M4 (ISS-27). `direct` for video is not yet placed | ISS-27; Section 7 |
-| Mux S1–S3 | S1 and S2 done in the engine; S3 open; nothing filed upstream | ISS-27, #72 |
+| Mux S1–S3 | S1 done in the engine; S2 is the SDK loop's released-or-not result; S3 open; nothing filed by us | ISS-27 |
 | Media runners Q1: 2 s cancel bound | Fine for closing the upstream connection; the runner's stop bound is theirs | — |
 | Media runners Q2: `header.v1` in builder-core | Yes in principle (it reads a header, not a body); unscheduled | Section 7 |
 | Media runners Q3: approval wildcards | No; the dev stack writes a file approval source | Section 7 |
@@ -386,14 +392,14 @@ Recommendations until the guides are locked.
 - **Testing.** Virtual-clock soaks for hours-long sessions; chaos cases (kill the engine, restart the
   orchestrator, stall the signer); a funded live run that reconciles a long session's cost.
 - **Hourly pricing reaches jobs too.** The Mux team prices VOD by the hour, so streamed jobs are metered
-  and funded today. #72 matters before sessions exist.
+  and funded today. Its redirect fix (#87) matters before sessions exist.
 
 ## 10. Traceability
 
 | Item | Category | Guide or placement | State at `d3df806` |
 | --- | --- | --- | --- |
-| #72 renewals and refreshes follow redirects | C2 | #72 (M3) | Open; upstream report followed only |
-| T17 funding outcome dropped | C2 | #72 (M3), closed for sessions by ISS-27 | Open |
+| #72 renewals and refreshes follow redirects | C2 | Upstream (livepeer-python-gateway#87); SDK pin bump | #72 closed as not planned |
+| T17 funding outcome dropped | C2 | ISS-28 (streams), ISS-27 (sessions) | Open |
 | P1 jobs reserve persistent runners | C1 | ISS-27 slice 1 | Open bug |
 | #73 P1 alias routes | C7 | ISS-29, if ISS-27 adopts them | Open |
 | #73 P2 engine relays frames | C3 | ISS-27 | Open |
@@ -412,7 +418,7 @@ Recommendations until the guides are locked.
 | R2 media outside the engine | C3 | Needs placement (`direct`) | Open |
 | R3 long lifetimes | C1 | ISS-27 | Open |
 | R4 evidence before `open` returns | C2 | ISS-27 | Rule exists (D54) |
-| R5 funding state, `ended()` | C1, C2 | #72, ISS-27 | Open |
+| R5 funding state, `ended()` | C1, C2 | ISS-27 | Open |
 | R6 endings | C1, C10 | ISS-27 | Open |
 | R7 restart recovery | C1 | ISS-27 | Jobs only |
 | R8 session admission | C1 | ISS-27 | Open |
@@ -426,7 +432,7 @@ Recommendations until the guides are locked.
 | R16 caller marks failure | C2, C8 | Needs placement | Open |
 | R17 find by `operation_ref` | C8 | Needs placement | Store method exists |
 | S1 reserve a chosen runner | C2 | ISS-27, in the engine | — |
-| S2 funding outcomes | C2 | #72, in the engine | — |
+| S2 funding outcomes | C2 | SDK loop result (released or not); ISS-27 Q8 | — |
 | S3 resumable funding | C2 | Not planned | Open question |
 | CR-1 sessions | C1, C3 | ISS-27 | Open |
 | CR-2 selection and admission | C5 | Needs placement | Open; amends D32 |

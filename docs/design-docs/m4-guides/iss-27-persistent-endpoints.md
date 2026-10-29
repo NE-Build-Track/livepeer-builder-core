@@ -18,8 +18,10 @@ also `origin/main`); livepeer/node `406b248` (the stack pin; `origin/main` is `a
 - Demonstrate a representative endpoint, and distinguish it from queued completion (ISS-26) and
   continuous streaming (stretch scope, `engine.md#persistent-sessions`).
 
-**Depends on:** ISS-14 ([repeat rules](../m3-guides/iss-11-14-idempotency.md)), ISS-19 (the matrix), and
-#72 ([the engine owns renewals](../m3-guides/72-payment-redirects.md)). External: H1 (SDK), H3 (node).
+**Depends on:** ISS-14 ([repeat rules](../m3-guides/iss-11-14-idempotency.md)) and ISS-19 (the matrix).
+External: H1 (SDK), H3 (node). Renewals stay the SDK's `run_payments()`: #72 was closed as not planned and
+its redirect fix is upstream ([livepeer-python-gateway#87](https://github.com/livepeer/livepeer-python-gateway/issues/87)),
+so builder-core owns no funding loop (revised 29 October).
 
 ## #73 in brief, and where this guide differs
 
@@ -28,8 +30,8 @@ also `origin/main`); livepeer/node `406b248` (the stack pin; `origin/main` is `a
 URLs amending D9 (P3), an engine-owned reserve (P4), a Trickle client behind `MediaChannel` (P5), browser
 socket tokens (P6), the `Key` scheme and CORS (P7), a `livepeer-client` wheel (P8), and an eight-step
 order. Its claims check out against the code with two exceptions: `Sec-WebSocket-*` is **not** reserved
-in `contracts/http.py` (only `upgrade` and `connection` are, lines 6-27), and the SDK's `run_payments`
-is no longer the loop once #72 lands. This guide adopts P2 and P4 for ISS-27 and treats the rest as
+in `contracts/http.py` (only `upgrade` and `connection` are, lines 6-27), and #73 assumed an
+engine-owned funding loop, which builder-core will not own (#72 closed; the loop stays the SDK's). This guide adopts P2 and P4 for ISS-27 and treats the rest as
 later slices or open questions (Q1-Q4); it does not reject them.
 
 ## Current state (verified)
@@ -93,10 +95,13 @@ clients only see `proxy_path`.** #73's P4 and P2 inside the reserved contract; n
    to `runner.url` and keeps funding running on return → parse `{session_id, app_url, control_url}` →
    session `open`. Refusals fail over under D52/D55 exactly as jobs do. A reply without the three fields
    after payment: best-effort stop, attempt `failed_after_payment`.
-2. **Funding** is the engine loop from #72 (`fund()` → `FundingEnd`): renewals reuse the stored manifest
-   and are **not** evidence writes; a refresh keeps the manifest (node `406b248`), so no new
-   `SignedSession` row. `FundingEnd.released` ends the session `released`; `refused`/`redirected` end it
-   `funding_stopped`. This closes T17 for sessions by construction.
+2. **Funding** is the SDK's `run_payments()`, started as jobs start it today, with its result **read
+   instead of dropped**: `True` (a renewal answered 404) ends the session `released`; `False` (any other
+   4xx but 408 and 429, and a 3xx once the pin includes #87) ends it `funding_stopped`; a cancel is the
+   engine's own close. 5xx and network errors are retried every cycle until the orchestrator releases
+   the session (Q8). Renewals reuse the stored manifest and are **not** evidence writes; a refresh keeps
+   the manifest (node `406b248`), so no new `SignedSession` row. Reading the result closes T17 for
+   sessions. Until the pin includes #87, renewals and refreshes follow redirects (accepted risk).
 3. **Traffic** (proxy delivery only in M4): `ANY /v1/sessions/{id}/app/{path}` forwards HTTP and SSE to
    `app_url + path` with the caller's body and allowed headers (the `contracts/http.py` rules, plus
    `sec-websocket-*`), streaming both ways; the same path accepts a WebSocket upgrade and relays frames
@@ -137,7 +142,7 @@ owner-redacted manifests), add the session rules to `payments.md`, the sequence 
 | `contracts/sessions.py` (new), `contracts/reserved.py`, `contracts/jobs.py` | Session contracts and endings; `ExecutionMode` gains `session` |
 | `protocols/__init__.py` | `SessionManager` gains `get`, `list_sessions`, `close`; new optional `ReservationTransport` (like `StreamingRunnerTransport`, D33): `reserve(runner, credential, recorder) -> Reservation` with `request`, `websocket`, `funding_ended`, `stop` |
 | `adapters/reservation.py` (new) | Engine-owned reserve over `PaidRequest`; vendored response parsing from `selection.reserve_session` and stop from `stop_runner_session`; aiohttp HTTP and `ws_connect` to `app_url`; origin check on `app_url`/`control_url` |
-| `adapters/runner_call.py` | `PaidRequest` exposes "keep funding on return" for the reserve; #72's `fund()`/`FundingEnd` |
+| `adapters/runner_call.py` | `PaidRequest` exposes "keep funding on return" for the reserve, and the funding task's `run_payments()` result |
 | `services/sessions.py` (new) | `SessionService`: state machine, limit and idle watchers, endings, close, recovery, drain. `services/jobs.py` is at 493 lines: keep sessions out of it |
 | `services/jobs.py`, `services/discovery.py` | P1: jobs skip persistent runners |
 | `services/admission.py` | Key the limiter by any string so a second instance caps sessions per actor |
@@ -159,7 +164,8 @@ aiohttp meets a real server; HTTP tests with httpx for REST and Starlette's `Tes
 for the relay; `lpb_sessions` store contract tests on SQLite and PostgreSQL. One live evidence page against
 `realtime-transcription` on the dev stack.
 
-**Seams.** Clock, renewal `interval_s`, harness route statuses, signer call counter. No aiohttp mocks.
+**Seams.** Clock, the SDK's `PAYMENT_INTERVAL_S` (monkeypatched, as `test_runner_call.py` does), harness
+route statuses, signer call counter. No aiohttp mocks.
 
 **Starter test:** a job for an app whose only runner is `persistent` fails `no_offering` and makes no
 runner request (P1; red on `releases/m3`).
@@ -185,7 +191,8 @@ Traffic
 Funding and endings
 [ ] renewals continue while open; no evidence write per renewal
 [ ] renewal 404: ending released, job succeeded, client socket closed with the ending
-[ ] renewal 403/409 or 3xx: ending funding_stopped; stop sent                [?] Q8
+[ ] renewal 403/409: ending funding_stopped; stop sent
+[ ] renewal 5xx: retried each cycle; the session ends only on release        [?] Q8
 [ ] close: funding stopped, POST control_url/stop once, ending closed
 [ ] idle_timeout and max_duration fire on the virtual clock
 [ ] engine.stop closes open sessions after the drain window
@@ -210,8 +217,8 @@ PostgreSQL; docs above updated; an evidence page in `docs/references/evidence/` 
 | Upstream | Needed? | Why / workaround |
 | --- | --- | --- |
 | livepeer/node | No (pin `406b248`) | Reserve, renewals, proxy (incl. WebSocket) and stop all exist. Its gaps (unauthenticated stop, `app_url` as a bearer capability, no release reason) are contained engine-side: proxy only, secrets kept out of records, P2 redaction, "released" only from a payment 404. Recheck `a4b68ed` (`f52724d` adds `session_token` to the reserved event, runner side) before re-pinning |
-| livepeer-python-gateway | No | Import `LivePaymentSession`/`LivePaymentChallenge`/`get_signer_info` as today. **Vendor** the reserve-response parsing and the stop (fingerprinted), as D53/#61 did; #72 already vendors the renewal loop. Trickle, `Control`, channel and media modules are **not** needed in M4; if the engine ever bridges Trickle, import them in `adapters/trickle.py` and note they follow redirects |
-| clearinghouse-batteries | Not for the call | Cost matching may need an engine-side rule change (Q7); verify the refresh behavior at `ca09e47` first |
+| livepeer-python-gateway | No | Import `LivePaymentSession`/`LivePaymentChallenge`/`get_signer_info` as today. **Vendor** the reserve-response parsing and the stop (fingerprinted), as D53/#61 did. Renewals stay the SDK's `run_payments()`; its redirect fix comes with a pin bump (#87). Trickle, `Control`, channel and media modules are **not** needed in M4; if the engine ever bridges Trickle, import them in `adapters/trickle.py` and note they follow redirects |
+| clearinghouse-batteries | Not for the call | Cost matching may need an engine-side rule change (Q7); a refresh keeps the signer state, so confirm one Batteries session per session in the live run |
 
 ## Consumer impact
 
@@ -240,13 +247,15 @@ not open sessions. The Mux and media-runner teams are the first users, through t
   non-admin reads?
 - **Q7. Matching.** If refreshes split Batteries sessions, accept many per key with one log entry
   (recommended) instead of `ambiguous`.
-- **Q8. Funding failure threshold.** End after two consecutive retryable renewal failures (the media plan's
-  default), or keep #72's retry-every-cycle until the orchestrator releases?
+- **Q8. Funding failures.** The SDK loop retries 5xx and network errors every cycle until the
+  orchestrator releases the session, and reports only "released or not". Accept that (recommended: the
+  ending is `released`, and node releases within about two missed renewals), or ask for richer funding
+  outcomes upstream next to #87? An engine-owned loop is ruled out (#72's closing note).
 
 ## Delivery slices
 
 1. P1 fix with its regression test (can ride M3 with Mike's agreement).
-2. #72 (engine `fund()` and `FundingEnd`), then `adapters/reservation.py` with harness tests.
+2. `adapters/reservation.py` with harness tests, reading the SDK loop's result.
 3. `SessionService`, store, limits, endings, recovery, embedded `SessionManager`, `FakeEngine` parity.
 4. REST routes, HTTP/SSE proxy, P2 redaction, docs.
 5. WebSocket relay, `websockets` in `[server]`, live evidence on `realtime-transcription`.

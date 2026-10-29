@@ -26,7 +26,7 @@ returns runner URLs and still checks `discover`.
 | Model | Meaning |
 | --- | --- |
 | `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, `rate_error`, `observed_at`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
-| `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
+| `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. `amount` is nonnegative and below `1e300` from any source, so the engine can always pad it into the signer's float ceiling. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
 | `ObservedRate` | A `NetworkRate` as the catalog serves it, plus `observed_at` and `observed_by` |
 | `Offering` | One runner app in one `(currency, unit)`: its modes, the cheapest and dearest rate (`rate_low`, `rate_high`), `rate_status`, `stale`, runner and ready counts, and `observed_at` (the engine's last good poll). An app advertised in two units is two offerings; runners with no rate are not listed |
 

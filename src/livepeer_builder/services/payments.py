@@ -262,7 +262,11 @@ class PaymentsService:
     async def rotate_key(
         self, admin: ActorContext, application_id: str, actor_id: str, operation_ref: str
     ) -> ProvisionedActor:
-        """New key on the same allocation, store it, then revoke the old key."""
+        """New key on the same allocation, store it, then revoke the old key.
+
+        A repeat with the same ``operation_ref`` gets the same key back from the provider's replay. The
+        actor already holds it, so the rotation is done: revoking ``actor.api_key_id`` then would revoke
+        the live key (B1, D57)."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         actor = await self._require_actor(application_id, actor_id)
         manager = self._require_manager()
@@ -271,6 +275,8 @@ class PaymentsService:
             f"{application_id}/{actor_id}",
             idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key"),
         )
+        if key.api_key_id == actor.api_key_id:
+            return actor
         ref = await self._secrets.put(_secret_name(application_id, actor_id), key.secret.get_secret_value())
         rotated = actor.model_copy(
             update={"api_key_id": key.api_key_id, "secret_ref": ref, "updated_at": self._clock.now()}

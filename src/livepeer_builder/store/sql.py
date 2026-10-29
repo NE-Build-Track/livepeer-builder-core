@@ -28,7 +28,7 @@ from livepeer_builder.contracts import (
     SyncCheckpoint,
     UsageRow,
 )
-from livepeer_builder.errors import OperationExists
+from livepeer_builder.errors import OperationConflict, OperationExists
 from livepeer_builder.store import actors, cost_reads
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.maintenance import SqlMaintenance
@@ -178,7 +178,10 @@ class SqlStore:
             found = await self.job_by_operation_ref(job.application_id, job.actor_id, job.operation_ref)
             if found is None:
                 raise
-            raise OperationExists(found[0]) from None
+            holder, holder_fingerprint = found
+            if holder_fingerprint is not None and holder_fingerprint != fingerprint:  # B2 (D57)
+                raise OperationConflict(holder) from None
+            raise OperationExists(holder) from None
 
     async def job_by_operation_ref(
         self, application_id: str, actor_id: str, operation_ref: str

@@ -244,7 +244,10 @@ class KeyRepo(Protocol):
 
 
 class JobRepo(Protocol):
-    async def create_job(self, job: Job, fingerprint: str | None) -> None: ...  # raises OperationExists
+    async def create_job(self, job: Job, fingerprint: str | None) -> None:
+        """Insert a job. A reference already held raises OperationExists with the holder, or
+        OperationConflict when the holder's fingerprint differs (B2)."""
+        ...
 
     async def job_by_operation_ref(
         self, application_id: str, actor_id: str, operation_ref: str

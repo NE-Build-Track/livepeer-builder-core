@@ -23,7 +23,7 @@ from livepeer_builder.contracts import (
     SyncCheckpoint,
     UsageRow,
 )
-from livepeer_builder.errors import OperationExists
+from livepeer_builder.errors import OperationConflict, OperationExists
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
 from tests.store.conftest import make_attempt, make_job
@@ -74,6 +74,16 @@ async def test_operation_ref_is_unique_per_actor(sql: SqlStore, clock: FixedCloc
     await sql.create_job(make_job(clock), None)  # many jobs without a ref
     found = await sql.job_by_operation_ref("default", "alice", "order-1")
     assert found is not None and found[1] == "fp"
+
+
+async def test_a_duplicate_with_a_different_body_is_a_conflict(sql: SqlStore, clock: FixedClock) -> None:
+    """B2: a concurrent duplicate passes the service's lookup and lands on the unique index. The store
+    compares fingerprints there, so a different request is a conflict, not a repeat."""
+    first = make_job(clock, ref="order-1")
+    await sql.create_job(first, "fp-a")
+    with pytest.raises(OperationConflict) as conflict:
+        await sql.create_job(make_job(clock, ref="order-1"), "fp-b")
+    assert conflict.value.job.id == first.id
 
 
 async def test_failure_and_listing(sql: SqlStore, clock: FixedClock) -> None:

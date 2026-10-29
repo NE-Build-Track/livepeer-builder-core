@@ -71,6 +71,31 @@ async def test_repeat_provisioning_returns_the_original(
     assert len(manager.allocations) == 1
 
 
+async def test_provisioning_repeated_after_a_lost_answer_creates_one_allocation(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 21 October console note (pin ad6bba9): a repeated provision created a second allocation. The
+    first call dies after the provider created the allocation, before the actor is saved; the repeat
+    derives the same provider key from the actor, so the provider replays the first allocation."""
+    engine = await make_engine()
+    save_actor = store.save_actor
+
+    async def lost(actor: object) -> None:
+        monkeypatch.setattr(store, "save_actor", save_actor)  # only the first save is lost
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "save_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.provision(admin, provision_request())
+    actor = await engine.payments.provision(admin, provision_request())
+    assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]
+    assert list(manager.allocations) == [actor.allocation_id]  # one allocation, the first one
+
+
 async def test_zero_amount_sets_up_identity_without_money(
     make_engine: EngineFactory, admin: ActorContext
 ) -> None:
@@ -227,6 +252,21 @@ async def test_rotation_replaces_the_key_and_revokes_the_old_one(
     assert after.allocation_id == before.allocation_id and after.api_key_id != before.api_key_id
     assert manager.keys[before.api_key_id][2] is True  # old key revoked upstream
     assert (await engine.payments.credential(alice)).token not in (None, old_secret)
+
+
+async def test_repeating_a_rotation_with_the_same_ref_keeps_the_new_key_live(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """B1: the provider replays the same new key, so the repeat must not revoke it as "the old key"."""
+    engine = await make_engine()
+    before = await engine.payments.provision(admin, provision_request())
+    first = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    again = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")  # a lost response
+    assert again.api_key_id == first.api_key_id
+    assert manager.keys[first.api_key_id][2] is False  # the live key is not revoked
+    assert manager.keys[before.api_key_id][2] is True
+    assert len(manager.keys) == 2  # provisioning's key and one rotation: one key minted
+    assert (await engine.payments.credential(alice)).token == manager.keys[first.api_key_id][1]
 
 
 async def test_per_application_mode_uses_the_configured_key(

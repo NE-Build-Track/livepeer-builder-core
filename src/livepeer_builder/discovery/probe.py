@@ -16,7 +16,6 @@ One orchestrator's failure, of any kind, is that orchestrator's ``Probe.failure`
 import asyncio
 import contextlib
 import ipaddress
-import json
 import logging
 import socket
 import ssl
@@ -28,6 +27,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from livepeer_builder.discovery.directory import Orchestrator
+from livepeer_builder.utils import loads_json_numbers
 
 _LOG = logging.getLogger(__name__)
 
@@ -189,7 +189,9 @@ class Prober:
                 body += chunk
                 if len(body) > self._max_bytes:
                     raise ValueError(f"inventory larger than {self._max_bytes} bytes")
-        entries = json.loads(body)
+        # parse_float=Decimal. The gateway's json.loads would turn price_usd into a float
+        # (livepeer/livepeer-python-gateway#88). The service re-serves these records.
+        entries = loads_json_numbers(body)
         if not isinstance(entries, list):
             raise ValueError("inventory is not a JSON list")
         runners: list[dict[str, Any]] = []

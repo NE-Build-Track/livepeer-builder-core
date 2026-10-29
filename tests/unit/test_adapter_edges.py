@@ -134,6 +134,27 @@ async def test_http_discovery_reads_only_the_discovery_url_and_parses_entries() 
     assert runner.rate is None and runner.orchestrator_url == "https://o"
 
 
+async def test_http_discovery_keeps_a_node_price_usd_from_the_raw_body() -> None:
+    """The SDK's json.loads would make this float. The engine reads the body itself (gateway#88)."""
+    payload = (
+        b'[{"address":"https://o","runners":[{"url":"https://r","app":"a/b","price_info":'
+        b'{"price":4492197255,"price_usd":0.0000027777777777777777777777777777,'
+        b'"currency":"wei","unit":"seconds"}}]}]'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://discovery:8939/discovery"
+        assert "authorization" not in request.headers
+        return httpx.Response(200, content=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
+        (runner,) = await source.fetch()
+    assert runner.rate is not None
+    assert runner.rate.price_usd == Decimal("0.0000027777777777777777777777777777")
+    assert runner.rate.amount == Decimal(4492197255)
+
+
 def test_rates_reject_bad_prices() -> None:
     entries = [
         {"address": "https://o", "runners": [

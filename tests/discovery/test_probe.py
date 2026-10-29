@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from decimal import Decimal
 
 import pytest
 from aiohttp import web
@@ -23,6 +24,25 @@ def answering(body: object, status: int = 200) -> Handler:
         return web.json_response(body, status=status)
 
     return handler
+
+
+async def test_a_node_price_usd_stays_a_decimal_through_the_probe(serve: Serve, tls: Tls) -> None:
+    """aiohttp's JSON helper would round this. The body is the node's JSON number (gateway#88)."""
+    payload = (
+        b'[{"address":"https://claims-elsewhere","runners":[{"url":"https://orch/apps/r1/app",'
+        b'"app":"example/echo","price_info":{"price":4492197255,'
+        b'"price_usd":0.0000027777777777777777777777777777,"currency":"wei","unit":"seconds"}}]}]'
+    )
+
+    async def handler(_: web.Request) -> web.StreamResponse:
+        return web.Response(body=payload, content_type="application/json")
+
+    url = await serve(handler, tls.trusted)
+    probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
+    assert probe.failure is None and probe.entry is not None
+    price_info = probe.entry["runners"][0]["price_info"]
+    assert price_info["price"] == 4492197255
+    assert price_info["price_usd"] == Decimal("0.0000027777777777777777777777777777")
 
 
 async def test_a_trusted_orchestrator_yields_one_entry_under_its_probed_address(

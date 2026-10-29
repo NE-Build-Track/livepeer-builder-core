@@ -145,6 +145,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
     go-livepeer compatibility tests therefore describe today's fleet, and the upstream request is what
     brings `price_usd` to it.
   - Not checked live: a stamping (`v1.0.4`+) source; the unit tests cover `observed_by=orchestrator`.
+- 29 October: `price_usd` digits. The SDK's `json.loads` makes a JSON number a float before the adapter sees it ([livepeer-python-gateway#88](https://github.com/livepeer/livepeer-python-gateway/issues/88)). The engine and `lpb discovery` parse and re-serve the body with `Decimal` until that ships. No wei-to-USD conversion.
 
 ## Decision log
 
@@ -155,3 +156,5 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   no engine-side conversion (ISS-10 derives no price).
 - 29 October (John): the guide's corrections go in this branch's plan; `iss-10-rates.md` is amended after
   PR #74 merges, not on Mike's branch.
+- 29 October (John): keep `price_usd` exact on this side of the gateway. Discovery JSON is parsed here
+  until livepeer-python-gateway#88 parses it as `Decimal`. The gateway issue is the upstream fix.

@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 from livepeer_gateway import http, live_runner
-from livepeer_gateway.discovery import discover_runners
 from livepeer_gateway.remote_signer import (
     GetPaymentResponse,
     LivePaymentChallenge,
@@ -21,7 +20,6 @@ from livepeer_gateway.remote_signer import (
 )
 
 from livepeer_builder.adapters import runner_call
-from livepeer_builder.adapters.sdk import HttpDiscoverySource
 
 COPIED_AT = "2017a80"
 # The first 16 hex digits of each function's source sha256 at COPIED_AT. When one fails: read the SDK
@@ -82,12 +80,3 @@ def test_the_signer_client_accepts_what_the_call_path_passes() -> None:
     assert isinstance(inspect.getattr_static(LivePaymentSession, "manifest_id"), property)
 
 
-async def test_discover_runners_accepts_every_keyword_the_source_passes() -> None:
-    seen: list[set[str]] = []
-
-    async def recorder(**kwargs: object) -> list[dict[str, Any]]:
-        seen.append(set(kwargs))
-        return []
-
-    await HttpDiscoverySource("http://discovery.example/discovery", discover=recorder).fetch()
-    assert _accepts(discover_runners, *seen[0])

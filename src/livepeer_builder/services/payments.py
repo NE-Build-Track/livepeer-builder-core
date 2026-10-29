@@ -11,6 +11,7 @@ Every provider write that moves money carries an idempotency key derived from
 
 import base64
 import hashlib
+import logging
 from datetime import datetime
 
 from pydantic import TypeAdapter
@@ -39,14 +40,18 @@ from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
     NotProvisioned,
+    ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import AccessPolicy, ActorRepo, AllocationManager, Clock, SecretStore
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation, TakenOver
+from livepeer_builder.utils import BODY_LIMIT
 
+_LOG = logging.getLogger(__name__)
 _ACTOR = TypeAdapter(ProvisionedActor)
 _NOTHING = TypeAdapter(type(None))
 _GRANT = TypeAdapter(GrantRecord)
+_UNREADABLE = "the allowance could not be read"  # what a builder reads when the provider fails (D58)
 GRANT_TAG = "lpb_operation"  # the metadata key that tags a grant the engine created (D57, Q5)
 
 
@@ -435,7 +440,15 @@ class PaymentsService:
         allocation_id = await self.allocation_for(actor.application_id, target)
         if allocation_id is None:
             raise NotFound(f"no allocation pays for actor {target!r}")
-        return await self.read_allowance(allocation_id)
+        try:
+            return await self.read_allowance(allocation_id)
+        except (ProviderError, ProviderUnavailable) as error:  # a builder's read: provider words to the log
+            status = error.status_code if isinstance(error, ProviderError) else None
+            extra = {"provider_status": status, "detail": str(error)[:BODY_LIMIT]}
+            _LOG.warning("allowance read failed", extra={"event": "payments.allowance_failed", **extra})
+            if status is None:  # httpx's text can name the provider's host (D58)
+                raise ProviderUnavailable(f"{_UNREADABLE}: the provider is unavailable") from error
+            raise ProviderError(status, _UNREADABLE) from error
 
     async def _require_actor(self, application_id: str, actor_id: str) -> ProvisionedActor:
         actor = await self._store.get_actor(application_id, actor_id)

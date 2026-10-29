@@ -543,6 +543,23 @@
             "title": "Payment Sent",
             "type": "boolean"
           },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_authorized",
+                  "allowance_exhausted",
+                  "signer_unavailable",
+                  "signer_unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
           "status_code": {
             "anyOf": [
               {

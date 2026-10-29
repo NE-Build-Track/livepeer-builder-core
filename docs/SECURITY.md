@@ -14,6 +14,13 @@
 Settings use `SecretStr`, so secrets don't print in reprs. `tests/unit/test_payments.py` checks that
 no plaintext payment key is stored, and `tests/unit/test_http.py` checks that none is returned.
 
+**The payment path stays out of builder responses (D58).** A payment failure's message is the
+engine's own; the signer URL and the signer's or Batteries' text go to the log only, and
+`GET /v1/allowance` answers a provider error with a fixed message. `LPB_SIGNER_URL` may carry no
+userinfo, query or fragment (refused at startup), so the URL in the log holds no secret, and a refused
+setting is never echoed. `tests/unit/test_payment_failures_http.py` scans every builder-facing body
+for a payment key, the signer URL and the signer's words ([payments.md](contracts/payments.md#who-answers-what)).
+
 ## Trust boundaries
 
 See [contracts/access.md](contracts/access.md#boundaries).

@@ -23,9 +23,46 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
    sign time; cost sync fills it on `(allocation_id, manifest_id)`. An expired challenge (a signer
    480) and a 400, 401, 402, 403 or 481 refusal make the session `unpaid`. If the signer charged an
    unpaid manifest anyway, the debit is unattributed on the allocation and the customer is not
-   billed. A lost reply, a signer 5xx, a cancel during `get_payment`, or the engine dying then leaves
-   the session `unknown`: the cost stays `pending` until usage matches it, and the job pays no other
-   orchestrator.
+   billed. A connection the signer refused, or a signer name that did not resolve, is `unpaid` too:
+   that request never reached the signer (D58, Q3). A lost reply, a timeout, a dropped connection, a
+   signer 5xx, a cancel during `get_payment`, or the engine dying then leaves the session `unknown`:
+   the cost stays `pending` until usage matches it, and the job pays no other orchestrator.
+
+## Who answers what
+
+A payment refusal is decided by Batteries, passed on by the signer, and reported by the engine as
+`Failure.reason` (D58; [engine.md](engine.md#failures)). Verified at livepeer/node `406b248` and
+`e75e5b6` and Batteries `ca09e47`.
+
+| Batteries decides (`internal/store/auth.go`) | The signer answers (`signer/auth.go`) | The engine reports | REST |
+| --- | --- | --- | --- |
+| 401: invalid or revoked key | 401, "signer auth rejected request with status 401" | `payment` / `not_authorized` | 403 |
+| 403: grant or allocation inactive (paused included), outside its window, or a session binding mismatch | 403 | `payment` / `not_authorized` | 403 |
+| 402: allocation exhausted, or no balance left | 402 | `payment` / `allowance_exhausted` | 402 |
+| (Batteries unreachable, or its answer invalid) | 502 | while signing: `payment_unknown` / `signer_unknown`; at `/sign-orchestrator-info`: `payment` / `signer_unavailable` | 503 |
+| (no answer) | connection refused, or no such host | `payment` / `signer_unavailable`: nothing was signed | 503 + `Retry-After: 10` |
+| (no answer) | a timeout or a dropped connection while signing | `payment_unknown` / `signer_unknown`: it may have charged | 503 |
+
+The engine's own `not_provisioned` (no allocation, or a revoked one) is checked before any of this and
+answers 402 with no reason.
+
+**Upstream limits, documented and not fixed** (both are servers, so neither is vendorable). The signer
+keeps Batteries' status and drops its reason, so a **paused allocation reads as `not_authorized`**,
+like an invalid binding; only the operator's view of the allocation tells them apart. And Batteries
+being down reaches the engine as a signer 502, like any other signer fault.
+
+**What builders never see.** No builder-facing body carries a payment key, the signer URL or the
+signer's or Batteries' own text:
+
+- provisioning and key rotation return the actor, never the `lpg_` key; keys are encrypted at rest;
+- a job's `failure.message` for a payment failure is the engine's own words, and `failure.body` is
+  only ever the runner's; the SDK's text, with the signer URL and its body, goes to the
+  `runner.signer_error` log line as `detail`;
+- `GET /v1/allowance` answers a provider error with a fixed message and the provider's status
+  ("provider HTTP 500: the allowance could not be read"); the provider's text goes to the
+  `payments.allowance_failed` log line;
+- the engine refuses to start with an `LPB_SIGNER_URL` that has userinfo, a query or a fragment, so
+  the URL it logs holds no secret; a refused setting is never echoed.
 
 ## Allocation modes
 

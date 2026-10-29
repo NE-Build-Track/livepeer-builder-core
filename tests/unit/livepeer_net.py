@@ -47,6 +47,8 @@ class Net:
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
     sign: list[SignStep] = field(default_factory=list)
+    # /sign-orchestrator-info: "ok", an HTTP status, "drop", or "malformed" (no signature)
+    info: list[int | str] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     bodies: list[Any] = field(default_factory=list)  # what each runner request carried, as JSON
@@ -54,6 +56,7 @@ class Net:
     headers: list[CIMultiDict[str]] = field(default_factory=list)  # ... and its request headers
     signer_requests: list[dict[str, Any]] = field(default_factory=list)
     release: asyncio.Event = field(default_factory=asyncio.Event)  # ends every hang at teardown
+    on_challenge: Callable[[], Awaitable[None]] | None = None  # runs before each 402 challenge is sent
     _challenges: int = 0
 
     async def hang(self, seconds: float) -> None:
@@ -76,6 +79,15 @@ class Net:
 
     async def _sign_info(self, request: web.Request) -> web.Response:
         self.log.append("signer info")
+        step = self.info.pop(0) if self.info else "ok"
+        if step == "drop":
+            assert request.transport is not None
+            request.transport.close()
+            return web.Response()
+        if isinstance(step, int):
+            return web.Response(status=step, text="UPSTREAM-INFO: signer auth webhook failed")
+        if step == "malformed":
+            return web.json_response({"address": "0x" + "ab" * 20})
         return web.json_response({"address": "0x" + "ab" * 20, "signature": "0xsig"})
 
     async def _generate(self, request: web.Request) -> web.StreamResponse:
@@ -91,7 +103,7 @@ class Net:
             request.transport.close()
             return web.Response()
         if isinstance(step, int) and not isinstance(step, bool):
-            return web.Response(status=step, text="signer refused")
+            return web.Response(status=step, text="UPSTREAM-SIGN: signer auth rejected request")
         if isinstance(step, float):
             await self.hang(step)
         return web.json_response(
@@ -114,6 +126,8 @@ class Net:
         if self.paid and (not payment or self.challenge_paid):
             if self.challenge_body is not None:
                 return web.Response(status=402, body=self.challenge_body, content_type="application/json")
+            if self.on_challenge is not None:
+                await self.on_challenge()
             self._challenges += 1
             manifest = f"m-{self._challenges}"
             self.log.append(f"challenge {manifest}")
@@ -170,3 +184,17 @@ async def start() -> AsyncIterator[Net]:
             yield holder[0]
         finally:
             holder[0].release.set()
+
+
+@contextlib.asynccontextmanager
+async def identity_only_signer() -> AsyncIterator[TestServer]:
+    """A signer that answers ``/sign-orchestrator-info`` until it is closed; after ``close()`` its port
+    refuses connections, as a signer that went down after the engine cached its identity."""
+    app = web.Application()
+
+    async def info(_: web.Request) -> web.Response:
+        return web.json_response({"address": "0x" + "cd" * 20, "signature": "0xsig"})
+
+    app.router.add_post("/sign-orchestrator-info", info)
+    async with TestServer(app) as server:
+        yield server

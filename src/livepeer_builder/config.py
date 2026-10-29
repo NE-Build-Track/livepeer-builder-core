@@ -4,8 +4,9 @@ import base64
 import os
 from collections.abc import Mapping
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
 
@@ -30,6 +31,9 @@ def _reserved(scope: str, prefix: str) -> bool:
 
 
 class EngineSettings(Contract):
+    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url).
+    model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
+
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
 
     # persistence
@@ -106,6 +110,18 @@ class EngineSettings(Contract):
             if isinstance(value, str)
             else value
         )
+
+    @field_validator("signer_url")
+    @classmethod
+    def _signer_url_holds_no_secret(cls, value: str | None) -> str | None:
+        """Error text and logs quote the signer URL (D58), so it may carry no userinfo, query or fragment;
+        the signer's credential is the actor's payment key, sent as a header."""
+        if value is None:
+            return None
+        parts = urlsplit(value if "://" in value else f"https://{value}")  # the SDK's reading of host:port
+        if "@" in parts.netloc or parts.query or parts.fragment or "?" in value or "#" in value:
+            raise ValueError("signer_url must not carry userinfo, a query or a fragment")
+        return value
 
     @field_validator("auth")
     @classmethod

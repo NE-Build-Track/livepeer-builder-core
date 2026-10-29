@@ -102,8 +102,10 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
         grant_id="g",
     )
     await engine.payments.provision(admin, request)
+    # The deadline must land in the hang (5 s), never in an earlier phase: a slow sign-orchestrator-info
+    # under load is signer_unavailable since D58, so a tight deadline made the outcome depend on timing.
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.1))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.5))
     job = failed.value.job
     expected_kind = "payment_unknown" if hang == "signer" else "timeout"
     assert job.state == state and job.failure is not None and job.failure.kind == expected_kind

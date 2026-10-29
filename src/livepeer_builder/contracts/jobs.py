@@ -155,12 +155,32 @@ FailureKind = Literal[
 ]
 
 
+# Why a payment failed, for the builder (D58). Set only on ``payment`` and ``payment_unknown`` failures.
+# "not_authorized": the signer refused the payer's key or allocation (401, 403). "allowance_exhausted":
+# it refused because the allocation is spent (402). "signer_unavailable": the signer could not be
+# reached, or failed, before anything was signed. "signer_unknown": it was asked and gave no answer, so
+# it may have charged.
+PaymentReason = Literal["not_authorized", "allowance_exhausted", "signer_unavailable", "signer_unknown"]
+
+
+def reason_fits(kind: FailureKind, reason: PaymentReason) -> bool:
+    """``signer_unknown`` belongs to ``payment_unknown``, every other reason to ``payment`` (D58)."""
+    return kind == ("payment_unknown" if reason == "signer_unknown" else "payment")
+
+
 class Failure(Contract):
     kind: FailureKind
     message: str
-    status_code: int | None = None  # the runner's own status, when it answered
-    body: str | None = None  # the runner's own words, bounded
+    status_code: int | None = None  # the runner's own status, or the signer's for a payment failure
+    body: str | None = None  # the runner's own words, bounded; never the signer's (D58)
     payment_sent: bool = False
+    reason: PaymentReason | None = None  # payment failures only (D58)
+
+    @model_validator(mode="after")
+    def _reason_fits_kind(self) -> "Failure":
+        if self.reason is not None and not reason_fits(self.kind, self.reason):
+            raise ValueError(f"reason {self.reason!r} does not fit kind {self.kind!r}")
+        return self
 
 
 JobState = Literal["queued", "running", "succeeded", "failed", "uncertain"]  # "queued" is reserved (async)

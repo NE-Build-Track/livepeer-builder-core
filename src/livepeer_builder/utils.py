@@ -11,8 +11,15 @@ from typing import Any
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
 
 BODY_LIMIT = 4096  # how much of a runner's or signer's response body an error keeps
-# The price units the engine will pay for, and the Live Runner payment type each is signed as.
-PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
+# The ceilings livepeer-node's signer accepts (signer/service.go, checkMaxPrice): wei, per second for a live
+# payment or per request for a fixed one. Each unit the engine pays, and the payment type it is signed as.
+PAYMENT_CURRENCY = "wei"
+PAYMENT_TYPES_BY_UNIT = {"seconds": "live", "fixed": "fixed"}
+
+
+def is_payable(currency: str, unit: str) -> bool:
+    """The signer takes a ceiling in this currency and unit; it refuses any other (HTTP 400)."""
+    return currency.strip().lower() == PAYMENT_CURRENCY and unit.strip().lower() in PAYMENT_TYPES_BY_UNIT
 
 
 def token_hash(token: str) -> str:

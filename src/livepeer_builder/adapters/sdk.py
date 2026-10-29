@@ -27,7 +27,7 @@ from livepeer_builder.contracts import (
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.contracts.discovery import PRICE_LIMIT
+from livepeer_builder.contracts.discovery import PRICE_FLOOR, PRICE_LIMIT
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import loads_json_numbers
 
@@ -192,8 +192,8 @@ def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
     if not isinstance(value, dict):
         return None, "price_info is not an object"
     amount = _decimal(value.get("price"))
-    if amount is None:
-        return None, "price is not a nonnegative number"
+    if amount is None or amount < PRICE_FLOOR:
+        return None, "price is not a number from 1e-300 to below 1e300"
     currency = _text(value.get("currency"))
     if currency is None:
         return None, "price_info has no currency"

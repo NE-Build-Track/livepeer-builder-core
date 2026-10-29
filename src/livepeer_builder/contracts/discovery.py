@@ -10,12 +10,15 @@ from livepeer_builder.contracts.common import Contract
 
 # max_price pads a rate into a float ceiling for the signer; a larger price overflows or is no float
 PRICE_LIMIT = Decimal("1e300")
+# ... and the signer refuses a ceiling that is not positive. Below the normal float range the padded
+# float rounds to 0.0, or below the price itself (7e-324 pads to 5e-324).
+PRICE_FLOOR = Decimal("1e-300")
 
 
 class NetworkRate(Contract):
     """A rate exactly as advertised: a wholesale network price per unit, not a job quote or a retail price."""
 
-    amount: Decimal = Field(ge=0, lt=PRICE_LIMIT)  # livepeer-node's price: wei on-chain
+    amount: Decimal = Field(ge=PRICE_FLOOR, lt=PRICE_LIMIT)  # livepeer-node's price: wei on-chain
     currency: str  # "wei" on-chain
     unit: str  # "seconds" or "fixed"; go-livepeer's "720p-pixel-seconds" is kept but cannot be paid
     # livepeer-node's price_usd: the runner's registered USD per the same unit. Not an engine conversion;
@@ -78,7 +81,9 @@ class Offering(Contract):
     modes: tuple[str, ...]
     rate_low: ObservedRate  # the range's currency and unit are the offering's
     rate_high: ObservedRate
-    rate_status: Literal["available", "missing"]  # missing: the engine does not pay this unit
+    # missing: the signer takes no ceiling in this currency and unit (only wei per seconds or fixed), so the
+    # engine does not pay it
+    rate_status: Literal["available", "missing"]
     # the snapshot is not fresh, or the oldest rate in the range is older than LPB_RATE_MAX_AGE_S
     stale: bool
     runner_count: int

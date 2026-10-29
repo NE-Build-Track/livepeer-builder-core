@@ -71,7 +71,7 @@ class Net:
             url=f"{self.url}/app" + (f"/{name}" if name else ""), app="example/echo", runner_id=name or "r1",
             mode="single-shot",
             orchestrator_url=orchestrator_url or self.url, capacity=1, capacity_available=1,
-            rate=NetworkRate(amount=Decimal(price), currency="usd", unit=unit),
+            rate=NetworkRate(amount=Decimal(price), currency="wei", unit=unit),
         )  # fmt: skip
 
     async def _sign_info(self, request: web.Request) -> web.Response:

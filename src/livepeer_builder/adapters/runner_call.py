@@ -56,7 +56,7 @@ from livepeer_gateway.remote_signer import (
 from livepeer_builder.contracts import AttemptOutcome, NetworkRate
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import BODY_LIMIT, PAYMENT_TYPES_BY_UNIT
+from livepeer_builder.utils import BODY_LIMIT, PAYMENT_TYPES_BY_UNIT, is_payable
 
 _LOG = logging.getLogger(__name__)
 
@@ -441,12 +441,13 @@ def payment_type(rate: NetworkRate | None) -> str:
 
 
 def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
-    if rate is None:
+    """The signer's ceiling, or None when it would refuse every ceiling for this rate's currency and unit."""
+    if rate is None or not is_payable(rate.currency, rate.unit):
         return None
     return {
         "price": float(rate.amount * _PRICE_PADDING),
-        "currency": (rate.currency or "usd").strip().lower(),
-        "unit": (rate.unit or "hour").strip().lower(),
+        "currency": rate.currency.strip().lower(),
+        "unit": rate.unit.strip().lower(),
     }
 
 

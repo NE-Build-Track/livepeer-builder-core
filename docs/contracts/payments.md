@@ -190,11 +190,13 @@ What a rate means, and what it does not:
 4. **The ceiling is the advertised rate plus 1.2 %.** The engine asks the signer to pay at most the
    runner's advertised wei rate times 1.012 (`_PRICE_PADDING` in `adapters/runner_call.py`), and the
    signer refuses a higher price (481).
-5. **The engine never signs without a ceiling.** A runner that asks for payment but advertised no usable
-   rate (`rate is None`: none advertised, or an unreadable `price` / `currency` / `unit`) is refused before
-   the signer is asked (`payment_refused`, nothing paid; the job fails over). A bad `price_usd` alone sets
-   `Runner.rate_error` but keeps the wei ceiling. The node signer checks no price at all when it gets no
-   ceiling.
+5. **The engine never signs without a ceiling the signer takes.** A runner that asks for payment but
+   advertised no usable rate is refused before the signer is asked (`payment_refused`, nothing paid; the
+   job fails over). No usable rate is `rate is None` (none advertised, or an unreadable `price` /
+   `currency` / `unit`, or a `price` below `1e-300` or from `1e300`) or a rate in any currency and unit but
+   `wei` per `seconds` or `fixed`. A bad `price_usd` alone sets `Runner.rate_error` but keeps the wei
+   ceiling. The node signer checks no price at all when it gets no ceiling, and refuses (400) one that is
+   not a positive `wei` price in the payment type's unit.
 6. **Tickets are probabilistic.** The reported cost is the expected value at signing. A single job's
    settled on-chain cost can differ; settlement is an operator-level figure.
 7. **`price_usd` is the advertiser's figure, not a conversion.** livepeer-node advertises the runner's

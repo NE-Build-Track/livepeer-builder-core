@@ -79,7 +79,7 @@ async def test_a_paid_call_records_the_intent_signs_then_sends(net: Net) -> None
     assert net.bodies == [{"x": 1}, {"x": 1}]
     sent = net.signer_requests[0]
     assert (sent["type"], sent["app"], sent["ManifestID"]) == ("fixed", APP, "m-1")
-    assert sent["maxPrice"] == {"price": pytest.approx(0.1012), "currency": "usd", "unit": "fixed"}
+    assert sent["maxPrice"] == {"price": pytest.approx(0.1012), "currency": "wei", "unit": "fixed"}
 
 
 async def test_a_missing_payload_is_sent_as_an_empty_json_object(net: Net) -> None:
@@ -108,6 +108,25 @@ async def test_a_runner_with_no_usable_price_is_never_signed_for(net: Net) -> No
     assert not any(
         entry.startswith(("intent ", "sign ")) for entry in net.log
     )  # "signer info" is not signing
+    assert net.signer_requests == []
+
+
+@pytest.mark.parametrize(
+    ("currency", "unit"),
+    [
+        ("usd", "seconds"),  # livepeer/node's signer takes only a wei ceiling (checkMaxPrice) ...
+        ("wei", "hour"),  # ... per second for a live payment, per request for a fixed one
+    ],
+)
+async def test_a_rate_the_signer_takes_no_ceiling_in_is_never_signed_for(
+    net: Net, currency: str, unit: str
+) -> None:
+    """Its ceiling would be a signer 400, after the intent was recorded: the engine refuses it first."""
+    rate = NetworkRate(amount=Decimal("0.10"), currency=currency, unit=unit)
+    with pytest.raises(RunnerCallError) as refused:
+        await call(net, runner=net.runner().model_copy(update={"rate": rate}))
+    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
+    assert not any(entry.startswith(("intent ", "sign ")) for entry in net.log)
     assert net.signer_requests == []
 
 
@@ -409,10 +428,13 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
 
 
 def test_price_unit_and_ceiling() -> None:
-    rate = NetworkRate(amount=Decimal("2"), currency="USD", unit="Seconds")
+    rate = NetworkRate(amount=Decimal("2"), currency="WEI", unit="Seconds")
     assert (payment_type(rate), payment_type(None)) == ("live", "live")
-    assert max_price(rate) == {"price": pytest.approx(2.024), "currency": "usd", "unit": "seconds"}
+    assert max_price(rate) == {"price": pytest.approx(2.024), "currency": "wei", "unit": "seconds"}
     assert max_price(None) is None
+    # The signer takes neither: an hour ceiling and a usd ceiling are each a 400 (checkMaxPrice).
+    assert max_price(NetworkRate(amount=Decimal("2"), currency="wei", unit="hour")) is None
+    assert max_price(NetworkRate(amount=Decimal("2"), currency="usd", unit="seconds")) is None
     with pytest.raises(RunnerCallError, match="unsupported runner price unit") as unsupported:
         payment_type(NetworkRate(amount=Decimal("1"), currency="usd", unit="request"))
     assert (unsupported.value.kind, unsupported.value.payment_sent) == (

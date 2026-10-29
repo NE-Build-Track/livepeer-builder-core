@@ -26,7 +26,7 @@ returns runner URLs and still checks `discover`.
 | Model | Meaning |
 | --- | --- |
 | `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, `rate_error`, `observed_at`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
-| `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. `amount` is nonnegative and below `1e300` from any source, so the engine can always pad it into the signer's float ceiling. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
+| `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. `amount` is from `1e-300` to below `1e300` from any source, so the engine can always pad it into a positive float ceiling above the price. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
 | `ObservedRate` | A `NetworkRate` as the catalog serves it, plus `observed_at` and `observed_by` |
 | `Offering` | One runner app in one `(currency, unit)`: its modes, the cheapest and dearest rate (`rate_low`, `rate_high`), `rate_status`, `stale`, runner and ready counts, and `observed_at` (the engine's last good poll). An app advertised in two units is two offerings; runners with no rate are not listed |
 
@@ -44,8 +44,14 @@ invents nothing:
 | --- | --- | --- |
 | absent or `null` (off-chain) | `None` | `None` |
 | complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
-| not an object, a bad price (negative, not finite, or `1e300` or more, which no float ceiling holds), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` |
+| not an object, a bad price (not finite, below `1e-300` (zero included), or `1e300` or more), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` |
 | complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
+
+The floor is `1e-300`, inside the normal float range. Below it, `0`, `1E-400` and `1E-999999` pad to
+the float `0.0`, and near the bottom of the range the 1.2% pad can land under the price (`7e-324`
+becomes `5e-324`). Every amount the contract keeps pads to a positive float strictly above the price.
+A price from `1e300` up, including `1E+1000000`, is not a rate, so `max_price` does not raise
+`decimal.Overflow` inside the paid call.
 
 Before ISS-10 a price with no currency or unit was labelled `usd` per `hour`. No released livepeer-node
 or go-livepeer advertises such a price, so the label only ever hid a malformed inventory.
@@ -54,9 +60,12 @@ or go-livepeer advertises such a price, so the label only ever hid a malformed i
 an hourly registration, which is metered in `seconds`). It is not a conversion by the engine, and the wei
 `amount` is what is paid.
 
-**Units.** `seconds` and `fixed` are what livepeer-node advertises and what the signer pays. `hour` is a
-registration unit that no released orchestrator advertises. go-livepeer's `720p-pixel-seconds` is kept as
-advertised and cannot be paid (`payment_refused` before any signing).
+**Currencies and units.** The node signer takes a ceiling only in `wei`, per `seconds` for a live payment
+or per `fixed` request (`checkMaxPrice` in `signer/service.go`); anything else is a 400. That is what
+livepeer-node advertises on-chain, and the only rate the engine pays. Any other rate is kept as advertised,
+its offering is `missing`, and a paid call to its runner is `payment_refused` before any signing:
+go-livepeer's `720p-pixel-seconds`, the registration unit `hour` (no released orchestrator advertises it;
+the SDK still signs it as `live`, T23), and any currency but `wei`.
 
 **Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
 [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
@@ -78,7 +87,7 @@ while the engine keeps it with its poll time.
 
 | Field | Meaning |
 | --- | --- |
-| `rate_status` | `available`, or `missing` when the engine does not pay the offering's unit (for example `720p-pixel-seconds`) |
+| `rate_status` | `available` when the signer takes a ceiling in the offering's currency and unit (`wei` per `seconds` or `fixed`); otherwise `missing`, for example `720p-pixel-seconds`, `hour` or `usd` |
 | `stale` | `true` when the snapshot is not fresh (three missed polls), or when the oldest rate in the range is older than `LPB_RATE_MAX_AGE_S` (default 600 s: two of livepeer-node discovery's default 5-minute refreshes) |
 
 Staleness is information, never a payment gate. Payment always uses the advertised wei rate with its

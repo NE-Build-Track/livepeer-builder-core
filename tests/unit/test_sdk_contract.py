@@ -66,7 +66,7 @@ def test_the_copy_keeps_the_sdk_s_mit_notice() -> None:
 
 
 def test_the_copied_protocol_constants_match() -> None:
-    assert runner_call._PAYMENT_TYPES_BY_UNIT == live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT
+    assert runner_call.PAYMENT_TYPES_BY_UNIT == live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT
     assert runner_call.PAYER_ADDRESS_HEADER == live_runner._LIVE_RUNNER_PAYER_ADDRESS_HEADER
 
 

@@ -1,5 +1,6 @@
 """ISS-10 rates: what a livepeer-node inventory advertises, and how the catalog reports its provenance and age."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -75,11 +76,12 @@ def test_an_unreadable_price_says_why() -> None:
 
 def test_a_node_on_chain_price_is_kept_as_advertised() -> None:
     """livepeer-node converts a registered 0.01 USD/hour into wei per second and keeps the USD figure per second."""
-    (runner,) = runners_from_entries(
-        inventory(
-            price=4492197255, price_usd="0.0000027777777777777777777777777777", currency="wei", unit="seconds"
-        )
-    )
+    payload = (
+        '[{"address": "https://orch.example:8935", "runners": [{"url": "https://orch.example:8935/apps/r1/app",'
+        ' "app": "a/b", "price_info": {"price": 4492197255, "price_usd": 0.0000027777777777777777777777777777,'
+        ' "currency": "wei", "unit": "seconds"}}]}]'
+    )  # livepeer-node sends both prices as JSON numbers
+    (runner,) = runners_from_entries(json.loads(payload, parse_float=Decimal))
     assert runner.rate == NetworkRate(
         amount=Decimal(4492197255),
         currency="wei",
@@ -88,10 +90,16 @@ def test_a_node_on_chain_price_is_kept_as_advertised() -> None:
     )
 
 
-def test_a_bad_price_usd_drops_only_price_usd() -> None:
-    for bad in ("not-a-number", "-0.01", "Infinity", True):
+def test_a_bad_price_usd_drops_only_price_usd_and_says_so() -> None:
+    for bad in ("not-a-number", "-0.01", "Infinity", Decimal("NaN"), True):
         (runner,) = runners_from_entries(inventory(price="10", price_usd=bad, currency="wei", unit="fixed"))
         assert runner.rate == NetworkRate(amount=Decimal(10), currency="wei", unit="fixed"), bad
+        assert runner.rate_error == "price_usd is not a nonnegative number", bad
+
+
+def test_an_absent_price_usd_is_not_an_error() -> None:
+    (runner,) = runners_from_entries(inventory(price="10", currency="wei", unit="fixed"))
+    assert runner.rate_error is None
 
 
 def test_the_orchestrators_observed_at_is_read_in_utc() -> None:

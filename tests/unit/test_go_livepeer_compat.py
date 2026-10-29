@@ -50,11 +50,18 @@ async def test_a_go_livepeer_rate_has_no_usd_figure_and_the_engines_age(clock: F
     assert (offering.rate_low.observed_at, offering.rate_low.observed_by) == (clock.now(), "engine")
 
 
-async def test_a_per_pixel_rate_is_kept_as_advertised_but_never_paid(net: Net) -> None:
+async def test_a_per_pixel_rate_is_kept_as_advertised_but_never_paid(net: Net, clock: FixedClock) -> None:
     (parsed,) = runners_from_entries(
         go_livepeer({"price": "1", "currency": "wei", "unit": "720p-pixel-seconds"})
     )
     assert parsed.rate == NetworkRate(amount=Decimal(1), currency="wei", unit="720p-pixel-seconds")
+    discovery = DiscoveryService(StaticDiscoverySource([parsed]), DefaultPolicy(), clock)
+    await discovery.refresh()
+    (offering,) = discovery.offerings()
+    assert (
+        offering.rate_low is not None and offering.rate_low.unit == "720p-pixel-seconds"
+    )  # kept as advertised
+    assert offering.rate_status == "missing"  # no rate the engine will pay
     runner = net.runner().model_copy(update={"rate": parsed.rate})
     with pytest.raises(RunnerCallError) as refused:
         await SdkRunnerTransport(net.url).call(runner, JobRequest(app=APP, path="/run"), "lpg_k")

@@ -58,14 +58,13 @@ from livepeer_builder.adapters.signer_failures import (
 from livepeer_builder.contracts import AttemptOutcome, CallTimings, NetworkRate, PaymentReason
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import BODY_LIMIT
+from livepeer_builder.utils import BODY_LIMIT, PAYMENT_TYPES_BY_UNIT
 
 _LOG = logging.getLogger(__name__)
 
 PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
-_PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
 _PRICE_PADDING = Decimal("1.012")  # the signer refuses a ceiling below the price it is asked to pay
 
 
@@ -458,11 +457,11 @@ def payment_type(rate: NetworkRate | None) -> str:
     unit = rate.unit.strip().lower() if rate is not None else ""
     if not unit:
         return "live"
-    if unit not in _PAYMENT_TYPES_BY_UNIT:
-        expected = ", ".join(sorted(_PAYMENT_TYPES_BY_UNIT))
+    if unit not in PAYMENT_TYPES_BY_UNIT:
+        expected = ", ".join(sorted(PAYMENT_TYPES_BY_UNIT))
         message = f"unsupported runner price unit {unit!r}; expected {expected}"
         raise RunnerCallError("payment_refused", message, payment_sent=False)
-    return _PAYMENT_TYPES_BY_UNIT[unit]
+    return PAYMENT_TYPES_BY_UNIT[unit]
 
 
 def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:

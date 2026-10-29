@@ -8,14 +8,13 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import and_, delete, event, func, insert, select, update
+from sqlalchemy import and_, delete, event, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from livepeer_builder.contracts import (
-    AccessKey,
     Attempt,
     Failure,
     Job,
@@ -28,9 +27,10 @@ from livepeer_builder.contracts import (
     SyncCheckpoint,
     UsageRow,
 )
-from livepeer_builder.errors import OperationExists
 from livepeer_builder.store import actors, cost_reads
+from livepeer_builder.store import operation_refs as refs
 from livepeer_builder.store import schema as t
+from livepeer_builder.store.keys import SqlKeys
 from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
     bump_evidence,
@@ -40,6 +40,7 @@ from livepeer_builder.store.matching import (
     match_payment_sessions,
 )
 from livepeer_builder.store.migrate import upgrade
+from livepeer_builder.store.operations import SqlOperations
 from livepeer_builder.store.rows import chunks, load_jobs
 
 
@@ -63,7 +64,7 @@ def create_engine(url: str) -> AsyncEngine:
     return engine
 
 
-class SqlStore:
+class SqlStore(SqlKeys, SqlOperations):
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
         self.maintenance = SqlMaintenance(engine)
@@ -105,91 +106,41 @@ class SqlStore:
         async with self.engine.connect() as conn:
             return await actors.list_sightings(conn, application_id)
 
-    # -- access keys --------------------------------------------------------------------------------
-
-    async def insert_access_key(self, key: AccessKey, token_hash: str) -> None:
-        values = key.model_dump() | {"permissions": list(key.permissions), "token_hash": token_hash}
-        async with self.engine.begin() as conn:
-            await conn.execute(insert(t.access_keys).values(values))
-
-    async def access_key_by_hash(self, token_hash: str) -> AccessKey | None:
-        query = select(t.access_keys).where(t.access_keys.c.token_hash == token_hash)
-        async with self.engine.connect() as conn:
-            row = (await conn.execute(query)).mappings().first()
-        return _access_key(row) if row else None
-
-    async def revoke_access_key(self, key_id: str, revoked_at: datetime) -> bool:
-        query = (
-            update(t.access_keys)
-            .where(t.access_keys.c.key_id == key_id, t.access_keys.c.revoked_at.is_(None))
-            .values(revoked_at=revoked_at)
-        )
-        async with self.engine.begin() as conn:
-            return (await conn.execute(query)).rowcount > 0
-
-    async def get_access_key(self, key_id: str) -> AccessKey | None:
-        query = select(t.access_keys).where(t.access_keys.c.key_id == key_id)
-        async with self.engine.connect() as conn:
-            row = (await conn.execute(query)).mappings().first()
-        return _access_key(row) if row else None
-
-    async def rotate_access_key(
-        self, old_key_id: str, new_key: AccessKey, new_token_hash: str, revoked_at: datetime
-    ) -> bool:
-        revoke = (
-            update(t.access_keys)
-            .where(t.access_keys.c.key_id == old_key_id, t.access_keys.c.revoked_at.is_(None))
-            .values(revoked_at=revoked_at)
-        )
-        values = new_key.model_dump() | {
-            "permissions": list(new_key.permissions),
-            "token_hash": new_token_hash,
-        }
-        async with self.engine.begin() as conn:
-            if (await conn.execute(revoke)).rowcount == 0:
-                return False
-            await conn.execute(insert(t.access_keys).values(values))
-        return True
-
-    async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]:
-        query = select(t.access_keys).order_by(t.access_keys.c.created_at)
-        if application_id is not None:
-            query = query.where(t.access_keys.c.application_id == application_id)
-        async with self.engine.connect() as conn:
-            return [_access_key(row) for row in (await conn.execute(query)).mappings()]
-
-    async def count_active_admin_keys(self) -> int:
-        query = select(func.count()).where(
-            t.access_keys.c.kind == "admin", t.access_keys.c.revoked_at.is_(None)
-        )
-        async with self.engine.connect() as conn:
-            return int((await conn.execute(query)).scalar_one())
-
     # -- jobs and attempts --------------------------------------------------------------------------
 
-    async def create_job(self, job: Job, fingerprint: str | None) -> None:
+    async def create_job(self, job: Job, fingerprint: str | None, *, retry_of: UUID | None = None) -> None:
+        """Insert a job. A reference already held raises ``OperationExists`` with the holder, or
+        ``OperationConflict`` when the holder's fingerprint differs (B2).
+
+        ``retry_of`` re-dispatches under the same reference (D57): one transaction marks that failed job
+        superseded by this one, a compare-and-set, then inserts this one. If another retry already
+        superseded it, the answer comes from the job now holding the reference."""
         values = _job_values(job) | {"request_fingerprint": fingerprint}
+        if retry_of is not None:
+            values["retry_of"] = str(retry_of)
         try:
             async with self.engine.begin() as conn:
+                if retry_of is not None:
+                    await refs.supersede(conn, retry_of, job)
                 await conn.execute(insert(t.jobs).values(values))
-        except IntegrityError:
+        except (IntegrityError, refs.Superseded):
             if job.operation_ref is None:
                 raise
             found = await self.job_by_operation_ref(job.application_id, job.actor_id, job.operation_ref)
             if found is None:
+                if retry_of is not None:  # the failed job is gone (retention): the reference is free
+                    return await self.create_job(job, fingerprint)
                 raise
-            raise OperationExists(found[0]) from None
+            raise refs.taken(*found, fingerprint) from None
 
     async def job_by_operation_ref(
         self, application_id: str, actor_id: str, operation_ref: str
     ) -> tuple[Job, str | None] | None:
-        query = select(t.jobs).where(
-            t.jobs.c.application_id == application_id,
-            t.jobs.c.actor_id == actor_id,
-            t.jobs.c.operation_ref == operation_ref,
-        )
+        """The job holding the reference: the one no retry superseded (D57)."""
         async with self.engine.connect() as conn:
-            row = (await conn.execute(query)).mappings().first()
+            row = (
+                (await conn.execute(refs.holder(application_id, actor_id, operation_ref))).mappings().first()
+            )
             if row is None:
                 return None
             return (await load_jobs(conn, [row]))[0], row["request_fingerprint"]
@@ -479,9 +430,3 @@ def _usage_values(row: UsageRow) -> dict[str, Any]:
     for name in ("computed_fee_eth", "computed_fee_usd"):
         values[name] = None if values[name] is None else str(values[name])
     return values
-
-
-def _access_key(row: Any) -> AccessKey:
-    data = {key: row[key] for key in AccessKey.model_fields}
-    data["permissions"] = tuple(row["permissions"])
-    return AccessKey.model_validate(data)

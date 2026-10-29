@@ -143,7 +143,10 @@ async def test_both_modes_accept_tokens_and_keys(idp: IdentityProvider) -> None:
     async with make_engine(**jwt_settings(idp, auth="jwt,api_keys")) as engine:
         assert engine.keys is not None
         issued = await engine.keys.issue(
-            ActorContext(actor_id="op", credential_kind="admin"), kind="actor", actor_id="bob"
+            ActorContext(actor_id="op", credential_kind="admin"),
+            kind="actor",
+            actor_id="bob",
+            operation_ref="issue-jwt_service-145",
         )
         for token, who in ((idp.token(), "alice"), (issued.token, "bob")):
             request = AuthRequest(method="GET", path="/", headers={"authorization": f"Bearer {token}"})

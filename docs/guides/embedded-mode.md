@@ -118,6 +118,7 @@ await engine.payments.provision(
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
         grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
+        operation_ref="provision-customer-42",  # required: a repeat is answered, never applied twice
     ),
 )
 ```
@@ -154,7 +155,7 @@ Failures are Python exceptions, not HTTP statuses:
 | `AccessDenied` | The actor lacks the operation, or the resource belongs to someone else |
 | `JobFailed` | The job finished without a runner result; `job.failure.kind` names why (`not_provisioned`, `no_offering`, `no_capacity`, `timeout`, …) |
 | `NoCapacity` | The engine or the app is at its concurrent-job limit (before any payment) |
-| `OperationExists` / `OperationConflict` | The caller's `operation_ref` collided |
+| `OperationExists` / `OperationConflict` | The caller's `operation_ref` was used before: by a job that ran (read `exc.job`), or with another request. `OperationInProgress`, an `OperationExists`, means that job still runs: ask again shortly. A job that failed before any runner accepted the work is dispatched again instead ([rules](../contracts/engine.md#idempotency)) |
 
 ## Type against the role you use, and test without a network
 

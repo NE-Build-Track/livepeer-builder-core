@@ -47,6 +47,7 @@ from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.discovery import DiscoveryService, MostCapacityFirst
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
+from livepeer_builder.services.ledger import OperationLedger
 from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
@@ -288,6 +289,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         settings.discovery_interval_s,
         rate_max_age_s=settings.rate_max_age_s,
     )
+    ledger = OperationLedger(parts.store, parts.clock, settings.operation_stale_s)  # one, for every command
     payments = PaymentsService(
         mode=settings.allocation_mode,
         store=parts.store,
@@ -295,6 +297,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         policy=parts.policy,
         clock=parts.clock,
         engine_id=settings.engine_id,
+        ledger=ledger,
         manager=parts.allocation_manager,
         grants=parts.grants_manager,
         currency=settings.default_currency,

@@ -3,10 +3,10 @@
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from livepeer_builder.contracts import (
@@ -17,6 +17,7 @@ from livepeer_builder.contracts import (
     AuthRequest,
     EventPage,
     Failure,
+    GrantPage,
     GrantRecord,
     Job,
     JobCost,
@@ -26,6 +27,7 @@ from livepeer_builder.contracts import (
     Money,
     NewAllocationKey,
     Operation,
+    OperationRecord,
     PaymentCredential,
     ProvisionedActor,
     PurgeReport,
@@ -188,7 +190,16 @@ class AllocationManager(Protocol):
 
     async def list_grants(self) -> list[GrantRecord]: ...
 
-    async def create_grant(self, name: str, amount: Money) -> GrantRecord: ...
+    async def grant_page(self, cursor: str | None) -> GrantPage:
+        """One page of grants, oldest first, from ``cursor`` (``None`` for the first): a resumed grant create
+        records the cursor after each page, so the next resume goes on from there (D57)."""
+        ...
+
+    async def create_grant(
+        self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
+    ) -> GrantRecord:
+        """Create a grant carrying ``metadata``, which ``list_grants`` returns (the engine's tag, D57)."""
+        ...
 
 
 class UsageSource(Protocol):
@@ -223,7 +234,16 @@ class ActorRepo(Protocol):
 
 
 class KeyRepo(Protocol):
-    async def insert_access_key(self, key: AccessKey, token_hash: str) -> None: ...
+    async def insert_access_key(
+        self, key: AccessKey, token_hash: str, operation: OperationRecord | None = None
+    ) -> bool:
+        """Insert ``key``. With ``operation`` (the ``done`` ledger record of the command that issued it, D57),
+        store both in one transaction; when that reference is already held, write nothing: ``False``."""
+        ...
+
+    async def get_operation(
+        self, application_id: str, actor_id: str, operation_ref: str
+    ) -> OperationRecord | None: ...  # the ledger record the key writes share (OperationRepo)
 
     async def access_key_by_hash(self, token_hash: str) -> AccessKey | None: ...
 
@@ -232,10 +252,16 @@ class KeyRepo(Protocol):
     async def get_access_key(self, key_id: str) -> AccessKey | None: ...  # never the token hash
 
     async def rotate_access_key(
-        self, old_key_id: str, new_key: AccessKey, new_token_hash: str, revoked_at: datetime
+        self,
+        old_key_id: str,
+        new_key: AccessKey,
+        new_token_hash: str,
+        revoked_at: datetime,
+        operation: OperationRecord | None = None,
     ) -> bool:
-        """In one transaction: revoke ``old_key_id`` if it is active and insert ``new_key``. ``False``, and
-        nothing written, when the old key is unknown or already revoked."""
+        """In one transaction: revoke ``old_key_id`` if it is active, store ``operation`` (its ledger record,
+        D57) and insert ``new_key``. ``False``, and nothing written, when the old key is unknown or already
+        revoked, or the operation's reference is held."""
         ...
 
     async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]: ...
@@ -244,7 +270,15 @@ class KeyRepo(Protocol):
 
 
 class JobRepo(Protocol):
-    async def create_job(self, job: Job, fingerprint: str | None) -> None: ...  # raises OperationExists
+    async def create_job(self, job: Job, fingerprint: str | None, *, retry_of: UUID | None = None) -> None:
+        """Insert a job. A reference already held raises OperationExists with the holder, or
+        OperationConflict when the holder's fingerprint differs (B2).
+
+        ``retry_of`` names a failed job holding the same reference that never reached a runner (D57). In one
+        transaction, mark it superseded by this job only if it is still failed and not superseded (a
+        compare-and-set), then insert this job. When another retry won, answer as above from the job
+        now holding the reference. ``job_by_operation_ref`` returns only the job not superseded."""
+        ...
 
     async def job_by_operation_ref(
         self, application_id: str, actor_id: str, operation_ref: str
@@ -290,6 +324,34 @@ class JobRepo(Protocol):
     async def set_usage(self, job_id: UUID, usage: MeasuredUsage) -> None: ...
 
     async def jobs_in_state(self, state: JobState) -> list[Job]: ...
+
+
+class OperationRepo(Protocol):
+    """The operation ledger (D57, ISS-11): one record per caller scope and ``operation_ref``, stored under a
+    unique constraint. Every write after ``begin_operation`` is fenced: it applies only while the record is
+    ``started`` with the caller's ``fencing_token``, and returns ``False`` and writes nothing otherwise."""
+
+    async def begin_operation(self, record: OperationRecord) -> OperationRecord | None:
+        """Insert ``record`` (``started``). ``None`` when inserted; when the reference is held, write nothing
+        and return the record holding it."""
+        ...
+
+    async def resume_operation(self, record: OperationRecord, started_at: datetime) -> OperationRecord | None:
+        """Take over a stale run: a compare-and-set that adds 1 to the token and sets ``started_at``. The
+        record now held, or ``None`` when another run moved it first."""
+        ...
+
+    async def remember_operation(self, record: OperationRecord) -> bool: ...  # store ``record.context``
+
+    async def complete_operation(self, record: OperationRecord, result: Any, completed_at: datetime) -> bool:
+        """``started`` -> ``done`` with the public result (JSON, never a token)."""
+        ...
+
+    async def abandon_operation(self, record: OperationRecord) -> bool: ...  # delete it: a definite refusal
+
+    async def get_operation(
+        self, application_id: str, actor_id: str, operation_ref: str
+    ) -> OperationRecord | None: ...
 
 
 class CostRepo(Protocol):
@@ -358,7 +420,7 @@ class StoreMaintenance(Protocol):
     async def schema_revision(self) -> str | None: ...
 
 
-class EngineStore(ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo, Protocol):
+class EngineStore(ActorRepo, KeyRepo, JobRepo, OperationRepo, CostRepo, SecretRepo, Protocol):
     """Every engine-owned record, behind one interface. SQL implementation: livepeer_builder.store."""
 
     @property

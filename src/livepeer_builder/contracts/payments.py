@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, computed_field
 
 from livepeer_builder.contracts.common import Contract, Currency, Money
+from livepeer_builder.contracts.operations import OperationRef
 
 AllocationMode = Literal["per_application", "per_actor"]
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
@@ -32,6 +33,7 @@ class ProvisionRequest(Contract):
     amount: Money  # may be zero: identity without money; fund later with an explicit command
     label: str = Field(default="", max_length=200)  # as stored: refused before any provider call
     grant_id: str = ""  # empty uses the grant of the caller's own allocation
+    operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
 
 
 class GrantRecord(Contract):
@@ -42,6 +44,16 @@ class GrantRecord(Contract):
     status: str
     currency: str
     total: str
+    # Batteries' grant metadata, when it is a JSON object of strings. The engine tags each grant it creates
+    # with ``lpb_operation`` (D57, Q5), so a resumed create finds it instead of creating a second one.
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class GrantPage(Contract):
+    """One page of grants, oldest first; ``next_cursor`` is ``None`` on the last page (D57)."""
+
+    grants: tuple[GrantRecord, ...]
+    next_cursor: str | None = None
 
 
 class ProvisionedActor(Contract):

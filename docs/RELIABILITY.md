@@ -16,6 +16,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
 | `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required to provision in `per_actor` mode |
+| `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | How many times one runner call may retry a 402 payment challenge (≥ 0) |
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |

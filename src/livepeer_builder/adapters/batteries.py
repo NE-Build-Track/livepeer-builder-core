@@ -6,7 +6,9 @@ credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant
 It has no ``grants.*``.
 """
 
+import asyncio
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -17,6 +19,7 @@ from pydantic import SecretStr
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
+    GrantPage,
     GrantRecord,
     Money,
     NewAllocationKey,
@@ -42,6 +45,7 @@ class BatteriesClient:
     ) -> None:
         self._client = client or batteries_http_client(base_url, token, timeout_s=timeout_s)
         self._owns_client = client is None
+        self._timeout_s = timeout_s
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -97,21 +101,43 @@ class BatteriesClient:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{allocation_id}"))
 
     async def list_grants(self) -> list[GrantRecord]:
-        body = await self._request("GET", "/v1/grants")
-        items = body.get("items")
-        if not isinstance(items, list):
-            return []
-        return [grant_from_item(item) for item in items if isinstance(item, dict)]
+        """Every grant, page by page."""
+        grants: list[GrantRecord] = []
+        cursor: str | None = None
+        while True:
+            page = await self.grant_page(cursor)
+            grants += page.grants
+            if page.next_cursor is None:
+                return grants
+            cursor = page.next_cursor
 
-    async def create_grant(self, name: str, amount: Money) -> GrantRecord:
-        created = await self._request(
-            "POST",
-            "/v1/grants",
-            json={"name": name, "status": "active", "sponsor": name, **_amount_fields(amount)},
-        )
+    async def grant_page(self, cursor: str | None) -> GrantPage:
+        """One page, oldest first: a resumed grant create looks for its tag page by page (D57)."""
+        params = {"limit": "1000"}  # Batteries' largest page
+        if cursor:
+            params["cursor"] = cursor
+        body = await self._request("GET", "/v1/grants", params=params)
+        items = body.get("items")
+        listed = items if isinstance(items, list) else []
+        grants = [grant_from_item(item) for item in listed if isinstance(item, dict)]
+        next_cursor = body.get("next_cursor")
+        return GrantPage(grants=tuple(grants), next_cursor=str(next_cursor) if next_cursor else None)
+
+    async def create_grant(
+        self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
+    ) -> GrantRecord:
+        body = {"name": name, "status": "active", "sponsor": name, **_amount_fields(amount)}
+        if metadata:  # Batteries takes string fields only: the object travels as JSON text
+            body["metadata"] = json.dumps(dict(metadata), sort_keys=True)
+        created = await self._request("POST", "/v1/grants", json=body)
         if not created.get("id"):
             raise ProviderError(200, "grant response missing id")
-        return grant_from_item(created)
+        # Batteries answers the create with the id only; the record is the grant as it stored it. The grant
+        # exists by now, so a failed read is an unknown outcome, never a refusal that frees the reference.
+        try:
+            return grant_from_item(await self._request("GET", f"/v1/grants/{created['id']}"))
+        except ProviderError as exc:
+            raise ProviderUnavailable(f"grant {created['id']} created but not read back: {exc}") from exc
 
     async def _request(
         self,
@@ -119,10 +145,16 @@ class BatteriesClient:
         path: str,
         json: dict[str, str] | None = None,
         idempotency_key: str | None = None,
+        params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         try:
-            response = await self._client.request(method, path, json=json, headers=headers)
+            # One deadline for the whole call: httpx times each phase separately, and the operation ledger's
+            # stale window is counted in whole calls (D57).
+            async with asyncio.timeout(self._timeout_s):
+                response = await self._client.request(method, path, json=json, headers=headers, params=params)
+        except TimeoutError as exc:
+            raise ProviderUnavailable(f"Batteries call timed out after {self._timeout_s:g} s") from exc
         except httpx.TransportError as exc:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         if response.status_code >= 400:
@@ -199,7 +231,19 @@ def grant_from_item(item: dict[str, Any]) -> GrantRecord:
         status=str(item.get("status", "")),
         currency=currency.upper() or "USD",
         total=str(item.get(total_key, "")),
+        metadata=_metadata(item.get("metadata")),
     )
+
+
+def _metadata(raw: Any) -> dict[str, str]:
+    """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {}."""
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) and raw else None
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): value for key, value in parsed.items() if isinstance(value, str)}
 
 
 def allowance_from_body(body: dict[str, Any]) -> Allowance:

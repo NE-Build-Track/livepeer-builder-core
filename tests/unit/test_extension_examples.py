@@ -239,6 +239,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:acme:alice",
             application_id="acme",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
@@ -264,7 +265,10 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
         await engine.payments.provision(
             bob,
             ProvisionRequest(
-                application_id="acme", actor_id="bob", amount=Money(amount=Decimal(1), currency="USD")
+                operation_ref="provision:acme:bob",
+                application_id="acme",
+                actor_id="bob",
+                amount=Money(amount=Decimal(1), currency="USD"),
             ),
         )  # admin rules still come from the default policy
 

@@ -53,11 +53,19 @@ from livepeer_builder.contracts.jobs import (
     SessionMatch,
     SignedSession,
 )
+from livepeer_builder.contracts.operations import (
+    OPERATION_REPLAYED,
+    OperationCommand,
+    OperationRecord,
+    OperationRef,
+    OperationState,
+)
 from livepeer_builder.contracts.payments import (
     AllocationMode,
     AllocationStatus,
     Allowance,
     FundRequest,
+    GrantPage,
     GrantRecord,
     KnownActor,
     NewAllocationKey,
@@ -71,6 +79,7 @@ from livepeer_builder.contracts.reserved import EngineEvent, EventPage, Session,
 
 __all__ = [
     "DEFAULT_ACTOR_PERMISSIONS",
+    "OPERATION_REPLAYED",
     "AccessKey",
     "ActorContext",
     "AllocationMode",
@@ -96,6 +105,7 @@ __all__ = [
     "FailureKind",
     "Fees",
     "FundRequest",
+    "GrantPage",
     "GrantRecord",
     "IssuedKey",
     "Job",
@@ -111,6 +121,10 @@ __all__ = [
     "ObservedRate",
     "Offering",
     "Operation",
+    "OperationCommand",
+    "OperationRecord",
+    "OperationRef",
+    "OperationState",
     "PaymentCredential",
     "PaymentState",
     "ProvisionRequest",

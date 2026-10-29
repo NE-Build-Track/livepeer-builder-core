@@ -50,6 +50,7 @@ def usd(amount: str) -> Money:
 
 def provision(actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1") -> ProvisionRequest:
     return ProvisionRequest(
+        operation_ref=f"provision:default:{actor_id}",
         application_id="default",
         actor_id=actor_id,
         amount=usd(amount),
@@ -68,7 +69,10 @@ async def test_payments_guard_clauses(
         await engine.payments.provision(
             admin,
             ProvisionRequest(
-                application_id="default", actor_id="a", amount=Money(amount=Decimal(1), currency="ETH")
+                operation_ref="provision:default:a",
+                application_id="default",
+                actor_id="a",
+                amount=Money(amount=Decimal(1), currency="ETH"),
             ),
         )
     with pytest.raises(NotFound):
@@ -92,7 +96,8 @@ async def test_reprovisioning_after_revoke_is_a_new_operation(
     first = await engine.payments.provision(admin, provision())
     await engine.payments.revoke(admin, "default", "alice")
     clock.advance(1)
-    second = await engine.payments.provision(admin, provision())
+    again = provision().model_copy(update={"operation_ref": "provision:default:alice:again"})  # a new command
+    second = await engine.payments.provision(admin, again)
     assert second.allocation_id != first.allocation_id  # not a replay of the revoked allocation
     assert len(manager.allocations) == 2
 

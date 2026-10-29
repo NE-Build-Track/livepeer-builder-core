@@ -58,6 +58,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import (
     AccessDenied,
+    AlreadyProvisioned,
     CursorMismatch,
     EngineError,
     InvalidRequest,
@@ -69,6 +70,7 @@ from livepeer_builder.errors import (
     NotProvisioned,
     OperationConflict,
     OperationExists,
+    OperationInProgress,
     ProviderError,
     ProviderUnavailable,
     RunnerCallError,
@@ -85,6 +87,7 @@ __all__ = [
     "ActorContext",
     "AdminApi",
     "Allowance",
+    "AlreadyProvisioned",
     "ApiKeys",
     "Attempt",
     "AttemptCost",
@@ -131,6 +134,7 @@ __all__ = [
     "Operation",
     "OperationConflict",
     "OperationExists",
+    "OperationInProgress",
     "ProviderError",
     "ProviderUnavailable",
     "ProvisionRequest",

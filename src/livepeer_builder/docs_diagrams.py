@@ -75,7 +75,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "SessionManager": (ReservedSessions,),
 }
 # Persistence sub-interfaces: implemented through EngineStore, listed in a table instead of the diagram.
-REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "CostRepo", "SecretRepo")
+REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "OperationRepo", "CostRepo", "SecretRepo")
 
 CONTRACTS: tuple[type[BaseModel], ...] = (
     AuthRequest, ActorContext, AuthProvenance, ResourceRef,
@@ -155,7 +155,10 @@ def render_interfaces() -> str:
         lines.append(f"    class {name} {{")
         lines.append("        <<interface>>")
         if name == "EngineStore":
-            lines.append("        +async ...ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo methods() None")
+            lines.append(
+                "        +async ...ActorRepo, KeyRepo, JobRepo, OperationRepo, CostRepo, SecretRepo"
+                " methods() None"
+            )
         lines += _methods(found[name], own_only=name == "EngineStore")
         lines.append("    }")
     implementations = sorted({cls.__name__ for defaults in DEFAULTS.values() for cls in defaults})

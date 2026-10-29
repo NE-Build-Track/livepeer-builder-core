@@ -157,11 +157,11 @@ classDiagram
     class GrantsApi {
         <<interface>>
         +async list_grants(admin) GrantRecord[]
-        +async create_grant(admin, name, amount) GrantRecord
+        +async create_grant(admin, name, amount, operation_ref) GrantRecord
     }
     class KeysApi {
         <<interface>>
-        +async issue(admin, kind, actor_id, application_id, permissions, label) IssuedKey
+        +async issue(admin, kind, actor_id, application_id, permissions, label, operation_ref) IssuedKey
         +async list_keys(admin, application_id) AccessKey[]
         +async revoke(admin, key_id) None
         +async bootstrap_admin(label) IssuedKey
@@ -210,7 +210,7 @@ classDiagram
     }
     class KeyRepo {
         <<interface>>
-        +async insert_access_key(key, token_hash) None
+        +async insert_access_key(key, token_hash, operation) bool
         +async access_key_by_hash(token_hash) AccessKey?
         +async revoke_access_key(key_id, revoked_at) bool
         +async list_access_keys(application_id) AccessKey[]
@@ -364,7 +364,8 @@ classDiagram
         +async revoke_key(api_key_id) None
         +async read_allocation(allocation_id) Allowance
         +async list_grants() GrantRecord[]
-        +async create_grant(name, amount) GrantRecord
+        +async grant_page(cursor) GrantPage
+        +async create_grant(name, amount, metadata) GrantRecord
     }
     class UsageSource {
         <<interface>>
@@ -866,9 +867,16 @@ classDiagram
     }
     class OperationExists {
         409 + Livepeer-Job-Id + job
+        code operation_exists
+    }
+    class OperationInProgress {
+        409 + Livepeer-Job-Id + job
+        code operation_in_progress
+        Retry-After 1
     }
     class OperationConflict {
         409 + Livepeer-Job-Id
+        code operation_conflict
     }
     class NoCapacity {
         503 + Retry-After
@@ -894,6 +902,7 @@ classDiagram
     EngineError <|-- InvalidRequest
     EngineError <|-- NotProvisioned
     EngineError <|-- OperationExists
+    OperationExists <|-- OperationInProgress
     EngineError <|-- OperationConflict
     EngineError <|-- NoCapacity
     EngineError <|-- ProviderUnavailable

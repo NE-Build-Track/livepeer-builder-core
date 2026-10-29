@@ -30,6 +30,9 @@ from livepeer_builder.contracts import (
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import loads_json_numbers
 
+# max_price pads a rate into a float ceiling for the signer; a larger price is no float, or overflows first
+_PRICE_LIMIT = Decimal("1e300")
+
 
 class HttpDiscoverySource:
     """Reads a ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
@@ -224,12 +227,12 @@ def _stamp(value: object) -> datetime | None:
 
 
 def _decimal(value: object) -> Decimal | None:
-    """A finite, nonnegative decimal, or None."""
+    """A finite, nonnegative decimal below ``_PRICE_LIMIT``, or None."""
     try:
         amount = value if isinstance(value, Decimal) else Decimal(str(value))
     except InvalidOperation:
         return None
-    return amount if amount.is_finite() and amount >= 0 else None
+    return amount if amount.is_finite() and 0 <= amount < _PRICE_LIMIT else None
 
 
 def _text(value: object) -> str | None:

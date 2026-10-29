@@ -46,9 +46,14 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
 def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with a fractional number as :class:`Decimal`, not a float.
 
-    livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``.
+    livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``. ``NaN`` and
+    ``Infinity`` are not JSON and raise ``ValueError``, as an unparseable body does.
     """
-    return json.loads(raw, parse_float=Decimal)
+    return json.loads(raw, parse_float=Decimal, parse_constant=_not_json)
+
+
+def _not_json(token: str) -> Any:
+    raise ValueError(f"{token} is not a JSON number")
 
 
 def dumps_json_numbers(value: object) -> str:

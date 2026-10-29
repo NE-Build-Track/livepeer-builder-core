@@ -90,6 +90,8 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
   `reason="private_address"`;
 - an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
   an empty inventory that replaces the last good one. `null` means no runners;
+- `NaN` or `Infinity` anywhere in an inventory is not JSON, so the probe fails. Numbers with a fraction
+  are kept as decimals and re-served with the digits the orchestrator sent;
 - any other failure, of any kind, is `reason="failed"` for that orchestrator alone: it never ends the
   pass;
 - an empty inventory counts as a success.

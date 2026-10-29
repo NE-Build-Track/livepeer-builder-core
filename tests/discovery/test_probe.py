@@ -64,6 +64,23 @@ async def test_a_self_signed_orchestrator_is_excluded_as_untrusted(serve: Serve,
     assert (probe.entry, probe.failure) == (None, "untrusted_certificate")
 
 
+async def test_nan_or_infinity_is_not_json_and_fails_the_probe(serve: Serve, tls: Tls) -> None:
+    """json.loads accepts both; the service could then not re-serve the catalog (allow_nan=False)."""
+    prober = Prober(ssl_context=tls.client)
+    for token in (b"NaN", b"Infinity", b"-Infinity"):
+        body = (
+            b'[{"runners":[{"url":"https://orch/apps/r1/app","app":"a/b","price_info":{"price_usd":%s}}]}]'
+            % token
+        )
+
+        async def handler(_: web.Request, body: bytes = body) -> web.StreamResponse:
+            return web.Response(body=body, content_type="application/json")
+
+        url = await serve(handler, tls.trusted)
+        probe = await prober.probe(Orchestrator(url=url))
+        assert (probe.entry, probe.failure) == (None, "failed"), token
+
+
 async def test_bad_answers_fail(serve: Serve, tls: Tls) -> None:
     async def slow(request: web.Request) -> web.StreamResponse:
         await asyncio.sleep(1)

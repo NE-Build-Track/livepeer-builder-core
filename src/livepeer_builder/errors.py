@@ -31,6 +31,16 @@ class OperationExists(EngineError):
         self.job = job
 
 
+class OperationInProgress(OperationExists):
+    """The job holding this operation_ref is still running (409, ``Retry-After``; D57). Ask again later.
+
+    An ``OperationExists``, so callers that catch that keep working."""
+
+    def __init__(self, job: Job) -> None:
+        EngineError.__init__(self, f"operation_ref {job.operation_ref!r} is still running as job {job.id}")
+        self.job = job
+
+
 class OperationConflict(EngineError):
     """The operation_ref was reused with a different request body (409)."""
 

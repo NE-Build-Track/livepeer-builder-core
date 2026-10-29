@@ -83,15 +83,18 @@ jobs = Table(
     Column("created_at", UTCDateTime, nullable=False),
     Column("completed_at", UTCDateTime, nullable=True),
     Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # +1 per evidence change
+    # 0009 (D57): a job re-dispatched under its reference after it never reached a runner
+    Column("retry_of", String(36), nullable=True),  # the failed job this one retries
+    Column("superseded_by", String(36), nullable=True),  # the job that retried this one
 )
-Index(
+Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
     jobs.c.application_id,
     jobs.c.actor_id,
     jobs.c.operation_ref,
     unique=True,
-    sqlite_where=text("operation_ref IS NOT NULL"),
-    postgresql_where=text("operation_ref IS NOT NULL"),
+    sqlite_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
+    postgresql_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
 )
 Index("lpb_jobs_owner_created", jobs.c.application_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)

@@ -866,9 +866,16 @@ classDiagram
     }
     class OperationExists {
         409 + Livepeer-Job-Id + job
+        code operation_exists
+    }
+    class OperationInProgress {
+        409 + Livepeer-Job-Id + job
+        code operation_in_progress
+        Retry-After 1
     }
     class OperationConflict {
         409 + Livepeer-Job-Id
+        code operation_conflict
     }
     class NoCapacity {
         503 + Retry-After
@@ -894,6 +901,7 @@ classDiagram
     EngineError <|-- InvalidRequest
     EngineError <|-- NotProvisioned
     EngineError <|-- OperationExists
+    OperationExists <|-- OperationInProgress
     EngineError <|-- OperationConflict
     EngineError <|-- NoCapacity
     EngineError <|-- ProviderUnavailable

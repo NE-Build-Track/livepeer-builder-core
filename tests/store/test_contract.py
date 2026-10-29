@@ -1,5 +1,6 @@
 """The EngineStore contract, identical on SQLite and PostgreSQL (ISS-06)."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, timedelta
 from decimal import Decimal
@@ -84,6 +85,58 @@ async def test_a_duplicate_with_a_different_body_is_a_conflict(sql: SqlStore, cl
     with pytest.raises(OperationConflict) as conflict:
         await sql.create_job(make_job(clock, ref="order-1"), "fp-b")
     assert conflict.value.job.id == first.id
+
+
+async def test_a_retry_supersedes_the_failed_job_holding_the_ref(sql: SqlStore, clock: FixedClock) -> None:
+    """D57: re-dispatch under the same reference marks the old job superseded and inserts the new one, in
+    one transaction. The old job keeps its reference for history; the new one holds it."""
+    old = make_job(clock, ref="order-1", state="failed")
+    await sql.create_job(old, "fp")
+    new = make_job(clock, ref="order-1", state="running")
+    await sql.create_job(new, "fp", retry_of=old.id)
+    found = await sql.job_by_operation_ref("default", "alice", "order-1")
+    assert found is not None and found[0].id == new.id
+    async with sql.engine.connect() as conn:
+        rows = dict(
+            (
+                await conn.execute(
+                    text("SELECT id, superseded_by FROM lpb_jobs WHERE operation_ref = 'order-1'")
+                )
+            ).all()
+        )
+        query = text("SELECT retry_of FROM lpb_jobs WHERE id = :id")
+        retry_of = (await conn.execute(query, {"id": str(new.id)})).scalar()
+    assert rows == {str(old.id): str(new.id), str(new.id): None}
+    assert retry_of == str(old.id)
+
+
+async def test_two_concurrent_retries_of_one_failed_job_make_one_new_job(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """D57: the compare-and-set lets one retry win; the other is answered from the winner."""
+    old = make_job(clock, ref="order-1", state="failed")
+    await sql.create_job(old, "fp")
+    retries = [make_job(clock, ref="order-1", state="running") for _ in range(2)]
+    outcomes = await asyncio.gather(
+        *(sql.create_job(retry, "fp", retry_of=old.id) for retry in retries), return_exceptions=True
+    )
+    won = [retry for retry, outcome in zip(retries, outcomes, strict=True) if outcome is None]
+    lost = [outcome for outcome in outcomes if outcome is not None]
+    assert len(won) == 1
+    assert len(lost) == 1 and type(lost[0]) is OperationExists and lost[0].job.id == won[0].id
+    async with sql.engine.connect() as conn:
+        count = (await conn.execute(text("SELECT count(*) FROM lpb_jobs"))).scalar()
+    assert count == 2  # the failed job and the one retry
+
+
+async def test_a_retry_supersedes_only_a_failed_job(sql: SqlStore, clock: FixedClock) -> None:
+    """The compare-and-set checks the state where the effect lands: a job that succeeded is never
+    superseded, whatever the caller believed."""
+    done = make_job(clock, ref="order-1", state="succeeded")
+    await sql.create_job(done, "fp")
+    with pytest.raises(OperationExists) as exists:
+        await sql.create_job(make_job(clock, ref="order-1", state="running"), "fp", retry_of=done.id)
+    assert exists.value.job.id == done.id
 
 
 async def test_failure_and_listing(sql: SqlStore, clock: FixedClock) -> None:

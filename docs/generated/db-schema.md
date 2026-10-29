@@ -83,6 +83,8 @@ erDiagram
         datetime created_at
         datetime completed_at
         integer evidence_version
+        string retry_of
+        string superseded_by
     }
     lpb_payment_sessions {
         string job_id PK
@@ -222,6 +224,8 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `created_at` | DATETIME | no |  |
 | `completed_at` | DATETIME | yes |  |
 | `evidence_version` | INTEGER | no |  |
+| `retry_of` | VARCHAR(36) | yes |  |
+| `superseded_by` | VARCHAR(36) | yes |  |
 
 Indexes:
 

@@ -24,7 +24,7 @@ accepted Build Track baseline (Cloud-SPE/Network-Engineering-SPE, approved 30 Se
 | D8 | Async jobs **and** persistent sessions are **defined in M2 and implemented in M4** (ISS-26, ISS-27). Async uses engine-level async by default, with runner-level recovery handles as an optional extension | `JobRequest.mode`, `ResultRef.storage="stored"`, `services/reserved.py` → 501 |
 | D9 | **The engine proxies the persistent `app_url`.** Clients never receive it | [engine.md#persistent-sessions](../contracts/engine.md#persistent-sessions) |
 | D10 | The events feed is a **contract definition only** in M2 | [events.md](../contracts/events.md) |
-| D11 | Idempotency semantics are owned by John's PR. Interim behavior: a repeated `operation_ref` returns 409 `OperationExists`; a changed body returns 409 `OperationConflict` | [engine.md#idempotency](../contracts/engine.md#idempotency) |
+| D11 | Idempotency semantics are owned by John's PR. Interim behavior: a repeated `operation_ref` returns 409 `OperationExists`; a changed body returns 409 `OperationConflict`. **Superseded by [D57](m3-decisions.md)** (29 October): the final rules | [engine.md#idempotency](../contracts/engine.md#idempotency) |
 
 ## Access (ISS-03): accepted design
 

@@ -28,8 +28,8 @@ from livepeer_builder.contracts import (
     SyncCheckpoint,
     UsageRow,
 )
-from livepeer_builder.errors import OperationConflict, OperationExists
 from livepeer_builder.store import actors, cost_reads
+from livepeer_builder.store import operation_refs as refs
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
@@ -167,32 +167,39 @@ class SqlStore:
 
     # -- jobs and attempts --------------------------------------------------------------------------
 
-    async def create_job(self, job: Job, fingerprint: str | None) -> None:
+    async def create_job(self, job: Job, fingerprint: str | None, *, retry_of: UUID | None = None) -> None:
+        """Insert a job. A reference already held raises ``OperationExists`` with the holder, or
+        ``OperationConflict`` when the holder's fingerprint differs (B2).
+
+        ``retry_of`` re-dispatches under the same reference (D57): one transaction marks that failed job
+        superseded by this one, a compare-and-set, then inserts this one. If another retry already
+        superseded it, the answer comes from the job now holding the reference."""
         values = _job_values(job) | {"request_fingerprint": fingerprint}
+        if retry_of is not None:
+            values["retry_of"] = str(retry_of)
         try:
             async with self.engine.begin() as conn:
+                if retry_of is not None:
+                    await refs.supersede(conn, retry_of, job)
                 await conn.execute(insert(t.jobs).values(values))
-        except IntegrityError:
+        except (IntegrityError, refs.Superseded):
             if job.operation_ref is None:
                 raise
             found = await self.job_by_operation_ref(job.application_id, job.actor_id, job.operation_ref)
             if found is None:
+                if retry_of is not None:  # the failed job is gone (retention): the reference is free
+                    return await self.create_job(job, fingerprint)
                 raise
-            holder, holder_fingerprint = found
-            if holder_fingerprint is not None and holder_fingerprint != fingerprint:  # B2 (D57)
-                raise OperationConflict(holder) from None
-            raise OperationExists(holder) from None
+            raise refs.taken(*found, fingerprint) from None
 
     async def job_by_operation_ref(
         self, application_id: str, actor_id: str, operation_ref: str
     ) -> tuple[Job, str | None] | None:
-        query = select(t.jobs).where(
-            t.jobs.c.application_id == application_id,
-            t.jobs.c.actor_id == actor_id,
-            t.jobs.c.operation_ref == operation_ref,
-        )
+        """The job holding the reference: the one no retry superseded (D57)."""
         async with self.engine.connect() as conn:
-            row = (await conn.execute(query)).mappings().first()
+            row = (
+                (await conn.execute(refs.holder(application_id, actor_id, operation_ref))).mappings().first()
+            )
             if row is None:
                 return None
             return (await load_jobs(conn, [row]))[0], row["request_fingerprint"]

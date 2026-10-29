@@ -8,8 +8,8 @@ import pytest
 
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
-from livepeer_builder.contracts import ActorContext, JobRequest
-from livepeer_builder.errors import NoCapacity, ProviderError, RunnerCallError
+from livepeer_builder.contracts import ActorContext, Job, JobRequest
+from livepeer_builder.errors import NoCapacity, OperationInProgress, ProviderError, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
 from tests.conftest import EngineFactory
@@ -144,6 +144,41 @@ async def test_a_signing_that_may_have_charged_is_503_without_retry_after(
     response = await client.post("/v1/jobs", json={"app": APP}, headers=alice)
     assert response.status_code == 503
     assert "retry-after" not in response.headers
+
+
+async def test_a_repeated_operation_ref_answers_409_with_a_stable_code(  # type: ignore[no-untyped-def]
+    api, transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D57: one 409 per answer, told apart by ``code``; every one names the job in the job id header."""
+    client, engine, admin, alice = api
+    await client.post(
+        ALLOCATION, json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1"}, headers=admin
+    )
+    body = {"app": APP, "payload": {"a": 1}, "operation_ref": "o1"}
+    transport.steps = [ScriptedTransport.ok()]
+    first = await client.post("/v1/jobs", json=body, headers=alice)
+    job_id = first.headers["livepeer-job-id"]
+    exists = await client.post("/v1/jobs", json=body, headers=alice)
+    changed = await client.post("/v1/jobs", json=body | {"payload": {"a": 2}}, headers=alice)
+    assert (exists.status_code, exists.json()["code"], exists.json()["job"]["id"]) == (
+        409, "operation_exists", job_id,
+    )  # fmt: skip
+    assert "retry-after" not in exists.headers
+    assert (changed.status_code, changed.json()["code"], changed.headers["livepeer-job-id"]) == (
+        409, "operation_conflict", job_id,
+    )  # fmt: skip
+
+    running = Job.model_validate(exists.json()["job"]).model_copy(update={"state": "running"})
+
+    async def still_running(*_: object, **__: object) -> object:
+        raise OperationInProgress(running)
+
+    monkeypatch.setattr(engine.jobs, "run", still_running)
+    busy = await client.post("/v1/jobs", json=body, headers=alice)
+    assert (busy.status_code, busy.json()["code"], busy.headers["retry-after"]) == (
+        409, "operation_in_progress", "1",
+    )  # fmt: skip
+    assert busy.headers["livepeer-job-id"] == job_id and busy.json()["job"]["state"] == "running"
 
 
 async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]

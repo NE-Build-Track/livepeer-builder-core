@@ -4,7 +4,9 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 1. Fail over when another runner can do what this one did not, and only to another orchestrator after
    a payment (services/failover.py, D52). A paid failure that may have run the work, or whose payment is
    unknown, is ``uncertain``; one that ran, or is about the request, is ``failed``.
-2. One (application, actor, operation_ref) dispatches at most once; a changed body is a conflict.
+2. One (application, actor, operation_ref) dispatches at most once; a changed body is a conflict. A
+   repeat while the job runs is ``OperationInProgress``; a repeat after a failure that never reached a
+   runner dispatches a new job under the same reference (D57, services/operations.py).
 3. An attempt row is written *before* the call and updated after it. Paid-but-unknown is
    ``uncertain``, never ``failed``. Jobs left ``running`` by a restart are resolved on start.
 4. Admission and provisioning are checked before any payment.
@@ -49,8 +51,6 @@ from livepeer_builder.errors import (
     NotFound,
     NotImplementedInMilestone,
     NotProvisioned,
-    OperationConflict,
-    OperationExists,
     RunnerCallError,
 )
 from livepeer_builder.protocols import (
@@ -74,6 +74,7 @@ from livepeer_builder.services.failover import (
     recover_interrupted,
     returned_failover,
 )
+from livepeer_builder.services.operations import check_operation, claim_operation
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
@@ -114,13 +115,14 @@ class JobService:
         self._open_streams: set[JobStream] = set()
 
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
-        """Dispatch one immediate job and wait for its result. Raises JobFailed, OperationExists."""
+        """Dispatch one immediate job and wait for its result. Raises JobFailed, OperationExists
+        (``OperationInProgress`` while the reference's job runs) and OperationConflict."""
         if request.return_http_errors:
             raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
-        fingerprint = await self._admit_request(actor, request)
+        fingerprint, retrying = await self._admit_request(actor, request)
         async with self._admission.admit(request.app):
             job = self._new_job(actor, request)
-            await self._store.create_job(job, fingerprint)
+            await claim_operation(self._store, job, fingerprint, retrying)
             attempts: list[Attempt] = []
             try:
                 return await self._dispatch(job, actor, request, attempts)
@@ -136,12 +138,12 @@ class JobService:
     ) -> JobStream:
         """``jobs.streaming.stream``: like ``run`` up to the first byte (see ``Streaming``, streams.py)."""
         deadline = asyncio.get_running_loop().time() + request.timeout_s  # timeout_s counts from here
-        fingerprint = await self._admit_request(actor, request)
+        fingerprint, retrying = await self._admit_request(actor, request)
         slot = contextlib.AsyncExitStack()
         await slot.enter_async_context(self._admission.admit(request.app))
         try:
             job = self._new_job(actor, request)
-            await self._store.create_job(job, fingerprint)
+            await claim_operation(self._store, job, fingerprint, retrying)
             attempts: list[Attempt] = []
             try:
                 opened, first_byte_left = await self._open(job, actor, request, attempts, transport, deadline)
@@ -242,26 +244,18 @@ class JobService:
         check_owner(self._policy, actor, operation, job_resource(job), f"job {job_id} not found")
         return job
 
-    async def _admit_request(self, actor: ActorContext, request: JobRequest) -> str:
-        """Policy, mode, path and idempotency checks that run before anything is written."""
+    async def _admit_request(self, actor: ActorContext, request: JobRequest) -> tuple[str, UUID | None]:
+        """Policy, mode, path and idempotency checks that run before anything is written. Returns the
+        request's fingerprint and the failed job a new one supersedes, if the repeat may run again."""
         self._policy.check(actor, Operation.JOBS_RUN)
         if request.mode == "async":
             raise NotImplementedInMilestone("async jobs", "M4", "ISS-26")
         if request.path and not request.path.startswith("/"):
             raise InvalidRequest("path must start with '/'")
         fingerprint = request_fingerprint(request)
-        if request.operation_ref is not None:
-            await self._check_operation(actor, request.operation_ref, fingerprint)
-        return fingerprint
-
-    async def _check_operation(self, actor: ActorContext, operation_ref: str, fingerprint: str) -> None:
-        found = await self._store.job_by_operation_ref(actor.application_id, actor.actor_id, operation_ref)
-        if found is None:
-            return
-        existing, existing_fingerprint = found
-        if existing_fingerprint is not None and existing_fingerprint != fingerprint:
-            raise OperationConflict(existing)
-        raise OperationExists(existing)
+        if request.operation_ref is None:
+            return fingerprint, None
+        return fingerprint, await check_operation(self._store, actor, request.operation_ref, fingerprint)
 
     async def _candidates(
         self, job: Job, actor: ActorContext, request: JobRequest, attempts: list[Attempt]

@@ -280,3 +280,52 @@ async def test_a_crash_while_signing_leaves_the_cost_pending(database_url: str, 
         assert cost is not None and cost.status == "pending"
     finally:
         await engine.stop()
+
+
+async def test_the_retry_migration_keeps_references_and_downgrades(
+    database_url: str, clock: FixedClock
+) -> None:
+    """0009 (D57): a reference written before it still holds; a downgrade gives a superseded job's up,
+    since the old index allows one job per reference."""
+    engine = create_engine(database_url)
+    await upgrade(engine, "0008")
+    old = make_job(clock, ref="order-1", state="failed")
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_jobs (id, application_id, actor_id, operation_ref, request_fingerprint, mode, "
+                "app, state, created_at) VALUES (:id, 'default', 'alice', 'order-1', 'fp', 'immediate', 'a/b', "
+                "'failed', :at)"
+            ),
+            {"id": str(old.id), "at": clock.now()},
+        )
+    await upgrade(engine)
+    store = SqlStore(engine)
+    found = await store.job_by_operation_ref("default", "alice", "order-1")
+    assert found is not None and found[0].id == old.id
+    retry = make_job(clock, ref="order-1", state="running")
+    await store.create_job(retry, "fp", retry_of=old.id)
+    await downgrade(engine, "0008")
+    async with engine.connect() as conn:
+        refs = dict((await conn.execute(text("SELECT id, operation_ref FROM lpb_jobs"))).all())
+    assert refs == {str(old.id): None, str(retry.id): "order-1"}
+    await store.close()
+
+
+async def test_a_purged_job_frees_its_reference(database_url: str, clock: FixedClock) -> None:
+    """D57: a reference lives as long as its job. Once retention purges it, the reference dispatches
+    again, and a retry whose failed job was purged meanwhile is written as a new job."""
+    store = await SqlStore.connect(database_url)
+    done, failed = make_job(clock, ref="order-1"), make_job(clock, ref="order-2", state="failed")
+    await store.create_job(done, "fp")
+    await store.create_job(failed, "fp")
+    clock.advance(timedelta(days=40).total_seconds())
+    await purge(store.engine, clock.now(), jobs_days=30, usage_days=None)
+    assert await store.job_by_operation_ref("default", "alice", "order-1") is None
+    again = make_job(clock, ref="order-1")
+    await store.create_job(again, "fp")
+    retry = make_job(clock, ref="order-2", state="running")
+    await store.create_job(retry, "fp", retry_of=failed.id)  # it looked before the purge
+    holders = [await store.job_by_operation_ref("default", "alice", ref) for ref in ("order-1", "order-2")]
+    await store.close()
+    assert [found[0].id for found in holders if found] == [again.id, retry.id]

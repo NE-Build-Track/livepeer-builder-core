@@ -244,9 +244,14 @@ class KeyRepo(Protocol):
 
 
 class JobRepo(Protocol):
-    async def create_job(self, job: Job, fingerprint: str | None) -> None:
+    async def create_job(self, job: Job, fingerprint: str | None, *, retry_of: UUID | None = None) -> None:
         """Insert a job. A reference already held raises OperationExists with the holder, or
-        OperationConflict when the holder's fingerprint differs (B2)."""
+        OperationConflict when the holder's fingerprint differs (B2).
+
+        ``retry_of`` names a failed job holding the same reference that never reached a runner (D57). In one
+        transaction, mark it superseded by this job only if it is still failed and not superseded (a
+        compare-and-set), then insert this job. When another retry won, answer as above from the job
+        now holding the reference. ``job_by_operation_ref`` returns only the job not superseded."""
         ...
 
     async def job_by_operation_ref(

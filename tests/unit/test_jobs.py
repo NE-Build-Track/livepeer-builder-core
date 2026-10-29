@@ -27,6 +27,7 @@ from livepeer_builder.errors import (
     NotImplementedInMilestone,
     OperationConflict,
     OperationExists,
+    OperationInProgress,
     RunnerCallError,
 )
 from livepeer_builder.store import SqlStore
@@ -458,6 +459,199 @@ async def test_operation_ref_dispatches_at_most_once(
     assert again.value.job.id == first.job.id
     with pytest.raises(OperationConflict):
         await engine.jobs.run(alice, JobRequest(app=APP, payload={"a": 2}, operation_ref="order-1"))
+    assert len(transport.calls) == 1
+
+
+async def test_a_repeat_after_every_runner_refused_runs_a_new_job_under_the_same_ref(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    store: SqlStore,
+) -> None:
+    """B3 (D57): a 503 with Retry-After invites a retry, so it must not burn the reference."""
+    engine = await provisioned(make_engine, admin, "alice")
+    request = JobRequest(app=APP, payload={"a": 1}, operation_ref="order-1")
+    transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
+    with pytest.raises(JobFailed) as busy:
+        await engine.jobs.run(alice, request)
+    transport.steps = [ScriptedTransport.ok()]
+    again = await engine.jobs.run(alice, request)
+    assert again.job.state == "succeeded" and again.job.id != busy.value.job.id
+    assert len(transport.calls) == 2
+    holder = await store.job_by_operation_ref("default", "alice", "order-1")
+    assert holder is not None and holder[0].id == again.job.id
+    old = await store.get_job(busy.value.job.id)
+    assert old is not None and old.state == "failed" and old.operation_ref == "order-1"  # kept for history
+
+
+async def test_a_repeat_while_the_job_runs_is_in_progress_and_dispatches_nothing(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+) -> None:
+    release, entered = asyncio.Event(), asyncio.Event()
+
+    class Slow(ScriptedTransport):
+        async def call(self, r, request, credential, on_signed=None):  # type: ignore[no-untyped-def]
+            self.calls.append((r.url, credential))
+            entered.set()
+            await release.wait()
+            return ScriptedTransport.ok()
+
+    slow = Slow()
+    engine = await provisioned(make_engine, admin, "alice", supply=EngineSupply(transport=slow))
+    request = JobRequest(app=APP, operation_ref="order-1")
+    first = asyncio.create_task(engine.jobs.run(alice, request))
+    await entered.wait()
+    with pytest.raises(OperationInProgress) as running:
+        await engine.jobs.run(alice, request)
+    assert running.value.job.state == "running"
+    assert isinstance(running.value, OperationExists)  # callers that catch OperationExists keep working
+    release.set()
+    assert running.value.job.id == (await first).job.id
+    assert len(slow.calls) == 1
+
+
+# How the job holding the reference ended -> whether a repeat dispatches again (D57, engine.md#idempotency).
+NEVER_REACHED_A_RUNNER = {
+    "every runner refused": RunnerCallError("refused", "busy", payment_sent=False, status_code=503),
+    "the orchestrator answered 404": RunnerCallError("http", "gone", payment_sent=False, status_code=404),
+    "the signer refused (payment)": RunnerCallError("payment", "402", payment_sent=False, status_code=402),
+    "the signer refused this orchestrator": RunnerCallError("payment_refused", "481", payment_sent=False),
+}
+REACHED_A_RUNNER = {
+    "a paid refusal": RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m",)),
+    "the runner's own error": RunnerCallError("http", "boom", payment_sent=True, status_code=500),
+    "an unpaid runner error": RunnerCallError("http", "bad", payment_sent=False, status_code=422),
+    "unreachable, unpaid (Q2)": RunnerCallError("unreachable", "reset", payment_sent=False),
+    "a timeout, unpaid (Q2)": RunnerCallError("timeout", "slow", payment_sent=False),
+    "uncertain": RunnerCallError("timeout", "slow", payment_sent=True, manifest_ids=("m",)),
+}
+
+
+@pytest.mark.parametrize("ending", NEVER_REACHED_A_RUNNER.values(), ids=NEVER_REACHED_A_RUNNER.keys())
+async def test_a_repeat_after_a_failure_that_never_reached_a_runner_dispatches_again(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    ending: RunnerCallError,
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice")
+    request = JobRequest(app=APP, operation_ref="order-1")
+    transport.steps = [ending]
+    with pytest.raises(JobFailed) as first:
+        await engine.jobs.run(alice, request)
+    assert first.value.job.state == "failed"
+    transport.steps = [ScriptedTransport.ok()]
+    again = await engine.jobs.run(alice, request)
+    assert again.job.state == "succeeded" and again.job.id != first.value.job.id
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.parametrize("ending", REACHED_A_RUNNER.values(), ids=REACHED_A_RUNNER.keys())
+async def test_a_repeat_after_a_job_that_reached_a_runner_is_operation_exists(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    ending: RunnerCallError,
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice")
+    request = JobRequest(app=APP, operation_ref="order-1")
+    transport.steps = [ending]
+    with pytest.raises(JobFailed) as first:
+        await engine.jobs.run(alice, request)
+    with pytest.raises(OperationExists) as again:
+        await engine.jobs.run(alice, request)
+    assert type(again.value) is OperationExists and again.value.job.id == first.value.job.id
+    assert again.value.job.state == first.value.job.state
+    assert len(transport.calls) == 1
+
+
+async def test_a_different_body_after_a_retryable_failure_is_a_conflict(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice")
+    transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
+    with pytest.raises(JobFailed):
+        await engine.jobs.run(alice, JobRequest(app=APP, payload={"a": 1}, operation_ref="order-1"))
+    with pytest.raises(OperationConflict):
+        await engine.jobs.run(alice, JobRequest(app=APP, payload={"a": 2}, operation_ref="order-1"))
+    assert len(transport.calls) == 1
+
+
+async def test_a_repeat_after_a_failure_before_dispatch_runs_once_the_cause_is_fixed(
+    make_engine: EngineFactory, admin: ActorContext, bob: ActorContext, transport: ScriptedTransport
+) -> None:
+    """Before any attempt (``no_offering``, ``no_capacity``, ``not_provisioned``): nothing was dispatched."""
+    engine = await make_engine()
+    request = JobRequest(app=APP, operation_ref="order-1")
+    with pytest.raises(JobFailed) as unprovisioned:
+        await engine.jobs.run(bob, request)
+    assert unprovisioned.value.job.failure is not None
+    assert unprovisioned.value.job.failure.kind == "not_provisioned"
+    await engine.payments.provision(
+        admin,
+        ProvisionRequest(
+            application_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
+            grant_id="grant_1",
+        ),
+    )  # fmt: skip
+    transport.steps = [ScriptedTransport.ok()]
+    assert (await engine.jobs.run(bob, request)).job.state == "succeeded"
+
+
+async def test_a_ref_taken_between_the_check_and_the_write_is_answered_from_its_holder(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent request took the reference after this one looked (the check saw nothing). The unique
+    index refuses the write, and the job holding the reference answers as a repeat would (D57)."""
+    engine = await provisioned(make_engine, admin, "alice")
+    request = JobRequest(app=APP, operation_ref="order-1")
+    transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
+    with pytest.raises(JobFailed) as busy:
+        await engine.jobs.run(alice, request)
+    lookup = store.job_by_operation_ref
+
+    async def missed(*args: str) -> object:  # the check ran before the first job was written
+        monkeypatch.setattr(store, "job_by_operation_ref", lookup)
+        return None
+
+    monkeypatch.setattr(store, "job_by_operation_ref", missed)
+    transport.steps = [ScriptedTransport.ok()]
+    again = await engine.jobs.run(alice, request)  # the holder never reached a runner: superseded
+    assert again.job.state == "succeeded" and again.job.id != busy.value.job.id
+    monkeypatch.setattr(store, "job_by_operation_ref", missed)
+    with pytest.raises(OperationExists) as exists:  # the holder now succeeded: it ran
+        await engine.jobs.run(alice, request)
+    assert type(exists.value) is OperationExists and exists.value.job.id == again.job.id
+    assert len(transport.calls) == 2
+
+
+async def test_a_ref_other_requests_keep_retrying_is_in_progress(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore,
+    transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    """Bounded: a reference that keeps being re-dispatched by other requests is busy, not ours to take."""
+    engine = await provisioned(make_engine, admin, "alice")
+    transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
+    with pytest.raises(JobFailed) as busy:
+        await engine.jobs.run(alice, JobRequest(app=APP, operation_ref="order-1"))
+    tries: list[object] = []
+
+    async def always_taken(job: Job, fingerprint: str | None, **retry: object) -> None:
+        tries.append(retry)
+        raise OperationExists(busy.value.job)  # another request superseded it first, every time
+
+    monkeypatch.setattr(store, "create_job", always_taken)
+    with pytest.raises(OperationInProgress):
+        await engine.jobs.run(alice, JobRequest(app=APP, operation_ref="order-1"))
+    assert tries == [{"retry_of": busy.value.job.id}] * 3
     assert len(transport.calls) == 1
 
 

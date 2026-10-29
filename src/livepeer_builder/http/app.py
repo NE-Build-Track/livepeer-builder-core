@@ -58,6 +58,7 @@ from livepeer_builder.errors import (
     NotProvisioned,
     OperationConflict,
     OperationExists,
+    OperationInProgress,
     ProviderError,
     ProviderUnavailable,
 )
@@ -78,6 +79,7 @@ _FAILURE_STATUS = {
     "interrupted": 502,
 }
 _RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
+_IN_PROGRESS_RETRY_AFTER = "1"  # a repeat while the operation's job still runs (D57)
 
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
@@ -432,11 +434,17 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
 
     @app.exception_handler(OperationExists)
     async def _exists(_: Request, exc: OperationExists) -> Response:
-        return problem(409, str(exc), {JOB_ID_HEADER: str(exc.job.id)}, job=exc.job.model_dump(mode="json"))
+        """Both answers carry the job; one still running asks the caller to come back (D57)."""
+        headers = {JOB_ID_HEADER: str(exc.job.id)}
+        code = "operation_exists"
+        if isinstance(exc, OperationInProgress):
+            headers["Retry-After"] = _IN_PROGRESS_RETRY_AFTER
+            code = "operation_in_progress"
+        return problem(409, str(exc), headers, code=code, job=exc.job.model_dump(mode="json"))
 
     @app.exception_handler(OperationConflict)
     async def _conflict(_: Request, exc: OperationConflict) -> Response:
-        return problem(409, str(exc), {JOB_ID_HEADER: str(exc.job.id)})
+        return problem(409, str(exc), {JOB_ID_HEADER: str(exc.job.id)}, code="operation_conflict")
 
     @app.exception_handler(NoCapacity)
     async def _capacity(_: Request, exc: NoCapacity) -> Response:

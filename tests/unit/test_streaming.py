@@ -10,7 +10,7 @@ import pytest
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
-from livepeer_builder.errors import JobFailed, OperationExists, RunnerCallError
+from livepeer_builder.errors import JobFailed, OperationExists, OperationInProgress, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport, StreamScript, runner
 from tests.conftest import EngineFactory
@@ -301,6 +301,41 @@ async def test_stream_keeps_idempotency_and_needs_a_streaming_transport(
         await engine.jobs.streaming.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
     plain = await provisioned(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
     assert plain.jobs.streaming is None  # a transport without open() offers no streaming (D33)
+
+
+async def test_a_streamed_repeat_follows_the_same_rules_and_never_streams_again(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    """D57: while the stream is open the job runs, so a repeat is in progress; once it ended it ran, so a
+    repeat is OperationExists. Neither opens the runner again: a replay never re-streams."""
+    engine = await provisioned(make_engine, admin)
+    transport.opens = [StreamScript(events=[b"a"])]
+    request = JobRequest(app=APP, operation_ref="op-1")
+    stream = await engine.jobs.streaming.stream(alice, request)
+    with pytest.raises(OperationInProgress) as running:
+        await engine.jobs.streaming.stream(alice, request)
+    assert running.value.job.id == stream.job.id
+    with pytest.raises(OperationInProgress):
+        await engine.jobs.run(alice, request)  # one reference, either surface
+    await read_all(stream)
+    with pytest.raises(OperationExists) as ran:
+        await engine.jobs.streaming.stream(alice, request)
+    assert type(ran.value) is OperationExists and ran.value.job.state == "succeeded"
+    assert len(transport.calls) == 1
+
+
+async def test_a_streamed_repeat_after_every_runner_refused_opens_a_new_stream(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin)
+    transport.opens = [RunnerCallError("refused", "busy", payment_sent=False)] * 2  # both runners
+    request = JobRequest(app=APP, operation_ref="op-1")
+    with pytest.raises(JobFailed) as busy:
+        await engine.jobs.streaming.stream(alice, request)
+    transport.opens = [StreamScript(events=[b"again"])]
+    stream = await engine.jobs.streaming.stream(alice, request)
+    assert stream.job.id != busy.value.job.id
+    assert await read_all(stream) == b"again"
 
 
 async def test_rest_streams_the_body_with_the_job_id_header(

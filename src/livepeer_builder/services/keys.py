@@ -8,22 +8,29 @@ livepeer_builder.adapters.auth.
 import logging
 import secrets
 from collections.abc import Iterable
+from typing import Any
+
+from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import (
     DEFAULT_ACTOR_PERMISSIONS,
+    OPERATION_REPLAYED,
     AccessKey,
     ActorContext,
     CredentialKind,
     IssuedKey,
     Operation,
+    OperationRecord,
     ResourceRef,
 )
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound
 from livepeer_builder.protocols import AccessPolicy, Clock, KeyRepo
+from livepeer_builder.services import ledger
 from livepeer_builder.services.ownership import check_owner
 from livepeer_builder.utils import token_hash
 
 _LOG = logging.getLogger(__name__)
+_KEY = TypeAdapter(AccessKey)
 TOKEN_PREFIX = "lpk_"  # noqa: S105 - a public prefix, not a secret
 
 
@@ -42,11 +49,24 @@ class KeyService:
         application_id: str = "default",
         permissions: Iterable[str] | None = None,
         label: str = "",
+        operation_ref: str,
     ) -> IssuedKey:
+        """Issue a key once per ``operation_ref`` (D57, B4): the key and its ledger record commit together, so
+        a repeat gets the key back, without its token, which is never stored."""
         self._policy.check(admin, Operation.ADMIN_KEYS)
-        issued = await self._issue(kind, actor_id, application_id, permissions, label)
-        _audit("keys.issued", issued.key, by=admin.actor_id)
-        return issued
+        OPERATION_REPLAYED.set(False)
+        granted = _validated_permissions(kind, permissions)
+        request: dict[str, Any] = {"kind": kind, "actor_id": actor_id, "application_id": application_id}
+        request |= {"permissions": sorted(granted), "label": label}
+        replay = await self._replayed(admin, operation_ref, ledger.fingerprint("issue_key", request))
+        if replay is not None:
+            return replay
+        token, key = self._new_key(kind, actor_id, application_id, granted, label)
+        record = ledger.done(admin, "issue_key", operation_ref, request, _public(key), key.created_at)
+        if await self._store.insert_access_key(key, token_hash(token), record):
+            _audit("keys.issued", key, by=admin.actor_id)
+            return IssuedKey(key=key, token=token)
+        return await self._taken(admin, record)
 
     async def bootstrap_admin(self, label: str = "bootstrap") -> IssuedKey:
         """Issue the first admin key. Refused once any active admin key exists (one-time bootstrap).
@@ -70,18 +90,30 @@ class KeyService:
         check_owner(self._policy, admin, Operation.ADMIN_READ, resource, f"key {key_id!r} not found")
         return key
 
-    async def rotate(self, admin: ActorContext, key_id: str, *, label: str | None = None) -> IssuedKey:
+    async def rotate(
+        self, admin: ActorContext, key_id: str, *, label: str | None = None, operation_ref: str
+    ) -> IssuedKey:
         """Replace an active key at once (D44): the old token stops working in the same transaction that
-        stores the new one. Same kind, actor, application and permissions; ``label`` renames it."""
+        stores the new one and its ledger record (D57). Same kind, actor, application and permissions;
+        ``label`` renames it. A repeat of ``operation_ref`` gets the new key back, without its token."""
         self._policy.check(admin, Operation.ADMIN_KEYS)
+        OPERATION_REPLAYED.set(False)
+        request = {"key_id": key_id, "label": label}
+        replay = await self._replayed(admin, operation_ref, ledger.fingerprint("rotate_access_key", request))
+        if replay is not None:
+            return replay
         old = await self._store.get_access_key(key_id)
         if old is None or old.revoked_at is not None:
             raise InvalidRequest(f"no active key {key_id!r}")
         token, key = self._new_key(
             old.kind, old.actor_id, old.application_id, old.permissions, old.label if label is None else label
         )
-        if not await self._store.rotate_access_key(key_id, key, token_hash(token), self._clock.now()):
-            raise InvalidRequest(f"no active key {key_id!r}")  # revoked or rotated meanwhile
+        record = ledger.done(admin, "rotate_access_key", operation_ref, request, _public(key), key.created_at)
+        if not await self._store.rotate_access_key(key_id, key, token_hash(token), key.created_at, record):
+            replay = await self._replayed(admin, operation_ref, record.fingerprint)
+            if replay is None:
+                raise InvalidRequest(f"no active key {key_id!r}")  # revoked or rotated meanwhile
+            return replay  # another request took the reference just now
         _audit("keys.rotated", key, by=admin.actor_id, replaced_key_id=key_id)
         return IssuedKey(key=key, token=token)
 
@@ -98,6 +130,20 @@ class KeyService:
         resource = None if scope is None else ResourceRef(kind="key", application_id=scope)
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         return await self._store.list_access_keys(scope)
+
+    async def _replayed(self, admin: ActorContext, operation_ref: str, fingerprint: str) -> IssuedKey | None:
+        """The answer to a held reference: the recorded key without its token (never stored, so never
+        replayed), a conflict, or in progress. ``None`` when the reference is free."""
+        held = await self._store.get_operation(admin.application_id, admin.actor_id, operation_ref)
+        if held is None:
+            return None
+        return IssuedKey(key=ledger.repeat(held, fingerprint, _KEY), token=None, replayed=True)
+
+    async def _taken(self, admin: ActorContext, record: OperationRecord) -> IssuedKey:
+        """The store refused the key because another request took the reference just now: answer from it."""
+        replay = await self._replayed(admin, record.operation_ref, record.fingerprint)
+        assert replay is not None  # the store refuses a key only while the reference is held, and keeps it
+        return replay
 
     async def _issue(
         self,
@@ -144,6 +190,10 @@ def _audit(event: str, key: AccessKey, *, by: str, replaced_key_id: str | None =
             **replaced,
         },
     )
+
+
+def _public(key: AccessKey) -> Any:
+    return _KEY.dump_python(key, mode="json")  # the key as inspected: never its token or hash
 
 
 def _validated_permissions(kind: CredentialKind, permissions: Iterable[str] | None) -> set[str]:

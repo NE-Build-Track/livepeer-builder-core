@@ -5,7 +5,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from livepeer_builder import contracts
-from livepeer_builder.contracts import AllocationStatus, CredentialKind, Money
+from livepeer_builder.contracts import AllocationStatus, CredentialKind, Money, OperationRef
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
 
@@ -26,17 +26,20 @@ class IssueKeyBody(BaseModel):
     application_id: str = "default"
     permissions: list[str] | None = None
     label: str = ""
+    operation_ref: OperationRef  # required (D57, Q4)
 
 
 class ProvisionBody(BaseModel):
     amount: Money
     label: str = Field(default="", max_length=200)  # ProvisionedActor.label; a 422 before money moves
     grant_id: str = ""
+    operation_ref: OperationRef  # required (D57, Q4)
 
 
 class GrantBody(BaseModel):
     name: str
     amount: Money
+    operation_ref: OperationRef  # required (D57, Q4)
 
 
 class StatusBody(BaseModel):
@@ -45,6 +48,7 @@ class StatusBody(BaseModel):
 
 class RotateKeyBody(BaseModel):
     label: str | None = None  # keep the key's label unless given
+    operation_ref: OperationRef  # required (D57, Q4)
 
 
 class RotateBody(BaseModel):

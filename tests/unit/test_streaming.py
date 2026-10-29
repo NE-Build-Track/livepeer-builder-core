@@ -24,6 +24,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, **setting
         runners=(runner(APP, url="https://r1"), runner(APP, url="https://r2")), **settings
     )
     request = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
@@ -108,6 +109,7 @@ async def test_a_paid_refusal_at_open_fails_over_to_another_orchestrator(
         )
     )
     provision = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
@@ -227,6 +229,7 @@ async def test_a_stream_obeys_the_paid_attempt_cap(
         max_paid_attempts=1,
     )
     provision = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
@@ -268,6 +271,7 @@ async def test_a_stream_failure_after_a_paid_failover_says_a_payment_went_out(
         )
     )
     provision = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
@@ -342,7 +346,9 @@ async def test_rest_streams_the_body_with_the_job_id_header(
     make_engine: EngineFactory, admin: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await provisioned(make_engine, admin)
-    issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", application_id="default")
+    issued = await engine.keys.issue(
+        admin, kind="actor", actor_id="alice", application_id="default", operation_ref="issue-streaming-349"
+    )
     headers = {"Authorization": f"Bearer {issued.token}"}
     app = create_app(engine, manage_lifecycle=False)
     transport.opens = [StreamScript(events=list(CHUNKS))]

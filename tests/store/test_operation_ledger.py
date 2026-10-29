@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from livepeer_builder.contracts import OperationRecord
+from livepeer_builder.contracts import AccessKey, OperationCommand, OperationRecord
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
 
@@ -118,3 +118,56 @@ async def test_a_reference_freed_between_the_insert_and_the_read_is_taken_again(
     retry = started(clock, fingerprint="corrected")
     assert await sql.begin_operation(retry) is None
     assert await sql.get_operation("default", "operator", "op-1") == retry
+
+
+def access_key(clock: FixedClock, key_id: str) -> AccessKey:
+    return AccessKey(
+        key_id=key_id, kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
+        label="", created_at=clock.now(), revoked_at=None,
+    )  # fmt: skip
+
+
+def issued(clock: FixedClock, key_id: str, command: OperationCommand = "issue_key") -> OperationRecord:
+    return started(clock, ref="key-1").model_copy(
+        update={
+            "command": command,
+            "state": "done",
+            "result": {"key_id": key_id},
+            "completed_at": clock.now(),
+        }
+    )
+
+
+async def test_an_access_key_and_its_record_commit_together(sql: SqlStore, clock: FixedClock) -> None:
+    """B4: no unknown outcome. A key whose reference is held is not written, and neither is its record."""
+    assert await sql.insert_access_key(access_key(clock, "key_a"), "hash-a", issued(clock, "key_a")) is True
+    assert await sql.insert_access_key(access_key(clock, "key_b"), "hash-b", issued(clock, "key_b")) is False
+    assert [key.key_id for key in await sql.list_access_keys()] == ["key_a"]
+    held = await sql.get_operation("default", "operator", "key-1")
+    assert held is not None and held.result == {"key_id": "key_a"}
+
+
+async def test_a_rotation_under_a_held_reference_writes_nothing(sql: SqlStore, clock: FixedClock) -> None:
+    await sql.insert_access_key(access_key(clock, "key_old"), "hash-old")
+    await sql.begin_operation(started(clock, ref="key-1"))  # the reference is taken
+    record = issued(clock, "key_new", "rotate_access_key")
+    assert (
+        await sql.rotate_access_key("key_old", access_key(clock, "key_new"), "hash-new", clock.now(), record)
+        is False
+    )
+    old = await sql.get_access_key("key_old")
+    assert old is not None and old.revoked_at is None  # the revoke rolled back with the rest
+    assert await sql.get_access_key("key_new") is None
+
+
+async def test_two_concurrent_issues_under_one_reference_store_one_key(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    written = await asyncio.gather(
+        *(
+            sql.insert_access_key(access_key(clock, k), "hash-" + k, issued(clock, k))
+            for k in ("key_a", "key_b")
+        )
+    )
+    assert sorted(written) == [False, True]
+    assert len(await sql.list_access_keys()) == 1

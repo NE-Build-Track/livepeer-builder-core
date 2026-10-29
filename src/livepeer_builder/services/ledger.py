@@ -10,6 +10,7 @@ an extension point: an enterprise replaces the store, not the ledger.
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -58,6 +59,11 @@ class RunningOperation:
     def context(self) -> dict[str, str]:
         return self.record.context
 
+    @property
+    def resumed(self) -> bool:
+        """An earlier run of this command may have done some steps (the record was taken over)."""
+        return self.record.fencing_token > 1
+
     async def remember(self, **values: str) -> None:
         """Add to the context before the next step, so a resume finds it. Raises ``TakenOver`` when a resume
         took this run over: undo what only this run made and re-raise; the other run owns the command now."""
@@ -65,6 +71,39 @@ class RunningOperation:
         if not await self._repo.remember_operation(noted):
             raise TakenOver
         self.record = noted
+
+
+def done(
+    caller: ActorContext,
+    command: OperationCommand,
+    operation_ref: str,
+    request: Mapping[str, Any],
+    result: Any,
+    now: datetime,
+) -> OperationRecord:
+    """The record of a command whose effect and record commit in one transaction (an access key): it is
+    never ``started``, so its outcome is never unknown."""
+    return OperationRecord(
+        application_id=caller.application_id,
+        actor_id=caller.actor_id,
+        operation_ref=operation_ref,
+        command=command,
+        fingerprint=fingerprint(command, request),
+        state="done",
+        result=result,
+        started_at=now,
+        completed_at=now,
+    )
+
+
+def repeat[T](held: OperationRecord, fingerprint: str, answer: TypeAdapter[T]) -> T:
+    """The answer to a repeat of a held reference that is not resumed: a conflict for another request, the
+    recorded result once done, otherwise in progress."""
+    if held.fingerprint != fingerprint:
+        raise OperationConflict(held)
+    if held.state != "done":
+        raise OperationInProgress(held)
+    return _replayed(held, answer)
 
 
 class OperationLedger:

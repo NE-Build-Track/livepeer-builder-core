@@ -41,6 +41,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: 
     engine = await make_engine(**settings)
     for actor_id in actors:
         request = ProvisionRequest(
+            operation_ref=f"provision:default:{actor_id}",
             application_id="default",
             actor_id=actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
@@ -592,7 +593,7 @@ async def test_a_repeat_after_a_failure_before_dispatch_runs_once_the_cause_is_f
     assert unprovisioned.value.job.failure.kind == "not_provisioned"
     await engine.payments.provision(
         admin,
-        ProvisionRequest(
+        ProvisionRequest(operation_ref="provision:default:bob",
             application_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",
         ),

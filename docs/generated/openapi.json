@@ -624,11 +624,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
           }
         },
         "required": [
           "name",
-          "amount"
+          "amount",
+          "operation_ref"
         ],
         "title": "GrantBody",
         "type": "object"
@@ -644,6 +651,13 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
           },
           "name": {
             "title": "Name",
@@ -708,6 +722,12 @@
             "title": "Label",
             "type": "string"
           },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          },
           "permissions": {
             "anyOf": [
               {
@@ -724,7 +744,8 @@
           }
         },
         "required": [
-          "actor_id"
+          "actor_id",
+          "operation_ref"
         ],
         "title": "IssueKeyBody",
         "type": "object"
@@ -735,9 +756,21 @@
           "key": {
             "$ref": "#/components/schemas/AccessKey"
           },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
           "token": {
-            "title": "Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
           }
         },
         "required": [
@@ -1403,10 +1436,17 @@
             "maxLength": 200,
             "title": "Label",
             "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
           }
         },
         "required": [
-          "amount"
+          "amount",
+          "operation_ref"
         ],
         "title": "ProvisionBody",
         "type": "object"
@@ -1634,8 +1674,17 @@
               }
             ],
             "title": "Label"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
           }
         },
+        "required": [
+          "operation_ref"
+        ],
         "title": "RotateKeyBody",
         "type": "object"
       },
@@ -2902,18 +2951,11 @@
           "content": {
             "application/json": {
               "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/RotateKeyBody"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
+                "$ref": "#/components/schemas/RotateKeyBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {

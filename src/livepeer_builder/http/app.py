@@ -261,15 +261,17 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         keys = engine.keys
 
         @app.post("/v1/admin/keys", response_model=IssuedKey, status_code=201)
-        async def issue_key(actor: Actor, body: IssueKeyBody) -> IssuedKey:
-            return await keys.issue(
+        async def issue_key(actor: Actor, body: IssueKeyBody, response: Response) -> IssuedKey:
+            issued = await keys.issue(
                 actor,
                 kind=body.kind,
                 actor_id=body.actor_id,
                 application_id=body.application_id,
                 permissions=body.permissions,
                 label=body.label,
+                operation_ref=body.operation_ref,
             )
+            return _replay(response, issued)
 
         @app.get("/v1/admin/keys", response_model=list[AccessKey])
         async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
@@ -280,8 +282,9 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
             return await keys.get(actor, key_id)
 
         @app.post("/v1/admin/keys/{key_id}/rotate", response_model=IssuedKey, status_code=201)
-        async def rotate_key(actor: Actor, key_id: str, body: RotateKeyBody | None = None) -> IssuedKey:
-            return await keys.rotate(actor, key_id, label=body.label if body else None)
+        async def rotate_key(actor: Actor, key_id: str, body: RotateKeyBody, response: Response) -> IssuedKey:
+            rotated = await keys.rotate(actor, key_id, label=body.label, operation_ref=body.operation_ref)
+            return _replay(response, rotated)
 
         @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
         async def revoke_key(actor: Actor, key_id: str) -> Response:
@@ -309,7 +312,7 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
 
     @app.post(base, response_model=ProvisionedActor, status_code=201)
     async def provision(
-        actor: Actor, application_id: str, actor_id: str, body: ProvisionBody
+        actor: Actor, application_id: str, actor_id: str, body: ProvisionBody, response: Response
     ) -> ProvisionedActor:
         request = ProvisionRequest(
             application_id=application_id,
@@ -317,8 +320,9 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
             amount=body.amount,
             label=body.label,
             grant_id=body.grant_id,
+            operation_ref=body.operation_ref,
         )
-        return await engine.payments.provision(actor, request)
+        return _replay(response, await engine.payments.provision(actor, request))
 
     @app.post(base + "/fund", response_model=ProvisionedActor)
     async def fund(
@@ -334,8 +338,9 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
             return await desk.list_grants(actor)
 
         @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
-        async def create_grant(actor: Actor, body: GrantBody) -> GrantRecord:
-            return await desk.create_grant(actor, body.name, body.amount)
+        async def create_grant(actor: Actor, body: GrantBody, response: Response) -> GrantRecord:
+            created = await desk.create_grant(actor, body.name, body.amount, operation_ref=body.operation_ref)
+            return _replay(response, created)
 
     @app.post("/v1/admin/grant/fund", status_code=204)
     async def fund_grant(actor: Actor, body: FundRequest) -> Response:

@@ -112,7 +112,11 @@ async def real(
     async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport)) as engine:
         amount = Money(amount=Decimal("5"), currency="USD")
         request = ProvisionRequest(
-            application_id="default", actor_id="alice", amount=amount, grant_id="grant_1"
+            operation_ref="provision:default:alice",
+            application_id="default",
+            actor_id="alice",
+            amount=amount,
+            grant_id="grant_1",
         )
         await engine.payments.provision(ADMIN, request)
         yield engine

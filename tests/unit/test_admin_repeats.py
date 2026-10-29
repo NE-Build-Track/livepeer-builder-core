@@ -10,10 +10,19 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from livepeer_builder import EngineSettings
-from livepeer_builder.contracts import ActorContext, FundRequest, Money, OperationRecord, ProvisionRequest
+from livepeer_builder.contracts import (
+    AccessKey,
+    ActorContext,
+    FundRequest,
+    GrantRecord,
+    Money,
+    OperationRecord,
+    ProvisionRequest,
+)
 from livepeer_builder.errors import (
     AccessDenied,
     InvalidRequest,
@@ -34,9 +43,13 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def provision_request(actor_id: str = "alice", amount: str = "5") -> ProvisionRequest:
+def provision_request(actor_id: str = "alice", amount: str = "5", *, ref: str = "") -> ProvisionRequest:
     return ProvisionRequest(
-        application_id="default", actor_id=actor_id, amount=usd(amount), grant_id="grant_1"
+        application_id="default",
+        actor_id=actor_id,
+        amount=usd(amount),
+        grant_id="grant_1",
+        operation_ref=ref or f"provision:{actor_id}",
     )
 
 
@@ -396,3 +409,238 @@ async def test_one_ref_used_for_another_command_is_a_conflict(
     with pytest.raises(OperationConflict):
         await engine.payments.rotate_key(admin, "default", "alice", "op-1")
     assert "create_key" not in manager.calls
+
+
+# -- provisioning (slice 4) ---------------------------------------------------------------------------------
+
+
+def test_a_provisioning_request_needs_an_operation_ref() -> None:
+    """Q4: required now, so a repeat after a lost response can never create a second allocation."""
+    with pytest.raises(ValidationError, match="operation_ref"):
+        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"))  # type: ignore[call-arg]
+    with pytest.raises(ValidationError, match="operation_ref"):
+        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), operation_ref="")
+
+
+async def test_provisioning_with_one_ref_and_another_body_is_a_conflict_before_any_provider_call(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    await engine.payments.provision(admin, provision_request(ref="p-1"))
+    with pytest.raises(OperationConflict):
+        await engine.payments.provision(admin, provision_request(actor_id="bob", ref="p-1"))
+    assert manager.calls == ["create_key_for_grant"]
+    with pytest.raises(OperationConflict):
+        await engine.payments.provision(admin, provision_request(amount="6", ref="p-1"))  # same actor
+
+
+async def test_two_concurrent_provisions_with_one_ref_create_one_allocation(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    answers = await asyncio.gather(
+        *(engine.payments.provision(admin, provision_request()) for _ in range(2)), return_exceptions=True
+    )
+    assert sorted(type(answer).__name__ for answer in answers) == ["OperationInProgress", "ProvisionedActor"]
+    assert manager.calls == ["create_key_for_grant"] and len(manager.allocations) == 1
+
+
+async def test_a_provisioning_resumed_after_its_secret_was_stored_keeps_one_copy_of_the_key(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = await make_engine()
+    save_actor = store.save_actor
+
+    async def lost(actor: object) -> None:
+        monkeypatch.setattr(store, "save_actor", save_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "save_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.provision(admin, provision_request())
+    clock.advance(120)
+    actor = await engine.payments.provision(admin, provision_request())
+    async with store.engine.connect() as conn:
+        refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
+    assert refs == {actor.secret_ref.ref}
+    assert (await engine.payments.credential(alice)).token == manager.keys[actor.api_key_id][1]
+
+
+# -- creating a grant (slice 4, Q5) -----------------------------------------------------------------------
+
+
+async def test_creating_a_grant_twice_with_one_ref_creates_one_grant(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    first = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    again = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")  # a lost response
+    assert again == first
+    assert manager.calls.count("create_grant") == 1 and len(manager.grants) == 1
+
+
+async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_grant(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batteries has no idempotency key on grant creation, so the engine tags each grant it creates with
+    ``metadata.lpb_operation`` and a resume lists the grants to find it."""
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    create_grant = manager.create_grant
+
+    async def answer_lost(*args: object, **kwargs: object) -> GrantRecord:
+        monkeypatch.setattr(manager, "create_grant", create_grant)
+        await create_grant(*args, **kwargs)  # type: ignore[arg-type]
+        raise ProviderUnavailable("Batteries unreachable: timed out")
+
+    monkeypatch.setattr(manager, "create_grant", answer_lost)
+    with pytest.raises(ProviderUnavailable):
+        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    clock.advance(120)
+    adopted = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    assert manager.grants == [adopted] and manager.calls.count("create_grant") == 1
+    assert adopted.metadata["lpb_operation"]
+
+
+async def test_two_grants_with_one_name_and_different_refs_are_both_created(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    first = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+    second = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-2")
+    assert first.id != second.id and len(manager.grants) == 2
+    assert first.metadata["lpb_operation"] != second.metadata["lpb_operation"]
+
+
+# -- engine access keys (slice 4, B4) ---------------------------------------------------------------------
+
+
+async def test_issuing_a_key_twice_with_one_ref_issues_one_key_and_the_replay_has_no_token(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    """B4: a lost response and a repeat must not leave two live credentials. The token is never stored, so a
+    replay cannot show it again: it returns the key without it, and an admin who lost it rotates the key."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    first = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    again = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    assert first.token is not None and first.token.startswith("lpk_") and not first.replayed
+    assert (again.key, again.token, again.replayed) == (first.key, None, True)
+    assert [key.key_id for key in await engine.keys.list_keys(admin)] == [first.key.key_id]
+
+
+async def test_rotating_a_key_repeated_after_success_rotates_once_and_the_replay_has_no_token(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    """Before the ledger, the repeat after a lost response answered 400 "no active key": the first call
+    had already revoked it."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    again = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    assert rotated.token is not None and not rotated.replayed
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)
+    assert len(await engine.keys.list_keys(admin)) == 2  # the old key and one replacement
+
+
+async def test_a_repeat_that_found_the_ref_free_but_lost_the_write_answers_from_the_winner(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The race window: the repeat looked before the first request's key and record committed. The store
+    refuses its key because the reference is held, and it answers from the winner's record. (Real
+    concurrency is a store contract test: this in-memory store shares one connection.)"""
+    engine = await make_engine()
+    assert engine.keys is not None
+    first = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    get_operation = store.get_operation
+
+    async def looked_too_early(*scope: str) -> OperationRecord | None:
+        monkeypatch.setattr(store, "get_operation", get_operation)
+        return None
+
+    monkeypatch.setattr(store, "get_operation", looked_too_early)
+    again = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    assert (again.key, again.token) == (first.key, None)
+    assert len(await engine.keys.list_keys(admin)) == 1
+
+
+async def test_a_rotation_repeat_that_looked_too_early_answers_from_the_first_rotation(
+    make_engine: EngineFactory, admin: ActorContext, store: SqlStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    get_operation, get_access_key = store.get_operation, store.get_access_key
+
+    async def looked_too_early(*scope: str) -> OperationRecord | None:
+        monkeypatch.setattr(store, "get_operation", get_operation)
+        return None
+
+    async def still_active(key_id: str) -> AccessKey | None:
+        old = await get_access_key(key_id)
+        return None if old is None else old.model_copy(update={"revoked_at": None})
+
+    monkeypatch.setattr(store, "get_operation", looked_too_early)
+    monkeypatch.setattr(store, "get_access_key", still_active)
+    again = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    assert (again.key, again.token) == (rotated.key, None)
+    with pytest.raises(InvalidRequest, match="no active key"):  # rotated meanwhile by another reference
+        await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-2")
+    assert len(await engine.keys.list_keys(admin)) == 2
+
+
+async def test_no_token_or_payment_key_is_ever_stored_in_the_ledger(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, store: SqlStore
+) -> None:
+    """Core belief 8: the ledger holds the public result and what a resume needs, never a secret."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    await engine.payments.provision(admin, provision_request())
+    await engine.payments.rotate_key(admin, "default", "alice", "rotate-payment-1")
+    async with store.engine.connect() as conn:
+        rows = str((await conn.execute(select(t.operations))).all())
+    secrets = [issued.token, rotated.token] + [secret for _, secret, _ in manager.keys.values()]
+    assert len(secrets) == 4 and all(secret and secret not in rows for secret in secrets)
+    assert rows.count("'done'") == 4
+
+
+async def test_issuing_with_one_ref_and_another_body_is_a_conflict(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    engine = await make_engine()
+    assert engine.keys is not None
+    await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    with pytest.raises(OperationConflict):
+        await engine.keys.issue(admin, kind="actor", actor_id="bob", operation_ref="key-1")
+    with pytest.raises(OperationConflict):  # one reference, another command
+        await engine.keys.rotate(admin, "key_anything", operation_ref="key-1")
+    assert len(await engine.keys.list_keys(admin)) == 1
+
+
+async def test_provisioning_an_actor_already_provisioned_under_a_new_ref_returns_it(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """The guide's plan: an existing allocation is recorded as the new reference's result, not created."""
+    engine = await make_engine()
+    first = await engine.payments.provision(admin, provision_request(ref="p-1"))
+    again = await engine.payments.provision(admin, provision_request(ref="p-2"))
+    assert again == first and manager.calls == ["create_key_for_grant"]

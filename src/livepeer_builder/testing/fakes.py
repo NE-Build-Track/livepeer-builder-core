@@ -2,7 +2,7 @@
 
 import asyncio
 import secrets
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -319,7 +319,9 @@ class FakeAllocationManager:
         self._fail("list_grants")
         return list(self.grants)
 
-    async def create_grant(self, name: str, amount: Money) -> GrantRecord:
+    async def create_grant(
+        self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
+    ) -> GrantRecord:
         self.calls.append("create_grant")
         self._fail("create_grant")
         grant = GrantRecord(
@@ -328,6 +330,7 @@ class FakeAllocationManager:
             status="active",
             currency=amount.currency,
             total=format(amount.amount, "f"),
+            metadata=dict(metadata or {}),
         )
         self.grants.append(grant)
         return grant

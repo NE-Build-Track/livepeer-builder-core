@@ -3,7 +3,7 @@
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers.
 """
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
@@ -189,7 +189,11 @@ class AllocationManager(Protocol):
 
     async def list_grants(self) -> list[GrantRecord]: ...
 
-    async def create_grant(self, name: str, amount: Money) -> GrantRecord: ...
+    async def create_grant(
+        self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
+    ) -> GrantRecord:
+        """Create a grant carrying ``metadata``, which ``list_grants`` returns (the engine's tag, D57)."""
+        ...
 
 
 class UsageSource(Protocol):
@@ -224,7 +228,16 @@ class ActorRepo(Protocol):
 
 
 class KeyRepo(Protocol):
-    async def insert_access_key(self, key: AccessKey, token_hash: str) -> None: ...
+    async def insert_access_key(
+        self, key: AccessKey, token_hash: str, operation: OperationRecord | None = None
+    ) -> bool:
+        """Insert ``key``. With ``operation`` (the ``done`` ledger record of the command that issued it, D57),
+        store both in one transaction; when that reference is already held, write nothing: ``False``."""
+        ...
+
+    async def get_operation(
+        self, application_id: str, actor_id: str, operation_ref: str
+    ) -> OperationRecord | None: ...  # the ledger record the key writes share (OperationRepo)
 
     async def access_key_by_hash(self, token_hash: str) -> AccessKey | None: ...
 
@@ -233,10 +246,16 @@ class KeyRepo(Protocol):
     async def get_access_key(self, key_id: str) -> AccessKey | None: ...  # never the token hash
 
     async def rotate_access_key(
-        self, old_key_id: str, new_key: AccessKey, new_token_hash: str, revoked_at: datetime
+        self,
+        old_key_id: str,
+        new_key: AccessKey,
+        new_token_hash: str,
+        revoked_at: datetime,
+        operation: OperationRecord | None = None,
     ) -> bool:
-        """In one transaction: revoke ``old_key_id`` if it is active and insert ``new_key``. ``False``, and
-        nothing written, when the old key is unknown or already revoked."""
+        """In one transaction: revoke ``old_key_id`` if it is active, store ``operation`` (its ledger record,
+        D57) and insert ``new_key``. ``False``, and nothing written, when the old key is unknown or already
+        revoked, or the operation's reference is held."""
         ...
 
     async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]: ...

@@ -10,7 +10,7 @@
 - **Branch:** `tasks/mz/iss-11-14-idempotency`, off `releases/m3` at `d3df806`.
 - **Design:** the idempotency guide, `docs/design-docs/m3-guides/iss-11-14-idempotency.md` (29 October;
   not on this branch yet). Open questions Q1–Q5 locked by Mike on 29 October.
-- **Progress:** slices 1, 2 and 3 built; slice 4 to do.
+- **Progress:** slices 1 to 4 built; the consumer changes (console and the enterprise apps) to do.
 - **Decision:** D57.
 
 ## Goal
@@ -26,10 +26,10 @@ From the tickets and the 21 October M3 plan:
 
 - [x] **ISS-14:** the final rules for repeated job submissions replace the interim 409, documented in
   [engine.md](../../contracts/engine.md#idempotency).
-- [ ] **ISS-11:** repeating an admin command (provision, fund, rotate) through the same operation
+- [x] **ISS-11:** repeating an admin command (provision, fund, rotate) through the same operation
   reference does not apply it twice; the docs separate allowance changes from signer funding and from a
   hard spending guarantee.
-- [ ] Every test in the guide's list is `[x]`, `[=]` or `[-]` with a reason; the `AGENTS.md` checks are
+- [x] Every test in the guide's list is `[x]`, `[=]` or `[-]` with a reason; the `AGENTS.md` checks are
   green, and `tests/store` on PostgreSQL.
 
 ### Slices
@@ -39,7 +39,7 @@ From the tickets and the 21 October M3 plan:
    runner, migration `0009`, the compare-and-set, the `code` field, `FakeEngine`, `engine.md`.
 3. [x] **Operation ledger** (`lpb_operations`) and its store contract tests, wired into fund, fund grant
    and rotate payment key.
-4. [ ] **Provision, create grant, issue and rotate access key** on the ledger (B4), required references,
+4. [x] **Provision, create grant, issue and rotate access key** on the ledger (B4), required references,
    `payments.md`; then the console change.
 
 ## Progress
@@ -98,16 +98,28 @@ From the tickets and the 21 October M3 plan:
   - **Existing tests changed:** the head revision `0009` became `0010` in `test_packaging.py` and
     `test_cli.py` (a new migration).
 
-## Decision log
+- 29 October: slice 4, test-first.
+  - **Required references (Q4):** `ProvisionRequest.operation_ref` (required field), and a required
+    keyword `operation_ref` on `create_grant`, `keys.issue` and `keys.rotate`; REST bodies 422 without
+    one (`ProvisionBody`, `GrantBody`, `IssueKeyBody`, `RotateKeyBody`, whose body is now required).
+  - **Provision and create grant** run on the ledger. A grant carries `metadata.lpb_operation`; a
+    resumed create adopts it (Q5). `BatteriesClient.create_grant` sends the tag, `grant_from_item`
+    parses it, `list_grants` reads every page. `GrantRecord.metadata` is new.
+  - **Access keys (B4):** `KeyRepo.insert_access_key` and `rotate_access_key` take the `done` record
+    and write it with the key in one transaction; `KeyRepo.get_operation` answers a repeat. Seen red:
+    a second key on a repeated issue, and 400 "no active key" on a repeated rotation. A replay has
+    `token: null`. `store/keys.py` (`SqlKeys`) holds the key SQL (a tidy: `store/sql.py` was near the cap).
+  - **FakeEngine:** no change. It implements `ActorApi` only; it has no admin commands to mirror.
+  - **Existing tests changed** (Q4 is a breaking change): every `ProvisionRequest(...)` in the tests
+    gained `operation_ref=f"provision:{application}:{actor}"`; every `keys.issue`, `keys.rotate` and
+    `create_grant` call a unique reference; REST provisioning, grant, key and rotation bodies a
+    reference. Three tests changed meaning: `test_provisioning_repeated_after_a_lost_answer...`
+    advances the clock past `LPB_OPERATION_STALE_S` before the repeat (an unknown outcome is now in
+    progress until stale); `test_reprovisioning_after_revoke_is_a_new_operation` uses a new reference
+    for the second provisioning (the same one replays); `test_http.py`'s 403 check and
+    `test_error_mapping`'s 400 check send a reference so they still reach the check they test.
 
-- **29 October (slice 3):** the ledger record has a `fencing_token` the guide's table does not list.
-  A resume bumps it by a compare-and-set, and every later write checks it, so a run presumed dead that
-  was only slow can neither overwrite the result nor write context. The guide asks for this fencing
-  (`complete` guarded by `state = 'started'`), and the token is what makes the guard per run.
-- **29 October (slice 3):** on a resume, the secret stored by an earlier run is **reused** from the
-  context, not deleted as the guide's provision plan says. Deleting it races a slow original that is
-  about to save the actor with that reference; reusing it is the same value (the provider replays the
-  same key). A run that a resume took over deletes the copy it wrote itself.
+## Decision log
 
 - **29 October (Mike):** Q1 a repeat of a job that ran stays 409 `OperationExists`, now final, with a
   stable `code`. Q2 `unreachable` and unpaid `timeout` are not re-dispatched. Q3
@@ -122,3 +134,29 @@ From the tickets and the 21 October M3 plan:
   also a signer refusal with nothing sent, and its job fails with the failure kind `payment`. So it is
   on the list too. Without it, a job every orchestrator refused this way would keep its reference,
   while one 402 would free it.
+- **29 October (slice 3):** the ledger record has a `fencing_token` the guide's table does not list.
+  A resume bumps it by a compare-and-set, and every later write checks it, so a run presumed dead that
+  was only slow can neither overwrite the result nor write context. The guide asks for this fencing
+  (`complete` guarded by `state = 'started'`), and the token is what makes the guard per run.
+- **29 October (slice 3):** on a resume, the secret stored by an earlier run is **reused** from the
+  context, not deleted as the guide's provision plan says. Deleting it races a slow original that is
+  about to save the actor with that reference; reusing it is the same value (the provider replays the
+  same key). A run that a resume took over deletes the copy it wrote itself.
+- **29 October (slice 4):** a "management API is not configured" error is raised before the ledger
+  begins (it was inside the steps, where the ledger took it for an unknown outcome and kept the record
+  `started`). Nothing was sent, so no record is written.
+- **29 October (slice 4):** the guide calls the grant tag "the derived idempotency key". It is
+  `base64url(sha256(engine_id:create-grant:{application}:{actor}:{operation_ref}:grant))`, namespaced by
+  the engine like every provider key. Batteries' `metadata` is a string field (at `ca09e47` every
+  management field must be a string), so the tag travels as JSON text and the adapter parses it back;
+  free-text metadata reads as `{}`. `list_grants` now follows `next_cursor` (Batteries pages at 100 by
+  default), or a resume could miss its grant.
+- **29 October (slice 4, Mike):** the guide's `token_replayed` would always be `false` (a token is never
+  stored), so it is `replayed` instead: `true` on a replay, which has `token: null`, and `false` on the
+  first answer. Embedded callers, who see no `Idempotent-Replayed` header, tell the two apart by it.
+- **29 October (review):** `create_grant` reads the grant back (`GET /v1/grants/{id}`): Batteries answers
+  the create with its id only, so the ledger recorded and replayed a grant with no name, status or total.
+  A failed read after the create is `ProviderUnavailable`, an unknown outcome, so it never frees the
+  reference; a resume adopts the grant by its tag.
+- **29 October (slice 4):** the three operation errors now carry `job` *or* `operation`, so `exc.job` is
+  `Job | None` (it was `Job`). No consumer reads it (checked in ChatLPT and inference-gateway).

@@ -160,7 +160,9 @@ Limits such as `timeout_s` and `max_attempts` may differ between repeats.
 | `failed` in any other way | 409 `OperationExists`, `code: operation_exists`, the job in the body | no |
 | no reference given | Runs it | yes |
 
-Every 409 carries the job's id in `Livepeer-Job-Id`. `OperationInProgress` is an `OperationExists`, so
+Every 409 for a job carries the job's id in `Livepeer-Job-Id`. Admin commands (provision, fund,
+grants, rotations, keys) use the same codes, with the command in the body instead of a job: see
+[payments.md](payments.md#repeat-safe-commands). `OperationInProgress` is an `OperationExists`, so
 a caller that catches `OperationExists` keeps working; branch on `code` to tell them apart.
 
 **Never reached a runner** is a closed list. The job failed before dispatch (`no_offering`,

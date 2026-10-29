@@ -118,6 +118,7 @@ await engine.payments.provision(
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
         grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
+        operation_ref="provision-customer-42",  # required: a repeat is answered, never applied twice
     ),
 )
 ```

@@ -176,6 +176,7 @@ async def test_a_stored_projection_keeps_billable_apart_from_fees(
         ),
     )
     request = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
@@ -210,6 +211,7 @@ def test_usd_total_only_when_every_row_is_priced() -> None:
 async def provisioned(make_engine: EngineFactory, admin: ActorContext):  # type: ignore[no-untyped-def]
     engine = await make_engine()
     request = ProvisionRequest(
+        operation_ref="provision:default:alice",
         application_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
@@ -227,6 +229,7 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:default:alice",
             application_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
@@ -278,6 +281,7 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:default:alice",
             application_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
@@ -321,6 +325,7 @@ async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:default:alice",
             application_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
@@ -347,6 +352,7 @@ async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:default:alice",
             application_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
@@ -384,6 +390,7 @@ async def test_a_forged_manifest_on_another_allocation_stays_unattributed(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:default:alice",
             application_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
@@ -467,7 +474,7 @@ async def test_a_job_that_ended_since_the_last_sync_counts_in_summary_and_recent
     engine = await make_engine()
     await engine.payments.provision(
         admin,
-        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                          grant_id="grant_1"),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-new",))]
@@ -553,7 +560,7 @@ async def test_a_reconciliation_during_a_sync_counts_every_row_once(
         engine = await make_engine(supply=EngineSupply(store=file_store))
         actor = await engine.payments.provision(
             admin,
-            ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+            ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                              grant_id="grant_1"),
         )  # fmt: skip
         job, attempt = await running_job(file_store, clock, allocation=actor.allocation_id)
@@ -593,7 +600,7 @@ async def test_a_running_jobs_matched_fee_is_pending_and_reconciliation_balances
     engine = await make_engine()
     actor = await engine.payments.provision(
         admin,
-        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                          grant_id="grant_1"),
     )  # fmt: skip
     transport.opens = [StreamScript(events=[b"a", 30.0], manifest_ids=("m-s",))]  # paid at open, then runs on
@@ -626,7 +633,7 @@ async def ended_paid_job(
     engine = await make_engine()
     actor = await engine.payments.provision(
         admin,
-        ProvisionRequest(application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                          grant_id="grant_1"),
     )  # fmt: skip
     job, attempt = await running_job(store, clock, allocation=actor.allocation_id)

@@ -116,6 +116,79 @@ async def test_create_grant_returns_the_response_record() -> None:
     assert error.value.status_code == 200
 
 
+async def test_a_created_grant_is_read_back_since_batteries_answers_with_its_id_only() -> None:
+    """At ca09e47, ``POST /v1/grants`` answers ``{"id": ...}`` (``management.go``); the record the engine
+    returns, and the ledger replays (D57), is the grant as Batteries stored it."""
+    requests: list[tuple[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "grant_9"})
+        stored = {"id": "grant_9", "name": "ops", "status": "active", "currency": "usd", "total_usd": "2.5"}
+        return httpx.Response(200, json=stored)
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    grant = await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"))
+    assert (grant.id, grant.name, grant.status, grant.currency, grant.total) == (
+        "grant_9",
+        "ops",
+        "active",
+        "USD",
+        "2.5",
+    )
+    assert requests == [("POST", "/v1/grants"), ("GET", "/v1/grants/grant_9")]
+
+
+async def test_a_grant_created_but_not_read_back_is_an_unknown_outcome_not_a_refusal() -> None:
+    """The grant exists once the create answered, so a failed read must not free the reference (a 4xx is a
+    definite refusal to the ledger, D57): it is unavailable, and a resume adopts the grant by its tag."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "grant_9"})
+        return httpx.Response(404, json={"error": "not found"})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    with pytest.raises(ProviderUnavailable, match="grant_9"):
+        await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"))
+
+
+async def test_a_grant_carries_the_engines_tag_as_batteries_metadata() -> None:
+    """D57, Q5: Batteries takes string fields only, so the tag travels as a JSON object in ``metadata``
+    (at ca09e47, ``managementFields`` refuses any non-string value), and grant reads parse it back."""
+    sent: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            sent.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": "grant_9"})
+        tagged = {"id": "grant_9", "name": "ops", "metadata": '{"lpb_operation": "abc"}'}
+        free_text = {"id": "grant_1", "name": "legacy", "metadata": "set up by hand"}
+        return httpx.Response(200, json={"items": [free_text, tagged], "next_cursor": ""})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"), {"lpb_operation": "abc"})
+    assert json.loads(sent[0]["metadata"]) == {"lpb_operation": "abc"}
+    assert [grant.metadata for grant in await client.list_grants()] == [{}, {"lpb_operation": "abc"}]
+
+
+async def test_the_grant_list_reads_every_page() -> None:
+    """Batteries pages grant lists (100 by default, at most 1000, at ca09e47); a resumed grant create must
+    see every grant to find its tag."""
+    seen: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        if "cursor" not in request.url.params:
+            return httpx.Response(200, json={"items": [{"id": "grant_1"}], "next_cursor": "c1"})
+        return httpx.Response(200, json={"items": [{"id": "grant_2"}], "next_cursor": ""})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    assert [grant.id for grant in await client.list_grants()] == ["grant_1", "grant_2"]
+    assert seen == [{"limit": "1000"}, {"limit": "1000", "cursor": "c1"}]
+
+
 async def test_provider_errors_and_outages_are_distinct() -> None:
     def conflict(_: httpx.Request) -> httpx.Response:
         return httpx.Response(409, json={"error": "idempotency key reused"})

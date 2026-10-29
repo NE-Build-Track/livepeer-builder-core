@@ -45,11 +45,11 @@ key of `base64url(sha256(engine_id:operation:step))`.
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `provision(application, actor, amount, grant_id)` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | per actor; a repeat returns the original |
+| `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is returned as it is |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
 | `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
-| `grants.create_grant(name, amount)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | a repeat creates another grant |
+| `grants.create_grant(name, amount, operation_ref=…)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN`, tagged `metadata.lpb_operation` | the ledger; Batteries has none on grants, so a resume finds the tagged grant (Q5) |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
@@ -105,7 +105,34 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
   reference is recorded before the actor points at it, so a resume reuses that copy.
+- **Provisioning** returns an actor that is already provisioned (not revoked) and records that as the
+  result. Re-provisioning after a revoke is a new command: it needs a new reference.
+- **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
+  grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
+  reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A
+  resumed create lists the grants (every page) and adopts the one carrying its tag instead of creating a
+  second. Grant names stay free-form: two references may create two grants with one name.
+- **Access keys** are written in the same transaction as their record, so they are never `started`:
+  a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.
+
+Which commands take a reference:
+
+| Command | `operation_ref` |
+| --- | --- |
+| Provision, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
+| Issue access key, rotate access key | **required**: creates a live engine credential |
+| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice |
+
+## Allowance, signer funding and spending guarantees
+
+Three different things, often all called "funding":
+
+| Term | What it is | Who moves it | Repeat-safe |
+| --- | --- | --- | --- |
+| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (provision, fund allocation, fund grant, create grant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
+| **Signer funding** | The payer's TicketBroker deposit and reserve on Arbitrum, which back the tickets the signer signs | The payment operator, outside the engine | No engine command touches it |
+| **Spending guarantee** | A hard limit no job can exceed | Nobody in M3 | n/a: the allowance is a cap that [can overshoot](#allowance); hard limits are stretch scope |
 
 ## Units
 ## Units

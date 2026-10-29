@@ -60,7 +60,9 @@ async def test_issued_key_authenticates_and_revocation_stops_it(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
-    issued = await keys.issue(admin, kind="actor", actor_id="alice", application_id="app-1")
+    issued = await keys.issue(
+        admin, kind="actor", actor_id="alice", application_id="app-1", operation_ref="issue-access-63"
+    )
     authenticator = ApiKeyAuthenticator(store)
     actor = await authenticator.authenticate(bearer(issued.token))
     assert actor is not None
@@ -76,16 +78,32 @@ async def test_issued_key_authenticates_and_revocation_stops_it(
 
 async def test_only_admins_issue_keys(store: SqlStore, clock: FixedClock, alice: ActorContext) -> None:
     with pytest.raises(AccessDenied):
-        await KeyService(store, DefaultPolicy(), clock).issue(alice, kind="actor", actor_id="mallory")
+        await KeyService(store, DefaultPolicy(), clock).issue(
+            alice, kind="actor", actor_id="mallory", operation_ref="issue-access-79"
+        )
 
 
 async def test_permission_validation(store: SqlStore, clock: FixedClock, admin: ActorContext) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
     with pytest.raises(InvalidRequest, match="unknown"):
-        await keys.issue(admin, kind="actor", actor_id="a", permissions=["jobs.everything"])
+        await keys.issue(
+            admin,
+            kind="actor",
+            actor_id="a",
+            permissions=["jobs.everything"],
+            operation_ref="issue-access-85",
+        )
     with pytest.raises(InvalidRequest, match="service credential"):
-        await keys.issue(admin, kind="actor", actor_id="a", permissions=["actors.assert"])
-    service = await keys.issue(admin, kind="service", actor_id="backend", permissions=["actors.assert"])
+        await keys.issue(
+            admin, kind="actor", actor_id="a", permissions=["actors.assert"], operation_ref="issue-access-87"
+        )
+    service = await keys.issue(
+        admin,
+        kind="service",
+        actor_id="backend",
+        permissions=["actors.assert"],
+        operation_ref="issue-access-88",
+    )
     assert service.key.permissions == ("actors.assert",)
 
 
@@ -128,7 +146,9 @@ async def test_a_key_is_inspected_without_its_secret(
     store: SqlStore, clock: FixedClock, admin: ActorContext, alice: ActorContext
 ) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
-    issued = await keys.issue(admin, kind="actor", actor_id="alice", label="laptop")
+    issued = await keys.issue(
+        admin, kind="actor", actor_id="alice", label="laptop", operation_ref="issue-access-131"
+    )
     shown = await keys.get(admin, issued.key.key_id)
     assert shown == issued.key
     assert issued.token not in shown.model_dump_json()
@@ -144,9 +164,15 @@ async def test_rotation_replaces_a_key_at_once_with_the_same_identity(
     keys = KeyService(store, DefaultPolicy(), clock)
     authenticator = ApiKeyAuthenticator(store)
     old = await keys.issue(
-        admin, kind="actor", actor_id="alice", application_id="app-1", permissions=["jobs.run"], label="ci"
+        admin,
+        kind="actor",
+        actor_id="alice",
+        application_id="app-1",
+        permissions=["jobs.run"],
+        label="ci",
+        operation_ref="issue-access-146",
     )
-    new = await keys.rotate(admin, old.key.key_id)
+    new = await keys.rotate(admin, old.key.key_id, operation_ref="rotate-access-175")
     assert new.token != old.token and new.key.key_id != old.key.key_id
     assert (new.key.kind, new.key.actor_id, new.key.application_id, new.key.permissions, new.key.label) == (
         "actor", "alice", "app-1", ("jobs.run",), "ci",
@@ -155,7 +181,7 @@ async def test_rotation_replaces_a_key_at_once_with_the_same_identity(
     assert actor is not None and (actor.actor_id, actor.application_id) == ("alice", "app-1")
     with pytest.raises(NotAuthenticated):
         await authenticator.authenticate(bearer(old.token))  # no overlap window (D44)
-    relabelled = await keys.rotate(admin, new.key.key_id, label="ci-2")
+    relabelled = await keys.rotate(admin, new.key.key_id, label="ci-2", operation_ref="rotate-access-184")
     assert relabelled.key.label == "ci-2"
 
 
@@ -163,14 +189,14 @@ async def test_only_an_admin_rotates_and_only_an_active_key(
     store: SqlStore, clock: FixedClock, admin: ActorContext, alice: ActorContext
 ) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
-    issued = await keys.issue(admin, kind="actor", actor_id="alice")
+    issued = await keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-access-166")
     with pytest.raises(AccessDenied):
-        await keys.rotate(alice, issued.key.key_id)
+        await keys.rotate(alice, issued.key.key_id, operation_ref="rotate-access-194")
     await keys.revoke(admin, issued.key.key_id)
     with pytest.raises(InvalidRequest, match="no active key"):
-        await keys.rotate(admin, issued.key.key_id)
+        await keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-197")
     with pytest.raises(InvalidRequest, match="no active key"):
-        await keys.rotate(admin, "key_unknown")
+        await keys.rotate(admin, "key_unknown", operation_ref="rotate-access-199")
 
 
 async def test_key_changes_are_logged_with_who_acted_and_never_the_secret(
@@ -179,8 +205,10 @@ async def test_key_changes_are_logged_with_who_acted_and_never_the_secret(
     keys = KeyService(store, DefaultPolicy(), clock)
     with caplog.at_level(logging.DEBUG):
         first = await keys.bootstrap_admin()
-        issued = await keys.issue(admin, kind="actor", actor_id="alice", application_id="app-1")
-        rotated = await keys.rotate(admin, issued.key.key_id)
+        issued = await keys.issue(
+            admin, kind="actor", actor_id="alice", application_id="app-1", operation_ref="issue-access-182"
+        )
+        rotated = await keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-211")
         await keys.revoke(admin, rotated.key.key_id)
     events = {
         getattr(r, "event", ""): r for r in caplog.records if getattr(r, "event", "").startswith("keys.")
@@ -214,13 +242,15 @@ async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
     assert engine.keys is not None
     with caplog.at_level(logging.DEBUG):
         first = await engine.keys.bootstrap_admin()
-        issued = await engine.keys.issue(admin, kind="actor", actor_id="alice")
+        issued = await engine.keys.issue(
+            admin, kind="actor", actor_id="alice", operation_ref="issue-access-217"
+        )
         assert await ApiKeyAuthenticator(engine.store).authenticate(bearer(issued.token)) is not None
-        rotated = await engine.keys.rotate(admin, issued.key.key_id)
+        rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-249")
         await engine.keys.revoke(admin, rotated.key.key_id)
         await engine.payments.provision(
             admin,
-            ProvisionRequest(
+            ProvisionRequest(operation_ref="provision:default:alice",
                 application_id="default", actor_id="alice", amount=Money(amount=Decimal("1"), currency="USD"),
                 grant_id="g-1",
             ),
@@ -298,12 +328,16 @@ async def test_an_auditor_key_is_issued_without_permissions_and_authenticates_as
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
-    issued = await keys.issue(admin, kind="auditor", actor_id="dashboard", application_id="app-1")
+    issued = await keys.issue(
+        admin, kind="auditor", actor_id="dashboard", application_id="app-1", operation_ref="issue-access-301"
+    )
     assert issued.key.permissions == ()
     actor = await ApiKeyAuthenticator(store).authenticate(bearer(issued.token))
     assert actor is not None and actor.credential_kind == "auditor"
     with pytest.raises(AccessDenied):
-        await keys.issue(actor, kind="actor", actor_id="mallory")  # an auditor cannot issue keys
+        await keys.issue(
+            actor, kind="actor", actor_id="mallory", operation_ref="issue-access-306"
+        )  # an auditor cannot issue keys
     assert [k.key_id for k in await keys.list_keys(actor)] != []  # but can read them
 
 
@@ -311,8 +345,12 @@ async def test_an_auditor_reads_only_its_own_applications_keys(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
-    own = await keys.issue(admin, kind="actor", actor_id="alice", application_id="app-1")
-    other = await keys.issue(admin, kind="actor", actor_id="bob", application_id="app-2")
+    own = await keys.issue(
+        admin, kind="actor", actor_id="alice", application_id="app-1", operation_ref="issue-access-314"
+    )
+    other = await keys.issue(
+        admin, kind="actor", actor_id="bob", application_id="app-2", operation_ref="issue-access-315"
+    )
     assert {k.key_id for k in await keys.list_keys(AUDITOR)} == {own.key.key_id}
     assert (await keys.get(AUDITOR, own.key.key_id)).actor_id == "alice"
     with pytest.raises(NotFound):

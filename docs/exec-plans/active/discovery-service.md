@@ -98,7 +98,7 @@ The contract is livepeer-node's inventory format, the one a `v1.0.2` orchestrato
 [{"address": "https://orch.example.com:8935", "runners": [{"url": "...", "app": "...", "capacity": 4, "price_info": {...}}]}]
 ```
 
-The engine already parses it: `runners_from_entries`, through the SDK's `discover_runners(discovery_url=…)`. So `LPB_DISCOVERY_URL` can point at:
+The engine already parses it: `runners_from_entries`. `HttpDiscoverySource` GETs the body itself so a JSON-number `price_usd` stays a `Decimal` (livepeer-python-gateway [#88](https://github.com/livepeer/livepeer-python-gateway/issues/88); the SDK's `discover_runners` parses it as a float). So `LPB_DISCOVERY_URL` can point at:
 
 - this service;
 - a single orchestrator's `/discovery`;

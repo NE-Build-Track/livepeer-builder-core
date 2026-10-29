@@ -1,9 +1,11 @@
 """Python gateway adapters: runner discovery and the Live Runner transport.
 
-Discovery reads livepeer-node's ``/discovery`` inventory through the SDK's ``discover_runners``. The paid
-runner call is the engine's own (``adapters/runner_call.py``, D53): it signs through the SDK's signer
-client and reports each payment session before the signer is asked, so cost attribution never depends on
-a callback that a lost signer reply would skip (docs/references/sdk-gateway.md).
+Discovery reads a ``/discovery`` inventory itself. The SDK's ``discover_runners`` parses JSON numbers as
+float, which drops digits from livepeer-node's ``price_usd``
+(https://github.com/livepeer/livepeer-python-gateway/issues/88). The paid runner call is the engine's
+own (``adapters/runner_call.py``, D53): it signs through the SDK's signer client and reports each
+payment session before the signer is asked, so cost attribution never depends on a callback that a
+lost signer reply would skip (docs/references/sdk-gateway.md).
 """
 
 import asyncio
@@ -12,7 +14,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
-from livepeer_gateway.discovery import discover_runners
+import httpx
 
 from livepeer_builder.adapters.runner_call import (
     PaidRequest,
@@ -28,10 +30,11 @@ from livepeer_builder.contracts import (
     RunnerReply,
 )
 from livepeer_builder.protocols import OnSigned
+from livepeer_builder.utils import loads_json_numbers
 
 
 class DiscoverRunners(Protocol):
-    """The SDK's ``discover_runners``, narrowed to the arguments this adapter passes."""
+    """A stand-in for the discovery fetch. Tests pass one; production reads the body itself."""
 
     async def __call__(
         self,
@@ -41,17 +44,45 @@ class DiscoverRunners(Protocol):
 
 
 class HttpDiscoverySource:
-    """Reads livepeer-node's ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
+    """Reads a ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
     (``lpb discovery``, docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
-    credentials; the signer is not involved in discovery (#45)."""
+    credentials; the signer is not involved in discovery (#45).
 
-    def __init__(self, discovery_url: str, *, discover: DiscoverRunners = discover_runners) -> None:
+    The body is parsed here, not by the SDK. ``discover_runners`` uses ``json.loads``, so a
+    livepeer-node ``price_usd`` would already be a float (livepeer/livepeer-python-gateway#88).
+    ``discover`` is only the test seam.
+    """
+
+    def __init__(
+        self,
+        discovery_url: str,
+        *,
+        discover: DiscoverRunners | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
         self._discovery_url = discovery_url
         self._discover = discover
+        self._client = client
 
     async def fetch(self) -> tuple[Runner, ...]:
-        entries = await self._discover(discovery_url=self._discovery_url)
+        if self._discover is not None:
+            entries = await self._discover(discovery_url=self._discovery_url)
+        else:
+            entries = await self._fetch_entries()
+        if not isinstance(entries, list):
+            raise ValueError("discovery response is not a JSON list")
         return tuple(runners_from_entries(entries))
+
+    async def _fetch_entries(self) -> Any:
+        owns_client = self._client is None
+        client = self._client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+        try:
+            response = await client.get(self._discovery_url, headers={"Accept": "application/json"})
+            response.raise_for_status()
+            return loads_json_numbers(response.content)
+        finally:
+            if owns_client:
+                await client.aclose()
 
 
 class SdkRunnerTransport:

@@ -1523,7 +1523,7 @@
       },
       "Offering": {
         "additionalProperties": false,
-        "description": "One runner app, as a builder sees it.",
+        "description": "One runner app in one (currency, unit), as a builder sees it. Runners with no rate are not listed.",
         "properties": {
           "app": {
             "title": "App",
@@ -1542,24 +1542,10 @@
             "type": "string"
           },
           "rate_high": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ObservedRate"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/ObservedRate"
           },
           "rate_low": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ObservedRate"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/ObservedRate"
           },
           "rate_status": {
             "enum": [
@@ -1568,10 +1554,6 @@
             ],
             "title": "Rate Status",
             "type": "string"
-          },
-          "rates_excluded": {
-            "title": "Rates Excluded",
-            "type": "integer"
           },
           "ready_count": {
             "title": "Ready Count",
@@ -1593,7 +1575,6 @@
           "rate_high",
           "rate_status",
           "stale",
-          "rates_excluded",
           "runner_count",
           "ready_count",
           "observed_at"

@@ -55,7 +55,6 @@ async def test_offerings_are_public_and_name_no_runner(api: tuple[httpx.AsyncCli
             "rate_high",
             "rate_status",
             "stale",
-            "rates_excluded",
             "runner_count",
             "ready_count",
             "observed_at",
@@ -71,7 +70,7 @@ async def test_offered_rates_carry_their_source_and_age(api: tuple[httpx.AsyncCl
         "amount", "currency", "unit", "price_usd", "source", "observed_at", "observed_by",
     }  # fmt: skip
     assert (offering["rate_low"]["source"], offering["rate_low"]["observed_by"]) == ("orchestrator", "engine")
-    assert (offering["rate_status"], offering["stale"], offering["rates_excluded"]) == ("available", False, 0)
+    assert (offering["rate_status"], offering["stale"]) == ("available", False)
     assert offering["rate_low"]["observed_at"] == offering["observed_at"]  # the fixture runner has no stamp
 
 

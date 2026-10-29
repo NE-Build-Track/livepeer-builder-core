@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
@@ -97,28 +96,27 @@ class DiscoveryService:
         observed = self._snapshot.observed_at
         if observed is None:
             return []
-        by_app: dict[str, list[Runner]] = {}
+        by_unit: dict[tuple[str, str, str], list[tuple[Runner, NetworkRate]]] = {}
         for runner in self._snapshot.runners:
-            if app is None or runner.app == app:
-                by_app.setdefault(runner.app, []).append(runner)
+            if runner.rate is not None and (app is None or runner.app == app):
+                key = (runner.app, runner.rate.currency, runner.rate.unit)
+                by_unit.setdefault(key, []).append((runner, runner.rate))
         offerings = []
-        for name in sorted(by_app):
-            group = by_app[name]
-            advertised = [
-                _observed(runner.rate, runner.observed_at, observed)
-                for runner in group
-                if runner.rate is not None
-            ]
-            rates = _comparable_rates(advertised)
+        for key in sorted(by_unit):
+            name, _, unit = key
+            group = [runner for runner, _ in by_unit[key]]
+            rates = sorted(
+                (_observed(rate, runner.observed_at, observed) for runner, rate in by_unit[key]),
+                key=lambda rate: rate.amount,
+            )
             offerings.append(
                 Offering(
                     app=name,
                     modes=tuple(sorted({runner.mode for runner in group if runner.mode})),
-                    rate_low=rates[0] if rates else None,
-                    rate_high=rates[-1] if rates else None,
-                    rate_status="available" if any(_is_payable(rate) for rate in rates) else "missing",
+                    rate_low=rates[0],
+                    rate_high=rates[-1],
+                    rate_status="available" if _is_payable(unit) else "missing",
                     stale=not self.is_fresh() or self._too_old(rates),
-                    rates_excluded=len(advertised) - len(rates),
                     runner_count=len(group),
                     ready_count=sum(1 for runner in group if _is_ready(runner)),
                     observed_at=observed,
@@ -146,14 +144,6 @@ def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) ->
     return ObservedRate(**rate.model_dump(), observed_at=stamp, observed_by="orchestrator")
 
 
-def _is_payable(rate: ObservedRate) -> bool:
+def _is_payable(unit: str) -> bool:
     """The engine signs for this unit (the rule ``payment_type`` applies); any other is refused."""
-    return rate.unit.strip().lower() in PAYMENT_TYPES_BY_UNIT
-
-
-def _comparable_rates(rates: list[ObservedRate]) -> list[ObservedRate]:
-    """Rates in the group's most common (currency, unit), cheapest first; other units do not compare."""
-    if not rates:
-        return []
-    common, _ = Counter((rate.currency, rate.unit) for rate in rates).most_common(1)[0]
-    return sorted((rate for rate in rates if (rate.currency, rate.unit) == common), key=lambda r: r.amount)
+    return unit.strip().lower() in PAYMENT_TYPES_BY_UNIT

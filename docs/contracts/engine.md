@@ -28,7 +28,7 @@ returns runner URLs and still checks `discover`.
 | `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, `rate_error`, `observed_at`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
 | `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
 | `ObservedRate` | A `NetworkRate` as the catalog serves it, plus `observed_at` and `observed_by` |
-| `Offering` | One runner app: its modes, the cheapest and dearest comparable rate (`rate_low`, `rate_high`), `rate_status`, `stale`, `rates_excluded`, runner and ready counts, and `observed_at` (the engine's last good poll) |
+| `Offering` | One runner app in one `(currency, unit)`: its modes, the cheapest and dearest rate (`rate_low`, `rate_high`), `rate_status`, `stale`, runner and ready counts, and `observed_at` (the engine's last good poll). An app advertised in two units is two offerings; runners with no rate are not listed |
 
 ### Rates (ISS-10)
 
@@ -78,9 +78,8 @@ while the engine keeps it with its poll time.
 
 | Field | Meaning |
 | --- | --- |
-| `rate_status` | `available`, or `missing` when no runner in the app advertises a usable rate |
+| `rate_status` | `available`, or `missing` when the engine does not pay the offering's unit (for example `720p-pixel-seconds`) |
 | `stale` | `true` when the snapshot is not fresh (three missed polls), or when the oldest rate in the range is older than `LPB_RATE_MAX_AGE_S` (default 600 s: two of livepeer-node discovery's default 5-minute refreshes) |
-| `rates_excluded` | Advertised rates left out of the range because their `(currency, unit)` is not the app's most common one; they do not compare |
 
 Staleness is information, never a payment gate. Payment always uses the advertised wei rate with its
 ceiling ([payments.md](payments.md#pricing-assumptions)).

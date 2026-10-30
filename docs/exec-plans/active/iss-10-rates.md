@@ -145,8 +145,9 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   runners in `tests/unit/livepeer_net.py` and `testing.fakes.runner()` advertise `wei`, not `usd`, as
   livepeer-node does; `test_sdk_contract.py` compares the engine's units with the SDK's minus `hour`.
 - 30 October: a number such as `1e1000000000000000000` is `inf` to the probe's float parser, so the raw
-  token was re-served. `loads_json_numbers` then raised and every engine refresh failed. The probe now
-  parses fractional numbers with `decimal_json_number` and fails that orchestrator only.
+  token was re-served. `loads_json_numbers` then raised and every engine refresh failed. #84 made the
+  probe parse fractional numbers with `Decimal` and fail that orchestrator only; that change moved to #87
+  (below) and is not on this branch.
 
 - 30 October: Mike's review of `53b12d7`, engine side (the `lpb discovery` items are T25). Test-first;
   each new test seen red for the right reason, or, where the behaviour already held, shown to fail under a
@@ -242,8 +243,15 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 - 30 October (John): #77 was too large. The `lpb discovery` changes (runner records kept as received,
   `b22b9c1`; #84's fix; the exponent tests) moved to
   [#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87), so the discovery service is
-  reviewed on its own. #77 changes only the engine. Until #87 merges, `price_usd` read through
-  `lpb discovery` is a float round-trip; the engine's own fetch keeps every digit from any other source.
+  reviewed on its own. #77 changes only the engine. Until #87 merges, `lpb discovery` is `releases/m3`'s
+  (`probe.py` uses `json.loads`, `GET /discovery` is Starlette's `JSONResponse`): `price_usd` is a float
+  round-trip, an exponent too large for a float makes `GET /discovery` fail (`JSONResponse` refuses `inf`),
+  so every engine refresh fails and keeps its last snapshot, and one too small is re-served as `0.0`. #87
+  fixes both. The engine's own fetch keeps every digit, and makes such a number one field's problem, from
+  any source that passes it through (livepeer-node's discovery cache, one orchestrator).
+- 30 October (Mike, review of `6d44652`): `decimal_json_number` claimed `lpb discovery` refuses such a
+  number, which is true only with #87. On this branch only the engine used it, so it is folded into
+  `_lenient_number` and removed; #87 adds it with the probe change.
 - 30 October (John): tests consolidated with no behaviour change. `test_go_livepeer_compat.py` is gone: its
   two tests repeated an unstamped-rate test in `test_rates.py` and the no-rate refusal in
   `test_runner_call.py`. The parsing cases are one table, the payment guard is one parametrised test that

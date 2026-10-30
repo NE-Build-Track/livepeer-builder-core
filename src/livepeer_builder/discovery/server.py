@@ -15,12 +15,12 @@ from starlette.routing import Route
 
 from livepeer_builder.discovery.catalog import Catalog, Probes
 from livepeer_builder.discovery.directory import OrchestratorDirectory
+from livepeer_builder.discovery.document import discovery_document
 from livepeer_builder.discovery.onchain import OnChainDirectory
 from livepeer_builder.discovery.probe import Prober
 from livepeer_builder.discovery.rpc import JsonRpcChain
 from livepeer_builder.discovery.settings import DiscoverySettings
 from livepeer_builder.discovery.static import StaticDirectory
-from livepeer_builder.utils import dumps_json_numbers
 
 _LOG = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ def create_app(catalog: Catalog, *, refresh: "asyncio.Task[None] | None" = None)
     serve a frozen inventory, so it must not look ready (#46 review)."""
 
     async def discovery(_: Request) -> Response:
-        # Not JSONResponse: json.dumps cannot write the probe's Decimal price_usd as a number.
-        return Response(dumps_json_numbers(catalog.inventory()), media_type="application/json")
+        # Runner objects are the orchestrator's JSON text. json.dumps would quote them.
+        return Response(discovery_document(catalog.inventory()), media_type="application/json")
 
     async def healthz(_: Request) -> JSONResponse:
         return JSONResponse({"ok": True})

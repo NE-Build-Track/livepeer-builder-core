@@ -64,8 +64,8 @@ an hourly registration, which is metered in `seconds`). It is not a conversion b
 or per `fixed` request (`checkMaxPrice` in `signer/service.go`); anything else is a 400. That is what
 livepeer-node advertises on-chain, and the only rate the engine pays. Any other rate is kept as advertised,
 its offering is `missing`, and a paid call to its runner is `payment_refused` before any signing:
-go-livepeer's `720p-pixel-seconds`, the registration unit `hour` (no released orchestrator advertises it;
-the SDK still signs it as `live`, T23), and any currency but `wei`.
+the registration unit `hour` (no released orchestrator advertises it; the SDK still signs it as `live`,
+T23), and any currency but `wei`.
 
 **Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
 [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
@@ -87,7 +87,7 @@ while the engine keeps it with its poll time.
 
 | Field | Meaning |
 | --- | --- |
-| `rate_status` | `available` when the signer takes a ceiling in the offering's currency and unit (`wei` per `seconds` or `fixed`); otherwise `missing`, for example `720p-pixel-seconds`, `hour` or `usd` |
+| `rate_status` | `available` when the signer takes a ceiling in the offering's currency and unit (`wei` per `seconds` or `fixed`); otherwise `missing`, for example `hour` or `usd` |
 | `stale` | `true` when the snapshot is not fresh (three missed polls), or when the oldest rate in the range is older than `LPB_RATE_MAX_AGE_S` (default 600 s: two of livepeer-node discovery's default 5-minute refreshes) |
 
 Staleness is information, never a payment gate. Payment always uses the advertised wei rate with its
@@ -105,7 +105,6 @@ this section.
 | --- | --- |
 | `price` always wei, `currency` always `wei`, **no `price_usd`** (the field exists from `v0.9.3`, but only go-livepeer's remote signer fills it, with its own wei-to-USD conversion) | `price_usd` is `None`. go-livepeer keeps the registered USD price internally; an upstream change that fills `price_usd` with livepeer-node's meaning makes it appear with no engine change |
 | no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
-| unit `720p-pixel-seconds` (per-pixel video, which livepeer-node refuses at registration) | Kept as advertised; refused for payment |
 | an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
 | wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
 

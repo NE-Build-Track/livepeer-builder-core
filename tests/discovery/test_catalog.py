@@ -1,6 +1,7 @@
 """The catalog: the directory and each orchestrator's last good inventory, refreshed on intervals (#45)."""
 
 import asyncio
+import json
 from collections.abc import Sequence
 
 import pytest
@@ -34,13 +35,15 @@ class Answers:
         return [
             Probe(orchestrator=o, failure="failed")
             if o.url in self.down
-            else Probe(orchestrator=o, entry={"address": o.url, "runners": [{"round": self.round}]})
+            else Probe(
+                orchestrator=o, entry={"address": o.url, "runners": [json.dumps({"round": self.round})]}
+            )
             for o in orchestrators
         ]
 
 
 def rounds(catalog: Catalog) -> dict[str, int]:
-    return {entry["address"]: entry["runners"][0]["round"] for entry in catalog.inventory()}
+    return {entry["address"]: json.loads(entry["runners"][0])["round"] for entry in catalog.inventory()}
 
 
 async def test_not_ready_until_a_directory_loads_and_a_probe_pass_finishes() -> None:

@@ -242,18 +242,14 @@ async def test_each_unit_of_an_app_is_its_own_offering(clock: FixedClock) -> Non
 
 
 async def test_an_unpaid_unit_does_not_hide_a_paid_one(clock: FixedClock) -> None:
-    pixels, seconds = await catalog(
+    hourly, seconds = await catalog(
         clock,
-        priced("1", unit="720p-pixel-seconds", name="p1"),
-        priced("2", unit="720p-pixel-seconds", name="p2"),
+        priced("1", unit="hour", name="h1"),
+        priced("2", unit="hour", name="h2"),
         priced("10", name="s1"),
     )
     assert (seconds.rate_low.unit, seconds.rate_status, seconds.runner_count) == ("seconds", "available", 1)
-    assert (pixels.rate_low.unit, pixels.rate_status, pixels.runner_count) == (
-        "720p-pixel-seconds",
-        "missing",
-        2,
-    )
+    assert (hourly.rate_low.unit, hourly.rate_status, hourly.runner_count) == ("hour", "missing", 2)
 
 
 @pytest.mark.parametrize(

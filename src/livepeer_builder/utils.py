@@ -61,22 +61,3 @@ def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
 
 def _not_json(token: str) -> Any:
     raise ValueError(f"{token} is not a JSON number")
-
-
-def dumps_json_numbers(value: object) -> str:
-    """Compact ``json.dumps`` that writes a :class:`Decimal` as the same JSON number.
-
-    ``str`` keeps the digits as sent; fixed-point would pad ``1E-999999`` to a megabyte."""
-    if isinstance(value, Decimal):
-        if not value.is_finite():
-            raise ValueError("non-finite decimal")
-        return str(value)
-    if isinstance(value, dict):
-        return "{" + ",".join(f"{_dumps(str(k))}:{dumps_json_numbers(v)}" for k, v in value.items()) + "}"
-    if isinstance(value, list | tuple):
-        return "[" + ",".join(dumps_json_numbers(item) for item in value) + "]"
-    return _dumps(value)
-
-
-def _dumps(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))

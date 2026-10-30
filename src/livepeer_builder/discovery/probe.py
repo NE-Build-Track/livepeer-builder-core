@@ -4,8 +4,8 @@ Only orchestrators whose certificate the deployment's trust store accepts are ke
 their runners over verified TLS, so one that is not trusted could never be used. That store is the
 system's, as OpenSSL loads it, so ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` extend it: a deployment that pins
 orchestrator certificates for its engine mounts the same pins here. Each answer becomes one
-entry under the address we probed (an orchestrator cannot claim another's), with its runner records
-passed on untouched for the engine to parse.
+entry under the address we probed (an orchestrator cannot claim another's), with each runner record
+kept as the JSON text the orchestrator sent.
 
 A URL the operator did not write (``Orchestrator.public_only``: an on-chain registration) is resolved once,
 refused unless every address is public, and fetched from the address that was checked, so a registration
@@ -27,7 +27,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from livepeer_builder.discovery.directory import Orchestrator
-from livepeer_builder.utils import loads_json_numbers
+from livepeer_builder.discovery.document import runner_records
 
 _LOG = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class Prober:
             return self._excluded(orchestrator, "failed", exc)
         return Probe(orchestrator=orchestrator, entry={"address": orchestrator.url, "runners": runners})
 
-    async def _fetch(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> list[dict[str, Any]]:
+    async def _fetch(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> list[str]:
         """Each target in order until one connects: a dead first address (often an AAAA) must not fail an
         orchestrator whose next one works, whether it refuses or stays silent. Each address but the last gets
         ``next_address_after_s`` to connect (TLS included), so a silent one cannot use up the probe (#46
@@ -172,7 +172,7 @@ class Prober:
         extensions: dict[str, Any],
         *,
         limits: httpx.Timeout | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[str]:
         request = client.build_request(
             "GET",
             url,
@@ -189,19 +189,7 @@ class Prober:
                 body += chunk
                 if len(body) > self._max_bytes:
                     raise ValueError(f"inventory larger than {self._max_bytes} bytes")
-        entries = loads_json_numbers(body)
-        if not isinstance(entries, list):
-            raise ValueError("inventory is not a JSON list")
-        runners: list[dict[str, Any]] = []
-        for entry in entries:
-            if not isinstance(entry, dict) or entry.get("runners") is None:  # null: a Go nil slice, none
-                continue
-            if not isinstance(entry["runners"], list):
-                raise ValueError(
-                    "runners is not a JSON list"
-                )  # never an empty inventory that replaces a good one
-            runners += [runner for runner in entry["runners"] if isinstance(runner, dict)]
-        return runners
+        return runner_records(body)
 
     def _excluded(self, orchestrator: Orchestrator, reason: Failure, exc: BaseException) -> Probe:
         _LOG.warning(

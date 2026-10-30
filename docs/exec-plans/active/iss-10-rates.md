@@ -144,6 +144,9 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   (the `wei`/`hour` catalog case passed once `hour` left the paid units). Fixtures changed: the test
   runners in `tests/unit/livepeer_net.py` and `testing.fakes.runner()` advertise `wei`, not `usd`, as
   livepeer-node does; `test_sdk_contract.py` compares the engine's units with the SDK's minus `hour`.
+- 30 October: a number such as `1e1000000000000000000` is `inf` to the probe's float parser, so the raw
+  token was re-served. `loads_json_numbers` then raised and every engine refresh failed. The probe now
+  parses fractional numbers with `decimal_json_number` and fails that orchestrator only.
 
 - 30 October: Mike's review of `53b12d7`, engine side (the `lpb discovery` items are T25). Test-first;
   each new test seen red for the right reason, or, where the behaviour already held, shown to fail under a
@@ -212,3 +215,6 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   ceiling needs it) but is bounded like the prober: 5 s in all, 1 MiB. `utils.read_capped` is shared so
   that the prober can adopt it. Items 10(a), 10(b) and 10(d) touch only `lpb discovery`
   (`discovery/document.py`, `discovery/probe.py`) and are left for that service (tech-debt tracker).
+- 30 October: an exponent `Decimal` cannot construct fails that orchestrator's probe, as `NaN` does.
+  It is not re-served. A float parse would turn `1e1000000000000000000` into `inf`, keep the token, and
+  every engine refresh would raise on the aggregated document.

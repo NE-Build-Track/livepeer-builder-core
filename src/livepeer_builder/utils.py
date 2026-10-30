@@ -5,7 +5,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterable, Coroutine
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
@@ -63,9 +63,25 @@ def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with a fractional number as :class:`Decimal`, not a float.
 
     livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``. ``NaN`` and
-    ``Infinity`` are not JSON and raise ``ValueError``, as an unparseable body does.
+    ``Infinity`` are not JSON and raise ``ValueError``, as an unparseable body does. So does an exponent
+    ``Decimal`` cannot construct (past ``10**18``).
     """
-    return json.loads(raw, parse_float=Decimal, parse_constant=_not_json)
+    return json.loads(raw, parse_float=decimal_json_number, parse_constant=_not_json)
+
+
+def decimal_json_number(token: str) -> Decimal:
+    """A JSON number token as :class:`Decimal`.
+
+    An exponent past ``10**18`` makes ``Decimal`` raise ``InvalidOperation``. Discovery must refuse that
+    inventory: the token would otherwise be re-served, and every engine refresh would fail on it.
+    """
+    try:
+        amount = Decimal(token)
+    except InvalidOperation as exc:
+        raise ValueError(f"{token} is not a JSON number") from exc
+    if not amount.is_finite():
+        raise ValueError(f"{token} is not a JSON number")
+    return amount
 
 
 def _not_json(token: str) -> Any:

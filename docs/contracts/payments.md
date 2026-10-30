@@ -193,8 +193,10 @@ What a rate means, and what it does not:
 5. **The engine never signs without a ceiling the signer takes.** A runner that asks for payment but
    advertised no usable rate is refused before the signer is asked (`payment_refused`, nothing paid; the
    job fails over). No usable rate is `rate is None` (none advertised, or an unreadable `price` /
-   `currency` / `unit`, or a `price` below `1e-300` or from `1e300`) or a rate in any currency and unit but
-   `wei` per `seconds` or `fixed`. A bad `price_usd` alone sets `Runner.rate_error` but keeps the wei
+   `currency` / `unit`, or a `price` above `0` but below `1e-300`, or from `1e300`), a free rate (`0`),
+   or a rate in any currency and unit but `wei` per `seconds` or `fixed`. The currency and the unit are
+   checked when the runner asks for payment, not before: a runner that answers without a 402 is not
+   refused for them. Paid jobs try runners with a usable rate first ([engine.md](engine.md#behavior-the-contract-fixes)). A bad `price_usd` alone sets `Runner.rate_error` but keeps the wei
    ceiling. The node signer checks no price at all when it gets no ceiling, and refuses (400) one that is
    not a positive `wei` price in the payment type's unit.
 6. **Tickets are probabilistic.** The reported cost is the expected value at signing. A single job's

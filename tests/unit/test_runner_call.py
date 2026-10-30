@@ -111,6 +111,33 @@ async def test_a_runner_with_no_usable_price_is_never_signed_for(net: Net) -> No
     assert net.signer_requests == []
 
 
+FREE = NetworkRate(amount=Decimal(0), currency="wei", unit="fixed")
+
+
+async def test_a_free_runner_that_asks_for_payment_is_never_signed_for(net: Net) -> None:
+    """A price of 0 needs no ceiling, and a 0.0 ceiling is a signer 400 after the intent (#77 review)."""
+    with pytest.raises(RunnerCallError) as refused:
+        await call(net, runner=net.runner().model_copy(update={"rate": FREE}))
+    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
+    assert "advertised a price of 0" in str(refused.value)
+    assert not any(entry.startswith(("intent ", "sign ")) for entry in net.log)
+    assert net.signer_requests == []
+
+
+async def test_a_free_runner_serves_a_credentialed_call(net: Net) -> None:
+    net.paid = False
+    reply = await call(net, runner=net.runner().model_copy(update={"rate": FREE}))
+    assert (reply.status_code, reply.payment_sent) == (200, False)
+
+
+async def test_a_runner_in_a_unit_the_engine_does_not_pay_serves_a_credentialed_call(net: Net) -> None:
+    """The unit matters only when the runner asks for payment, as the currency does (#77 review)."""
+    net.paid = False
+    hourly = NetworkRate(amount=Decimal("0.10"), currency="wei", unit="hour")
+    reply = await call(net, runner=net.runner().model_copy(update={"rate": hourly}))
+    assert (reply.status_code, reply.payment_sent) == (200, False)
+
+
 @pytest.mark.parametrize(
     ("currency", "unit"),
     [

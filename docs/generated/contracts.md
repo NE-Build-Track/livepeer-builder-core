@@ -145,8 +145,8 @@ classDiagram
     class Offering {
         +str app
         +str[] modes
-        +ObservedRate rate_low
-        +ObservedRate rate_high
+        +ObservedRate? rate_low
+        +ObservedRate? rate_high
         +enum rate_status
         +bool stale
         +int runner_count

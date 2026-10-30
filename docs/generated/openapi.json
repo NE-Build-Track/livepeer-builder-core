@@ -1436,7 +1436,7 @@
       },
       "Offering": {
         "additionalProperties": false,
-        "description": "One runner app in one (currency, unit), as a builder sees it. Runners with no rate are not listed.",
+        "description": "One runner app in one (currency, unit), as a builder sees it. An app's runners with no rate are one\nmore offering with no range: they still serve jobs, so the catalog lists them.",
         "properties": {
           "app": {
             "title": "App",
@@ -1455,10 +1455,24 @@
             "type": "string"
           },
           "rate_high": {
-            "$ref": "#/components/schemas/ObservedRate"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObservedRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "rate_low": {
-            "$ref": "#/components/schemas/ObservedRate"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObservedRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "rate_status": {
             "enum": [

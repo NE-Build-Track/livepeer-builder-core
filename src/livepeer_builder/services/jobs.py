@@ -78,7 +78,7 @@ from livepeer_builder.services.operations import check_operation, claim_operatio
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.utils import run_shielded, signable
 
 _LOG = logging.getLogger(__name__)
 
@@ -271,6 +271,8 @@ class JobService:
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
         ordered = tuple(self._selection.order(candidates, request))
+        if credential.token is not None:  # paid: a runner with no usable ceiling is refused at its 402 (D62)
+            ordered = _capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
         return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
@@ -476,6 +478,16 @@ class JobService:
             created_at=self._clock.now(),
             completed_at=None,
         )
+
+
+def _capped_first(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
+    """The policy's order, runners the signer takes a ceiling for first; the rest are the last resort."""
+    return tuple(sorted(runners, key=lambda runner: not _can_cap(runner)))  # stable: keeps the policy's order
+
+
+def _can_cap(runner: Runner) -> bool:
+    rate = runner.rate
+    return rate is not None and signable(rate.amount, rate.currency, rate.unit)
 
 
 def _result_ref(reply: RunnerReply) -> ResultRef:

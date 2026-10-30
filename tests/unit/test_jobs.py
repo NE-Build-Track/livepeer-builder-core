@@ -292,6 +292,48 @@ async def test_an_unknown_payment_never_pays_another_orchestrator(
     assert job.failure.kind == "payment_unknown" and job.attempts[0].outcome == "payment_unknown"  # stored
 
 
+def capped_and_uncapped() -> tuple[Runner, ...]:
+    """MostCapacityFirst alone would try the runner with no rate first: it has more free capacity."""
+    return (
+        runner(url="https://uncapped", orchestrator_url=ORCH_A, price=None, capacity_available=5),
+        runner(url="https://capped", orchestrator_url=ORCH_B, capacity_available=1),
+    )
+
+
+async def test_a_paid_job_tries_runners_it_can_cap_first(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """A runner with no usable ceiling is refused at its 402 (D62): first, it would fail over on every paid job."""
+    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    transport.steps = [ScriptedTransport.ok()]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    assert [url for url, _ in transport.calls] == ["https://capped"]
+
+
+async def test_a_paid_job_still_tries_a_runner_it_cannot_cap_last(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """It may serve without asking for payment; only a 402 from it is refused."""
+    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    transport.steps = [
+        RunnerCallError("refused", "busy", payment_sent=False, status_code=503),
+        ScriptedTransport.ok(),
+    ]
+    await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=2))
+    assert [url for url, _ in transport.calls] == ["https://capped", "https://uncapped"]
+
+
+async def test_an_unpaid_job_keeps_the_selection_policy_s_order(
+    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await make_engine(
+        allocation_mode="per_application", runners=capped_and_uncapped()
+    )  # no key: unpaid
+    transport.steps = [ScriptedTransport.ok()]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    assert transport.calls == [("https://uncapped", None)]
+
+
 async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:

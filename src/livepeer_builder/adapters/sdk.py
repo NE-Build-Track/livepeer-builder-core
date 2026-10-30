@@ -7,10 +7,12 @@ each payment session before the signer is asked, so cost attribution never depen
 a lost signer reply would skip (docs/references/sdk-gateway.md)."""
 
 import asyncio
+import contextlib
 import json
+import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
 
 import httpx
 
@@ -27,32 +29,59 @@ from livepeer_builder.contracts import (
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.contracts.discovery import PRICE_FLOOR, PRICE_LIMIT
+from livepeer_builder.contracts.discovery import PRICE_LIMIT, PRICE_RULE, is_price
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import loads_json_numbers
+from livepeer_builder.utils import INVENTORY_MAX_BYTES, loads_json_numbers, read_capped
+
+_LOG = logging.getLogger(__name__)
 
 
 class HttpDiscoverySource:
     """Reads a ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
     (``lpb discovery``, docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
-    credentials; the signer is not involved in discovery (#45). ``price_usd`` stays a ``Decimal``."""
+    credentials; the signer is not involved in discovery (#45). ``price_usd`` stays a ``Decimal``.
 
-    def __init__(self, discovery_url: str, *, client: httpx.AsyncClient | None = None) -> None:
+    The whole request, body included, gets ``timeout_s`` (5 s, as the SDK's ``discover_runners`` had) and
+    at most ``max_bytes`` (1 MiB, livepeer/node's MaxBody): ``DiscoveryService`` refreshes serially, so a
+    slow or huge source would otherwise freeze the snapshot. A redirect is not followed; it fails the refresh.
+    """
+
+    def __init__(
+        self,
+        discovery_url: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        timeout_s: float = 5.0,
+        max_bytes: int = INVENTORY_MAX_BYTES,
+    ) -> None:
         self._discovery_url = discovery_url
         self._client = client
+        self._timeout_s = timeout_s
+        self._max_bytes = max_bytes
 
     async def fetch(self) -> tuple[Runner, ...]:
-        client = self._client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+        client = self._client or httpx.AsyncClient(timeout=self._timeout_s, follow_redirects=False)
         try:
-            response = await client.get(self._discovery_url, headers={"Accept": "application/json"})
-            response.raise_for_status()
-            entries = loads_json_numbers(response.content)
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
+            async with asyncio.timeout(self._timeout_s):
+                body = await self._body(client)
+        except TimeoutError as error:
+            message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
+            raise TimeoutError(message) from error
         finally:
             if self._client is None:
                 await client.aclose()
+        entries = loads_json_numbers(body)
         if not isinstance(entries, list):
             raise ValueError("discovery response is not a JSON list")
         return tuple(runners_from_entries(entries))
+
+    async def _body(self, client: httpx.AsyncClient) -> bytes:
+        request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
+        response = await client.send(request, stream=True)
+        async with contextlib.aclosing(response):
+            response.raise_for_status()
+            return await read_capped(response.aiter_bytes(), self._max_bytes)
 
 
 class SdkRunnerTransport:
@@ -132,14 +161,37 @@ class SdkRunnerTransport:
             raise events.error("timeout", message) from error
 
 
-def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:
+def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
+    """Every runner that parses. A malformed entry or runner record is skipped, never the inventory: one bad
+    orchestrator must not stale discovery for the rest (livepeer/node's Decode does the same)."""
     runners: list[Runner] = []
+    skipped_entries = skipped_runners = 0
     for entry in entries:
+        if not isinstance(entry, dict):
+            skipped_entries += 1
+            continue
+        records = entry.get("runners")
+        if records is None:  # null is a Go nil slice: no runners, nothing wrong
+            continue
+        if not isinstance(records, list):
+            skipped_entries += 1
+            continue
         orchestrator_url = _text(entry.get("address"))
-        for raw in entry.get("runners") or ():
+        for raw in records:
             runner = _runner_from_raw(raw, orchestrator_url)
-            if runner is not None:
+            if runner is None:
+                skipped_runners += 1
+            else:
                 runners.append(runner)
+    if skipped_entries or skipped_runners:
+        _LOG.warning(
+            "discovery inventory had malformed records",
+            extra={
+                "event": "discovery.inventory_skipped",
+                "entries": skipped_entries,
+                "runners": skipped_runners,
+            },
+        )
     return runners
 
 
@@ -192,8 +244,8 @@ def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
     if not isinstance(value, dict):
         return None, "price_info is not an object"
     amount = _decimal(value.get("price"))
-    if amount is None or amount < PRICE_FLOOR:
-        return None, "price is not a number from 1e-300 to below 1e300"
+    if amount is None or not is_price(amount):
+        return None, PRICE_RULE
     currency = _text(value.get("currency"))
     if currency is None:
         return None, "price_info has no currency"

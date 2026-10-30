@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import sys
 from collections.abc import AsyncIterable, Coroutine
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -90,15 +89,8 @@ def _lenient_number(token: str) -> Decimal | _UnreadableNumber:
 
 
 def _lenient_int(token: str) -> int | _UnreadableNumber:
-    """An integer token, or ``UNREADABLE_NUMBER`` when ``int`` would refuse its length.
-
-    The default limit (``sys.get_int_max_str_digits``, 4300) makes ``json.loads`` raise ``ValueError``
-    from inside the decoder. That would fail every runner in the inventory; the field is unreadable instead.
-    """
-    limit = sys.get_int_max_str_digits()
-    digits = token[1:] if token.startswith("-") else token
-    if limit > 0 and len(digits) > limit:
-        return UNREADABLE_NUMBER
+    """An integer token, or ``UNREADABLE_NUMBER`` past the runtime digit limit
+    (``sys.get_int_max_str_digits``, 4300 by default), where ``int`` raises and would fail every runner."""
     try:
         return int(token)
     except ValueError:

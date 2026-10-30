@@ -99,62 +99,45 @@ async def test_an_unpaid_call_never_reaches_the_signer(net: Net) -> None:
     assert not any(entry.startswith("sign") for entry in net.log)
 
 
-async def test_a_runner_with_no_usable_price_is_never_signed_for(net: Net) -> None:
-    """No rate means no maxPrice, and the signer checks no ceiling then: the engine refuses instead (ISS-10)."""
-    unpriced = net.runner().model_copy(update={"rate": None, "rate_error": "price_info has no currency"})
+def _rate(amount: str, currency: str = "wei", unit: str = "fixed") -> NetworkRate:
+    return NetworkRate(amount=Decimal(amount), currency=currency, unit=unit)
+
+
+@pytest.mark.parametrize(
+    ("rate", "reason"),
+    [
+        # no rate means no maxPrice, and the signer then checks no ceiling at all (ISS-10)
+        (None, "advertised no usable price"),
+        # a price of 0 needs no ceiling, and a 0.0 ceiling is a signer 400 after the intent (#77 review)
+        (_rate("0"), "advertised a price of 0"),
+        # livepeer/node's signer takes only a wei ceiling (checkMaxPrice) ...
+        (_rate("0.10", "usd", "seconds"), "which the signer takes no ceiling in"),
+        # ... per second for a live payment, per request for a fixed one
+        (_rate("0.10", unit="hour"), "unsupported runner price unit 'hour'"),
+    ],
+)
+async def test_a_runner_the_signer_cannot_cap_is_never_signed_for(
+    net: Net, rate: NetworkRate | None, reason: str
+) -> None:
+    """Its 402 is refused before the signer is asked, so the job fails over unpaid."""
     with pytest.raises(RunnerCallError) as refused:
-        await call(net, runner=unpriced)
+        await call(net, runner=net.runner().model_copy(update={"rate": rate}))
     assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
+    assert reason in str(refused.value)
     assert not any(
         entry.startswith(("intent ", "sign ")) for entry in net.log
     )  # "signer info" is not signing
     assert net.signer_requests == []
 
 
-FREE = NetworkRate(amount=Decimal(0), currency="wei", unit="fixed")
-
-
-async def test_a_free_runner_that_asks_for_payment_is_never_signed_for(net: Net) -> None:
-    """A price of 0 needs no ceiling, and a 0.0 ceiling is a signer 400 after the intent (#77 review)."""
-    with pytest.raises(RunnerCallError) as refused:
-        await call(net, runner=net.runner().model_copy(update={"rate": FREE}))
-    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
-    assert "advertised a price of 0" in str(refused.value)
-    assert not any(entry.startswith(("intent ", "sign ")) for entry in net.log)
-    assert net.signer_requests == []
-
-
-async def test_a_free_runner_serves_a_credentialed_call(net: Net) -> None:
-    net.paid = False
-    reply = await call(net, runner=net.runner().model_copy(update={"rate": FREE}))
-    assert (reply.status_code, reply.payment_sent) == (200, False)
-
-
-async def test_a_runner_in_a_unit_the_engine_does_not_pay_serves_a_credentialed_call(net: Net) -> None:
-    """The unit matters only when the runner asks for payment, as the currency does (#77 review)."""
-    net.paid = False
-    hourly = NetworkRate(amount=Decimal("0.10"), currency="wei", unit="hour")
-    reply = await call(net, runner=net.runner().model_copy(update={"rate": hourly}))
-    assert (reply.status_code, reply.payment_sent) == (200, False)
-
-
-@pytest.mark.parametrize(
-    ("currency", "unit"),
-    [
-        ("usd", "seconds"),  # livepeer/node's signer takes only a wei ceiling (checkMaxPrice) ...
-        ("wei", "hour"),  # ... per second for a live payment, per request for a fixed one
-    ],
-)
-async def test_a_rate_the_signer_takes_no_ceiling_in_is_never_signed_for(
-    net: Net, currency: str, unit: str
+@pytest.mark.parametrize("rate", [_rate("0"), _rate("0.10", unit="hour")])
+async def test_a_runner_the_signer_cannot_cap_still_serves_a_call_it_does_not_charge(
+    net: Net, rate: NetworkRate
 ) -> None:
-    """Its ceiling would be a signer 400, after the intent was recorded: the engine refuses it first."""
-    rate = NetworkRate(amount=Decimal("0.10"), currency=currency, unit=unit)
-    with pytest.raises(RunnerCallError) as refused:
-        await call(net, runner=net.runner().model_copy(update={"rate": rate}))
-    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
-    assert not any(entry.startswith(("intent ", "sign ")) for entry in net.log)
-    assert net.signer_requests == []
+    """The price is checked only when the runner asks for payment (#77 review)."""
+    net.paid = False
+    reply = await call(net, runner=net.runner().model_copy(update={"rate": rate}))
+    assert (reply.status_code, reply.payment_sent) == (200, False)
 
 
 @pytest.mark.parametrize(

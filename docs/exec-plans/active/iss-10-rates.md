@@ -244,3 +244,8 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   [#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87), so the discovery service is
   reviewed on its own. #77 changes only the engine. Until #87 merges, `price_usd` read through
   `lpb discovery` is a float round-trip; the engine's own fetch keeps every digit from any other source.
+- 30 October (John): tests consolidated with no behaviour change. `test_go_livepeer_compat.py` is gone: its
+  two tests repeated an unstamped-rate test in `test_rates.py` and the no-rate refusal in
+  `test_runner_call.py`. The parsing cases are one table, the payment guard is one parametrised test that
+  also checks each refusal's reason (shown failing with the ceiling guard off and with the 402 unit check
+  off), and the malformed-inventory cases are one test.

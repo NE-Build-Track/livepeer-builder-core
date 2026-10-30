@@ -176,58 +176,52 @@ async def test_http_discovery_gives_up_on_a_slow_body_at_its_deadline() -> None:
             await source.fetch()
 
 
-async def test_http_discovery_refuses_an_inventory_over_livepeer_node_s_max_body() -> None:
+@pytest.mark.parametrize(("padding", "refused"), [((1 << 20) - 2, False), (1 << 20, True)])
+async def test_http_discovery_reads_at_most_livepeer_node_s_max_body(padding: int, refused: bool) -> None:
     """livepeer/node's discovery reads at most 1 MiB (discovery/shared/inventory.go, MaxBody)."""
-    oversized = b"[" + b" " * (1 << 20) + b"]"  # one byte over
-    async with discovery_serving(oversized) as client:
+    body = b"[" + b" " * padding + b"]"  # exactly 1 MiB, or one byte over
+    async with discovery_serving(body) as client:
         source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
-        with pytest.raises(ValueError, match="inventory larger than 1048576 bytes"):
-            await source.fetch()
+        if refused:
+            with pytest.raises(ValueError, match="inventory larger than 1048576 bytes"):
+                await source.fetch()
+        else:
+            assert await source.fetch() == ()
 
 
-async def test_http_discovery_reads_an_inventory_of_exactly_the_max_body() -> None:
-    at_limit = b"[" + b" " * ((1 << 20) - 2) + b"]"
-    async with discovery_serving(at_limit) as client:
-        assert await HttpDiscoverySource("http://discovery:8939/discovery", client=client).fetch() == ()
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [(b"{}", "discovery response is not a JSON list"), (b"[NaN]", "NaN is not a JSON number")],
+)
+async def test_http_discovery_refuses_a_document_that_is_not_a_json_list(body: bytes, error: str) -> None:
+    """The whole poll fails, so the last good snapshot stays; NaN and Infinity are not JSON."""
+    async with discovery_serving(body) as client:
+        with pytest.raises(ValueError, match=error):
+            await HttpDiscoverySource("http://discovery:8939/discovery", client=client).fetch()
 
 
 GOOD_ENTRY = {"address": "https://good", "runners": [{"url": "https://good/apps/r1/app", "app": "a/b"}]}
 
 
-def test_an_entry_that_is_not_an_object_loses_no_other_orchestrator() -> None:
-    """livepeer/node's Decode skips a bad entry and keeps the rest; one bad entry must not stale discovery."""
-    (runner,) = runners_from_entries([None, GOOD_ENTRY])
-    assert runner.orchestrator_url == "https://good"
-
-
-@pytest.mark.parametrize("runners", [5, "r1", {"url": "https://bad/apps/r1/app", "app": "a/b"}])
-def test_an_entry_whose_runners_is_not_a_list_loses_no_other_orchestrator(runners: object) -> None:
-    (runner,) = runners_from_entries([{"address": "https://bad", "runners": runners}, GOOD_ENTRY])
-    assert runner.orchestrator_url == "https://good"
-
-
-def test_a_runner_record_that_is_not_an_object_loses_no_other_runner() -> None:
-    good = GOOD_ENTRY["runners"][0]  # type: ignore[index]
-    (runner,) = runners_from_entries([{"address": "https://good", "runners": [None, 7, "r", good]}])
-    assert runner.url == "https://good/apps/r1/app"
-
-
-def test_skipped_entries_and_runner_records_are_counted_in_one_warning(
+def test_a_malformed_entry_or_record_is_skipped_counted_and_loses_nothing_else(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """livepeer/node's Decode skips a bad entry and keeps the rest; one bad entry must not stale discovery."""
     entries = [
         None,  # an entry that is not an object
-        {"address": "https://bad", "runners": 5},  # runners that is not a list
+        {"address": "https://bad", "runners": 5},  # runners that is not a list ...
+        {"address": "https://bad", "runners": "r1"},
+        {"address": "https://bad", "runners": {"url": "https://bad/apps/r1/app", "app": "a/b"}},
         {"address": "https://none", "runners": None},  # a Go nil slice: no runners, nothing wrong
-        {"address": "https://good", "runners": [None, {"app": "a/b"}, GOOD_ENTRY["runners"][0]]},  # type: ignore[index]
+        {"address": "https://good", "runners": [None, 7, {"app": "a/b"}, GOOD_ENTRY["runners"][0]]},  # type: ignore[index]
     ]
     with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.sdk"):
         (runner,) = runners_from_entries(entries)
     [record] = [
         item for item in caplog.records if getattr(item, "event", "") == "discovery.inventory_skipped"
     ]
-    assert (record.entries, record.runners) == (2, 2)  # a non-object record and one with no url
-    assert runner.orchestrator_url == "https://good"
+    assert (record.entries, record.runners) == (4, 3)  # two non-object records and one with no url
+    assert runner.url == "https://good/apps/r1/app"
 
 
 def test_a_clean_inventory_logs_no_skip(caplog: pytest.LogCaptureFixture) -> None:

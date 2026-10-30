@@ -13,6 +13,7 @@ from livepeer_builder.adapters.runner_call import max_price
 from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import NetworkRate, ObservedRate, Offering, Runner
+from livepeer_builder.contracts.discovery import PRICE_RULE
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.testing import FixedClock, make_engine
@@ -50,16 +51,6 @@ async def catalog(clock: FixedClock, *runners: Runner) -> list[Offering]:
 # -- parsing: a rate exactly as advertised ---------------------------------------------------------------
 
 
-def test_a_price_with_no_currency_is_not_a_rate() -> None:
-    (runner,) = runners_from_entries(inventory(price="4492197255", unit="seconds"))
-    assert (runner.rate, runner.rate_error) == (None, "price_info has no currency")
-
-
-def test_a_price_with_no_unit_is_not_a_rate() -> None:
-    (runner,) = runners_from_entries(inventory(price="4492197255", currency="wei"))
-    assert (runner.rate, runner.rate_error) == (None, "price_info has no unit")
-
-
 def test_no_price_info_is_no_rate_and_no_error() -> None:
     """Off-chain registrations advertise no price (livepeer-node omits price_info)."""
     entries = [{"address": "https://o", "runners": [
@@ -69,48 +60,34 @@ def test_no_price_info_is_no_rate_and_no_error() -> None:
     assert [(r.rate, r.rate_error) for r in runners_from_entries(entries)] == [(None, None), (None, None)]
 
 
-def test_an_unreadable_price_says_why() -> None:
-    entries = [{"address": "https://o", "runners": [
-        {"url": "https://o/apps/r1/app", "app": "a/b", "price_info": "4492197255"},
-        {"url": "https://o/apps/r2/app", "app": "a/b", "price_info": {"price": "-1", "currency": "wei", "unit": "seconds"}},
-        {"url": "https://o/apps/r3/app", "app": "a/b", "price_info": {"price": "NaN", "currency": "wei", "unit": "seconds"}},
-        {"url": "https://o/apps/r4/app", "app": "a/b", "price_info": {"currency": "wei", "unit": "seconds"}},
-    ]}]  # fmt: skip
-    assert [(r.rate, r.rate_error) for r in runners_from_entries(entries)] == [
-        (None, "price_info is not an object"),
-        (None, "price must be 0, or from 1e-300 to below 1e300"),
-        (None, "price must be 0, or from 1e-300 to below 1e300"),
-        (None, "price must be 0, or from 1e-300 to below 1e300"),
-    ]
-
-
-def test_a_price_too_large_for_a_float_ceiling_is_not_a_rate() -> None:
-    """max_price pads the amount into a float; 1E+1000000 overflowed before the signer was asked."""
-    huge = Decimal("1E+1000000")
-    (runner,) = runners_from_entries(inventory(price=huge, currency="wei", unit="seconds"))
-    assert (runner.rate, runner.rate_error) == (None, "price must be 0, or from 1e-300 to below 1e300")
-    (runner,) = runners_from_entries(inventory(price="10", price_usd=huge, currency="wei", unit="seconds"))
-    assert runner.rate is not None and runner.rate.price_usd is None
-
-
-def test_a_price_too_small_for_a_positive_float_ceiling_is_not_a_rate() -> None:
-    """livepeer/node's signer refuses a ceiling that is not positive (checkMaxPrice).
-
-    1E-400 and 1E-999999 are 0.0 once padded into the float max_price sends. 0 is a free rate (below).
-    """
-    for tiny in ("1E-400", "1E-999999"):
-        (runner,) = runners_from_entries(inventory(price=tiny, currency="wei", unit="seconds"))
-        assert runner.rate is None, tiny
-        assert runner.rate_error == "price must be 0, or from 1e-300 to below 1e300", tiny
+@pytest.mark.parametrize(
+    ("price_info", "error"),
+    [
+        ("4492197255", "price_info is not an object"),
+        ({"price": "4492197255", "unit": "seconds"}, "price_info has no currency"),  # never defaulted to usd
+        ({"price": "4492197255", "currency": "wei"}, "price_info has no unit"),  # never defaulted to hour
+        ({"currency": "wei", "unit": "seconds"}, PRICE_RULE),
+        ({"price": "-1", "currency": "wei", "unit": "seconds"}, PRICE_RULE),
+        ({"price": "NaN", "currency": "wei", "unit": "seconds"}, PRICE_RULE),
+        # max_price pads the amount into a float: 1E+1000000 overflowed before the signer was asked, and
+        # 1E-400 or 1E-999999 pad to 0.0, a ceiling livepeer/node's signer refuses (checkMaxPrice)
+        ({"price": Decimal("1E+1000000"), "currency": "wei", "unit": "seconds"}, PRICE_RULE),
+        ({"price": "1E-400", "currency": "wei", "unit": "seconds"}, PRICE_RULE),
+        ({"price": "1E-999999", "currency": "wei", "unit": "seconds"}, PRICE_RULE),
+    ],
+)
+def test_a_price_info_that_is_not_a_rate_says_why(price_info: object, error: str) -> None:
+    runner = {"url": "https://o/apps/r1/app", "app": "a/b", "price_info": price_info}
+    (parsed,) = runners_from_entries([{"address": "https://o", "runners": [runner]}])
+    assert (parsed.rate, parsed.rate_error) == (None, error)
 
 
 def test_a_price_of_0_is_a_free_rate() -> None:
     """0 is a price (free); only the engine's ceiling needs a positive one, and a 402 from it is refused (#77 review)."""
+    free = NetworkRate(amount=Decimal(0), currency="wei", unit="seconds")
     (runner,) = runners_from_entries(inventory(price=0, currency="wei", unit="seconds"))
-    assert (runner.rate, runner.rate_error) == (
-        NetworkRate(amount=Decimal(0), currency="wei", unit="seconds"),
-        None,
-    )
+    assert (runner.rate, runner.rate_error) == (free, None)
+    assert testing.runner(price="0").rate == free.model_copy(update={"unit": "fixed"})
 
 
 def test_any_source_s_rate_is_refused_unless_a_float_ceiling_holds_it() -> None:
@@ -145,7 +122,7 @@ def test_a_node_on_chain_price_is_kept_as_advertised() -> None:
 
 
 def test_a_bad_price_usd_drops_only_price_usd_and_says_so() -> None:
-    for bad in ("not-a-number", "-0.01", "Infinity", Decimal("NaN"), True):
+    for bad in ("not-a-number", "-0.01", "Infinity", Decimal("NaN"), True, Decimal("1E+1000000")):
         (runner,) = runners_from_entries(inventory(price="10", price_usd=bad, currency="wei", unit="fixed"))
         assert runner.rate == NetworkRate(amount=Decimal(10), currency="wei", unit="fixed"), bad
         assert runner.rate_error == "price_usd is not a nonnegative number", bad
@@ -243,10 +220,6 @@ def test_an_offering_is_not_available_without_a_rate() -> None:
 async def test_a_free_runner_is_a_rate_of_0_in_the_catalog(clock: FixedClock) -> None:
     (offering,) = await catalog(clock, priced("0"))
     assert (offering.rate_low.amount, offering.rate_high.amount, offering.rate_status) == (0, 0, "available")
-
-
-def test_the_testing_runner_can_be_free() -> None:
-    assert testing.runner(price="0").rate == NetworkRate(amount=Decimal(0), currency="wei", unit="fixed")
 
 
 async def test_every_offering_is_stale_once_the_snapshot_is(clock: FixedClock) -> None:

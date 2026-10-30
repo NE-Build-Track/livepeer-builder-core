@@ -103,7 +103,8 @@ livepeer/node replaced go-livepeer (D2) in our stacks, but runner-app-examples r
 and the public orchestrators sampled on 29 October serve go-livepeer's inventory. Their `/discovery` (`ai/runner/live_runner.go`, `v0.9.0` to master) differs from
 livepeer-node's, and the engine reads it as follows. One rule is go-livepeer-specific: a runner priced in
 `720p-pixel-seconds` is dropped (`DROPPED_UNITS` in `adapters/sdk.py`). Each other difference falls under
-a rule above. `tests/unit/test_go_livepeer_compat.py` pins the behavior; delete both with this section.
+a rule above, and its tests (`test_rates.py`, `test_runner_call.py`) pin it; delete `DROPPED_UNITS` with this
+section.
 
 | go-livepeer `/discovery` | What the engine does |
 | --- | --- |

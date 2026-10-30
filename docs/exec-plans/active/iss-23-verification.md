@@ -55,6 +55,13 @@ From the ticket and the 21 October M3 plan, as the guide's definition of done:
 
 ## Progress
 
+- 2026-10-30: The M3 live suite ran on the console's stack with this branch merged with #77 (`9676260`): 41
+  engine checks green across payment failures, access, secrets, a discovery outage, streams with an
+  engine restart, Batteries down and sync replay ([evidence](../../references/evidence/2026-10-30-m3-live-suite.md)).
+  The traceability spec gains the L rows it proves, a live payment-failure section (ISS-12), and the
+  console's D57 checks; the dev-stack README notes that restarting clearinghouse needs the signer
+  recreated.
+
 - 2026-10-30: Cursor's second review of #83. The first probe job could itself be paid: `POST /v1/jobs`
   returns after the runner call, and the shared key pays in `per_application` mode. The jobs now name the
   run's own app (`lpb-probe/<run>`), the probe checks `GET /v1/offerings?app=` first and sends none if it

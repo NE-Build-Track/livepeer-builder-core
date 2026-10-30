@@ -16,7 +16,7 @@ fails when a cited test does not exist, so a rename fails CI until this file fol
 | H | HTTP route: the REST app in-process, over `httpx.ASGITransport` |
 | N | Loopback network: `tests/unit/livepeer_net.py`, a local orchestrator and signer driving the real runner call |
 | P | Property test (Hypothesis) |
-| L | Live: `scripts/live_probe.py` against a running stack ([below](#live-probe)) |
+| L | Live, against a running stack: `scripts/live_probe.py` ([below](#live-probe)), the console's live checks, or the recorded [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md) |
 
 **Evidence** is `fixture` for every level but L, and `live` for L. **Ticket** is ISS-23 for its own
 checks, or the guide that owns the row: ISS-11/14 (repeat-safe commands, D57), ISS-12 (payment
@@ -39,6 +39,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Cost summary, recent costs and allowance leave out another actor's fees; naming the other actor is refused | `tests/unit/test_verification_access.py::test_cost_summary_recent_costs_and_allowance_leave_out_another_actors_fees` | U | fixture | ISS-23 |
 | On a live stack: another actor's job and its cost are 404, and its list leaves the job out | `scripts/live_probe.py` (cross-actor checks) | L | live | ISS-23 |
 | On a live stack: another actor's `operation_ref` makes a new job | `scripts/live_probe.py` | L | live | ISS-23 |
+| On a live stack: another actor's result, cost and usage report are 404 | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run B | L | live | ISS-23 |
 
 ## Revoked credentials
 
@@ -55,6 +56,8 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | `not_provisioned` stays 402 with no reason | `tests/unit/test_payment_failures_http.py::test_not_provisioned_stays_402_and_has_no_reason` | H | fixture | ISS-12 |
 | Re-provisioning after a revoke is a new operation | `tests/unit/test_service_edges.py::test_reprovisioning_after_revoke_is_a_new_operation` | U | fixture | ISS-11/14 |
 | On a live stack: a revoked actor key answers 401 | `scripts/live_probe.py` (revocation checks) | L | live | ISS-23 |
+| On a live stack: a revoked auditor key is 401 on admin reads | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run B | L | live | ISS-23 |
+| On a live stack: a job after revoke-allocation fails `not_provisioned` (402) and pays nothing | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-23 |
 
 ## Duplicate job submissions
 
@@ -71,6 +74,8 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | A repeat answers 409 with a stable code over REST | `tests/unit/test_http_routes.py::test_a_repeated_operation_ref_answers_409_with_a_stable_code` | H | fixture | ISS-11/14 |
 | `FakeEngine` raises the same | `tests/unit/test_fake_engine_contract.py::test_a_repeated_operation_ref_raises_operation_exists_or_conflict` | U | fixture | ISS-11/14 |
 | A repeat after a payment refusal runs again; after a signer that may have charged it is 409 | `tests/unit/test_payment_failures.py::test_a_repeat_after_a_payment_refusal_runs_again_under_its_reference`, `tests/unit/test_payment_failures.py::test_a_repeat_after_a_signer_that_may_have_charged_is_operation_exists` | U | fixture | ISS-12 |
+| On a live stack: after an unpaid `allowance_exhausted` refusal and a fund, the same `operation_ref` runs a new job (the closed list) | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-11/14 |
+| On a live stack: job repeats: in progress, exists, conflict, re-run after an unpaid failure | builder-core-console `scripts/live-check-d57.py` (46 checks, 30 October) | L | live | ISS-11/14 |
 
 ## Duplicate admin commands
 
@@ -88,6 +93,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Repeated set-status, revoke-allocation and revoke-key change nothing more; the provider is not called again to revoke | `tests/unit/test_verification_access.py::test_repeating_set_status_revoke_allocation_or_revoke_key_changes_nothing_more` | U | fixture | ISS-23 |
 | The same over REST: set-status 200 twice; revoke-allocation 200 twice and revoke-key 204 twice (a retry gets the first answer, D61); an unknown actor 404, an unknown key 400 | `tests/unit/test_verification_access.py::test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest` | H | fixture | ISS-23 |
 | On a live stack: a fund sent twice under one `operation_ref` is replayed (`Idempotent-Replayed: true`) and applied once | `scripts/live_probe.py` (with `--yes`) | L | live | ISS-23 |
+| On a live stack: admin commands repeated under one reference replay (`Idempotent-Replayed: true`) and apply once; a reference reused for another request is 409 | builder-core-console `scripts/live-check-d57.py` (46 checks, 30 October) | L | live | ISS-11/14 |
 
 ## Authorization denial
 
@@ -105,6 +111,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | The signer's refusal is told apart: not authorized 403, allowance exhausted 402, signer unavailable 503 | `tests/unit/test_payment_failures.py::test_a_signer_refusal_says_why_is_unpaid_and_does_not_fail_over`, `tests/unit/test_payment_failures_http.py::test_each_payment_reason_has_its_own_status` | U, H | fixture | ISS-12 |
 | No builder-facing body carries a payment key, the signer URL or its words | `tests/unit/test_payment_failures_http.py::test_no_builder_facing_body_carries_the_payment_path` | H | fixture | ISS-12 |
 | On a live stack: no credential is 401; an actor key is 403 on admin reads and a write; an auditor key reads but is 403 on writes | `scripts/live_probe.py` (authorization checks) | L | live | ISS-23 |
+| On a live stack: a key limited to `discover` reads runners and is 403 on jobs, history, costs and allowance | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run B | L | live | ISS-23 |
 
 ## Late or duplicate cost observations
 
@@ -126,6 +133,20 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | A row id delivered again with another fee is ignored and logged (`costs.usage_redelivered`), never a correction (Q2) | `tests/unit/test_cost_observations.py::test_a_redelivered_row_with_another_fee_is_ignored_and_logged` | U | fixture | ISS-23 |
 | The same, when a new row id comes twice on one page: the first copy is stored, the second logged | `tests/unit/test_cost_observations.py::test_a_row_id_twice_on_one_page_with_another_fee_keeps_the_first_and_is_logged` | U | fixture | ISS-23 |
 | A late row for a job retention purged stays unattributed, and reconciliation still balances | `tests/unit/test_cost_observations.py::test_a_late_row_for_a_job_retention_purged_stays_unattributed` | U | fixture | ISS-23 |
+| On a live stack: three syncs and an engine restart change no total, and reconciliation stays balanced | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run G | L | live | ISS-23 |
+| On a live stack: with Batteries down a paid job stays succeeded, its cost `pending`, and `/readyz` names the sync error; it settles once Batteries is back | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run F | L | live | ISS-23 |
+| On a live stack: a long stream's cost is `pending` mid-stream and settles with several rows; after an engine restart mid-stream the job is `interrupted`, `uncertain`, and its cost still settles | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run E | L | live | ISS-23 |
+
+## Payment failures, live (ISS-12, D58)
+
+The three failures ISS-12 must tell apart, and `not_provisioned`, on the real signer and Batteries.
+
+| Behavior | Check | Level | Evidence | Ticket |
+| --- | --- | --- | --- | --- |
+| On a live stack: an exhausted allocation is 402 `allowance_exhausted`, no `Retry-After`, the job failed and unpaid | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-12 |
+| On a live stack: a paused allocation is 403 `not_authorized`, no `Retry-After` | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-12 |
+| On a live stack: a stopped signer is 503 `signer_unavailable` with `Retry-After: 10`, buffered and streamed, with no failover | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-12 |
+| On a live stack: no response carries a payment key or the signer's URL, and no key appears in the engine's logs | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), runs A and C | L | live | ISS-12 |
 
 ## Live probe
 

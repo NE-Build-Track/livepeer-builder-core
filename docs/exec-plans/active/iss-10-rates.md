@@ -149,7 +149,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   probe parse fractional numbers with `Decimal` and fail that orchestrator only; that change moved to #87
   (below) and is not on this branch.
 
-- 30 October: Mike's review of `53b12d7`, engine side (the `lpb discovery` items are T25). Test-first;
+- 30 October: Mike's review of `53b12d7`, engine side (the `lpb discovery` items are T26). Test-first;
   each new test seen red for the right reason, or, where the behaviour already held, shown to fail under a
   mutation:
   - **Discovery fetch** (`tests/unit/test_adapter_edges.py`): a body that sends a byte every 10 ms times

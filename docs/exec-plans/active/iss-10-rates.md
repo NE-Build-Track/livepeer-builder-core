@@ -179,6 +179,18 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   - **Results:** 1560 passed, 48 skipped (one deselected, as on 29 October: a stale `dist/` wheel); every
     coverage floor met, diff coverage 100 %; ruff, mypy (strict), `check_docs.py`, `lpb gen-docs` and
     `lpb smoke` clean.
+- 30 October: Mike's follow-up on `53b12d7`. #84 cherry-picked (Cursor's `lpb discovery` fix), then:
+  - **Both exponent signs** (`tests/discovery/test_document.py`, `test_probe.py`): `1e` and `1e-` followed
+    by twenty 9s fail only that orchestrator's probe; eighteen 9s, which `Decimal` builds, is kept as
+    received. Each shown to fail with the float decoder put back.
+  - **Engine** (`tests/unit/test_adapter_edges.py`): a document with such a `price_usd` on one runner and
+    such a `price` on another orchestrator's runner gives all three runners, the bad fields unreadable
+    with their usual `rate_error`; seen red first (the whole parse raised). #84's assertion that
+    `loads_json_numbers` raises was removed: it pinned the strict engine behaviour this reverses.
+  - **720p:** runners priced in `720p-pixel-seconds` are dropped (`DROPPED_UNITS`, `adapters/sdk.py`). The
+    drop was driven by tests that were red first (per-pixel runners dropped, case-insensitively and even
+    with no usable price, while a `seconds` runner in the same inventory is kept), then green. Those tests
+    were then deleted on John's instruction, so no test names the unit.
 
 ## Decision log
 
@@ -215,6 +227,15 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   ceiling needs it) but is bounded like the prober: 5 s in all, 1 MiB. `utils.read_capped` is shared so
   that the prober can adopt it. Items 10(a), 10(b) and 10(d) touch only `lpb discovery`
   (`discovery/document.py`, `discovery/probe.py`) and are left for that service (tech-debt tracker).
-- 30 October: an exponent `Decimal` cannot construct fails that orchestrator's probe, as `NaN` does.
-  It is not re-served. A float parse would turn `1e1000000000000000000` into `inf`, keep the token, and
-  every engine refresh would raise on the aggregated document.
+- 30 October (Mike's follow-up on `53b12d7`; #84 cherry-picked into this branch): an exponent `Decimal`
+  cannot construct (`1e` or `1e-` followed by twenty 9s) fails that orchestrator's probe in `lpb discovery`,
+  as `NaN` does, so it is never re-served; a float parse turned it into `inf` or `0.0` and kept the token.
+  The engine reads such a number as unreadable in that field only (`utils.UNREADABLE_NUMBER`), so a
+  source that passes it through (livepeer-node's discovery cache) fails one runner's rate, not the
+  refresh. The probe stays strict; the engine is lenient, because it cannot tell one orchestrator's
+  entries from another's in a document it parses whole.
+- 30 October (John, on Mike's follow-up): `720p-pixel-seconds` is not payable and is removed entirely.
+  The engine drops a runner priced in it from discovery: not listed, not routed to, not paid. This
+  replaces "kept as advertised, `missing`" for that unit, and amends D62 (6): this is the one
+  go-livepeer-specific rule. By John's choice no test names the unit; `is_payable` refuses every unit
+  but `seconds` and `fixed`.

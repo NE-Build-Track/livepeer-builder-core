@@ -19,6 +19,7 @@ from livepeer_builder.adapters.runner_call import (
     SdkRunnerStream,
     json_object,
 )
+from livepeer_builder.adapters.signer_failures import signer_not_reached
 from livepeer_builder.contracts import (
     JobRequest,
     NetworkRate,
@@ -116,9 +117,10 @@ class SdkRunnerTransport:
     ) -> SdkRunnerStream:
         """The paid request, answered: the 402 is paid before the first byte, so payment is known here.
 
-        Waiting for the runner's response headers is bounded by ``first_byte_timeout_s`` (D35). A timeout
-        keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
-        validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
+        Waiting for the runner's response headers is bounded by ``first_byte_timeout_s`` (D35). A deadline
+        during signer identity is ``signer_unavailable`` (nothing was signed, D58). A later timeout keeps
+        the sessions signed so far for cost sync; if it hits before the signer's payment is validated,
+        ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
         events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
@@ -126,6 +128,10 @@ class SdkRunnerTransport:
             async with asyncio.timeout(request.first_byte_timeout_s):
                 return await paid.open(connect_timeout_s=request.timeout_s)
         except TimeoutError as error:  # the deadline; the call's own timeouts are already RunnerCallError
+            if not paid.runner_contacted:
+                # Still in /sign-orchestrator-info: nothing was signed and no runner was asked (D58).
+                # A runner timeout would burn the operation reference (D57).
+                raise events.error("payment", signer_not_reached(), reason="signer_unavailable") from error
             message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
             raise events.error("timeout", message) from error
 

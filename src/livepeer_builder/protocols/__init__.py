@@ -149,8 +149,10 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
     """A transport that can also hand the response back unbuffered. ``jobs.streaming`` exists only with one.
 
     ``open`` returns once the runner answered with its status and headers. It must give up after
-    ``request.first_byte_timeout_s`` and raise ``RunnerCallError("timeout", ...)`` with the payment
-    evidence so far; the engine stops an ``open`` that runs well past that and treats it as paid (D35).
+    ``request.first_byte_timeout_s``. A deadline during signer identity, before the runner is asked,
+    is ``payment`` / ``signer_unavailable`` (nothing was signed, D58). Any later deadline is
+    ``RunnerCallError("timeout", ...)`` with the payment evidence so far. The engine stops an ``open``
+    that runs well past that and treats it as paid (D35).
     """
 
     async def open(

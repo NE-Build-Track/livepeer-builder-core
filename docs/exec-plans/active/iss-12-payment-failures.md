@@ -87,3 +87,7 @@ From the ticket and the 21 October M3 plan:
 - 2026-10-29: `ProviderError` keeps its `provider HTTP {status}: …` form for the fixed allowance
   message. Only `/v1/allowance` reaches the provider among builder-facing routes; admin routes keep the
   provider's text for operators.
+- 2026-10-30: A caller's first-byte deadline during `/sign-orchestrator-info` was stored as a runner
+  `timeout`, and a 200 that is not a JSON object was stored as `runner_error`. Neither had signed or
+  asked a runner, but both are off D57's re-run list, so the reference could not be used again. They
+  are `signer_unavailable` and `payment` (no reason) respectively.

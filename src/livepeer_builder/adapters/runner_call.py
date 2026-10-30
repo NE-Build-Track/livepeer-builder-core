@@ -172,6 +172,8 @@ class PaidRequest:
         self._events = events
         self._payment_type = payment_type(rate) if signer_url is not None else ""
         self._max_price = max_price(rate) if signer_url is not None else None
+        # Set once the runner is about to be asked. A deadline before that is still in signer identity.
+        self.runner_contacted = False
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
         async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
@@ -239,6 +241,7 @@ class PaidRequest:
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
             funding = start_funding(payment) if self._payment_type == "live" else None
+            self.runner_contacted = True
             try:
                 # A redirect would replay the payment headers to another host.
                 response = await session.request(

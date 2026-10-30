@@ -44,6 +44,7 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | Actor collection and read-only admin (#52) | [active/admin-read-and-actors.md](exec-plans/active/admin-read-and-actors.md) | Mike (John reviews) |
 | ISS-11 + ISS-14 Repeat-safe commands (idempotency) | [active/iss-11-14-idempotency.md](exec-plans/active/iss-11-14-idempotency.md) | John (Mike reviews) |
 | ISS-12 Distinct payment failures | [active/iss-12-payment-failures.md](exec-plans/active/iss-12-payment-failures.md) | John (Mike reviews) |
+| ISS-15 Owned job history and basic results | [active/iss-15-history-results.md](exec-plans/active/iss-15-history-results.md) | John (Mike reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.
 

@@ -15,6 +15,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import AwareDatetime
 
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
@@ -69,6 +70,7 @@ from livepeer_builder.http.bodies import (
     StatusBody,
     UsageBody,
 )
+from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
 from livepeer_builder.http.streaming import stream_response
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
@@ -140,7 +142,9 @@ async def _authenticated(engine: EngineApi, request: Request) -> ActorContext:
     return actor
 
 
-def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
+def create_app(
+    engine: EngineApi, *, manage_lifecycle: bool = True, max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
@@ -153,6 +157,7 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
 
     app = FastAPI(title="livepeer-builder", version=engine.health().version, lifespan=lifespan)
     _install_error_handlers(app, engine)
+    install_request_limit(app, max_request_bytes)  # 413 before a body is held in memory (D59)
 
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
@@ -209,8 +214,12 @@ def create_app(engine: EngineApi, *, manage_lifecycle: bool = True) -> FastAPI:
         )
 
     @app.get("/v1/jobs", response_model=list[Job])
-    async def list_jobs(actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50) -> list[Job]:
-        return list(await engine.jobs.list_jobs(actor, limit=limit))
+    async def list_jobs(
+        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: AwareDatetime | None = None
+    ) -> list[Job]:
+        """Newest first; ``before`` (an ISO-8601 time with its offset) is the last page's oldest
+        ``created_at``, for the next page (D59)."""
+        return list(await engine.jobs.list_jobs(actor, limit=limit, before=before))
 
     @app.get("/v1/jobs/{job_id}", response_model=Job)
     async def get_job(actor: Actor, job_id: UUID) -> Job:

@@ -86,6 +86,11 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
   image is an explicit `docker compose push <service>`. Base images (`python`, Go) still come from
   Docker Hub.
+- **Restarting `clearinghouse` needs the signer recreated.** The signer runs in clearinghouse's network
+  namespace (`network_mode: service:clearinghouse`), so after clearinghouse restarts it stays on the old
+  namespace and every payment fails `signer_unavailable`. Recreate it: `docker compose up -d
+  --force-recreate --no-build signer` (seen live on 30 October,
+  [evidence](../../docs/references/evidence/2026-10-30-m3-live-suite.md)).
 - **The signer container runs as root** (`user: "0:0"`) so bind-mounted secrets stay readable;
   clearinghouse runs as its image's default user. This is dev only.
 - **The engine image runs as `lpb` (uid 10001)**, and `/.dockerignore` keeps `secrets/`, `.env`,

@@ -112,6 +112,10 @@ real services at the pinned commits.
 
 ## Open questions to lock
 
+**Locked by Mike, 30 October 2026:** Q1 the live probe in builder-core (`scripts/live_probe.py`, REST
+only, not in CI); Q2 a re-delivered row id with another fee is ignored and logged; Q3 one live probe
+marks the rows live, with ISS-25 as the funded proof. The rules become [D61](../m3-decisions.md).
+
 - **Q1.** Add the live probe to builder-core (recommended), or keep live checks in the console repo?
 - **Q2.** A re-delivered usage row id with a different fee: keep ignoring it (log it), or treat it as a
   correction?

@@ -82,9 +82,9 @@ def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
 
 
 def _lenient_number(token: str) -> Decimal | _UnreadableNumber:
-    try:
-        return decimal_json_number(token)
-    except ValueError:
+    try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
+        return Decimal(token)
+    except InvalidOperation:  # an exponent past 10**18: Decimal cannot build it
         return UNREADABLE_NUMBER
 
 
@@ -95,19 +95,6 @@ def _lenient_int(token: str) -> int | _UnreadableNumber:
         return int(token)
     except ValueError:
         return UNREADABLE_NUMBER
-
-
-def decimal_json_number(token: str) -> Decimal:
-    """A JSON number token as :class:`Decimal`.
-
-    An exponent past ``10**18`` makes ``Decimal`` raise ``InvalidOperation``, here a ``ValueError``.
-    ``lpb discovery`` refuses that inventory, so the token is never re-served; the engine reads it as
-    ``UNREADABLE_NUMBER`` (``loads_json_numbers``).
-    """
-    try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
-        return Decimal(token)
-    except InvalidOperation as exc:
-        raise ValueError(f"{token} is not a JSON number") from exc
 
 
 def _not_json(token: str) -> Any:

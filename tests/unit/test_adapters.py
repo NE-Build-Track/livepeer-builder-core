@@ -322,6 +322,13 @@ def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
             EngineSettings.model_validate({"max_paid_attempts": value})
 
 
+def test_the_discovery_inventory_cap_is_an_operator_setting() -> None:
+    assert EngineSettings().discovery_max_bytes == 16 << 20
+    assert EngineSettings.from_env({"LPB_DISCOVERY_MAX_BYTES": "33554432"}).discovery_max_bytes == 32 << 20
+    with pytest.raises(ValidationError):
+        EngineSettings.model_validate({"discovery_max_bytes": 0})
+
+
 @pytest.mark.parametrize(
     "url",
     ["discovery:8939/discovery", "ftp://discovery/discovery", "http:///discovery", "http://[::1/discovery"],

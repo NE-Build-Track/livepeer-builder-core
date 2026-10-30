@@ -81,7 +81,7 @@ says which clock it used:
 | Runner stamp | `observed_at` | `observed_by` |
 | --- | --- | --- |
 | present and at most 30 s after the poll | the stamp | `orchestrator` |
-| absent (livepeer-node `v1.0.2`, go-livepeer), unreadable, or more than 30 s ahead | the poll time | `engine` |
+| absent (livepeer-node `v1.0.2`, go-livepeer), unreadable (including one with no UTC offset from a non-HTTP source), or more than 30 s ahead | the poll time | `engine` |
 
 The 30 s bound is livepeer-node's own (`ClockSkew` in `discovery/shared/inventory.go`). The engine is
 deliberately looser than livepeer-node's collectors: they drop a runner with no or a future stamp (#70),

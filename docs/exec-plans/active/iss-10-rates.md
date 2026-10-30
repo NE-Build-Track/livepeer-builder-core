@@ -163,7 +163,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   - **Catalog** (`tests/unit/test_rates.py`): an app with no rate is listed as `missing` with no range; an
     app's runners with no rate are an offering after its priced ones (mutation: missing group first);
     `available` with no range is not an `Offering`. 10(c): two `ObservedRate`s per offering, not one per
-    runner.
+    runner (`test_an_offering_builds_two_observed_rates_however_many_runners_it_has`, added on 31 October).
   - **Paid order** (`tests/unit/test_jobs.py`): a paid job tries a runner it can cap before a busier one
     with no rate; the one with no rate is still tried last (mutation: dropping it); an unpaid job keeps
     `MostCapacityFirst` (mutation: re-ordering unpaid jobs too).
@@ -192,6 +192,23 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
     drop was driven by tests that were red first (per-pixel runners dropped, case-insensitively and even
     with no usable price, while a `seconds` runner in the same inventory is kept), then green. Those tests
     were then deleted on John's instruction, so no test names the unit.
+- 31 October: Mike's re-check at `a7299aa`, and Copilot's two findings on it. Test-first; each new test
+  seen red for the right reason, or, where the behaviour already held, shown to fail under a mutation:
+  - **Inventory cap** (`tests/unit/test_adapter_edges.py`, `test_adapters.py`, `test_runtime.py`): the
+    engine read every inventory under livepeer/node's 1 MiB per-orchestrator limit, so `lpb discovery`'s
+    combined inventory failed every refresh past about 2,000 runner records. The engine now reads at most
+    `LPB_DISCOVERY_MAX_BYTES` (default 16 MiB, `contracts.discovery.DISCOVERY_MAX_BYTES`): exactly 16 MiB is
+    read and one byte more refused (red: refused at 1 MiB), the setting is read from the environment and
+    `0` refused, and assembly passes it to `HttpDiscoverySource`. The probe keeps its 1 MiB per orchestrator.
+  - **10(c)** (`tests/unit/test_rates.py`): fifty runners in one offering build exactly its two
+    `ObservedRate`s; shown failing with `_range` building one per runner.
+  - **Redirect on an injected client** (Copilot): an `httpx.AsyncClient(follow_redirects=True)` passed as
+    `client` followed a 301 and replaced the snapshot. `follow_redirects=False` is now set on the send
+    itself; red first (no error, two requests).
+  - **Naive `observed_at`** (Copilot): a non-HTTP source (`StaticDiscoverySource`, a custom one) could hand
+    over a datetime with no offset, and comparing it with the poll time raised `TypeError`, failing the
+    whole catalog. Such a stamp is unreadable, as HTTP's are: the rate is `observed_by` the engine. Red
+    first (`TypeError`).
 
 ## Decision log
 

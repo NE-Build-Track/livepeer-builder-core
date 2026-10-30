@@ -178,14 +178,15 @@ async def test_http_discovery_gives_up_on_a_slow_body_at_its_deadline() -> None:
             await source.fetch()
 
 
-@pytest.mark.parametrize(("padding", "refused"), [((1 << 20) - 2, False), (1 << 20, True)])
-async def test_http_discovery_reads_at_most_livepeer_node_s_max_body(padding: int, refused: bool) -> None:
-    """livepeer/node's discovery reads at most 1 MiB (discovery/shared/inventory.go, MaxBody)."""
-    body = b"[" + b" " * padding + b"]"  # exactly 1 MiB, or one byte over
+@pytest.mark.parametrize(("padding", "refused"), [((16 << 20) - 2, False), (16 << 20, True)])
+async def test_http_discovery_reads_at_most_16_mib(padding: int, refused: bool) -> None:
+    """A discovery service's combined inventory: livepeer/node's MaxBody (1 MiB) is per orchestrator, and
+    about 2,000 runner records fill it (#77 review)."""
+    body = b"[" + b" " * padding + b"]"  # exactly 16 MiB, or one byte over
     async with discovery_serving(body) as client:
         source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
         if refused:
-            with pytest.raises(ValueError, match="inventory larger than 1048576 bytes"):
+            with pytest.raises(ValueError, match="inventory larger than 16777216 bytes"):
                 await source.fetch()
         else:
             assert await source.fetch() == ()
@@ -252,6 +253,22 @@ async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: Fixe
     assert [runner.url for runner in snapshot.runners] == ["https://good/apps/r1/app"]
     assert snapshot.last_error is not None and "301" in snapshot.last_error
     assert seen == ["http://discovery:8939/discovery"] * 2
+
+
+async def test_an_injected_client_that_follows_redirects_does_not_follow_the_discovery_url_s() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "elsewhere":
+            return httpx.Response(200, content=json.dumps([GOOD_ENTRY]).encode())
+        return httpx.Response(301, headers={"Location": "http://elsewhere/discovery"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
+        with pytest.raises(httpx.HTTPStatusError, match="301"):
+            await source.fetch()
+    assert seen == ["http://discovery:8939/discovery"]
 
 
 async def test_a_number_decimal_cannot_build_fails_one_runner_not_the_refresh() -> None:

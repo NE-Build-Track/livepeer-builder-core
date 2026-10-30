@@ -158,7 +158,9 @@ def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) ->
 
 
 def _known(stamp: datetime | None, polled_at: datetime) -> tuple[datetime, ObservedBy]:
-    """When a rate was last known, and whose clock says so: its orchestrator's stamp, else the poll time."""
-    if stamp is None or stamp > polled_at + _CLOCK_SKEW:
+    """When a rate was last known, and whose clock says so: its orchestrator's stamp, else the poll time.
+
+    A stamp with no UTC offset (a source other than HTTP can hand one over) is unreadable, as HTTP's are."""
+    if stamp is None or stamp.utcoffset() is None or stamp > polled_at + _CLOCK_SKEW:
         return polled_at, "engine"
     return stamp, "orchestrator"

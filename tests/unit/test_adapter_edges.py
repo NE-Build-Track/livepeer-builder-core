@@ -21,7 +21,8 @@ from livepeer_builder.adapters.batteries import (
 from livepeer_builder.adapters.runner_call import network_kind
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, runners_from_entries
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
-from livepeer_builder.contracts import Money, SecretRef
+from livepeer_builder.contracts import Money, NetworkRate, SecretRef
+from livepeer_builder.contracts.discovery import PRICE_RULE
 from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
@@ -255,6 +256,30 @@ async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: Fixe
     assert [runner.url for runner in snapshot.runners] == ["https://good/apps/r1/app"]
     assert snapshot.last_error is not None and "301" in snapshot.last_error
     assert seen == ["http://discovery:8939/discovery"] * 2
+
+
+async def test_a_number_decimal_cannot_build_fails_one_runner_not_the_refresh() -> None:
+    """livepeer-node's discovery cache passes price_usd through as received: one such token must not stop every
+    orchestrator from updating (#77 review)."""
+    huge, tiny = "1e" + "9" * 20, "1e-" + "9" * 20
+    body = (
+        '[{"address":"https://a","runners":['
+        '{"url":"https://a/apps/good/app","app":"a/b","price_info":{"price":10,"currency":"wei","unit":"fixed"}},'
+        '{"url":"https://a/apps/usd/app","app":"a/b","price_info":{"price":10,"price_usd":' + huge + ","
+        '"currency":"wei","unit":"fixed"}}]},'
+        '{"address":"https://b","runners":['
+        '{"url":"https://b/apps/r1/app","app":"a/b","price_info":{"price":'
+        + tiny
+        + ',"currency":"wei","unit":"fixed"}}]}]'
+    ).encode()
+    async with discovery_serving(body) as client:
+        good, bad_usd, bad_price = await HttpDiscoverySource(
+            "http://discovery:8939/discovery", client=client
+        ).fetch()
+    wei = NetworkRate(amount=Decimal(10), currency="wei", unit="fixed")
+    assert (good.rate, good.rate_error) == (wei, None)
+    assert (bad_usd.rate, bad_usd.rate_error) == (wei, "price_usd is not a nonnegative number")
+    assert (bad_price.rate, bad_price.rate_error) == (None, PRICE_RULE)
 
 
 def test_rates_reject_bad_prices() -> None:

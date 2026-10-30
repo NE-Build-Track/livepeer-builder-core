@@ -59,21 +59,40 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
     return task
 
 
+class _UnreadableNumber:
+    """A JSON number :class:`Decimal` cannot build. Not a number to any reader of it."""
+
+    def __repr__(self) -> str:
+        return "UNREADABLE_NUMBER"
+
+
+UNREADABLE_NUMBER = _UnreadableNumber()
+
+
 def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with a fractional number as :class:`Decimal`, not a float.
 
-    livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``. ``NaN`` and
-    ``Infinity`` are not JSON and raise ``ValueError``, as an unparseable body does. So does an exponent
-    ``Decimal`` cannot construct (past ``10**18``).
+    livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``. A number
+    ``Decimal`` cannot build (an exponent past ``10**18``) is ``UNREADABLE_NUMBER``, so only the field that
+    holds it is unreadable, not the document: livepeer-node's discovery cache passes ``price_usd`` through as
+    received. ``NaN`` and ``Infinity`` are not JSON and raise ``ValueError``, as an unparseable body does.
     """
-    return json.loads(raw, parse_float=decimal_json_number, parse_constant=_not_json)
+    return json.loads(raw, parse_float=_lenient_number, parse_constant=_not_json)
+
+
+def _lenient_number(token: str) -> Decimal | _UnreadableNumber:
+    try:
+        return decimal_json_number(token)
+    except ValueError:
+        return UNREADABLE_NUMBER
 
 
 def decimal_json_number(token: str) -> Decimal:
     """A JSON number token as :class:`Decimal`.
 
-    An exponent past ``10**18`` makes ``Decimal`` raise ``InvalidOperation``. Discovery must refuse that
-    inventory: the token would otherwise be re-served, and every engine refresh would fail on it.
+    An exponent past ``10**18`` makes ``Decimal`` raise ``InvalidOperation``, here a ``ValueError``.
+    ``lpb discovery`` refuses that inventory, so the token is never re-served; the engine reads it as
+    ``UNREADABLE_NUMBER`` (``loads_json_numbers``).
     """
     try:
         amount = Decimal(token)

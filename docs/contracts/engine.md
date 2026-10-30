@@ -46,6 +46,7 @@ invents nothing:
 | complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
 | not an object, a bad price (not finite, negative, above `0` but below `1e-300`, or `1e300` or more), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` or `"price must be 0, or from 1e-300 to below 1e300"` |
 | complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
+| a `price` or `price_usd` number whose exponent `Decimal` cannot build (past `10**18` either way, for example `1e` and twenty 9s) | as for a bad `price` (`None`) or a bad `price_usd` (the rate, without it) | the same reasons. Only that field is unreadable, never the document: a cache that passes the token through (livepeer-node's discovery) does not stop every other orchestrator from updating. `lpb discovery` refuses such an orchestrator instead ([discovery.md](discovery.md)) |
 
 The floor for a positive price is `1e-300`, inside the normal float range. Below it, `1E-400` and
 `1E-999999` pad to the float `0.0`, and near the bottom of the range the 1.2% pad can land under the
@@ -100,9 +101,9 @@ ceiling ([payments.md](payments.md#pricing-assumptions)).
 
 livepeer/node replaced go-livepeer (D2) in our stacks, but runner-app-examples run go-livepeer `v0.9.1`,
 and the public orchestrators sampled on 29 October serve go-livepeer's inventory. Their `/discovery` (`ai/runner/live_runner.go`, `v0.9.0` to master) differs from
-livepeer-node's, and the engine reads it as follows. No go-livepeer-specific code exists: each difference
-falls under a rule above. `tests/unit/test_go_livepeer_compat.py` pins the behavior; delete it with
-this section.
+livepeer-node's, and the engine reads it as follows. One rule is go-livepeer-specific: a runner priced in
+`720p-pixel-seconds` is dropped (`DROPPED_UNITS` in `adapters/sdk.py`). Each other difference falls under
+a rule above. `tests/unit/test_go_livepeer_compat.py` pins the behavior; delete both with this section.
 
 | go-livepeer `/discovery` | What the engine does |
 | --- | --- |
@@ -110,6 +111,7 @@ this section.
 | no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
 | an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
 | wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
+| per-pixel video priced in `720p-pixel-seconds` | The runner is dropped from discovery: never listed in `/v1/offerings`, never routed to, never paid (no signer takes such a ceiling). Decided 30 October, after Mike's review of `53b12d7` |
 
 Capability → app resolution (descriptor or configuration table) is a later contract. In M2 the caller
 names the runner `app`; `capability` and `model` are labels only.

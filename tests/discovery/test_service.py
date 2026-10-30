@@ -1,14 +1,15 @@
 """The discovery service's settings, HTTP routes and composition root (#45)."""
 
 import asyncio
+import json
 import socket
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
 
 from livepeer_builder.discovery import Catalog, OnChainDirectory, Orchestrator, Probe, StaticDirectory
+from livepeer_builder.discovery.document import InventoryEntry, RawJson
 from livepeer_builder.discovery.server import create_app, directory_from, serve
 from livepeer_builder.discovery.settings import DiscoverySettings
 
@@ -74,12 +75,15 @@ def test_the_settings_choose_the_directory(tmp_path: Path) -> None:
 
 
 class Fixed:
-    def __init__(self, *runners: dict[str, Any]) -> None:
-        self.runners = list(runners)
+    """A prober whose runners are the JSON object text a real probe would have stored."""
+
+    def __init__(self, *runners: str) -> None:
+        self.runners = tuple(RawJson(runner) for runner in runners)
 
     async def probe_all(self, orchestrators):  # type: ignore[no-untyped-def]
         return [
-            Probe(orchestrator=o, entry={"address": o.url, "runners": self.runners}) for o in orchestrators
+            Probe(orchestrator=o, entry=InventoryEntry(address=o.url, runners=self.runners))
+            for o in orchestrators
         ]
 
 
@@ -91,7 +95,7 @@ def client(catalog: Catalog) -> httpx.AsyncClient:
 
 async def test_discovery_serves_the_inventory_and_readiness_follows_the_catalog() -> None:
     runner = {"url": "https://a.example/apps/r1/app", "app": "example/echo"}
-    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed(runner))
+    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed(json.dumps(runner)))
     async with client(catalog) as http:
         assert (await http.get("/healthz")).status_code == 200
         not_ready = await http.get("/readyz")
@@ -106,13 +110,34 @@ async def test_discovery_serves_the_inventory_and_readiness_follows_the_catalog(
         ]
 
 
+async def test_discovery_serves_the_stored_runner_text_unchanged() -> None:
+    """Number tokens stored from the probe are written back as those tokens, not quoted or rewritten."""
+    price_usd = "0.0000027777777777777777777777777777"
+    runner = (
+        '{"url":"https://a.example/apps/r1/app","app":"example/echo","price_info":'
+        f'{{"price":4492197255,"price_usd":{price_usd},"tiny":1e-999999}}}}'
+    )
+    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed(runner))
+    await catalog.load_directory()
+    await catalog.probe()
+    async with client(catalog) as http:
+        body = (await http.get("/discovery")).content
+    assert f'"price_usd":{price_usd}'.encode() in body
+    assert b'"tiny":1e-999999' in body
+    (entry,) = json.loads(body)
+    assert entry["address"] == "https://a.example"
+    assert entry["runners"] == [json.loads(runner)]
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
 
 
-async def test_serve_runs_the_catalog_and_the_listener_until_cancelled() -> None:
+async def test_serve_runs_the_catalog_and_the_listener_until_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     port = free_port()
     settings = DiscoverySettings(
         orchestrators="https://unused.example", http_port=port, probe_interval_s=0.05
@@ -122,7 +147,9 @@ async def test_serve_runs_the_catalog_and_the_listener_until_cancelled() -> None
         async def orchestrators(self) -> tuple[Orchestrator, ...]:
             return (Orchestrator(url="https://a.example"),)
 
-    task = asyncio.create_task(serve(settings, directory=One(), prober=Fixed({"url": "u", "app": "a"})))
+    fixed = Fixed(json.dumps({"url": "u", "app": "a"}))
+    monkeypatch.setattr("livepeer_builder.discovery.server.Prober", lambda **_: fixed)
+    task = asyncio.create_task(serve(settings, directory=One()))
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as http, asyncio.timeout(5):
             while True:
@@ -143,7 +170,7 @@ async def test_serve_runs_the_catalog_and_the_listener_until_cancelled() -> None
 
 async def test_readiness_fails_once_the_refresh_task_has_stopped() -> None:
     """A stopped refresh would serve a frozen inventory while /readyz said 200 (#46 review)."""
-    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed({"url": "u", "app": "a"}))
+    catalog = Catalog(StaticDirectory(["https://a.example"]), Fixed(json.dumps({"url": "u", "app": "a"})))
     await catalog.load_directory()
     await catalog.probe()
 

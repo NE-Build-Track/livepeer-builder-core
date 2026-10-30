@@ -285,3 +285,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   `9999-12-31T23:00:00-01:00`) raised `OverflowError` inside `_stamp` and failed the whole engine refresh.
   It is an unreadable stamp (`None`), and the other runners stay. An integer longer than the runtime digit
   limit did the same from `json.loads`; that field is `UNREADABLE_NUMBER`, one runner's rate, not the poll.
+- 31 October: #87 merged into `releases/m3`, and `releases/m3` merged into this branch. `lpb discovery` now
+  re-serves each runner record as received and refuses a number `Decimal` cannot build, so the "until #87
+  merges" behaviour above no longer applies. `utils.py` keeps both sides: this branch's
+  `loads_json_numbers` and `read_capped` for the engine, and #87's `decimal_json_number` for the probe.

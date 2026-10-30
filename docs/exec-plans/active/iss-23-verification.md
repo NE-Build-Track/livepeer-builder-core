@@ -55,6 +55,12 @@ From the ticket and the 21 October M3 plan, as the guide's definition of done:
 
 ## Progress
 
+- 2026-10-30: Cursor's second review of #83. The first probe job could itself be paid: `POST /v1/jobs`
+  returns after the runner call, and the shared key pays in `per_application` mode. The jobs now name the
+  run's own app (`lpb-probe/<run>`), the probe checks `GET /v1/offerings?app=` first and sends none if it
+  is listed, and both jobs must end `no_offering` unpaid. The test that claimed this is rebuilt in
+  `per_application` with a runner for the probe's app: no runner call, no job. 26 checks now.
+
 - 2026-10-30: Cursor's review of #83. (1) `live_probe.py` reads how its first job ended and sends the second
   only after a `no_offering` failure with nothing paid: if some runner advertised the probe's app, the
   shared key could have paid in `per_application` mode. (2) Its keys are revoked in a `finally`, one

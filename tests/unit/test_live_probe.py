@@ -4,6 +4,7 @@ The live run itself is the operator's; these pin that its checks pass against a 
 spends only with ``--yes`` and within its cap, and that a wrong answer fails it.
 """
 
+import json
 import runpy
 from collections.abc import AsyncIterator
 from decimal import Decimal
@@ -92,7 +93,7 @@ async def test_every_check_passes_against_the_engine_and_the_fund_applies_once(
     allocation = (await engine.store.get_actor("default", "carol")).allocation_id  # type: ignore[union-attr]
     assert await run(stack, spend=True, fund_actor="carol") == 0
     out = capsys.readouterr().out
-    assert "FAIL  " not in out and "SKIP  " not in out and ": 25 passed, 0 failed, 0 skipped" in out, out
+    assert "FAIL  " not in out and "SKIP  " not in out and ": 26 passed, 0 failed, 0 skipped" in out, out
     assert manager.allocations[allocation].granted == Decimal("5.01")  # one cent, applied once
     assert manager.calls.count("fund_allocation") == 1
     probe_keys = [
@@ -130,22 +131,58 @@ async def test_an_engine_that_answers_wrongly_fails_the_probe(capsys: pytest.Cap
     assert "FAIL  issue a key (actor): 200" in capsys.readouterr().out
 
 
-async def test_a_probe_job_that_does_not_fail_before_payment_stops_before_the_second_actor(
+async def test_a_probe_app_that_some_runner_advertises_sends_no_job(
     make_engine: EngineFactory, transport: ScriptedTransport, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """If some runner did advertise the probe's app, its job could run and be paid (in per_application
-    mode with the shared key). The probe reads how the job ended and stops before sending another (#83)."""
-    engine = await make_engine(runners=(runner(app=SCRIPT["NO_SUCH_APP"]),))
+    """In per_application mode the shared key pays for any actor, so a job for an advertised app would be
+    paid on the POST itself. The probe's app is its own run's, and it checks the catalog first: an
+    advertised app sends no job at all (#83 review)."""
+    engine = await make_engine(
+        runners=(runner(app=SCRIPT["probe_app"]("lpb-probe-test")),),
+        allocation_mode="per_application",
+        shared_payment_key="lpg_shared",
+    )
     transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
     token = (await engine.keys.bootstrap_admin()).token
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
-        assert await SCRIPT["probe"](ProbeSettings("http://engine", token), spend=False, client=client) == 1
-    assert "FAIL  a job is recorded without payment" in capsys.readouterr().out
-    probe_jobs = [
+        settings = ProbeSettings("http://engine", token)
+        assert await SCRIPT["probe"](settings, spend=False, client=client, run="lpb-probe-test") == 1
+    assert "FAIL  no runner advertises the probe's app" in capsys.readouterr().out
+    assert transport.calls == []  # no runner was called, so nothing was paid
+    assert not [
         job for job in await engine.store.list_jobs("default", None) if job.actor_id.startswith("lpb-probe-")
     ]
-    assert len(probe_jobs) == 1  # the second actor's job was never sent
+
+
+class _SecondJobRan(httpx.AsyncBaseTransport):
+    """The engine, except the second job read answers as a job that ran and was paid."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self._inner, self._reads = inner, 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._inner.handle_async_request(request)
+        path = request.url.path
+        if request.method == "GET" and path.startswith("/v1/jobs/") and path.count("/") == 3:
+            self._reads += 1
+            if self._reads == 2:
+                await response.aread()
+                job = json.loads(response.content) | {"state": "succeeded", "failure": None}
+                job["attempts"] = [{"payment_sent": True}]
+                return httpx.Response(200, json=job, request=request)
+        return response
+
+
+async def test_the_second_actor_s_job_must_also_end_unpaid(
+    stack: tuple[httpx.AsyncClient, BuilderEngine, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both probe jobs are read; a second one that ran and paid fails the probe (#83 review)."""
+    _, engine, token = stack
+    transport = _SecondJobRan(httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False)))
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        assert await SCRIPT["probe"](ProbeSettings("http://engine", token), spend=False, client=client) == 1
+    assert "FAIL  another actor's operation_ref is a new job" in capsys.readouterr().out
 
 
 class _BreaksOnJobs(httpx.AsyncBaseTransport):

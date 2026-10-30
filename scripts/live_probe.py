@@ -9,7 +9,8 @@ stack, and its output is the ``live`` evidence in docs/product-specs/m3-traceabi
 ``LPB_PROBE_URL`` and ``LPB_PROBE_ADMIN_KEY`` (an admin ``lpk_`` key; the engine must accept API keys)
 name the stack; without them the probe prints why and exits 0. It issues two actor keys and an auditor
 key for fresh probe actors, checks 401 with no credential, 403 on admin routes for the actor and auditor
-keys, 404 across actors (on a job that fails ``no_offering`` before any payment), then revokes a key and
+keys, 404 across actors (on jobs for the run's own app, ``lpb-probe/<run>``, that fail ``no_offering``
+before any payment; none is sent if the catalog lists that app), then revokes a key and
 expects 401.
 
 It spends only with ``--yes`` and ``LPB_PROBE_FUND_ACTOR`` (an actor already provisioned in application
@@ -35,7 +36,14 @@ import httpx
 
 APPLICATION = "default"  # the fund actor's application; the allowance is read in the admin key's
 SYNC = "/v1/admin/costs/sync"  # a harmless admin write: if a key were wrongly allowed, nothing moves
-NO_SUCH_APP = "lpb-probe/no-such-app"  # no runner advertises it: the job fails before any payment
+
+
+def probe_app(run: str) -> str:
+    """The app the probe's jobs name: this run's own, so no runner on the network advertises it and the job
+    fails ``no_offering`` before any payment. The catalog is checked first all the same (#83 review)."""
+    return f"lpb-probe/{run}"
+
+
 DEFAULT_FUND = {"USD": Decimal("0.01"), "ETH": Decimal("0.000005")}
 FUND_CAP = {"USD": Decimal("0.05"), "ETH": Decimal("0.00002")}  # "a few cents", per allocation currency
 
@@ -125,19 +133,19 @@ async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_
 
 
 async def cross_actor(probe: Probe, a: str, b: str) -> None:
-    job = {"app": NO_SUCH_APP, "operation_ref": f"{probe.run}-job"}
-    first = (await probe.call("POST", "/v1/jobs", a, json=job)).headers.get("livepeer-job-id")
-    read = await probe.call("GET", f"/v1/jobs/{first}", a) if first else None
-    record = read.json() if read is not None and read.status_code == 200 else {}
-    # Some runner could advertise the app; in per_application mode the shared key would then pay. Only a
-    # job that failed before dispatch, with nothing paid, lets the probe send a second one (#83).
-    failure, attempts = record.get("failure") or {}, record.get("attempts") or []
-    unpaid = record.get("state") == "failed" and failure.get("kind") == "no_offering"
-    unpaid = unpaid and not any(attempt.get("payment_sent") for attempt in attempts)
-    ending = f"{first}: {record.get('state')} / {failure.get('kind')}"
-    if not probe.record("PASS" if unpaid else "FAIL", "a job is recorded without payment", ending):
+    app = probe_app(probe.run)
+    # A POST /v1/jobs returns only after the runner call, and in per_application mode the shared key pays
+    # for any actor: a job for an advertised app is paid on the POST itself. So none is sent then (#83).
+    offered = await probe.call("GET", "/v1/offerings", None, params={"app": app})
+    listing = offered.json() if offered.status_code == 200 else None
+    clear = isinstance(listing, list) and not any(item.get("app") == app for item in listing)
+    if not probe.record("PASS" if clear else "FAIL", "no runner advertises the probe's app", app):
         return
-    second = (await probe.call("POST", "/v1/jobs", b, json=job)).headers.get("livepeer-job-id")
+    job = {"app": app, "operation_ref": f"{probe.run}-job"}
+    first, read = await _unpaid_job(probe, a, job)
+    if not probe.record("PASS" if first else "FAIL", "a job is recorded without payment", str(first)):
+        return
+    second, _ = await _unpaid_job(probe, b, job)
     reused = "PASS" if second and second != first else "FAIL"
     probe.record(reused, "another actor's operation_ref is a new job", str(second))
     assert read is not None
@@ -148,6 +156,21 @@ async def cross_actor(probe: Probe, a: str, b: str) -> None:
     ids = [item.get("id") for item in listed.json()] if listed.status_code == 200 else None
     left_out = "PASS" if ids is not None and first not in ids else "FAIL"
     probe.record(left_out, "another actor's job list leaves it out", f"{listed.status_code}")
+
+
+async def _unpaid_job(
+    probe: Probe, token: str, job: dict[str, str]
+) -> tuple[str | None, httpx.Response | None]:
+    """Send one probe job and read it back: its id only when it failed ``no_offering`` with nothing paid."""
+    job_id = (await probe.call("POST", "/v1/jobs", token, json=job)).headers.get("livepeer-job-id")
+    read = await probe.call("GET", f"/v1/jobs/{job_id}", token) if job_id else None
+    record = read.json() if read is not None and read.status_code == 200 else {}
+    failure, attempts = record.get("failure") or {}, record.get("attempts") or []
+    unpaid = record.get("state") == "failed" and failure.get("kind") == "no_offering"
+    unpaid = (
+        unpaid and not failure.get("payment_sent") and not any(item.get("payment_sent") for item in attempts)
+    )
+    return (job_id if unpaid else None), read
 
 
 async def repeated_fund(probe: Probe, *, spend: bool, actor: str | None, amount: str | None) -> None:
@@ -214,11 +237,13 @@ async def cleanup(probe: Probe) -> None:
         probe.record("FAIL" if left else "PASS", "revoke the probe's other keys", ", ".join(left))
 
 
-async def probe(settings: ProbeSettings, *, spend: bool, client: httpx.AsyncClient | None = None) -> int:
+async def probe(
+    settings: ProbeSettings, *, spend: bool, client: httpx.AsyncClient | None = None, run: str | None = None
+) -> int:
     """Run every check against ``settings.url`` (or ``client``); 1 when any check failed."""
     own = client is None
     http = client or httpx.AsyncClient(base_url=settings.url, timeout=30.0)
-    checks = Probe(http, settings.admin_key)
+    checks = Probe(http, settings.admin_key) if run is None else Probe(http, settings.admin_key, run=run)
     try:
         try:
             await run_checks(

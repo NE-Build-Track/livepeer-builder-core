@@ -90,6 +90,11 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
   `reason="private_address"`;
 - an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
   an empty inventory that replaces the last good one. `null` means no runners;
+- `NaN` or `Infinity` anywhere in an inventory is not JSON, so the probe fails. A number whose exponent
+  `Decimal` cannot construct (past `10**18` either way, such as `1e1000000000000000000` or
+  `1e-99999999999999999999`) fails the same way: a float
+  parser would keep the token, and re-serving it would fail every engine's discovery refresh. Other
+  numbers with a fraction are kept as the orchestrator sent them and re-served with those digits;
 - any other failure, of any kind, is `reason="failed"` for that orchestrator alone: it never ends the
   pass;
 - an empty inventory counts as a success.

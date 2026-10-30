@@ -211,6 +211,11 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     certificates. On-chain AI orchestrators mostly don't run livepeer-node's `/discovery` yet, which is
     why the rollout is static first.
   - **Static, Railway's list:** 28 orchestrators, 5 serving 89 runners; 19 untrusted, 4 failed.
+- 30 October: runner records are kept as the JSON text each orchestrator sent (`discovery/document.py`),
+  so `GET /discovery` re-serves livepeer-node's `price_usd` with every digit instead of a float. A number
+  `Decimal` cannot build (an exponent past `10**18`, either sign) fails that orchestrator's probe, as
+  `NaN` does, so it is never re-served for every engine's refresh to fail on. Moved here from #77 (ISS-10)
+  with #84's fix, so the discovery service is reviewed on its own.
 
 ## Decision log
 

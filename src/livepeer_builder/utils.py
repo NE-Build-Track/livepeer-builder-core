@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from collections.abc import Coroutine
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
@@ -37,3 +38,19 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
     _SHIELDED.add(task)
     task.add_done_callback(_SHIELDED.discard)
     return task
+
+
+def decimal_json_number(token: str) -> Decimal:
+    """A JSON number token as :class:`Decimal`.
+
+    An exponent past ``10**18`` makes ``Decimal`` raise ``InvalidOperation``, here a ``ValueError``.
+    ``lpb discovery`` refuses that inventory, so the token is never re-served for every engine's refresh
+    to fail on.
+    """
+    try:
+        amount = Decimal(token)
+    except InvalidOperation as exc:
+        raise ValueError(f"{token} is not a JSON number") from exc
+    if not amount.is_finite():
+        raise ValueError(f"{token} is not a JSON number")
+    return amount

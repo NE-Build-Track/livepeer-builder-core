@@ -277,8 +277,14 @@ class PaymentsService:
         return await self._update_status(actor, status)
 
     async def revoke(self, admin: ActorContext, application_id: str, actor_id: str) -> ProvisionedActor:
-        """Revoke the allocation (unused funds return to the grant) and forget the key."""
+        """Revoke the allocation (unused funds return to the grant) and forget the key.
+
+        It takes no reference (D57): a repeat after it finished answers with the revoked actor and calls
+        nothing, so a retry after a lost answer is not an error (D61). One cut short is still active here
+        and runs again; Batteries' revoke is repeat-safe."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        if (done := await self._store.get_actor(application_id, actor_id)) and done.status == "revoked":
+            return done
         actor = await self._require_actor(application_id, actor_id)
         await self._require_manager().revoke_allocation(actor.allocation_id)
         await self._secrets.delete(actor.secret_ref)

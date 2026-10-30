@@ -8,9 +8,12 @@ Checks:
 5. Mermaid blocks contain no ``;`` (Mermaid treats it as a statement separator and fails to render).
 6. A code block marked ``<!-- example: path#name -->`` equals the region between ``# docs:start name``
    and ``# docs:end name`` in that file, so documented examples are the tested ones.
+7. Every check a traceability file cites as ``tests/...py::test_name`` exists (ISS-23), so the mapping from
+   behavior to test survives renames.
 Each failure says how to fix it.
 """
 
+import ast
 import re
 import sys
 import textwrap
@@ -151,6 +154,42 @@ def check_examples(errors: list[str]) -> None:
                 errors.append(f"{where}: the block differs from the tested region; copy the region in")
 
 
+CITATION = re.compile(r"(?<![\w/.-])(tests/[\w./-]+\.py)::(\w+(?:::\w+)*)")
+
+
+def test_names(source: Path) -> set[str]:
+    """``name`` for each module-level test function, ``Class::name`` for each method."""
+    names: set[str] = set()
+    for node in ast.parse(source.read_text()).body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            names.update(
+                f"{node.name}::{item.name}"
+                for item in node.body
+                if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+            )
+    return names
+
+
+def missing_test_citations(text: str) -> list[str]:
+    """Each ``tests/...py::name`` in ``text`` (a parametrized id is ignored) that names no test."""
+    missing: list[str] = []
+    for path, name in CITATION.findall(text):
+        source = ROOT / path
+        if not source.is_file() or name not in test_names(source):
+            missing.append(f"{path}::{name}")
+    return missing
+
+
+def check_test_citations(errors: list[str]) -> None:
+    for doc in sorted((ROOT / "docs" / "product-specs").glob("*traceability*.md")):
+        for cited in missing_test_citations(doc.read_text()):
+            errors.append(
+                f"{doc.relative_to(ROOT)} cites {cited}, which does not exist: fix the name or add the test"
+            )
+
+
 def main() -> int:
     errors: list[str] = []
     graph = check_links(errors)
@@ -159,6 +198,7 @@ def main() -> int:
     check_code_references(errors)
     check_mermaid(errors)
     check_examples(errors)
+    check_test_citations(errors)
     for error in errors:
         sys.stderr.write(f"docs: {error}\n")
     if not errors:

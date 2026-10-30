@@ -1,9 +1,11 @@
 """SqlStore: the EngineStore over SQLAlchemy Core (async). SQLite by default, PostgreSQL via [postgres]."""
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
@@ -42,6 +44,8 @@ from livepeer_builder.store.matching import (
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.operations import SqlOperations
 from livepeer_builder.store.rows import chunks, load_jobs
+
+_LOG = logging.getLogger(__name__)
 
 
 def create_engine(url: str) -> AsyncEngine:
@@ -245,16 +249,21 @@ class SqlStore(SqlKeys, SqlOperations):
     async def apply_usage(self, rows: Sequence[UsageRow], checkpoint: SyncCheckpoint) -> list[UsageRow]:
         """Insert rows not seen before and move the cursor, in one transaction. Returns the new rows.
 
-        A new row on an already matched session bumps that job's evidence version in the same transaction."""
+        A new row on an already matched session bumps that job's evidence version in the same transaction.
+        A row id seen before keeps its stored copy; delivered again with another fee, it is logged (D61)."""
         new: list[UsageRow] = []
         synced_at = datetime.now(UTC)
+        fees = (t.usage_rows.c.id, t.usage_rows.c.computed_fee_eth, t.usage_rows.c.computed_fee_usd)
         async with self.engine.begin() as conn:
-            seen: set[str] = set()
+            stored: dict[str, tuple[str | None, str | None]] = {}
             for chunk in chunks([row.id for row in rows]):
-                found = await conn.execute(select(t.usage_rows.c.id).where(t.usage_rows.c.id.in_(chunk)))
-                seen.update(found.scalars())
+                found = await conn.execute(select(*fees).where(t.usage_rows.c.id.in_(chunk)))
+                stored.update((row_id, (eth, usd)) for row_id, eth, usd in found)
+            seen = set(stored)
             for row in rows:
                 if row.id in seen:
+                    if row.id in stored:
+                        _log_another_fee(row, *stored[row.id])
                     continue
                 seen.add(row.id)
                 await conn.execute(insert(t.usage_rows).values(_usage_values(row) | {"synced_at": synced_at}))
@@ -423,6 +432,25 @@ def _attempt_values(attempt: Attempt) -> dict[str, Any]:
     values = attempt.model_dump(exclude={"sessions"})
     values["job_id"] = str(attempt.job_id)
     return values
+
+
+def _log_another_fee(row: UsageRow, eth: str | None, usd: str | None) -> None:
+    """A usage row id delivered again with a fee other than the stored one is ignored, never a correction
+    (D61, Q2): only a new row id changes a job's cost. The difference is logged for the operator."""
+    stored = (None if eth is None else Decimal(eth), None if usd is None else Decimal(usd))
+    if stored == (row.computed_fee_eth, row.computed_fee_usd):
+        return
+    _LOG.warning(
+        "a usage row was delivered again with another fee; the stored copy is kept",
+        extra={
+            "event": "costs.usage_redelivered",
+            "row_id": row.id,
+            "stored_fee_eth": eth,
+            "delivered_fee_eth": None if row.computed_fee_eth is None else str(row.computed_fee_eth),
+            "stored_fee_usd": usd,
+            "delivered_fee_usd": None if row.computed_fee_usd is None else str(row.computed_fee_usd),
+        },
+    )
 
 
 def _usage_values(row: UsageRow) -> dict[str, Any]:

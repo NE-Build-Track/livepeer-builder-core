@@ -179,7 +179,7 @@ Which commands take a reference:
 | --- | --- |
 | Provision, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
 | Issue access key, rotate access key | **required**: creates a live engine credential |
-| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice |
+| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeat after one finished answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
 
 ## Allowance, signer funding and spending guarantees
 

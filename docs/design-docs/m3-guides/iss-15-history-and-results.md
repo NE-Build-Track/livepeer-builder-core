@@ -92,6 +92,11 @@ Batteries change is involved.
 
 ## Open questions to lock
 
+**Locked by Mike, 30 October 2026:** Q1 the console's FLUX schnell preset sends `sync_mode: true` (a
+console change); the engine docs still document provider-hosted asset expiry and name `sync_mode: true`
+as the inline option; Q2 expose `before` on `GET /v1/jobs` now (ISO-8601, newest first, own jobs only for
+an actor); Q3 a separate `docs/guides/rest-builder.md`. The rules become [D59](../m3-decisions.md).
+
 - **Q1.** Switch the console's FLUX schnell preset to `sync_mode: true` so the image is inline and
   survives, or keep the URL and document the expiry (both are documented either way)?
 - **Q2.** Expose `before` on `GET /v1/jobs` now (recommended, small), or leave paging to M4?

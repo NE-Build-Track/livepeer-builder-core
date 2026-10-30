@@ -210,22 +210,26 @@ allowance exhausted (HTTP 402)") and `status_code` is the signer's status, when 
 signer's URL and its own text go to the engine log only, and `body` is never the signer's
 ([payments.md](payments.md#who-answers-what)).
 
+A job's `failure` is its **last** attempt's. A job that failed over keeps every attempt, and whether
+the same `operation_ref` runs again depends on all of them ([the closed list](#idempotency)), not on
+the last kind alone.
+
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
-| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings` |
-| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header |
-| `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help |
-| `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header |
-| `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying does not help |
-| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again ([idempotency](#idempotency)) |
-| `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry later |
-| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, or a refresh past its budget), the signer refused with another status, or its identity reply was malformed |
+| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
+| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header, with the same `operation_ref` |
+| `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
+| `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
+| `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
+| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
+| `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first. An operator checks the signer if it lasts |
+| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, or a refresh past its budget), the signer refused with another status, or its identity reply was malformed. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
 | `payment_unknown` | `signer_unknown` | maybe | 503, no `Retry-After` | The signer was asked and gave no validated answer while signing (a 5xx, a timeout, a dropped or malformed reply): it may have charged. The job is `uncertain` and the cost `pending` until usage settles it. Do not retry blindly: a repeat under the same `operation_ref` is 409, and a new one could pay twice |
-| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time |
-| `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner refused the request: fix the request |
-| `runner_error` (5xx) | | yes | 502 | The runner failed, or the engine did (`engine error: …`) |
-| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran |
-| `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | |
+| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time; it may still have run the work. Read the job: when `uncertain`, wait for its cost before running it again. A repeat under the same `operation_ref` is 409, so a new attempt needs a new reference |
+| `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner ran and refused the request; `failure.body` holds its words. Fix the request and send it with a new `operation_ref`. A paid attempt is `failed_after_payment`, never billable ([payments.md](payments.md#cost-classification)) |
+| `runner_error` (5xx) | | yes | 502 | The runner failed after it ran, or the engine did (`engine error: …`). Not run again automatically: try later with a new `operation_ref`. Every `runner_error` answers HTTP 502; the runner's own status is `failure.status_code`. A paid runner **500** ran and is `failed_after_payment`, never billable, and the job is `failed`. A paid runner **502 or 504** may still be running behind the orchestrator's proxy, so that attempt is `uncertain` until usage settles it (D52). Read `job.state`: when it is `uncertain`, wait for the cost before running it again |
+| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran; the next start resolves it `uncertain` when anything may have paid, else `failed`. Read the job: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): no attempt, or every attempt refused before the app ran with nothing paid, as after a restart mid-failover. Otherwise treat it as `timeout` |
+| `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | The caller left the stream before its end ([how a stream ends](#how-a-stream-ends)); the bytes it did not read are gone. Read the job for the outcome and cost. To get the result, run it again with a new `operation_ref` |
 
 `not_provisioned` and `allowance_exhausted` are both 402: `kind` tells them apart. A 403 from
 `POST /v1/jobs` is either the access policy (`AccessDenied`, no job in the body) or `not_authorized`
@@ -328,12 +332,72 @@ the REST streaming route answers 400 (D33).
 `open` must honour `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the
 payment evidence so far.
 
-## Results
+## Inputs and results in M3
 
-Immediate results are returned inline and **not retained**. The job records a `ResultRef`
-(`storage="inline"`, content type, size, sha256) so the result can be checked later.
+What a builder sends, what comes back, and what the engine keeps (D59). The engine moves bytes between
+the caller and a runner: it hosts no media and keeps no result in M3. Stored results are M4 (ISS-26).
+The REST path through this section is [guides/rest-builder.md](../guides/rest-builder.md).
+
+### Inputs
+
+- A JSON `payload` (an object), or a `raw_body` of up to 8 MiB with its `content_type`
+  ([opaque request bodies](#opaque-request-bodies-and-stream-headers)). **The whole request is
+  limited** over REST: a `/v1/` body over `LPB_HTTP_MAX_REQUEST_BYTES` (default 16 MiB, which fits an
+  8 MiB `raw_body` as base64) is refused with 413, `code: request_too_large` and `limit_bytes`, before
+  the engine reads it into memory or checks the credential, whether it declares its `Content-Length` or
+  streams without one. Routes outside `/v1/` (an operator's own, a persistent endpoint's proxy) are not
+  limited by the engine. Embedded callers pass a `JobRequest` and are not limited.
+- **A URL inside a payload is passed to the runner unchanged, and the runner fetches it.** The engine
+  does not fetch, host, validate or rewrite media. The URL must be reachable from the runner, and stay
+  so until the runner has read it (a signed URL's expiry included).
+- Neither is kept: the job records a fingerprint of the request for [idempotency](#idempotency), not
+  its body.
+
+### Results
+
+Immediate results are returned inline, **once**, and **not retained**. The job records a `ResultRef`
+(`storage="inline"`, `content_type`, `size_bytes`, and the `sha256` of the bytes returned), so a
+builder can check a copy it saved: hash the saved bytes and compare. A stream's `ResultRef` covers the
+bytes the caller received ([how a stream ends](#how-a-stream-ends)). Save the result when the job
+returns; the engine cannot give it again.
+
 `storage="stored"` (a retrievable `location`) is reserved for async results (M4). Until then,
-`GET /v1/jobs/{id}/result` answers 501.
+`GET /v1/jobs/{id}/result` checks the permission (403) and the owner (404 for another actor's job or a
+missing one), then answers 501 with `milestone: "M4"` and `ticket: "ISS-26"`.
+
+### Provider-hosted assets
+
+Some runners answer with a URL to a file the model provider hosts, not the file itself: the FLUX
+schnell runner returns `output.images[0].url`, a temporary fal URL. That URL belongs to the provider.
+It expires on the provider's schedule, and the engine cannot reissue it: the engine never fetched the
+file, and the `ResultRef` hashes the runner's answer (the JSON holding the URL), not the image. Once
+the URL has expired:
+
+- the job still reads `succeeded`, and its cost stands (the attempt is `delivered`);
+- fetching the URL returns the provider's own error, not the engine's;
+- nothing in the engine can reproduce the file.
+
+**Save the asset when the job returns, or ask the runner for inline output where it offers one.** For
+FLUX schnell, `sync_mode: true` in the payload returns the image as a data URI inside the answer, so
+the `ResultRef` covers it and it lasts as long as your copy. An application that shows such a URL
+should handle a failed load ("the provider no longer serves this file") instead of a broken image.
+
+### Job history
+
+`GET /v1/jobs` (`jobs.list_jobs` in-process) lists jobs **newest first**: an actor's own; for an admin
+or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
+(default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
+ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
+is 422. Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
+them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job, or a missing one, is
+404.
+
+A job records its `state`, `failure`, `result` (a `ResultRef`, on success), reported `usage`, its
+labels and its times. Each attempt records the runner and orchestrator it called, the allocation that
+paid, the sessions the signer signed, `payment_sent`, its `outcome`, the status code and its times
+([jobs and attempts](#jobs-and-attempts)). Neither records the request body or the result's bytes. The
+cost is read beside the job (`GET /v1/jobs/{id}/cost`). `LPB_RETENTION_JOBS_DAYS` purges `succeeded`
+and `failed` jobs; `uncertain` ones are kept ([persistence.md](persistence.md#retention)).
 
 ## Measured usage
 

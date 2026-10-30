@@ -42,6 +42,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging |
+| `LPB_HTTP_MAX_REQUEST_BYTES` | `16777216` (16 MiB) | A `/v1/` request body over it is refused with 413 `request_too_large` before it is read (D59); at least 1024. It fits an 8 MiB `raw_body` as base64 |
 
 ## Operations
 

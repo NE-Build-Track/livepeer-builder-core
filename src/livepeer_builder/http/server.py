@@ -33,7 +33,7 @@ async def build_app(
     """
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:
-        return _app(engine, extend)
+        return _app(engine, settings, extend)
     except BaseException:
         await engine.stop()
         raise
@@ -52,15 +52,15 @@ async def serve(
     configure_logging(json_lines=settings.log_json)
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:
-        app = _app(engine, extend)
+        app = _app(engine, settings, extend)
         config = uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
         await uvicorn.Server(config).serve()
     finally:
         await engine.stop()  # idempotent: the lifespan may already have stopped it
 
 
-def _app(engine: EngineApi, extend: Extend | None) -> FastAPI:
-    app = create_app(engine)
+def _app(engine: EngineApi, settings: EngineSettings, extend: Extend | None) -> FastAPI:
+    app = create_app(engine, max_request_bytes=settings.http_max_request_bytes)
     if extend is not None:
         extend(app, engine)
     return app

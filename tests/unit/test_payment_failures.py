@@ -257,6 +257,9 @@ def test_a_payment_failure_stored_before_reasons_existed_still_reads() -> None:
         "engine:s3cret@signer.example:8081",  # the SDK reads a bare host:port as https
         "https://signer.example/?token=s3cret",  # a query
         "https://signer.example/#s3cret",  # a fragment
+        "//engine:s3cret@signer.example",  # scheme-relative: the @ lands in the path (Cursor, #78)
+        "  //engine:s3cret@signer.example:8081",  # the same, with leading spaces
+        "signer.example/engine:s3cret@x",  # an @ anywhere: a base URL never needs one
     ],
 )
 def test_a_signer_url_that_could_carry_a_secret_is_refused_at_startup(url: str) -> None:

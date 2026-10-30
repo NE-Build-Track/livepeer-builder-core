@@ -121,6 +121,37 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     assert engine.admission.running == 0
 
 
+async def test_a_first_byte_deadline_while_the_signer_identifies_is_signer_unavailable(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net
+) -> None:
+    """The stream's deadline can expire during /sign-orchestrator-info, before anything is signed and
+    before any runner is asked. That is the signer not answering, D58 (4): ``payment`` /
+    ``signer_unavailable``, unpaid and failed, so the same reference runs again (D57), not a 504."""
+    net.info = [5.0]
+    engine = await make_engine(
+        runners=(net.runner(),), supply=EngineSupply(transport=SdkRunnerTransport(net.url))
+    )
+    request = ProvisionRequest(
+        operation_ref="provision:default:alice",
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(5), currency="USD"),
+        grant_id="g",
+    )
+    await engine.payments.provision(admin, request)
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.3))
+    job = failed.value.job
+    assert job.state == "failed" and job.failure is not None
+    assert (job.failure.kind, job.failure.reason, job.failure.payment_sent) == (
+        "payment",
+        "signer_unavailable",
+        False,
+    )
+    assert net.log == ["signer info"]  # no runner was asked and nothing was signed
+    assert engine.admission.running == 0
+
+
 async def test_headers_without_a_first_chunk_time_out_on_first_byte(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:

@@ -59,6 +59,13 @@ From the ticket and the 21 October M3 plan:
 
 ## Progress
 
+- 2026-10-30: Cursor's review of #78. (1) A stream's `first_byte_timeout_s` that expired during
+  `/sign-orchestrator-info` was `timeout` (504, a repeat 409): the deadline cancels the identity call, so
+  `PaidRequest.identifying` now says where it stopped and the stream maps it to `payment` /
+  `signer_unavailable` (D58 (4)); pinned with a loopback signer that hangs on identity. (2) A
+  scheme-relative `//user:pw@host` passed the startup check and the SDK's error quoted it: `@`, `?` and
+  `#` are refused anywhere, and a URL with no host is refused (D58 (7)).
+
 - 2026-10-29: Baseline at `a41beef`: 1489 passed, 49 skipped. Built test-first in one session. One
   existing assertion changed: `test_runner_call.py::test_unreachable_runner_or_signer_is_unpaid`
   expected a signer that refuses connections at `sign-orchestrator-info` to be `unreachable`; under D58

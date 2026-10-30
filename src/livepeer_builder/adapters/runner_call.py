@@ -172,6 +172,7 @@ class PaidRequest:
         self._events = events
         self._payment_type = payment_type(rate) if signer_url is not None else ""
         self._max_price = max_price(rate) if signer_url is not None else None
+        self.identifying = False  # waiting on /sign-orchestrator-info: nothing signed, no runner asked
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
         async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
@@ -268,8 +269,9 @@ class PaidRequest:
     async def _signer_identity(self, signer_url: str) -> SignerMaterial:
         """Before any runner is asked to work. Nothing is signed here, and every runner shares the signer,
         so a signer that cannot answer fails the job ``payment`` / ``signer_unavailable`` (D58)."""
+        self.identifying = True  # left set if the stream's deadline cancels the call (adapters/sdk.py)
         try:
-            return await get_signer_info(signer_url, frozenset(self._signer_headers.items()))
+            material = await get_signer_info(signer_url, frozenset(self._signer_headers.items()))
         except LivepeerGatewayError as error:
             self._log_signer_error(None, error)
             if not unavailable_before_signing(error):
@@ -279,6 +281,8 @@ class PaidRequest:
             raise self._events.error(
                 "payment", message, status_code=status, reason="signer_unavailable"
             ) from error
+        self.identifying = False
+        return material
 
     async def _sign(self, session: LivePaymentSession) -> GetPaymentResponse:
         """``manifest_id`` is known before ``get_payment`` returns."""

@@ -47,8 +47,8 @@ class Net:
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
     sign: list[SignStep] = field(default_factory=list)
-    # /sign-orchestrator-info: "ok", an HTTP status, "drop", or "malformed" (no signature)
-    info: list[int | str] = field(default_factory=list)
+    # /sign-orchestrator-info: "ok", an HTTP status, "drop", "malformed" (no signature), or seconds to hang
+    info: list[int | float | str] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     bodies: list[Any] = field(default_factory=list)  # what each runner request carried, as JSON
@@ -80,6 +80,9 @@ class Net:
     async def _sign_info(self, request: web.Request) -> web.Response:
         self.log.append("signer info")
         step = self.info.pop(0) if self.info else "ok"
+        if isinstance(step, float):
+            await self.hang(step)
+            step = "ok"
         if step == "drop":
             assert request.transport is not None
             request.transport.close()

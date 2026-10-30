@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict
 
 from livepeer_builder.utils import decimal_json_number
 
+from livepeer_builder.utils import decimal_json_number
+
 _WS = " \t\r\n"
 
 RawJson = NewType("RawJson", str)

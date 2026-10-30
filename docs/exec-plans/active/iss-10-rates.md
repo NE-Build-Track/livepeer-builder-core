@@ -239,3 +239,8 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   replaces "kept as advertised, `missing`" for that unit, and amends D62 (6): this is the one
   go-livepeer-specific rule. By John's choice no test names the unit; `is_payable` refuses every unit
   but `seconds` and `fixed`.
+- 30 October (John): #77 was too large. The `lpb discovery` changes (runner records kept as received,
+  `b22b9c1`; #84's fix; the exponent tests) moved to
+  [#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87), so the discovery service is
+  reviewed on its own. #77 changes only the engine. Until #87 merges, `price_usd` read through
+  `lpb discovery` is a float round-trip; the engine's own fetch keeps every digit from any other source.

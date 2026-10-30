@@ -156,6 +156,9 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   (the `wei`/`hour` catalog case passed once `hour` left the paid units). Fixtures changed: the test
   runners in `tests/unit/livepeer_net.py` and `testing.fakes.runner()` advertise `wei`, not `usd`, as
   livepeer-node does; `test_sdk_contract.py` compares the engine's units with the SDK's minus `hour`.
+- 30 October: a number such as `1e1000000000000000000` is `inf` to the probe's float parser, so the raw
+  token was re-served. `loads_json_numbers` then raised and every engine refresh failed. The probe now
+  parses fractional numbers with `decimal_json_number` and fails that orchestrator only.
 
 ## Decision log
 
@@ -177,3 +180,6 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   so padding always lands above the price.
 - 30 October (Mike, reviewing #77): Q1–Q3 locked as proposed, with the separate `stale` flag and the
   price-ceiling guard. Renumbered D58 → D62: #78 (ISS-12) holds D58 and its stack D59–D61.
+- 30 October: an exponent `Decimal` cannot construct fails that orchestrator's probe, as `NaN` does.
+  It is not re-served. A float parse would turn `1e1000000000000000000` into `inf`, keep the token, and
+  every engine refresh would raise on the aggregated document.

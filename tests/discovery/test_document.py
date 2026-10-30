@@ -3,6 +3,7 @@
 import pytest
 
 from livepeer_builder.discovery.document import discovery_document, runner_records
+from livepeer_builder.utils import loads_json_numbers
 
 
 def test_a_non_object_runner_is_dropped_and_the_last_runners_field_wins() -> None:
@@ -13,6 +14,18 @@ def test_a_non_object_runner_is_dropped_and_the_last_runners_field_wins() -> Non
 def test_a_nodes_entry_and_a_null_runners_contribute_nothing() -> None:
     body = b'[{"nodes":[{"url":"https://o"}]},{"address":"https://o","runners":null},{"runners":[]}]'
     assert runner_records(body) == []
+
+
+def test_a_number_decimal_cannot_parse_is_refused() -> None:
+    """Float accepts ``1e1000000000000000000`` as ``inf`` and would re-serve the token.
+
+    The engine parses the aggregated document with ``Decimal``, so one such number fails every refresh.
+    """
+    body = b'[{"runners":[{"url":"u","price":1e1000000000000000000},{"url":"kept","price":1}]}]'
+    with pytest.raises(ValueError, match="not a JSON number"):
+        runner_records(body)
+    with pytest.raises(ValueError, match="not a JSON number"):
+        loads_json_numbers(body)
 
 
 def test_trailing_json_is_refused() -> None:

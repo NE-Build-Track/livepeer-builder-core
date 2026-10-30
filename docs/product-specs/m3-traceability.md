@@ -151,5 +151,5 @@ payment), never provisions, and runs no paid job. It prints PASS, FAIL or SKIP p
 and exits 1 when a check failed. Its logic is checked without a network against the engine in-process:
 `tests/unit/test_live_probe.py::test_every_check_passes_against_the_engine_and_the_fund_applies_once`.
 
-**Evidence: pending the live run.** The output of the first run against the console's stack will be
-recorded under `docs/references/evidence/` and linked here.
+**Evidence:** [first run, 30 October 2026](../references/evidence/2026-10-30-iss-23-live-probe.md),
+against the console's stack with the engine at `ade673f`: 25 passed, 0 failed, 0 skipped.

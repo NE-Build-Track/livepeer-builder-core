@@ -8,8 +8,8 @@
   be stacked on the ISS-15 and ISS-18 branches.
 - **Design:** the [verification guide](../../design-docs/m3-guides/iss-23-verification.md) (29 October).
   Q1–Q3 locked by Mike on 30 October.
-- **Progress:** the spec, the doc guard, the gap tests and the live probe are built and checked;
-  awaiting review. The live run against the console's stack is to do (Mike's lead).
+- **Progress:** the spec, the doc guard, the gap tests and the live probe are built and checked, and
+  the probe has run live (25 passed); in review as #83.
 - **Decision:** D61.
 
 ## Goal
@@ -29,8 +29,9 @@ From the ticket and the 21 October M3 plan, as the guide's definition of done:
   (`tests/structure/test_traceability.py`).
 - [x] The gap tests are green (`test_admin_route_sweep.py`, `test_verification_access.py`,
   `test_cost_observations.py`).
-- [ ] The live probe has run once against the console's stack, with its output recorded under
-  `docs/references/evidence/` and linked from the spec (Mike's lead; not run by the builder).
+- [x] The live probe has run once against the console's stack, with its output recorded under
+  `docs/references/evidence/` and linked from the spec
+  ([30 October](../../references/evidence/2026-10-30-iss-23-live-probe.md): 25 passed, engine `ade673f`).
 - [x] The `AGENTS.md` checks are green.
 
 ### Test list
@@ -53,6 +54,10 @@ From the ticket and the 21 October M3 plan, as the guide's definition of done:
   spent without `--yes` or above the cap; a wrong answer fails it; no stack, exit 0
 
 ## Progress
+
+- 2026-10-30: Live run on the console's stack with the engine built from `ade673f`: 25 passed, 0 failed,
+  one 0.01 USD fund applied once. The review changes (repeat revoke 204, 413 over 16 MiB, `before`
+  422 without an offset, `by_app` by class) seen on the same engine.
 
 - 2026-10-30: Baseline at `56ccb27`: 1578 passed, 49 skipped. Built test-first in one session.
 - 2026-10-30: The only engine change: `SqlStore.apply_usage` reads the stored fees of row ids it has

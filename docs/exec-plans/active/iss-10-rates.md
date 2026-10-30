@@ -92,7 +92,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
    is `observed_by=engine`. They serve go-livepeer's inventory, not livepeer-node `v1.0.2`'s as #70
    assumed (see Progress).
 3. The engine is deliberately looser than livepeer-node's collectors, which drop an unstamped runner.
-4. `720p-pixel-seconds` (go-livepeer) is kept as advertised and is not payable; `hour` and `usd` are
+4. Any unit but `seconds` or `fixed` is kept as advertised and is not payable. `hour` and `usd` are
    registration-side only, and not payable either.
 5. `amount_usd` becomes `price_usd`; the raw stamp is `Runner.observed_at`; the catalog type is
    `ObservedRate`; the status is two fields.

@@ -20,7 +20,7 @@ class NetworkRate(Contract):
 
     amount: Decimal = Field(ge=PRICE_FLOOR, lt=PRICE_LIMIT)  # livepeer-node's price: wei on-chain
     currency: str  # "wei" on-chain
-    unit: str  # "seconds" or "fixed"; go-livepeer's "720p-pixel-seconds" is kept but cannot be paid
+    unit: str  # as advertised; the engine pays only "seconds" and "fixed"
     # livepeer-node's price_usd: the runner's registered USD per the same unit. Not an engine conversion;
     # absent from go-livepeer orchestrators. The wei amount is what is paid.
     price_usd: Decimal | None = None

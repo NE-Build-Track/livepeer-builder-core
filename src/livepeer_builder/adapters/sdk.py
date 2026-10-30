@@ -276,15 +276,21 @@ def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
 
 
 def _stamp(value: object) -> datetime | None:
-    """An RFC 3339 time in UTC (Go's nanoseconds truncate to microseconds), or None. A time with no offset is
-    not RFC 3339."""
+    """An RFC 3339 time in UTC (Go's nanoseconds truncate to microseconds), or None.
+
+    A time with no offset is not RFC 3339. A time that parses but cannot be converted to UTC (``0001-01-01``
+    with a positive offset, ``9999-12-31`` with a negative one) is unreadable too: ``astimezone`` raises
+    ``OverflowError``, and that must not fail the rest of the inventory.
+    """
     if not isinstance(value, str):
         return None
     try:
         stamp = datetime.fromisoformat(value)
-    except ValueError:
+        if stamp.tzinfo is None:
+            return None
+        return stamp.astimezone(UTC)
+    except (ValueError, OverflowError):
         return None
-    return stamp.astimezone(UTC) if stamp.tzinfo is not None else None
 
 
 def _decimal(value: object) -> Decimal | None:

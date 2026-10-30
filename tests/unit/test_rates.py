@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from livepeer_builder import EngineSettings, EngineSupply
+from livepeer_builder import EngineSettings, EngineSupply, testing
 from livepeer_builder.adapters.runner_call import max_price
 from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.static import StaticDiscoverySource
@@ -78,9 +78,9 @@ def test_an_unreadable_price_says_why() -> None:
     ]}]  # fmt: skip
     assert [(r.rate, r.rate_error) for r in runners_from_entries(entries)] == [
         (None, "price_info is not an object"),
-        (None, "price is not a number from 1e-300 to below 1e300"),
-        (None, "price is not a number from 1e-300 to below 1e300"),
-        (None, "price is not a number from 1e-300 to below 1e300"),
+        (None, "price must be 0, or from 1e-300 to below 1e300"),
+        (None, "price must be 0, or from 1e-300 to below 1e300"),
+        (None, "price must be 0, or from 1e-300 to below 1e300"),
     ]
 
 
@@ -88,7 +88,7 @@ def test_a_price_too_large_for_a_float_ceiling_is_not_a_rate() -> None:
     """max_price pads the amount into a float; 1E+1000000 overflowed before the signer was asked."""
     huge = Decimal("1E+1000000")
     (runner,) = runners_from_entries(inventory(price=huge, currency="wei", unit="seconds"))
-    assert (runner.rate, runner.rate_error) == (None, "price is not a number from 1e-300 to below 1e300")
+    assert (runner.rate, runner.rate_error) == (None, "price must be 0, or from 1e-300 to below 1e300")
     (runner,) = runners_from_entries(inventory(price="10", price_usd=huge, currency="wei", unit="seconds"))
     assert runner.rate is not None and runner.rate.price_usd is None
 
@@ -96,12 +96,21 @@ def test_a_price_too_large_for_a_float_ceiling_is_not_a_rate() -> None:
 def test_a_price_too_small_for_a_positive_float_ceiling_is_not_a_rate() -> None:
     """livepeer/node's signer refuses a ceiling that is not positive (checkMaxPrice).
 
-    0, 1E-400 and 1E-999999 are 0.0 once padded into the float max_price sends.
+    1E-400 and 1E-999999 are 0.0 once padded into the float max_price sends. 0 is a free rate (below).
     """
-    for tiny in ("0", "1E-400", "1E-999999"):
+    for tiny in ("1E-400", "1E-999999"):
         (runner,) = runners_from_entries(inventory(price=tiny, currency="wei", unit="seconds"))
         assert runner.rate is None, tiny
-        assert runner.rate_error == "price is not a number from 1e-300 to below 1e300", tiny
+        assert runner.rate_error == "price must be 0, or from 1e-300 to below 1e300", tiny
+
+
+def test_a_price_of_0_is_a_free_rate() -> None:
+    """0 is a price (free); only the engine's ceiling needs a positive one, and a 402 from it is refused (#77 review)."""
+    (runner,) = runners_from_entries(inventory(price=0, currency="wei", unit="seconds"))
+    assert (runner.rate, runner.rate_error) == (
+        NetworkRate(amount=Decimal(0), currency="wei", unit="seconds"),
+        None,
+    )
 
 
 def test_any_source_s_rate_is_refused_unless_a_float_ceiling_holds_it() -> None:
@@ -110,7 +119,7 @@ def test_any_source_s_rate_is_refused_unless_a_float_ceiling_holds_it() -> None:
     9.99E-301 would survive as a float, but it is under the 1e-300 floor: below the normal range the
     pad can land under the price (7e-324 becomes 5e-324).
     """
-    for bad in ("-1", "0", "1E-400", "1E-999999", "9.99E-301", "1E+300", "1E+1000000"):
+    for bad in ("-1", "1E-400", "1E-999999", "9.99E-301", "1E+300", "1E+1000000"):
         with pytest.raises(ValidationError):
             NetworkRate(amount=Decimal(bad), currency="wei", unit="seconds")
     for bound in ("1E-300", "9.99E+299"):
@@ -196,13 +205,48 @@ async def test_a_stamp_from_the_future_is_trusted_only_within_30_seconds(clock: 
     assert (offering.rate_high.observed_at, offering.rate_high.observed_by) == (clock.now(), "engine")
 
 
-async def test_an_app_with_no_usable_rate_is_not_listed(clock: FixedClock) -> None:
+async def test_an_app_with_no_rate_is_listed_as_missing_with_no_range(clock: FixedClock) -> None:
+    """A runner with no rate (off-chain, or a price_info that is not one) still serves jobs: it is listed (#77 review)."""
     unpriced = priced("10", name="free").model_copy(update={"app": "c/d", "rate": None})
     unreadable = unpriced.model_copy(
         update={"rate_error": "price_info has no currency", "url": "https://o/x"}
     )
-    (available,) = await catalog(clock, priced("10"), unpriced, unreadable)
+    available, missing = await catalog(clock, priced("10"), unpriced, unreadable)
     assert (available.app, available.rate_status) == ("a/b", "available")
+    assert (missing.app, missing.rate_status, missing.rate_low, missing.rate_high) == (
+        "c/d",
+        "missing",
+        None,
+        None,
+    )
+    assert (missing.runner_count, missing.ready_count, missing.stale) == (2, 2, False)
+
+
+async def test_an_app_s_runners_with_no_rate_are_a_missing_offering_after_its_priced_ones(
+    clock: FixedClock,
+) -> None:
+    """Every runner of the app is counted in exactly one of its offerings."""
+    unpriced = priced("10", name="free").model_copy(update={"rate": None})
+    seconds, missing = await catalog(clock, unpriced, priced("10", name="r1"), priced("30", name="r2"))
+    assert (seconds.rate_low.amount, seconds.rate_high.amount, seconds.runner_count) == (10, 30, 2)
+    assert (missing.rate_low, missing.rate_status, missing.runner_count) == (None, "missing", 1)
+
+
+def test_an_offering_is_not_available_without_a_rate() -> None:
+    with pytest.raises(ValidationError, match="an available offering has a rate range"):
+        Offering(
+            app="a/b", modes=(), rate_low=None, rate_high=None, rate_status="available", stale=False,
+            runner_count=1, ready_count=1, observed_at=datetime(2026, 10, 30, tzinfo=UTC),
+        )  # fmt: skip
+
+
+async def test_a_free_runner_is_a_rate_of_0_in_the_catalog(clock: FixedClock) -> None:
+    (offering,) = await catalog(clock, priced("0"))
+    assert (offering.rate_low.amount, offering.rate_high.amount, offering.rate_status) == (0, 0, "available")
+
+
+def test_the_testing_runner_can_be_free() -> None:
+    assert testing.runner(price="0").rate == NetworkRate(amount=Decimal(0), currency="wei", unit="fixed")
 
 
 async def test_every_offering_is_stale_once_the_snapshot_is(clock: FixedClock) -> None:

@@ -6,8 +6,8 @@
 - **Ticket:** ISS-10 ([Network-Engineering-SPE#23](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/23)).
   Guide: `docs/design-docs/m3-guides/iss-10-rates.md` in [PR #74](https://github.com/NE-Build-Track/livepeer-builder-core/pull/74) (`2e82565`).
 - **Branch:** `tasks/m3/iss-10-rates`, off `releases/m3` at `d3df806`.
-- **State:** built test-first; awaiting review. The console change (Mike) and the go-livepeer upstream
-  request (below) are open.
+- **State:** built test-first; awaiting review. Mike's review of `53b12d7` is answered on this branch
+  (Progress, 30 October). The console change (Mike) is open.
 - **Decision:** D62 (Q1–Q3 locked by Mike, 30 October).
 
 ## Goal
@@ -23,8 +23,9 @@ From the 21 October M3 plan and the guide's "Done when":
 
 - [x] Every rate carries amount, currency, unit, source and age: `ObservedRate` (`amount`, `currency`,
   `unit`, `price_usd`, `source`, `observed_at`, `observed_by`) on `Offering.rate_low`/`rate_high`.
-- [x] Unpaid and stale rates are explicit: one `Offering` per app and `(currency, unit)`, `rate_status`, `stale`;
-  `Runner.rate_error` says why an advertised price is not a rate.
+- [x] Unpaid, missing and stale rates are explicit: one `Offering` per app and `(currency, unit)`, and one
+  with no range for an app's runners with no rate; `rate_status`, `stale`; `Runner.rate_error` says why
+  an advertised price is not a rate.
 - [x] A network rate is not represented as a total-job quote or a retail price: no defaults, no
   conversion, no job total; [payments.md](../../contracts/payments.md#pricing-assumptions).
 - [x] `payments.md` has "Wholesale and retail" and "Pricing assumptions".
@@ -71,19 +72,6 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 | go-livepeer `/discovery` (`discoveryRunner`, `convertPrice`) | `{price: wei (rounded down), currency: "wei", unit: "seconds", "fixed" or "720p-pixel-seconds"}`; no `price_usd`, no `observed_at`; no `price_info` off-chain **or while an on-chain runner's price feed is not ready** |
 | Node signer (`checkMaxPrice`) | The ceiling must be a positive wei price in the payment type's unit (`seconds` for `live`, `fixed` for `fixed`), else 400; with no ceiling, no check |
 
-### go-livepeer upstream request (draft; not filed)
-
-To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstream changes escalate):
-
-> **Advertise `price_usd` in orchestrator `/discovery`, as livepeer/node does.**
-> `LiveRunnerPriceInfo.PriceUSD` exists since v0.9.3 but only the remote signer fills it, with its own
-> wei-to-USD conversion. The orchestrator already holds the runner's registered USD price
-> (`runner.PriceInfo`). In `discoveryRunner()`, set `PriceUSD` from it per the advertised unit, as an
-> exact decimal string: `hour` → USD/3600 per second; `fixed` → USD per request; `720p` → USD per
-> 720p pixel-second (USD / (3600 × 1280 × 720 × 30)). Optionally stamp `observed_at` (RFC 3339, response
-> time) as livepeer/node v1.0.4 does. Consumers can then read one meaning of `price_usd` from both
-> implementations.
-
 ### Guide amendments (for `iss-10-rates.md` once PR #74 merges)
 
 1. `observed_at` is the orchestrator's response time. It measures inventory freshness and carries
@@ -96,7 +84,8 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
    registration-side only, and not payable either.
 5. `amount_usd` becomes `price_usd`; the raw stamp is `Runner.observed_at`; the catalog type is
    `ObservedRate`; the status is two fields.
-6. go-livepeer's `price_usd` is absent pending the upstream request above.
+6. go-livepeer orchestrators send no `price_usd` or `observed_at`, and no upstream change is planned:
+   go-livepeer is deprecated (Mike, 30 October).
 7. The stamp is in the `v1.0.3` tag (first released in `v1.0.4`). Replace the unresolvable `e75e5b6`
    with `a4b68ed` (`main`) or `v1.0.6` (`c7be946`).
 8. `LPB_RATE_MAX_AGE_S` defaults to 600 s (Q2), with the reason above.
@@ -142,8 +131,7 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   - **Finding:** these, and `lpt.sundara.tv:8935`, serve **go-livepeer's** inventory: wei with no
     `price_usd` (livepeer-node `v1.0.1`+ always adds it on-chain), go-livepeer's key set, and the
     `720p-pixel-seconds` unit livepeer-node refuses. #70 read them as livepeer-node `v1.0.2`. The
-    go-livepeer compatibility tests therefore describe today's fleet, and the upstream request is what
-    brings `price_usd` to it.
+    go-livepeer compatibility tests therefore describe today's fleet.
   - Not checked live: a stamping (`v1.0.4`+) source; the unit tests cover `observed_by=orchestrator`.
 - 29 October: `price_usd` digits. The SDK's `json.loads` makes a JSON number a float before the adapter sees it ([livepeer-python-gateway#88](https://github.com/livepeer/livepeer-python-gateway/issues/88)). The engine and `lpb discovery` parse and re-serve the body with `Decimal` until that ships. No wei-to-USD conversion.
 - 29 October: PR #77 review, ceilings the signer refuses. livepeer/node `406b248` `checkMaxPrice` takes only
@@ -157,23 +145,70 @@ To file on livepeer/go-livepeer only after the owner approves (AGENTS.md: upstre
   runners in `tests/unit/livepeer_net.py` and `testing.fakes.runner()` advertise `wei`, not `usd`, as
   livepeer-node does; `test_sdk_contract.py` compares the engine's units with the SDK's minus `hour`.
 
+- 30 October: Mike's review of `53b12d7`, engine side (the `lpb discovery` items are T25). Test-first;
+  each new test seen red for the right reason, or, where the behaviour already held, shown to fail under a
+  mutation:
+  - **Discovery fetch** (`tests/unit/test_adapter_edges.py`): a body that sends a byte every 10 ms times
+    out at the deadline, an inventory one byte over 1 MiB is refused and one of exactly 1 MiB is read,
+    and a 301 is a failed refresh that keeps the last snapshot and requests nothing else (mutation:
+    following redirects). Live, against a local server sending a byte every 2 s: the refresh gives up at
+    5.0 s, against 24.5 s in the review.
+  - **Malformed entries:** a `null` entry, a `runners` that is not a list (`5`, a string, an object) and a
+    runner record that is not an object each lose nothing else; one `discovery.inventory_skipped`
+    warning counts what was skipped, and a clean inventory logs none.
+  - **Catalog** (`tests/unit/test_rates.py`): an app with no rate is listed as `missing` with no range; an
+    app's runners with no rate are an offering after its priced ones (mutation: missing group first);
+    `available` with no range is not an `Offering`. 10(c): two `ObservedRate`s per offering, not one per
+    runner.
+  - **Paid order** (`tests/unit/test_jobs.py`): a paid job tries a runner it can cap before a busier one
+    with no rate; the one with no rate is still tried last (mutation: dropping it); an unpaid job keeps
+    `MostCapacityFirst` (mutation: re-ordering unpaid jobs too).
+  - **Price 0:** a free rate parses, is a rate of `0` in the catalog and builds in `testing.runner()`
+    (mutation: `is_price` refusing `0`); a free runner that answers 402 is refused unsigned, and one that
+    answers 200 serves a credentialed call.
+  - **Unit on 402** (`tests/unit/test_runner_call.py`): an `hour` runner that answers 200 serves a
+    credentialed call; the existing `wei`/`hour` case still refuses its 402 unsigned.
+  - **`LPB_DISCOVERY_URL`** (`tests/unit/test_adapters.py`): `discovery:8939/discovery`,
+    `ftp://discovery/discovery`, `http:///discovery` and `http://[::1/discovery` are refused at startup.
+  - **Existing tests changed:** `test_an_app_with_no_usable_rate_is_not_listed` is replaced, because the
+    review reverses it. `0` left the refused prices in two tests, and three tests take the reworded error
+    `price must be 0, or from 1e-300 to below 1e300`.
+  - **Results:** 1560 passed, 48 skipped (one deselected, as on 29 October: a stale `dist/` wheel); every
+    coverage floor met, diff coverage 100 %; ruff, mypy (strict), `check_docs.py`, `lpb gen-docs` and
+    `lpb smoke` clean.
+
 ## Decision log
 
 - 29 October (John, from the guide review and plan): the decisions in D62. Q1: keep the USD figure,
   named `price_usd`. Q2: 600 s. Q3: keep the orchestrator's stamp when present and sane.
 - 29 October (John): go-livepeer compatibility is packaged as fixtures and docs, deleted together when
-  go-livepeer is retired (D2). `price_usd` stays absent for go-livepeer until the upstream request lands;
-  no engine-side conversion (ISS-10 derives no price).
+  go-livepeer is retired (D2). `price_usd` stays absent for go-livepeer; no engine-side conversion
+  (ISS-10 derives no price).
 - 29 October (John): the guide's corrections go in this branch's plan; `iss-10-rates.md` is amended after
   PR #74 merges, not on Mike's branch.
 - 29 October (John): keep `price_usd` exact on this side of the gateway. Discovery JSON is parsed here
   until livepeer-python-gateway#88 parses it as `Decimal`. The gateway issue is the upstream fix.
 - 29 October (John, PR #77 review): an app advertised in two units is two offerings, not one range with
   the minority unit excluded, so an unpaid unit never hides a paid one. Runners with no rate are not
-  listed, and `rates_excluded` is gone.
+  listed (superseded 30 October, below), and `rates_excluded` is gone.
 - 29 October (John, PR #77 review): the engine pays exactly the ceilings livepeer/node's signer takes,
   `wei` per `seconds` or `fixed`, and the catalog says `available` for exactly those. A price no positive
   float ceiling holds is no rate, like one from `1e300`: the floor is `1e-300`, in the normal float range,
   so padding always lands above the price.
 - 30 October (Mike, reviewing #77): Q1–Q3 locked as proposed, with the separate `stale` flag and the
   price-ceiling guard. Renumbered D58 → D62: #78 (ISS-12) holds D58 and its stack D59–D61.
+- 30 October (Mike, reviewing `53b12d7`): no requests to go-livepeer, which is deprecated. Its
+  orchestrators send no `price_usd` or `observed_at`; no upstream change is planned. The drafted request
+  is removed from this plan.
+- 30 October (John, from Mike's review of `53b12d7`): every app is listed. An app's runners with no rate are
+  one more offering with no range and `rate_status` `missing`, because they still serve jobs and an empty
+  catalog beside a working `POST /v1/jobs` misled. On a paid job the runners the signer takes a ceiling
+  for are tried first, in the selection policy's order (applied after the policy, so a custom policy keeps
+  its relative order); the rest are the last resort, so a runner that would be refused at its 402 is not
+  failed over from on every job. A runner priced at `0` has no ceiling, so it is in the last group too.
+- 30 October (John, same review): `0` is a valid free rate, never signed for. The `1e-300` floor applies
+  only above `0`. The unit, like the currency, is checked only when the runner asks for payment.
+- 30 October (John, same review): `HttpDiscoverySource` keeps its own exact-decimal fetch (the payment
+  ceiling needs it) but is bounded like the prober: 5 s in all, 1 MiB. `utils.read_capped` is shared so
+  that the prober can adopt it. Items 10(a), 10(b) and 10(d) touch only `lpb discovery`
+  (`discovery/document.py`, `discovery/probe.py`) and are left for that service (tech-debt tracker).

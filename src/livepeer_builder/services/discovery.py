@@ -15,6 +15,7 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
+from livepeer_builder.contracts.discovery import ObservedBy
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
 from livepeer_builder.utils import is_payable
 
@@ -96,27 +97,27 @@ class DiscoveryService:
         observed = self._snapshot.observed_at
         if observed is None:
             return []
-        by_unit: dict[tuple[str, str, str], list[tuple[Runner, NetworkRate]]] = {}
+        # one group per app and (currency, unit); an app's runners with no rate are one more group, after them
+        by_unit: dict[tuple[str, bool, str, str], list[Runner]] = {}
         for runner in self._snapshot.runners:
-            if runner.rate is not None and (app is None or runner.app == app):
-                key = (runner.app, runner.rate.currency, runner.rate.unit)
-                by_unit.setdefault(key, []).append((runner, runner.rate))
+            if app is None or runner.app == app:
+                rate = runner.rate
+                key = (runner.app, False, rate.currency, rate.unit) if rate else (runner.app, True, "", "")
+                by_unit.setdefault(key, []).append(runner)
+        fresh = self.is_fresh()
         offerings = []
         for key in sorted(by_unit):
-            name, currency, unit = key
-            group = [runner for runner, _ in by_unit[key]]
-            rates = sorted(
-                (_observed(rate, runner.observed_at, observed) for runner, rate in by_unit[key]),
-                key=lambda rate: rate.amount,
-            )
+            name, _, currency, unit = key
+            group = by_unit[key]
+            span = _range(group, observed)
             offerings.append(
                 Offering(
                     app=name,
                     modes=tuple(sorted({runner.mode for runner in group if runner.mode})),
-                    rate_low=rates[0],
-                    rate_high=rates[-1],
-                    rate_status="available" if is_payable(currency, unit) else "missing",
-                    stale=not self.is_fresh() or self._too_old(rates),
+                    rate_low=span[0] if span else None,
+                    rate_high=span[1] if span else None,
+                    rate_status="available" if span and is_payable(currency, unit) else "missing",
+                    stale=not fresh or (span is not None and self._too_old(span[2])),
                     runner_count=len(group),
                     ready_count=sum(1 for runner in group if _is_ready(runner)),
                     observed_at=observed,
@@ -124,9 +125,9 @@ class DiscoveryService:
             )
         return offerings
 
-    def _too_old(self, rates: list[ObservedRate]) -> bool:
+    def _too_old(self, oldest: datetime) -> bool:
         """The oldest rate in the range is older than the max age: its source missed refreshes."""
-        return any(self._clock.now() - rate.observed_at > self._rate_max_age for rate in rates)
+        return self._clock.now() - oldest > self._rate_max_age
 
 
 def _free_capacity(runner: Runner) -> int:
@@ -137,8 +138,27 @@ def _is_ready(runner: Runner) -> bool:
     return runner.capacity_available is None or runner.capacity_available > 0
 
 
+def _range(group: list[Runner], polled_at: datetime) -> tuple[ObservedRate, ObservedRate, datetime] | None:
+    """The cheapest and dearest rate, and the oldest time any rate in the group was known; None with no rate.
+
+    Two ``ObservedRate`` are built, not one per runner: the catalog is public, built on every request.
+    """
+    rated = [(runner.rate, runner.observed_at) for runner in group if runner.rate is not None]
+    if not rated:
+        return None
+    cheapest = min(rated, key=lambda pair: pair[0].amount)
+    dearest = max(rated, key=lambda pair: pair[0].amount)
+    oldest = min(_known(stamp, polled_at)[0] for _, stamp in rated)
+    return _observed(*cheapest, polled_at), _observed(*dearest, polled_at), oldest
+
+
 def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) -> ObservedRate:
-    """A rate with when it was last known: its orchestrator's stamp, else the poll that read it."""
+    observed_at, observed_by = _known(stamp, polled_at)
+    return ObservedRate(**rate.model_dump(), observed_at=observed_at, observed_by=observed_by)
+
+
+def _known(stamp: datetime | None, polled_at: datetime) -> tuple[datetime, ObservedBy]:
+    """When a rate was last known, and whose clock says so: its orchestrator's stamp, else the poll time."""
     if stamp is None or stamp > polled_at + _CLOCK_SKEW:
-        return ObservedRate(**rate.model_dump(), observed_at=polled_at, observed_by="engine")
-    return ObservedRate(**rate.model_dump(), observed_at=stamp, observed_by="orchestrator")
+        return polled_at, "engine"
+    return stamp, "orchestrator"

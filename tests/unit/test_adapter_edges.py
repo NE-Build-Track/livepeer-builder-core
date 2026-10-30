@@ -1,5 +1,10 @@
 """Adapter edge cases: Batteries routes and errors, network error classification, discovery parsing, secret stores."""
 
+import asyncio
+import json
+import logging
+import re
+from collections.abc import AsyncIterator
 from decimal import Decimal
 
 import httpx
@@ -23,6 +28,8 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
+from livepeer_builder.services.discovery import DiscoveryService
+from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
 
@@ -146,6 +153,108 @@ async def test_http_discovery_keeps_every_digit_of_a_node_price_usd() -> None:
     assert runner.rate is not None
     assert runner.rate.price_usd == Decimal("0.0000027777777777777777777777777777")
     assert runner.rate.amount == Decimal(4492197255)
+
+
+def discovery_streaming(chunks: AsyncIterator[bytes]) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=chunks)))
+
+
+async def test_http_discovery_gives_up_on_a_slow_body_at_its_deadline() -> None:
+    """httpx's timeout bounds each read, not the request: a byte every 10 ms never trips it (#77 review)."""
+
+    async def drip() -> AsyncIterator[bytes]:
+        for _ in range(300):  # 3 s in all
+            yield b" "
+            await asyncio.sleep(0.01)
+
+    async with discovery_streaming(drip()) as client:
+        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client, timeout_s=0.1)
+        with pytest.raises(
+            TimeoutError, match=re.escape("no inventory from http://discovery:8939/discovery within 0.1s")
+        ):
+            await source.fetch()
+
+
+async def test_http_discovery_refuses_an_inventory_over_livepeer_node_s_max_body() -> None:
+    """livepeer/node's discovery reads at most 1 MiB (discovery/shared/inventory.go, MaxBody)."""
+    oversized = b"[" + b" " * (1 << 20) + b"]"  # one byte over
+    async with discovery_serving(oversized) as client:
+        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
+        with pytest.raises(ValueError, match="inventory larger than 1048576 bytes"):
+            await source.fetch()
+
+
+async def test_http_discovery_reads_an_inventory_of_exactly_the_max_body() -> None:
+    at_limit = b"[" + b" " * ((1 << 20) - 2) + b"]"
+    async with discovery_serving(at_limit) as client:
+        assert await HttpDiscoverySource("http://discovery:8939/discovery", client=client).fetch() == ()
+
+
+GOOD_ENTRY = {"address": "https://good", "runners": [{"url": "https://good/apps/r1/app", "app": "a/b"}]}
+
+
+def test_an_entry_that_is_not_an_object_loses_no_other_orchestrator() -> None:
+    """livepeer/node's Decode skips a bad entry and keeps the rest; one bad entry must not stale discovery."""
+    (runner,) = runners_from_entries([None, GOOD_ENTRY])
+    assert runner.orchestrator_url == "https://good"
+
+
+@pytest.mark.parametrize("runners", [5, "r1", {"url": "https://bad/apps/r1/app", "app": "a/b"}])
+def test_an_entry_whose_runners_is_not_a_list_loses_no_other_orchestrator(runners: object) -> None:
+    (runner,) = runners_from_entries([{"address": "https://bad", "runners": runners}, GOOD_ENTRY])
+    assert runner.orchestrator_url == "https://good"
+
+
+def test_a_runner_record_that_is_not_an_object_loses_no_other_runner() -> None:
+    good = GOOD_ENTRY["runners"][0]  # type: ignore[index]
+    (runner,) = runners_from_entries([{"address": "https://good", "runners": [None, 7, "r", good]}])
+    assert runner.url == "https://good/apps/r1/app"
+
+
+def test_skipped_entries_and_runner_records_are_counted_in_one_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entries = [
+        None,  # an entry that is not an object
+        {"address": "https://bad", "runners": 5},  # runners that is not a list
+        {"address": "https://none", "runners": None},  # a Go nil slice: no runners, nothing wrong
+        {"address": "https://good", "runners": [None, {"app": "a/b"}, GOOD_ENTRY["runners"][0]]},  # type: ignore[index]
+    ]
+    with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.sdk"):
+        (runner,) = runners_from_entries(entries)
+    [record] = [
+        item for item in caplog.records if getattr(item, "event", "") == "discovery.inventory_skipped"
+    ]
+    assert (record.entries, record.runners) == (2, 2)  # a non-object record and one with no url
+    assert runner.orchestrator_url == "https://good"
+
+
+def test_a_clean_inventory_logs_no_skip(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.sdk"):
+        runners_from_entries([GOOD_ENTRY, {"address": "https://none", "runners": None}])
+    assert not [
+        item for item in caplog.records if getattr(item, "event", "") == "discovery.inventory_skipped"
+    ]
+
+
+async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: FixedClock) -> None:
+    """Never followed, as lpb discovery's prober and livepeer/node do: the last good snapshot stays."""
+    seen: list[str] = []
+    answers = [httpx.Response(200, content=json.dumps([GOOD_ENTRY]).encode()),
+               httpx.Response(301, headers={"Location": "http://elsewhere/discovery"})]  # fmt: skip
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return answers.pop(0)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
+        discovery = DiscoveryService(source, DefaultPolicy(), clock)
+        await discovery.refresh()
+        snapshot = await discovery.refresh()
+    assert [runner.url for runner in snapshot.runners] == ["https://good/apps/r1/app"]
+    assert snapshot.last_error is not None and "301" in snapshot.last_error
+    assert seen == ["http://discovery:8939/discovery"] * 2
 
 
 def test_rates_reject_bad_prices() -> None:

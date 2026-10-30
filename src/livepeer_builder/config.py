@@ -132,6 +132,24 @@ class EngineSettings(Contract):
             raise ValueError("signer_url needs a host, as http(s)://host[:port] or host:port")
         return value
 
+    @field_validator("discovery_url")
+    @classmethod
+    def _http_discovery_url(cls, value: str | None) -> str | None:
+        # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
+        if value is None:
+            return None
+        try:
+            parts = urlsplit(value)
+            valid = parts.scheme in ("http", "https") and bool(parts.hostname)
+        except ValueError:  # an unclosed IPv6 literal, for example
+            valid = False
+        if not valid:
+            raise ValueError(
+                f"LPB_DISCOVERY_URL must be an http:// or https:// URL with a host, such as "
+                f"http://discovery:8939/discovery; got {value!r}"
+            )
+        return value
+
     @field_validator("auth")
     @classmethod
     def _one_of_each(cls, value: tuple[AuthMode, ...]) -> tuple[AuthMode, ...]:

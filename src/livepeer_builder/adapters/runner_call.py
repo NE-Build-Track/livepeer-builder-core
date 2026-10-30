@@ -58,7 +58,7 @@ from livepeer_builder.adapters.signer_failures import (
 from livepeer_builder.contracts import AttemptOutcome, CallTimings, NetworkRate, PaymentReason
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import BODY_LIMIT, PAYMENT_TYPES_BY_UNIT, is_payable
+from livepeer_builder.utils import BODY_LIMIT, PAYMENT_TYPES_BY_UNIT, signable
 
 _LOG = logging.getLogger(__name__)
 
@@ -172,7 +172,8 @@ class PaidRequest:
         self._signer_headers = signer_headers or {}
         self._attempts = (max(0, retries) + 1) * 2
         self._events = events
-        self._payment_type = payment_type(rate) if signer_url is not None else ""
+        self._rate = rate
+        self._payment_type = ""  # set by the first 402: a unit matters only when payment is asked for
         self._max_price = max_price(rate) if signer_url is not None else None
         self.identifying = False  # waiting on /sign-orchestrator-info: nothing signed, no runner asked
 
@@ -275,10 +276,11 @@ class PaidRequest:
                 raise self._events.error(
                     "http", f"{self.url} asks for payment; the call is unpaid", status_code=402
                 )
+            self._payment_type = self._payable_type()
             if self._max_price is None:  # the signer checks no ceiling without one: never sign uncapped
                 raise self._events.error(
                     "payment_refused",
-                    f"{self.url} asks for payment but advertised no usable price",
+                    f"{self.url} asks for payment but advertised {_no_ceiling(self._rate)}",
                     status_code=402,
                 )
             challenge = self._challenge(text)
@@ -301,6 +303,15 @@ class PaidRequest:
             ) from error
         self.identifying = False
         return material
+
+    def _payable_type(self) -> str:
+        """The payment type for this rate's unit; a unit the engine does not pay is refused, unsigned."""
+        try:
+            return payment_type(self._rate)
+        except RunnerCallError as error:
+            raise self._events.error(
+                error.kind, f"{self.url} asks for payment: {error}", status_code=402
+            ) from None
 
     async def _sign(self, session: LivePaymentSession) -> GetPaymentResponse:
         """``manifest_id`` is known before ``get_payment`` returns."""
@@ -465,14 +476,23 @@ def payment_type(rate: NetworkRate | None) -> str:
 
 
 def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
-    """The signer's ceiling, or None when it would refuse every ceiling for this rate's currency and unit."""
-    if rate is None or not is_payable(rate.currency, rate.unit):
+    """The signer's ceiling, or None when there is none to give: no rate, a free one, or a currency and unit
+    the signer refuses every ceiling in."""
+    if rate is None or not signable(rate.amount, rate.currency, rate.unit):
         return None
     return {
         "price": float(rate.amount * _PRICE_PADDING),
         "currency": rate.currency.strip().lower(),
         "unit": rate.unit.strip().lower(),
     }
+
+
+def _no_ceiling(rate: NetworkRate | None) -> str:
+    if rate is None:
+        return "no usable price"
+    if rate.amount == 0:
+        return "a price of 0"
+    return f"a price in {rate.currency} per {rate.unit}, which the signer takes no ceiling in"
 
 
 def start_funding(payment: LivePaymentSession | None) -> asyncio.Task[Any] | None:

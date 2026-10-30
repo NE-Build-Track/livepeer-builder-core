@@ -29,9 +29,9 @@ from livepeer_builder.contracts import (
     RunnerGPU,
     RunnerReply,
 )
-from livepeer_builder.contracts.discovery import PRICE_LIMIT, PRICE_RULE, is_price
+from livepeer_builder.contracts.discovery import DISCOVERY_MAX_BYTES, PRICE_LIMIT, PRICE_RULE, is_price
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import INVENTORY_MAX_BYTES, loads_json_numbers, read_capped
+from livepeer_builder.utils import loads_json_numbers, read_capped
 
 _LOG = logging.getLogger(__name__)
 # Runners priced in these units are dropped from discovery: never listed, never routed to, never paid.
@@ -45,8 +45,9 @@ class HttpDiscoverySource:
     credentials; the signer is not involved in discovery (#45). ``price_usd`` stays a ``Decimal``.
 
     The whole request, body included, gets ``timeout_s`` (5 s, as the SDK's ``discover_runners`` had) and
-    at most ``max_bytes`` (1 MiB, livepeer/node's MaxBody): ``DiscoveryService`` refreshes serially, so a
-    slow or huge source would otherwise freeze the snapshot. A redirect is not followed; it fails the refresh.
+    at most ``max_bytes`` (16 MiB, ``LPB_DISCOVERY_MAX_BYTES``: a discovery service's combined inventory):
+    ``DiscoveryService`` refreshes serially, so a slow or huge source would otherwise freeze the snapshot. A
+    redirect is not followed, even by an injected client; it fails the refresh.
     """
 
     def __init__(
@@ -55,7 +56,7 @@ class HttpDiscoverySource:
         *,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
-        max_bytes: int = INVENTORY_MAX_BYTES,
+        max_bytes: int = DISCOVERY_MAX_BYTES,
     ) -> None:
         self._discovery_url = discovery_url
         self._client = client
@@ -63,7 +64,7 @@ class HttpDiscoverySource:
         self._max_bytes = max_bytes
 
     async def fetch(self) -> tuple[Runner, ...]:
-        client = self._client or httpx.AsyncClient(timeout=self._timeout_s, follow_redirects=False)
+        client = self._client or httpx.AsyncClient(timeout=self._timeout_s)
         try:
             # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
             async with asyncio.timeout(self._timeout_s):
@@ -81,7 +82,7 @@ class HttpDiscoverySource:
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
         request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
-        response = await client.send(request, stream=True)
+        response = await client.send(request, stream=True, follow_redirects=False)
         async with contextlib.aclosing(response):
             response.raise_for_status()
             return await read_capped(response.aiter_bytes(), self._max_bytes)

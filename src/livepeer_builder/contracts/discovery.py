@@ -15,6 +15,10 @@ PRICE_LIMIT = Decimal("1e300")
 # needs no ceiling, and the engine never signs for it.
 PRICE_FLOOR = Decimal("1e-300")
 PRICE_RULE = "price must be 0, or from 1e-300 to below 1e300"
+# The most a /discovery inventory may be (LPB_DISCOVERY_MAX_BYTES). livepeer/node reads at most 1 MiB from
+# one orchestrator (discovery/shared/inventory.go, MaxBody); a discovery service's combined inventory is many
+# of those, and 1 MiB holds only about 2,000 runner records (#77 review)
+DISCOVERY_MAX_BYTES = 16 << 20
 
 
 def is_price(amount: Decimal) -> bool:

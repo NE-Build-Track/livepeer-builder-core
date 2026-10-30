@@ -11,9 +11,6 @@ from typing import Any
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
 
 BODY_LIMIT = 4096  # how much of a runner's or signer's response body an error keeps
-# The most a /discovery inventory may be: livepeer/node's discovery reads no more
-# (discovery/shared/inventory.go, MaxBody)
-INVENTORY_MAX_BYTES = 1 << 20
 # The ceilings livepeer-node's signer accepts (signer/service.go, checkMaxPrice): wei, per second for a live
 # payment or per request for a fixed one. Each unit the engine pays, and the payment type it is signed as.
 PAYMENT_CURRENCY = "wei"

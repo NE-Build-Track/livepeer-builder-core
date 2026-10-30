@@ -109,6 +109,22 @@ async def test_a_discovery_url_reads_the_discovery_service() -> None:
         assert isinstance(parts.discovery_source, HttpDiscoverySource)
 
 
+async def test_the_discovery_service_is_read_under_lpb_discovery_max_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "livepeer_builder.adapters.sdk.HttpDiscoverySource",
+        lambda url, *, max_bytes: built.append((url, max_bytes)) or StaticDiscoverySource(),
+    )
+    settings = EngineSettings(
+        database_url=MEMORY, discovery_url="http://d/discovery", discovery_max_bytes=7, log_json=False
+    )
+    async with contextlib.AsyncExitStack() as stack:
+        await default_parts(settings, stack)
+    assert built == [("http://d/discovery", 7)]
+
+
 async def test_operator_token_wires_a_separate_grants_client() -> None:
     settings = EngineSettings(
         database_url=MEMORY,

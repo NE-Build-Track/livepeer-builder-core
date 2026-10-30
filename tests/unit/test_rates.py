@@ -199,6 +199,16 @@ async def test_a_stamp_from_the_future_is_trusted_only_within_30_seconds(clock: 
     assert (offering.rate_high.observed_at, offering.rate_high.observed_by) == (clock.now(), "engine")
 
 
+async def test_a_stamp_with_no_utc_offset_was_observed_by_the_engines_poll(clock: FixedClock) -> None:
+    """A source other than HTTP (StaticDiscoverySource, a custom one) can hand over a naive datetime: its zone
+    is unknown, so it is unreadable, not a reason to fail the catalog."""
+    naive = (clock.now() - timedelta(seconds=20)).replace(tzinfo=None)
+    (offering,) = await catalog(clock, priced("10", naive))
+    assert offering.rate_low is not None
+    assert (offering.rate_low.observed_at, offering.rate_low.observed_by) == (clock.now(), "engine")
+    assert offering.stale is False
+
+
 async def test_an_app_with_no_rate_is_listed_as_missing_with_no_range(clock: FixedClock) -> None:
     """A runner with no rate (off-chain, or a price_info that is not one) still serves jobs: it is listed (#77 review)."""
     unpriced = priced("10", name="free").model_copy(update={"app": "c/d", "rate": None})
@@ -224,6 +234,23 @@ async def test_an_app_s_runners_with_no_rate_are_a_missing_offering_after_its_pr
     seconds, missing = await catalog(clock, unpriced, priced("10", name="r1"), priced("30", name="r2"))
     assert (seconds.rate_low.amount, seconds.rate_high.amount, seconds.runner_count) == (10, 30, 2)
     assert (missing.rate_low, missing.rate_status, missing.runner_count) == (None, "missing", 1)
+
+
+async def test_an_offering_builds_two_observed_rates_however_many_runners_it_has(
+    clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """10(c): the catalog is public and built on every request, so its cost must not grow with the fleet."""
+    built: list[ObservedRate] = []
+
+    def counted(**fields: object) -> ObservedRate:
+        built.append(ObservedRate(**fields))  # type: ignore[arg-type]
+        return built[-1]
+
+    monkeypatch.setattr("livepeer_builder.services.discovery.ObservedRate", counted)
+    runners = [priced(str(10 + n), name=f"r{n}") for n in range(50)]
+    (offering,) = await catalog(clock, *runners)
+    assert offering.runner_count == 50
+    assert built == [offering.rate_low, offering.rate_high]
 
 
 def test_an_offering_is_not_available_without_a_rate() -> None:

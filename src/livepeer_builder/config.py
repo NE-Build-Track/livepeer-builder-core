@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 
 from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
+from livepeer_builder.contracts.discovery import DISCOVERY_MAX_BYTES
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
@@ -44,6 +45,7 @@ class EngineSettings(Contract):
     signer_url: str | None = None
     discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
     discovery_interval_s: float = Field(default=15.0, gt=0)
+    discovery_max_bytes: int = Field(default=DISCOVERY_MAX_BYTES, gt=0)  # the largest inventory a poll reads
     # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node discovery's
     # default 5-minute refreshes. lpb discovery evicts a failing orchestrator sooner (30 s probes, 6 failures)
     rate_max_age_s: float = Field(default=600.0, gt=0)

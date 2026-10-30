@@ -101,10 +101,9 @@ ceiling ([payments.md](payments.md#pricing-assumptions)).
 
 livepeer/node replaced go-livepeer (D2) in our stacks, but runner-app-examples run go-livepeer `v0.9.1`,
 and the public orchestrators sampled on 29 October serve go-livepeer's inventory. Their `/discovery` (`ai/runner/live_runner.go`, `v0.9.0` to master) differs from
-livepeer-node's, and the engine reads it as follows. One rule is go-livepeer-specific: a runner priced in
-`720p-pixel-seconds` is dropped (`DROPPED_UNITS` in `adapters/sdk.py`). Each other difference falls under
-a rule above, and its tests (`test_rates.py`, `test_runner_call.py`) pin it; delete `DROPPED_UNITS` with this
-section.
+livepeer-node's, and the engine reads it as follows. No rule is go-livepeer-specific: each difference
+falls under a rule above, and its tests (`test_rates.py`, `test_runner_call.py`) pin it. Delete this
+section when go-livepeer is retired (D2).
 
 | go-livepeer `/discovery` | What the engine does |
 | --- | --- |
@@ -112,7 +111,7 @@ section.
 | no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
 | an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
 | wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
-| per-pixel video priced in `720p-pixel-seconds` | The runner is dropped from discovery: never listed in `/v1/offerings`, never routed to, never paid (no signer takes such a ceiling). Decided 30 October, after Mike's review of `53b12d7` |
+| per-pixel video priced in `720p-pixel-seconds` | Kept, like any other unpaid unit. Its own offering, `rate_status` `missing` (the signer takes a ceiling only in `wei` per `seconds` or `fixed`). On a paid job it is last resort; a 402 is refused before the signer is asked |
 
 Capability → app resolution (descriptor or configuration table) is a later contract. In M2 the caller
 names the runner `app`; `capability` and `model` are labels only.

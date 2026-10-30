@@ -133,6 +133,14 @@ def test_an_absent_price_usd_is_not_an_error() -> None:
     assert runner.rate_error is None
 
 
+def test_a_per_pixel_unit_is_kept_and_has_no_ceiling() -> None:
+    """go-livepeer advertises per-pixel video as wei per 720p-pixel-seconds. It is an unpaid unit, kept
+    like any other: the catalog groups by unit, and the signer takes no ceiling in it."""
+    (runner,) = runners_from_entries(inventory(price="10", currency="WEI", unit="720p-Pixel-Seconds"))
+    assert runner.rate == NetworkRate(amount=Decimal(10), currency="wei", unit="720p-pixel-seconds")
+    assert max_price(runner.rate) is None
+
+
 def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
     """livepeer-node stamps each runner with RFC 3339 nanoseconds (Go's RFC3339Nano) at response time."""
     stamps = [

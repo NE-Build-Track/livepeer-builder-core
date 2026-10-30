@@ -129,6 +129,10 @@ class SdkRunnerTransport:
             if paid.identifying:  # the signer never answered: nothing signed, no runner asked (D58 (4))
                 message = f"the signer did not identify itself within {request.first_byte_timeout_s:g}s"
                 raise events.error("payment", message, reason="signer_unavailable") from error
+            if events.unknown:  # cut off while signing: the signer is the one that did not answer (D58 (5))
+                raise events.error(
+                    "timeout", "the signer gave no answer while signing; it may have charged"
+                ) from error
             message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
             raise events.error("timeout", message) from error
 

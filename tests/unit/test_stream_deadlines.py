@@ -110,6 +110,9 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     expected_kind = "payment_unknown" if hang == "signer" else "timeout"
     assert job.state == state and job.failure is not None and job.failure.kind == expected_kind
     assert job.failure.payment_sent is paid
+    if hang == "signer":  # the signer is the one that did not answer, in D58's words (#78 review)
+        assert job.failure.reason == "signer_unknown"
+        assert job.failure.message == "the signer gave no answer while signing; it may have charged"
     assert len(job.attempts) == 1  # a timeout never fails over, paid or not
     attempt = job.attempts[0]
     outcome = "timeout" if paid else "payment_unknown"  # stored, so a restart still sees it may have paid

@@ -65,6 +65,8 @@ From the ticket and the 21 October M3 plan:
   `signer_unavailable` (D58 (4)); pinned with a loopback signer that hangs on identity. (2) A
   scheme-relative `//user:pw@host` passed the startup check and the SDK's error quoted it: `@`, `?` and
   `#` are refused anywhere, and a URL with no host is refused (D58 (7)).
+  (3) A deadline that cut off signing kept `signer_unknown` but was worded as a runner timeout; it now
+  reads "the signer gave no answer while signing; it may have charged" (D58 (5)).
 
 - 2026-10-29: Baseline at `a41beef`: 1489 passed, 49 skipped. Built test-first in one session. One
   existing assertion changed: `test_runner_call.py::test_unreachable_runner_or_signer_is_unpaid`

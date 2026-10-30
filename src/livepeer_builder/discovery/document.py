@@ -8,6 +8,8 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from livepeer_builder.utils import decimal_json_number
+
 _WS = " \t\r\n"
 
 
@@ -16,10 +18,13 @@ def runner_records(body: str | bytes | bytearray) -> list[str]:
 
     A metadata entry, or an entry whose ``runners`` is null, contributes nothing. A ``runners`` value that
     is not a list is refused. A runner that is not an object is dropped. ``NaN`` and ``Infinity`` are not
-    JSON and raise ``ValueError``.
+    JSON and raise ``ValueError``. A number ``Decimal`` cannot construct does too, so it is never re-served
+    for every engine's refresh to trip on.
     """
     text = body.decode() if isinstance(body, bytes | bytearray) else body
-    decoder = json.JSONDecoder(parse_constant=_not_json)
+    # Same parser as the engine. A float parser turns 1e1000000000000000000 into inf and would keep the
+    # token; the served document would then fail every consumer's refresh.
+    decoder = json.JSONDecoder(parse_float=decimal_json_number, parse_constant=_not_json)
     index = _skip(text, 0)
     if index >= len(text) or text[index] != "[":
         raise ValueError("inventory is not a JSON list")

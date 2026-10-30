@@ -44,7 +44,7 @@ classDiagram
     class RunnerStream {
         <<interface>>
         +content_type str
-        +headers str[][]
+        +headers tuple~str str~[]
         +manifest_ids str[]
         +payment_sent bool
         +status_code int
@@ -91,9 +91,9 @@ classDiagram
     }
     class CostSnapshot {
         <<interface>>
-        +async job_with_projection(job_id) Job[]?
-        +async projections_and_unprojected(application_id, actor_id, start, end) str[][][]
-        +async recent_with_projections(application_id, actor_id, limit) Job[][]
+        +async job_with_projection(job_id) tuple~Job JobCost?~?
+        +async projections_and_unprojected(application_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
+        +async recent_with_projections(application_id, actor_id, limit) tuple~Job JobCost?~[]
         +async unattributed_usage(allocation_id) UsageRow[]
         +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
     }

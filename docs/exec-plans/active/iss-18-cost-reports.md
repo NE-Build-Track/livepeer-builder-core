@@ -93,3 +93,7 @@ From the ticket, the 21 October M3 plan and the guide's criteria check:
   service, not SQL, for exact decimals and the live-computed jobs. (4) **`by_app` is kept by class**,
   `{app: {class: Fees}}`: the guide's flat total folded `pending`, which can still grow, into a figure
   that read as final. The field is new and unused, so its shape is chosen now; the check is per class.
+- 2026-10-30: Cursor's review of #82: the generated interfaces showed the changed `CostSnapshot` method as
+  `str[][][]`, since the diagram helper kept only a tuple's first element. A fixed-length tuple now
+  renders each element in Mermaid's generic notation (`tuple~tuple~str JobCost~[] Job[]~`), which also
+  corrects `job_with_projection`, `recent_with_projections` and the request headers; a doc test pins it.

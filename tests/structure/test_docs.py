@@ -84,3 +84,15 @@ def test_the_not_authorized_row_says_what_happens_once_the_key_is_fixed() -> Non
     )
     advice = row.split("|")[-2]
     assert "retrying does not help" not in advice and "never reached a runner" in advice
+
+
+def test_a_fixed_length_tuple_keeps_every_element_in_the_generated_docs() -> None:
+    """``tuple[A, B]`` rendered as ``A[]`` hid ``JobCost`` and ``list[Job]`` from a custom store's author
+    (#82 review). A fixed tuple shows each element in Mermaid's generic notation; a ``tuple[X, ...]``
+    and a list stay ``X[]``."""
+    from livepeer_builder.contracts import Job, JobCost
+    from livepeer_builder.docs_diagrams import type_name
+
+    assert type_name(tuple[list[tuple[str, JobCost]], list[Job]]) == "tuple~tuple~str JobCost~[] Job[]~"
+    assert type_name(tuple[str, ...]) == type_name(list[str]) == "str[]"
+    assert "," not in type_name(tuple[str, int, JobCost])

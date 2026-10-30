@@ -100,7 +100,10 @@ def type_name(annotation: Any) -> str:
     if annotation is inspect.Parameter.empty or annotation is None or annotation is type(None):
         return "None"
     origin = typing.get_origin(annotation)
+    fixed = origin is tuple and Ellipsis not in typing.get_args(annotation)
     args = [a for a in typing.get_args(annotation) if a is not Ellipsis]
+    if fixed and len(args) > 1:  # each element, in Mermaid's generic notation (no commas)
+        return "tuple~" + " ".join(type_name(a) for a in args) + "~"
     if origin in (typing.Union, types.UnionType):
         present = [a for a in args if a is not type(None)]
         name = " or ".join(type_name(a) for a in present)

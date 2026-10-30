@@ -1074,7 +1074,7 @@ classDiagram
     direction LR
     class server_py {
         <<module>>
-        +async serve(settings, directory, prober) None
+        +async serve(settings, directory) None
         +create_app(catalog) Starlette
         +directory_from(settings) OrchestratorDirectory
     }

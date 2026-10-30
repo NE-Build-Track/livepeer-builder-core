@@ -154,6 +154,23 @@ def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
     ]
 
 
+def test_a_stamp_outside_the_utc_range_is_unreadable_and_keeps_the_inventory() -> None:
+    """``astimezone(UTC)`` raises OverflowError at the ends of the datetime range.
+
+    One such stamp on one runner must not fail the refresh for every other runner. ``lpb discovery``
+    re-serves the text: the probe only checks that it is a JSON string.
+    """
+    entries = [{"address": "https://o", "runners": [
+        {"url": "https://o/apps/good/app", "app": "a/b", "observed_at": "2026-10-30T00:00:00Z"},
+        {"url": "https://o/apps/low/app", "app": "a/b", "observed_at": "0001-01-01T00:00:00+01:00"},
+        {"url": "https://o/apps/high/app", "app": "a/b", "observed_at": "9999-12-31T23:00:00-01:00"},
+    ]}]  # fmt: skip
+    good, low, high = runners_from_entries(entries)
+    assert good.observed_at == datetime(2026, 10, 30, tzinfo=UTC)
+    assert low.observed_at is None and high.observed_at is None
+    assert (low.url, high.url) == ("https://o/apps/low/app", "https://o/apps/high/app")
+
+
 # -- the catalog: provenance and age ---------------------------------------------------------------------
 
 

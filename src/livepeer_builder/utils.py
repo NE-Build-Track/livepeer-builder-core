@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import sys
 from collections.abc import AsyncIterable, Coroutine
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -73,16 +74,33 @@ def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with a fractional number as :class:`Decimal`, not a float.
 
     livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``. A number
-    ``Decimal`` cannot build (an exponent past ``10**18``) is ``UNREADABLE_NUMBER``, so only the field that
-    holds it is unreadable, not the document: livepeer-node's discovery cache passes ``price_usd`` through as
-    received. ``NaN`` and ``Infinity`` are not JSON and raise ``ValueError``, as an unparseable body does.
+    ``Decimal`` cannot build (an exponent past ``10**18``), or an integer past the runtime digit limit, is
+    ``UNREADABLE_NUMBER``, so only the field that holds it is unreadable, not the document: livepeer-node's
+    discovery cache passes the token through as received. ``NaN`` and ``Infinity`` are not JSON and raise
+    ``ValueError``, as an unparseable body does.
     """
-    return json.loads(raw, parse_float=_lenient_number, parse_constant=_not_json)
+    return json.loads(raw, parse_float=_lenient_number, parse_int=_lenient_int, parse_constant=_not_json)
 
 
 def _lenient_number(token: str) -> Decimal | _UnreadableNumber:
     try:
         return decimal_json_number(token)
+    except ValueError:
+        return UNREADABLE_NUMBER
+
+
+def _lenient_int(token: str) -> int | _UnreadableNumber:
+    """An integer token, or ``UNREADABLE_NUMBER`` when ``int`` would refuse its length.
+
+    The default limit (``sys.get_int_max_str_digits``, 4300) makes ``json.loads`` raise ``ValueError``
+    from inside the decoder. That would fail every runner in the inventory; the field is unreadable instead.
+    """
+    limit = sys.get_int_max_str_digits()
+    digits = token[1:] if token.startswith("-") else token
+    if limit > 0 and len(digits) > limit:
+        return UNREADABLE_NUMBER
+    try:
+        return int(token)
     except ValueError:
         return UNREADABLE_NUMBER
 

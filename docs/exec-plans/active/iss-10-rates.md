@@ -249,3 +249,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   `test_runner_call.py`. The parsing cases are one table, the payment guard is one parametrised test that
   also checks each refusal's reason (shown failing with the ceiling guard off and with the 402 unit check
   off), and the malformed-inventory cases are one test.
+- 30 October: an `observed_at` that parses but cannot convert to UTC (`0001-01-01T00:00:00+01:00`,
+  `9999-12-31T23:00:00-01:00`) raised `OverflowError` inside `_stamp` and failed the whole engine refresh.
+  It is an unreadable stamp (`None`), and the other runners stay. An integer longer than the runtime digit
+  limit did the same from `json.loads`; that field is `UNREADABLE_NUMBER`, one runner's rate, not the poll.

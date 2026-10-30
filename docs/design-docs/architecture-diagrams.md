@@ -280,7 +280,7 @@ sequenceDiagram
     Op->>C: GET /v1/admin/reconciliation?actor_id=alice
     C->>Pay: allocation_for(app, actor)
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
-    C->>DB: projections_and_unprojected(app, actor) → fresh projections, jobs none covers (running, ended since, older evidence version)
+    C->>DB: projections_and_unprojected(app, actor) → fresh projections (each with its job's runner app), jobs none covers (running, ended since, older evidence version)
     C->>C: classify the uncovered jobs live (running ones are pending) → sum attempts by cost_class
     C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)

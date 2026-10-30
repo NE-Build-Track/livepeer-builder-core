@@ -312,7 +312,8 @@ async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_job
     covered = make_job(clock)
     await sql.create_job(covered, None)
     clock.advance(1)
-    stale = make_job(clock)  # projected, then ended later: its projection predates its end
+    # Projected, then ended later: its projection predates its end. Another app, to tell them apart.
+    stale = make_job(clock).model_copy(update={"app": "a/other"})
     await sql.create_job(stale, None)
     none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
     for job_id, at in ((covered.id, clock.now()), (stale.id, clock.now() - timedelta(seconds=5))):
@@ -328,7 +329,8 @@ async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_job
         stored, uncovered = await reads.projections_and_unprojected("default", None, *window)
         _, none_for_bob = await reads.projections_and_unprojected("default", "bob", *window)
     assert {job.id for job in uncovered} == {running.id, stale.id}
-    assert {cost.job_id for cost in stored} == {covered.id, stale.id} and none_for_bob == []
+    assert {cost.job_id: app for app, cost in stored} == {covered.id: "a/b", stale.id: "a/other"}  # D60
+    assert none_for_bob == []
 
 
 async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:

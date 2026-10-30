@@ -831,7 +831,7 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/jobs/{id}/cost` | `costs.for_job` | `JobCost` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
-| `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501` until M4 |
+| `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/admin/keys`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `POST /v1/admin/applications/{app}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |

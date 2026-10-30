@@ -1,4 +1,4 @@
-"""Services whose contracts are defined in M2 and implemented later. They fail loudly, never silently."""
+"""Services defined in M2 and implemented later, or held by a decision. They fail loudly, never silently."""
 
 from uuid import UUID
 
@@ -7,11 +7,17 @@ from livepeer_builder.errors import NotImplementedInMilestone
 
 
 class ReservedEventFeed:
-    """EventFeed placeholder: versioned events with a retention window and 410 on an expired cursor (M3)."""
+    """EventFeed placeholder: versioned events with a retention window and 410 on an expired cursor.
+    Held, with no milestone: the M3 scope decision of 21 October 2026 (item 4), kept for M3 by D60."""
 
     async def after(self, actor: ActorContext, cursor: int, limit: int = 500) -> EventPage:
         del actor, cursor, limit
-        raise NotImplementedInMilestone("the engine events feed", "M3", "docs/contracts/events.md")
+        raise NotImplementedInMilestone(
+            "the engine events feed",
+            "held",
+            "ISS-18",
+            held_by="the M3 scope decision of 21 October 2026 (item 4, D60)",
+        )
 
 
 class ReservedSessions:

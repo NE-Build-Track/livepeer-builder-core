@@ -12,22 +12,18 @@ the unauthenticated ``/readyz`` is a stable reason, never another system's text.
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Protocol
 
 from pydantic import BaseModel
 
 from livepeer_builder.discovery.abi import ChainError
 from livepeer_builder.discovery.directory import Orchestrator, OrchestratorDirectory
-from livepeer_builder.discovery.probe import Probe
+from livepeer_builder.discovery.document import InventoryEntry
+from livepeer_builder.discovery.probe import Prober
 
 _LOG = logging.getLogger(__name__)
 _OWN_MESSAGES = (ValueError, ChainError)  # written by this package, so safe to show
-
-
-class Probes(Protocol):
-    async def probe_all(self, orchestrators: Sequence[Orchestrator]) -> list[Probe]: ...
 
 
 class CatalogStatus(BaseModel):
@@ -43,7 +39,7 @@ class Catalog:
     def __init__(
         self,
         directory: OrchestratorDirectory,
-        prober: Probes,
+        prober: Prober,
         *,
         max_failed_refreshes: int = 6,
         directory_timeout_s: float = 300.0,
@@ -57,7 +53,7 @@ class Catalog:
         self._directory_timeout_s = directory_timeout_s
         self._now = now
         self._orchestrators: tuple[Orchestrator, ...] | None = None
-        self._inventory: dict[str, dict[str, Any]] = {}
+        self._inventory: dict[str, InventoryEntry] = {}
         self._failures: dict[str, int] = {}
         self._loaded_at: datetime | None = None
         self._probed_at: datetime | None = None
@@ -93,11 +89,8 @@ class Catalog:
                 self._inventory.pop(url, None)
         self._probed_at = self._now()
 
-    def inventory(self) -> list[dict[str, Any]]:
-        """One entry per serving orchestrator, in directory order.
-
-        Each runner is the JSON text the probe stored, not a parsed object.
-        """
+    def inventory(self) -> list[InventoryEntry]:
+        """One entry per serving orchestrator, in directory order, its runners as the JSON text received."""
         return [self._inventory[o.url] for o in self._orchestrators or () if o.url in self._inventory]
 
     def status(self) -> CatalogStatus:

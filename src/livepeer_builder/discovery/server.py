@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from livepeer_builder.discovery.catalog import Catalog, Probes
+from livepeer_builder.discovery.catalog import Catalog
 from livepeer_builder.discovery.directory import OrchestratorDirectory
 from livepeer_builder.discovery.document import discovery_document
 from livepeer_builder.discovery.onchain import OnChainDirectory
@@ -68,14 +68,13 @@ async def serve(
     settings: DiscoverySettings,
     *,
     directory: OrchestratorDirectory | None = None,
-    prober: Probes | None = None,
 ) -> None:
     """Run the refresh loop and the listener until cancelled."""
     import uvicorn
 
     catalog = Catalog(
         directory or directory_from(settings),
-        prober or Prober(timeout_s=settings.probe_timeout_s),
+        Prober(timeout_s=settings.probe_timeout_s),
         max_failed_refreshes=settings.max_failed_refreshes,
         directory_timeout_s=settings.directory_timeout_s,
     )

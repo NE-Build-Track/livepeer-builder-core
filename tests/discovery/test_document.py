@@ -2,7 +2,7 @@
 
 import pytest
 
-from livepeer_builder.discovery.document import discovery_document, runner_records
+from livepeer_builder.discovery.document import InventoryEntry, RawJson, discovery_document, runner_records
 
 
 def test_a_non_object_runner_is_dropped_and_the_last_runners_field_wins() -> None:
@@ -30,6 +30,8 @@ def test_an_inventory_that_is_not_valid_json_is_refused(body: bytes) -> None:
 TOO_BIG = "1e" + "9" * 20  # past Decimal's exponent range; inf as a float
 TOO_SMALL = "1e-" + "9" * 20  # past it the other way; 0.0 as a float
 AT_RANGE = "1e" + "9" * 18  # Decimal still builds it: Decimal('1E+999999999999999999')
+# The lower limit is MIN_ETINY, -1999999999999999997 on 64-bit CPython, not -10**18.
+SMALL_AT_RANGE = "1e-" + str(10**18)
 
 
 @pytest.mark.parametrize("token", [TOO_BIG, TOO_SMALL])
@@ -40,9 +42,10 @@ def test_a_number_decimal_cannot_parse_is_refused(token: str) -> None:
         runner_records(body)
 
 
-def test_a_number_decimal_can_parse_is_kept_as_received() -> None:
-    body = f'[{{"runners":[{{"url":"u","price":{AT_RANGE}}}]}}]'.encode()
-    assert runner_records(body) == [f'{{"url":"u","price":{AT_RANGE}}}']
+@pytest.mark.parametrize("token", [AT_RANGE, SMALL_AT_RANGE])
+def test_a_number_decimal_can_parse_is_kept_as_received(token: str) -> None:
+    body = f'[{{"runners":[{{"url":"u","price":{token}}}]}}]'.encode()
+    assert runner_records(body) == [f'{{"url":"u","price":{token}}}']
 
 
 def test_trailing_json_is_refused() -> None:
@@ -51,8 +54,7 @@ def test_trailing_json_is_refused() -> None:
 
 
 def test_the_served_document_embeds_runner_text_without_quoting_it() -> None:
-    runner = '{"price_usd":1e-999999}'
-    other = '{"price":1e-999999}'
-    assert discovery_document([{"address": 'https://a.example/"b', "runners": [runner, other]}]) == (
+    runners = (RawJson('{"price_usd":1e-999999}'), RawJson('{"price":1e-999999}'))
+    assert discovery_document([InventoryEntry(address='https://a.example/"b', runners=runners)]) == (
         '[{"address":"https://a.example/\\"b","runners":[{"price_usd":1e-999999},{"price":1e-999999}]}]'
     )

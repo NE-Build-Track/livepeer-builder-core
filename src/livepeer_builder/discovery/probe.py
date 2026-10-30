@@ -27,7 +27,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from livepeer_builder.discovery.directory import Orchestrator
-from livepeer_builder.discovery.document import runner_records
+from livepeer_builder.discovery.document import InventoryEntry, RawJson, runner_records
 
 _LOG = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class Probe(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     orchestrator: Orchestrator
-    entry: dict[str, Any] | None = None
+    entry: InventoryEntry | None = None
     failure: Failure | None = None
 
 
@@ -124,9 +124,11 @@ class Prober:
             return self._excluded(orchestrator, "private_address", exc)
         except Exception as exc:  # anything else is this orchestrator's failure; the pass goes on
             return self._excluded(orchestrator, "failed", exc)
-        return Probe(orchestrator=orchestrator, entry={"address": orchestrator.url, "runners": runners})
+        return Probe(
+            orchestrator=orchestrator, entry=InventoryEntry(address=orchestrator.url, runners=tuple(runners))
+        )
 
-    async def _fetch(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> list[str]:
+    async def _fetch(self, client: httpx.AsyncClient, orchestrator: Orchestrator) -> list[RawJson]:
         """Each target in order until one connects: a dead first address (often an AAAA) must not fail an
         orchestrator whose next one works, whether it refuses or stays silent. Each address but the last gets
         ``next_address_after_s`` to connect (TLS included), so a silent one cannot use up the probe (#46
@@ -172,7 +174,7 @@ class Prober:
         extensions: dict[str, Any],
         *,
         limits: httpx.Timeout | None = None,
-    ) -> list[str]:
+    ) -> list[RawJson]:
         request = client.build_request(
             "GET",
             url,

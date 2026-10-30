@@ -212,10 +212,9 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     why the rollout is static first.
   - **Static, Railway's list:** 28 orchestrators, 5 serving 89 runners; 19 untrusted, 4 failed.
 - 30 October: runner records are kept as the JSON text each orchestrator sent (`discovery/document.py`),
-  so `GET /discovery` re-serves livepeer-node's `price_usd` with every digit instead of a float. A number
-  `Decimal` cannot build (an exponent past `10**18`, either sign) fails that orchestrator's probe, as
-  `NaN` does, so it is never re-served for every engine's refresh to fail on. Moved here from #77 (ISS-10)
-  with #84's fix, so the discovery service is reviewed on its own.
+  and a number `Decimal` cannot build fails that orchestrator's probe. Moved here from #77 (ISS-10) with
+  #84's fix, so the discovery service is reviewed on its own. See the decision log, "30 October, runner
+  records as received".
 
 ## Decision log
 
@@ -240,3 +239,22 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     (active, and registered for AI), and an operator can read the protocol registry with `controller`.
   - **Exposure:** the service is public on Railway (John, `00ed0f4`), so `/readyz` carries only stable
     reasons.
+- **30 October, runner records as received ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87), Mike's review).**
+  - **As received:** each runner object is kept as the JSON text the orchestrator sent and re-served
+    unchanged, because livepeer-node's `price_usd` has more digits than a float keeps. Only the envelope
+    (the list, each entry's `runners`) is parsed.
+  - **Unbuildable numbers:** a number `Decimal` cannot build fails that orchestrator's probe alone, as
+    `NaN` does. A float parser would keep it, and re-serving it would fail every consumer's refresh.
+  - **Order with #77:** the digits reach the engine only once ISS-10
+    ([#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77)) is in. Before that, the SDK
+    reads `price_usd` as a float. Merged back to back, this does not matter.
+  - **The limit is the platform's:** on 64-bit CPython, an adjusted exponent above `999999999999999999`
+    or an exponent below `-1999999999999999997`. 32-bit builds refuse sooner, and `_pydecimal` builds
+    both. This is stated in `utils.decimal_json_number`, not enforced as a bound of our own: a bound at
+    the 64-bit limits never triggers on CI, a tighter one would refuse numbers kept on purpose, and the
+    engine reads an unbuildable number per field (#77).
+  - **Typed entry:** `Probe.entry` and `Catalog.inventory()` are `InventoryEntry` (`address`,
+    `runners: tuple[RawJson, ...]`), not `dict[str, Any]`. A parsed runner is refused when the `Probe`
+    is built and flagged by mypy, so it can no longer make every `GET /discovery` a 500.
+  - **`Probes` retired:** the directory is the service's one port, so the prober is no longer
+    replaceable. `Catalog` takes a `Prober`, and `serve()` has no `prober=` argument.

@@ -43,9 +43,13 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
 def decimal_json_number(token: str) -> Decimal:
     """A JSON number token as :class:`Decimal`.
 
-    An exponent past ``10**18`` makes ``Decimal`` raise ``InvalidOperation``, here a ``ValueError``.
-    ``lpb discovery`` refuses that inventory, so the token is never re-served for every engine's refresh
-    to fail on.
+    A number ``Decimal`` cannot build raises ``InvalidOperation``, here a ``ValueError``. ``lpb discovery``
+    refuses that inventory, so the token is never re-served for every engine's refresh to fail on.
+
+    The limit is the platform's, not ours. On 64-bit CPython (libmpdec) a number is refused when its
+    adjusted exponent is above ``MAX_EMAX`` (999999999999999999) or its exponent is below ``MIN_ETINY``
+    (-1999999999999999997), so ``1e-1000000000000000000`` is kept. 32-bit builds refuse sooner, and the
+    pure-Python ``_pydecimal`` builds both. No price comes near either limit.
     """
     try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
         return Decimal(token)

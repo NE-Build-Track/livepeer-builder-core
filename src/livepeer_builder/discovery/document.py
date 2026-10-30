@@ -5,15 +5,29 @@ is not parsed into a float and written back.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from collections.abc import Iterable, Sequence
+from typing import Any, NewType
+
+from pydantic import BaseModel, ConfigDict
 
 from livepeer_builder.utils import decimal_json_number
 
 _WS = " \t\r\n"
 
+RawJson = NewType("RawJson", str)
+"""One JSON value, exactly the text the orchestrator sent."""
 
-def runner_records(body: str | bytes | bytearray) -> list[str]:
+
+class InventoryEntry(BaseModel):
+    """One orchestrator in ``GET /discovery``: the address we probed and its runner objects as received."""
+
+    model_config = ConfigDict(frozen=True)
+
+    address: str
+    runners: tuple[RawJson, ...]
+
+
+def runner_records(body: str | bytes | bytearray) -> list[RawJson]:
     """The runner objects in an orchestrator's ``GET /discovery`` body, in order, as received.
 
     A metadata entry, or an entry whose ``runners`` is null, contributes nothing. A ``runners`` value that
@@ -31,7 +45,7 @@ def runner_records(body: str | bytes | bytearray) -> list[str]:
     entries, index = _array(text, index, decoder)
     if _skip(text, index) != len(text):
         raise ValueError("inventory is not a JSON list")
-    runners: list[str] = []
+    runners: list[RawJson] = []
     for value, raw in entries:
         if not isinstance(value, dict):
             continue
@@ -42,20 +56,20 @@ def runner_records(body: str | bytes | bytearray) -> list[str]:
         if not isinstance(runners_value, list):
             raise ValueError("runners is not a JSON list")
         items, _ = _array(runners_raw, 0, decoder)
-        runners += [raw_item for item, raw_item in items if isinstance(item, dict)]
+        runners += [RawJson(raw_item) for item, raw_item in items if isinstance(item, dict)]
     return runners
 
 
-def discovery_document(entries: Sequence[Mapping[str, Any]]) -> str:
+def discovery_document(entries: Sequence[InventoryEntry]) -> str:
     """The inventory ``GET /discovery`` serves: one entry per orchestrator, runners in the text we stored.
     json.dumps would quote the runner objects, so we build the document ourselves.
     """
     return _json_array(_orchestrator(entry) for entry in entries)
 
 
-def _orchestrator(entry: Mapping[str, Any]) -> str:
-    address = json.dumps(entry["address"], ensure_ascii=False)
-    return f'{{"address":{address},"runners":{_json_array(entry["runners"])}}}'
+def _orchestrator(entry: InventoryEntry) -> str:
+    address = json.dumps(entry.address, ensure_ascii=False)
+    return f'{{"address":{address},"runners":{_json_array(entry.runners)}}}'
 
 
 def _json_array(items: Iterable[str]) -> str:

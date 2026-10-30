@@ -43,7 +43,7 @@ class Answers:
 
 
 def rounds(catalog: Catalog) -> dict[str, int]:
-    return {entry["address"]: json.loads(entry["runners"][0])["round"] for entry in catalog.inventory()}
+    return {entry.address: json.loads(entry.runners[0])["round"] for entry in catalog.inventory()}
 
 
 async def test_not_ready_until_a_directory_loads_and_a_probe_pass_finishes() -> None:

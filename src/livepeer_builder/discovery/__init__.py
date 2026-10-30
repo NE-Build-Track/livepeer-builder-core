@@ -9,6 +9,7 @@ the two this package ships.
 
 from livepeer_builder.discovery.catalog import Catalog, CatalogStatus
 from livepeer_builder.discovery.directory import Orchestrator, OrchestratorDirectory
+from livepeer_builder.discovery.document import InventoryEntry, RawJson
 from livepeer_builder.discovery.onchain import OnChainDirectory
 from livepeer_builder.discovery.probe import Probe, Prober
 from livepeer_builder.discovery.rpc import JsonRpcChain
@@ -20,12 +21,14 @@ __all__ = [
     "Catalog",
     "CatalogStatus",
     "DiscoverySettings",
+    "InventoryEntry",
     "JsonRpcChain",
     "OnChainDirectory",
     "Orchestrator",
     "OrchestratorDirectory",
     "Probe",
     "Prober",
+    "RawJson",
     "StaticDirectory",
     "create_app",
     "directory_from",

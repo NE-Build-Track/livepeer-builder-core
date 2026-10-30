@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from livepeer_builder.discovery import Catalog, OnChainDirectory, Orchestrator, Probe, StaticDirectory
+from livepeer_builder.discovery.document import InventoryEntry, RawJson
 from livepeer_builder.discovery.server import create_app, directory_from, serve
 from livepeer_builder.discovery.settings import DiscoverySettings
 
@@ -77,11 +78,12 @@ class Fixed:
     """A prober whose runners are the JSON object text a real probe would have stored."""
 
     def __init__(self, *runners: str) -> None:
-        self.runners = list(runners)
+        self.runners = tuple(RawJson(runner) for runner in runners)
 
     async def probe_all(self, orchestrators):  # type: ignore[no-untyped-def]
         return [
-            Probe(orchestrator=o, entry={"address": o.url, "runners": self.runners}) for o in orchestrators
+            Probe(orchestrator=o, entry=InventoryEntry(address=o.url, runners=self.runners))
+            for o in orchestrators
         ]
 
 
@@ -133,7 +135,9 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def test_serve_runs_the_catalog_and_the_listener_until_cancelled() -> None:
+async def test_serve_runs_the_catalog_and_the_listener_until_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     port = free_port()
     settings = DiscoverySettings(
         orchestrators="https://unused.example", http_port=port, probe_interval_s=0.05
@@ -143,9 +147,9 @@ async def test_serve_runs_the_catalog_and_the_listener_until_cancelled() -> None
         async def orchestrators(self) -> tuple[Orchestrator, ...]:
             return (Orchestrator(url="https://a.example"),)
 
-    task = asyncio.create_task(
-        serve(settings, directory=One(), prober=Fixed(json.dumps({"url": "u", "app": "a"})))
-    )
+    fixed = Fixed(json.dumps({"url": "u", "app": "a"}))
+    monkeypatch.setattr("livepeer_builder.discovery.server.Prober", lambda **_: fixed)
+    task = asyncio.create_task(serve(settings, directory=One()))
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as http, asyncio.timeout(5):
             while True:

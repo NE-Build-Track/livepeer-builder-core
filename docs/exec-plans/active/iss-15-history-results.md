@@ -84,3 +84,8 @@ From the ticket and the 21 October M3 plan:
   the ISS-29 guide is corrected so its cursor carries the id, not only the order. (3) Only `raw_body` had
   a limit, and nothing bounded a request before FastAPI read it into memory: a `/v1/` request-size limit
   is added now (`LPB_HTTP_MAX_REQUEST_BYTES`, default 16 MiB, 413 `request_too_large`; D59 (4b)).
+- 2026-10-30: Cursor's review of #81. (1) The failure table keyed "the same `operation_ref` runs again"
+  off the last kind; after failover an earlier `unreachable` or unpaid `timeout` makes the repeat 409. The
+  rows past dispatch now point at the closed list, a note says `failure` is the last attempt's, and a doc
+  test keeps it. (2) `runner_error` said a paid attempt is `failed_after_payment`: only a paid 500 is; a
+  paid 502 or 504 stays `uncertain` (D52). Pinned by a doc test.

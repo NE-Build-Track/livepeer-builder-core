@@ -39,3 +39,29 @@ def test_every_failure_row_says_what_it_means_and_what_to_do() -> None:
         row.split("|")[1].strip() for row in rows if not row.rstrip().rstrip("|").split("|")[-1].strip()
     ]
     assert not silent, f"say what {silent} means and what to do in docs/contracts/engine.md#failures"
+
+
+def test_a_failure_row_that_may_follow_failover_ties_a_repeat_to_the_closed_list() -> None:
+    """A job's failure is its last attempt's. After failover an earlier attempt may be ``unreachable`` or an
+    unpaid ``timeout``, and then the same reference is 409, whatever the last kind (D57, #81 review). So a
+    row past dispatch that promises "the same ``operation_ref`` runs again" must point at the closed list."""
+    engine_md = SCRIPT.parents[1] / "docs" / "contracts" / "engine.md"
+    section = engine_md.read_text().split("### Failures", 1)[1].split("\n## ", 1)[0]
+    before_dispatch = ("`no_offering`", "`no_capacity`", "`not_provisioned`")
+    rows = [line for line in section.splitlines() if line.startswith("| `")]
+    loose = [
+        row.split("|")[1].strip() + " " + row.split("|")[2].strip()
+        for row in rows
+        if not row.split("|")[1].strip().startswith(before_dispatch)
+        and ("same `operation_ref` runs again" in row or "with the same `operation_ref`" in row)
+        and "never reached a runner" not in row
+    ]
+    assert not loose, f"tie the repeat advice of {loose} to the closed list (engine.md#idempotency)"
+
+
+def test_the_runner_error_row_keeps_a_paid_502_or_504_uncertain() -> None:
+    """D52: a paid 500 ran and is ``failed_after_payment``; a paid 502 or 504 may still be running behind
+    the proxy and stays ``uncertain`` until usage settles it (#81 review)."""
+    engine_md = SCRIPT.parents[1] / "docs" / "contracts" / "engine.md"
+    row = next(line for line in engine_md.read_text().splitlines() if line.startswith("| `runner_error`"))
+    assert "502" in row.split("|")[-2] and "504" in row.split("|")[-2] and "`uncertain`" in row.split("|")[-2]

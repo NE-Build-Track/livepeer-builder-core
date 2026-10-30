@@ -98,13 +98,16 @@ allow = ["write"]
     if console is None:
         return creds
     allow = ", ".join(f'"{name}"' for name in READER_ALLOW)
-    return creds + f"""
+    return (
+        creds
+        + f"""
 [[credentials]]
 id = "console-reader"
 secret = "{console}"
 [credentials.management]
 allow = [{allow}]
 """
+    )
 
 
 def local_ula() -> str:

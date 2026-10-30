@@ -27,44 +27,38 @@ def require_token(name: str) -> str:
     return value
 
 
-def local_ula() -> str:
-    """Return this container's unique-local IPv6 address."""
-    text = Path("/proc/net/if_inet6").read_text(encoding="ascii")
-    found: list[ipaddress.IPv6Address] = []
-    for line in text.splitlines():
-        raw = line.split()[0]
-        if len(raw) != 32:
-            continue
-        groups = [raw[index : index + 4] for index in range(0, 32, 4)]
-        address = ipaddress.IPv6Address(":".join(groups))
-        if address.is_private and not address.is_loopback and not address.is_link_local:
-            found.append(address)
-    if len(found) != 1:
-        sys.exit(f"expected one unique-local address, found {len(found)}")
-    return str(found[0])
+# The console's Batteries credential. Read permissions only, the same list as the
+# local stack's console-reader. Absent unless CONSOLE_READER_TOKEN is set, so a
+# production deploy that does not set it keeps today's credential file.
+READER_ALLOW = [
+    "grants.read",
+    "allocations.read",
+    "api_keys.read",
+    "sessions.read",
+    "settlements.read",
+    "usage.read",
+    "ledger.read",
+    "escrow.read",
+]
 
 
-def kafka_bind() -> str:
-    configured = os.environ.get("KAFKA_BIND", "").strip()
-    if not configured:
-        return f"[{local_ula()}]:9092"
-    if "\n" in configured or '"' in configured:
-        sys.exit("KAFKA_BIND cannot contain quotes or newlines")
-    return configured
+def console_reader_token() -> str | None:
+    value = os.environ.get("CONSOLE_READER_TOKEN", "").strip()
+    if not value:
+        return None
+    if HEX_TOKEN.fullmatch(value) is None:
+        sys.exit("CONSOLE_READER_TOKEN must be 64 lowercase hex characters")
+    return value
 
 
-def main() -> None:
-    os.umask(0o077)
-    operator = require_token("OPERATOR_TOKEN")
-    engine = require_token("ENGINE_TOKEN")
-    webhook = require_token("WEBHOOK_TOKEN")
-    reader = require_token("KAFKA_READER_TOKEN")
-    producer = require_token("KAFKA_PRODUCER_TOKEN")
-    bind = kafka_bind()
-
-    secrets = Path("/run/secrets")
-    secrets.mkdir(mode=0o700, exist_ok=True)
-    Path("/data").mkdir(mode=0o700, exist_ok=True)
+def credentials_document(
+    operator: str,
+    engine: str,
+    webhook: str,
+    reader: str,
+    producer: str,
+    console: str | None,
+) -> str:
     creds = f"""[[credentials]]
 id = "operator"
 secret = "{operator}"
@@ -101,6 +95,58 @@ secret = "{producer}"
 username = "producer"
 allow = ["write"]
 """
+    if console is None:
+        return creds
+    allow = ", ".join(f'"{name}"' for name in READER_ALLOW)
+    return creds + f"""
+[[credentials]]
+id = "console-reader"
+secret = "{console}"
+[credentials.management]
+allow = [{allow}]
+"""
+
+
+def local_ula() -> str:
+    """Return this container's unique-local IPv6 address."""
+    text = Path("/proc/net/if_inet6").read_text(encoding="ascii")
+    found: list[ipaddress.IPv6Address] = []
+    for line in text.splitlines():
+        raw = line.split()[0]
+        if len(raw) != 32:
+            continue
+        groups = [raw[index : index + 4] for index in range(0, 32, 4)]
+        address = ipaddress.IPv6Address(":".join(groups))
+        if address.is_private and not address.is_loopback and not address.is_link_local:
+            found.append(address)
+    if len(found) != 1:
+        sys.exit(f"expected one unique-local address, found {len(found)}")
+    return str(found[0])
+
+
+def kafka_bind() -> str:
+    configured = os.environ.get("KAFKA_BIND", "").strip()
+    if not configured:
+        return f"[{local_ula()}]:9092"
+    if "\n" in configured or '"' in configured:
+        sys.exit("KAFKA_BIND cannot contain quotes or newlines")
+    return configured
+
+
+def main() -> None:
+    os.umask(0o077)
+    operator = require_token("OPERATOR_TOKEN")
+    engine = require_token("ENGINE_TOKEN")
+    webhook = require_token("WEBHOOK_TOKEN")
+    reader = require_token("KAFKA_READER_TOKEN")
+    producer = require_token("KAFKA_PRODUCER_TOKEN")
+    console = console_reader_token()
+    bind = kafka_bind()
+
+    secrets = Path("/run/secrets")
+    secrets.mkdir(mode=0o700, exist_ok=True)
+    Path("/data").mkdir(mode=0o700, exist_ok=True)
+    creds = credentials_document(operator, engine, webhook, reader, producer, console)
     (secrets / "clearinghouse.toml").write_text(creds, encoding="utf-8")
     os.chmod(secrets / "clearinghouse.toml", 0o600)
 

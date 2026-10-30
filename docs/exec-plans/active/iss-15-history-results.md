@@ -89,3 +89,7 @@ From the ticket and the 21 October M3 plan:
   rows past dispatch now point at the closed list, a note says `failure` is the last attempt's, and a doc
   test keeps it. (2) `runner_error` said a paid attempt is `failed_after_payment`: only a paid 500 is; a
   paid 502 or 504 stays `uncertain` (D52). Pinned by a doc test.
+- 2026-10-30: Cursor's second review of #81. (1) Every `runner_error` answers HTTP 502, so the row now splits
+  a paid 500 from a paid 502/504 by `failure.status_code` and ties "wait for the cost" to `job.state`
+  being `uncertain`. (2) `not_authorized` said retrying does not help; once an operator fixes the key,
+  the same reference runs again under the closed list. Both pinned by the doc tests.

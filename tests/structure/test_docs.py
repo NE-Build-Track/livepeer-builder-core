@@ -64,4 +64,21 @@ def test_the_runner_error_row_keeps_a_paid_502_or_504_uncertain() -> None:
     the proxy and stays ``uncertain`` until usage settles it (#81 review)."""
     engine_md = SCRIPT.parents[1] / "docs" / "contracts" / "engine.md"
     row = next(line for line in engine_md.read_text().splitlines() if line.startswith("| `runner_error`"))
-    assert "502" in row.split("|")[-2] and "504" in row.split("|")[-2] and "`uncertain`" in row.split("|")[-2]
+    advice = row.split("|")[-2]
+    assert "502" in advice and "504" in advice and "`uncertain`" in advice
+    # Every runner_error answers HTTP 502, so the split is the runner's own status, and the job's state
+    # says whether to wait for the cost (#81 review)
+    assert "`failure.status_code`" in advice and "`job.state`" in advice
+
+
+def test_the_not_authorized_row_says_what_happens_once_the_key_is_fixed() -> None:
+    """An unpaid signer refusal is on the closed list: once an operator fixes the key, the same reference
+    runs again, unless an earlier attempt was unreachable or an unpaid timeout (#81 review)."""
+    engine_md = SCRIPT.parents[1] / "docs" / "contracts" / "engine.md"
+    row = next(
+        line
+        for line in engine_md.read_text().splitlines()
+        if line.startswith("| `payment` | `not_authorized`")
+    )
+    advice = row.split("|")[-2]
+    assert "retrying does not help" not in advice and "never reached a runner" in advice

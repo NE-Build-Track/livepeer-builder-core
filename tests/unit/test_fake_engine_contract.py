@@ -30,7 +30,7 @@ from livepeer_builder import (
     OperationExists,
     OperationInProgress,
 )
-from livepeer_builder.contracts import AttemptOutcome, FailureKind, ProvisionRequest
+from livepeer_builder.contracts import AttemptOutcome, FailureKind, PaymentReason, ProvisionRequest
 from livepeer_builder.errors import AccessDenied, NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
@@ -70,13 +70,17 @@ async def fake(
     fails_mid_stream: bool = False,
     paid: bool = False,
     error: RunnerError | None = None,
+    payment: PaymentReason | None = None,
 ) -> AsyncIterator[ActorApi]:
     cut = Fails(message="cut", status_code=None)  # a runner error after the first byte, no status of its own
     script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((cut,) if fails_mid_stream else ()))
     failed = Fails(payment_sent=True, body="trace") if paid else Fails()
     if error is not None:
         failed = Fails(kind=FAILURE_KINDS[error[0]], status_code=None, payment_sent=error[1])
-    reply: Reply | Fails = failed if fails or error else Reply(chunks=script, data=data)
+    if payment is not None:  # a payment failure as the engine reports it (D58)
+        kind: FailureKind = "payment_unknown" if payment == "signer_unknown" else "payment"
+        failed = Fails(kind=kind, reason=payment, status_code=None)
+    reply: Reply | Fails = failed if fails or error or payment else Reply(chunks=script, data=data)
     replies = {(APP, ""): reply, (NONE, ""): Fails(kind="no_offering", status_code=None)}
     yield FakeEngine(replies=replies, runners=RUNNERS, streaming=chunks is not None)
 
@@ -90,9 +94,15 @@ async def real(
     fails_mid_stream: bool = False,
     paid: bool = False,
     error: RunnerError | None = None,
+    payment: PaymentReason | None = None,
 ) -> AsyncIterator[ActorApi]:
     transport: ScriptedTransport
-    if error is not None:
+    if payment is not None:  # what the Live Runner transport raises for each reason (D58)
+        unknown = payment == "signer_unknown"
+        reason = None if unknown else payment
+        refusal = RunnerCallError("payment", "m", payment_sent=False, payment_unknown=unknown, reason=reason)
+        transport = ScriptedTransport([refusal] * 2)
+    elif error is not None:
         transport = ScriptedTransport(
             [RunnerCallError(error[0], "boom", payment_sent=error[1])] * 2
         )  # a repeat
@@ -518,3 +528,25 @@ async def test_a_running_stream_costs_pending(side: Side) -> None:
         cost = await engine.costs.for_job(ALICE, stream.job.id)  # still running: it may still pay
         await stream.aclose()
     assert cost.status == "pending"
+
+
+@pytest.mark.parametrize(
+    ("reason", "kind", "state"),
+    [
+        ("not_authorized", "payment", "failed"),
+        ("allowance_exhausted", "payment", "failed"),
+        ("signer_unavailable", "payment", "failed"),
+        ("signer_unknown", "payment_unknown", "uncertain"),  # the signer may have charged
+    ],
+)
+async def test_a_payment_failure_carries_its_reason(side: Side, reason: str, kind: str, state: str) -> None:
+    async with side(payment=reason) as engine:
+        with pytest.raises(JobFailed) as failed:
+            await engine.jobs.run(ALICE, JobRequest(app=APP))
+    job = failed.value.job
+    assert job.failure is not None and (job.state, job.failure.kind, job.failure.reason) == (
+        state,
+        kind,
+        reason,
+    )
+    assert len(job.attempts) == 1 and not job.attempts[0].payment_sent  # the signer is every runner's

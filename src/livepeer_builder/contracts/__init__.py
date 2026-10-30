@@ -40,11 +40,13 @@ from livepeer_builder.contracts.jobs import (
     JobResult,
     JobState,
     MeasuredUsage,
+    PaymentReason,
     PaymentState,
     ResultRef,
     RunnerReply,
     SessionMatch,
     SignedSession,
+    reason_fits,
 )
 from livepeer_builder.contracts.operations import (
     OPERATION_REPLAYED,
@@ -118,6 +120,7 @@ __all__ = [
     "OperationRef",
     "OperationState",
     "PaymentCredential",
+    "PaymentReason",
     "PaymentState",
     "ProvisionRequest",
     "ProvisionedActor",
@@ -140,4 +143,5 @@ __all__ = [
     "UsageRow",
     "add_fees",
     "billable_fees",
+    "reason_fits",
 ]

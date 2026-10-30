@@ -96,7 +96,8 @@ Each third-party package is confined to one module so a dependency change has on
 
 | Package | Only in |
 | --- | --- |
-| `livepeer_gateway`, `aiohttp` | `adapters/sdk.py` |
+| `livepeer_gateway` | `adapters/sdk.py`, `adapters/runner_call.py`, `adapters/signer_failures.py` |
+| `aiohttp` | `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `discovery/` |
 | `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |

@@ -38,22 +38,23 @@ from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 import aiohttp
-from livepeer_gateway.errors import (
-    LivepeerGatewayError,
-    LivepeerHTTPError,
-    PaymentError,
-    SignerRefreshRequired,
-    SkipPaymentCycle,
-)
+from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError, SignerRefreshRequired
 from livepeer_gateway.remote_signer import (
     GetPaymentResponse,
     LivePaymentChallenge,
     LivePaymentSession,
-    RemoteSignerError,
+    SignerMaterial,
     get_signer_info,
 )
 
-from livepeer_builder.contracts import AttemptOutcome, NetworkRate
+from livepeer_builder.adapters.signer_failures import (
+    classify,
+    network_kind,
+    refused_by_signer,
+    signer_message,
+    unavailable_before_signing,
+)
+from livepeer_builder.contracts import AttemptOutcome, NetworkRate, PaymentReason
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import BODY_LIMIT
@@ -65,11 +66,6 @@ SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
 _PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
 _PRICE_PADDING = Decimal("1.012")  # the signer refuses a ceiling below the price it is asked to pay
-_PAYMENT_ERRORS = (PaymentError, SkipPaymentCycle, RemoteSignerError)
-# 400 and 481 are this orchestrator's params (D26). 402, 403, 502 and 503 are the caller's or the signer's.
-_ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
-# These say the signer did not sign. A timeout, a lost reply or a 5xx may have charged.
-_SIGNER_REFUSALS = frozenset({400, 401, 402, 403, 481})
 
 
 @runtime_checkable
@@ -109,12 +105,9 @@ class PaymentEvents:
             await self._on_signed(manifest_id)
 
     async def note_failure(self, manifest_id: str, error: Exception) -> None:
-        """A refusal makes the stored manifest ``unpaid``. Anything else leaves it ``unknown``: the
-        signer may have charged."""
-        refused = isinstance(error, (SignerRefreshRequired, SkipPaymentCycle)) or (
-            isinstance(error, LivepeerHTTPError) and error.status_code in _SIGNER_REFUSALS
-        )
-        if not refused:
+        """A refusal, or a request that never reached the signer (Q3), makes the stored manifest
+        ``unpaid``. Anything else leaves it ``unknown``: the signer may have charged."""
+        if not refused_by_signer(error):
             self.unknown = True
             return
         callback = self._on_signed
@@ -122,7 +115,13 @@ class PaymentEvents:
             await callback.refused(manifest_id)
 
     def error(
-        self, kind: AttemptOutcome, message: str, *, status_code: int | None = None, body: str | None = None
+        self,
+        kind: AttemptOutcome,
+        message: str,
+        *,
+        status_code: int | None = None,
+        body: str | None = None,
+        reason: PaymentReason | None = None,
     ) -> RunnerCallError:
         return RunnerCallError(
             kind,
@@ -132,6 +131,7 @@ class PaymentEvents:
             status_code=status_code,
             body=body,
             payment_unknown=self.unknown,
+            reason=reason,
         )
 
 
@@ -172,6 +172,7 @@ class PaidRequest:
         self._events = events
         self._payment_type = payment_type(rate) if signer_url is not None else ""
         self._max_price = max_price(rate) if signer_url is not None else None
+        self.identifying = False  # waiting on /sign-orchestrator-info: nothing signed, no runner asked
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
         async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
@@ -212,7 +213,7 @@ class PaidRequest:
         # last one winning); the payment headers below are never the caller's (contracts/http.py).
         headers.update(self._headers)
         if self._signer_url is not None:
-            material = await get_signer_info(self._signer_url, frozenset(self._signer_headers.items()))
+            material = await self._signer_identity(self._signer_url)
             headers[PAYER_ADDRESS_HEADER] = str(material.address)
         challenge: LivePaymentChallenge | None = None
         for attempt in range(self._attempts):
@@ -265,6 +266,24 @@ class PaidRequest:
             challenge = self._challenge(text)
         raise self._events.error("http", f"{self.url} kept asking for payment", status_code=402)
 
+    async def _signer_identity(self, signer_url: str) -> SignerMaterial:
+        """Before any runner is asked to work. Nothing is signed here, and every runner shares the signer,
+        so a signer that cannot answer fails the job ``payment`` / ``signer_unavailable`` (D58)."""
+        self.identifying = True  # left set if the stream's deadline cancels the call (adapters/sdk.py)
+        try:
+            material = await get_signer_info(signer_url, frozenset(self._signer_headers.items()))
+        except LivepeerGatewayError as error:
+            self._log_signer_error(None, error)
+            if not unavailable_before_signing(error):
+                raise
+            status = error.status_code if isinstance(error, LivepeerHTTPError) else None
+            message = signer_message(error, "signer_unavailable", unknown=False)
+            raise self._events.error(
+                "payment", message, status_code=status, reason="signer_unavailable"
+            ) from error
+        self.identifying = False
+        return material
+
     async def _sign(self, session: LivePaymentSession) -> GetPaymentResponse:
         """``manifest_id`` is known before ``get_payment`` returns."""
         manifest_id = session.manifest_id
@@ -288,7 +307,9 @@ class PaidRequest:
         await self._events.confirmed(manifest_id)
         return signed
 
-    def _log_signer_error(self, manifest_id: str, error: BaseException) -> None:
+    def _log_signer_error(self, manifest_id: str | None, error: BaseException) -> None:
+        """``detail`` is the SDK's text: the signer URL and its own words, for the operator only (D58).
+        ``manifest_id`` is None at ``/sign-orchestrator-info``, before any challenge."""
         _LOG.warning(
             "signer error",
             extra={
@@ -296,6 +317,7 @@ class PaidRequest:
                 "error_type": type(error).__name__,
                 "manifest_id": manifest_id,
                 "paid": self._events.signed,
+                "detail": str(error)[:BODY_LIMIT],
             },
         )
 
@@ -401,27 +423,9 @@ def _origin(url: str) -> str | None:
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:
-    """A refresh past the retry budget is unpaid ``payment_refused``, like a 400."""
-    if isinstance(error, SignerRefreshRequired):
-        return events.error("payment_refused", str(error))
-    if isinstance(error, LivepeerHTTPError):
-        orchestrator_specific = error.status_code in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES
-        kind: AttemptOutcome = "payment_refused" if orchestrator_specific else "payment"
-        return events.error(kind, str(error), status_code=error.status_code)
-    if isinstance(error, _PAYMENT_ERRORS):
-        return events.error("payment", str(error))
-    return events.error(network_kind(error), str(error))
-
-
-def network_kind(error: BaseException) -> AttemptOutcome:
-    current: BaseException | None = error
-    while current is not None:
-        if isinstance(current, TimeoutError):
-            return "timeout"
-        if isinstance(current, (ConnectionError, OSError, aiohttp.ClientConnectionError)):
-            return "unreachable"
-        current = current.__cause__
-    return "http"
+    """The engine's account of a signer failure (``signer_failures.classify``, D58)."""
+    kind, message, status, reason = classify(error, unknown=events.unknown)
+    return events.error(kind, message, status_code=status, reason=reason)
 
 
 def payment_type(rate: NetworkRate | None) -> str:

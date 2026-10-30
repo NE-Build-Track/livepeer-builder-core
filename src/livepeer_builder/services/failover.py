@@ -6,7 +6,7 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, FailureKind, Runner
+from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, FailureKind, Runner, reason_fits
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
 from livepeer_builder.utils import BODY_LIMIT
@@ -112,7 +112,8 @@ def returned_failover(
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
     """A 404 or 409 is reported as ``refused``. ``status_code`` keeps the orchestrator's status.
 
-    ``payment_unknown`` means the signer was asked and may have charged. It is not a retryable refusal.
+    ``payment_unknown`` means the signer was asked and may have charged. It is not a retryable refusal,
+    and its reason is ``signer_unknown`` (D58).
     """
     not_run = error.kind == "http" and error.status_code in NOT_RUN_STATUSES
     kind: FailureKind
@@ -122,12 +123,16 @@ def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:
         kind = "refused"
     else:
         kind = failure_kind(error.kind, error.status_code)
+    reason = "signer_unknown" if error.payment_unknown else error.reason
+    if reason is not None and not reason_fits(kind, reason):
+        reason = None  # a transport's reason that does not fit what the engine made of its error
     return Failure(
         kind=kind,
         message=str(error) if tried == 1 else f"all {tried} runners failed; last: {error}",
         status_code=error.status_code,
         body=error.body[:BODY_LIMIT] if error.body else None,
         payment_sent=paid,
+        reason=reason,
     )
 
 

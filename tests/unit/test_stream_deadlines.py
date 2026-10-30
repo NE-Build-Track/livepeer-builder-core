@@ -102,12 +102,17 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
         grant_id="g",
     )
     await engine.payments.provision(admin, request)
+    # The deadline must land in the hang (5 s), never in an earlier phase: a slow sign-orchestrator-info
+    # under load is signer_unavailable since D58, so a tight deadline made the outcome depend on timing.
     with pytest.raises(JobFailed) as failed:
-        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.1))
+        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.5))
     job = failed.value.job
     expected_kind = "payment_unknown" if hang == "signer" else "timeout"
     assert job.state == state and job.failure is not None and job.failure.kind == expected_kind
     assert job.failure.payment_sent is paid
+    if hang == "signer":  # the signer is the one that did not answer, in D58's words (#78 review)
+        assert job.failure.reason == "signer_unknown"
+        assert job.failure.message == "the signer gave no answer while signing; it may have charged"
     assert len(job.attempts) == 1  # a timeout never fails over, paid or not
     attempt = job.attempts[0]
     outcome = "timeout" if paid else "payment_unknown"  # stored, so a restart still sees it may have paid
@@ -116,6 +121,37 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
         paid,
         manifests,
     )
+    assert engine.admission.running == 0
+
+
+async def test_a_first_byte_deadline_while_the_signer_identifies_is_signer_unavailable(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net
+) -> None:
+    """The stream's deadline can expire during /sign-orchestrator-info, before anything is signed and
+    before any runner is asked. That is the signer not answering, D58 (4): ``payment`` /
+    ``signer_unavailable``, unpaid and failed, so the same reference runs again (D57), not a 504."""
+    net.info = [5.0]
+    engine = await make_engine(
+        runners=(net.runner(),), supply=EngineSupply(transport=SdkRunnerTransport(net.url))
+    )
+    request = ProvisionRequest(
+        operation_ref="provision:default:alice",
+        application_id="default",
+        actor_id="alice",
+        amount=Money(amount=Decimal(5), currency="USD"),
+        grant_id="g",
+    )
+    await engine.payments.provision(admin, request)
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.3))
+    job = failed.value.job
+    assert job.state == "failed" and job.failure is not None
+    assert (job.failure.kind, job.failure.reason, job.failure.payment_sent) == (
+        "payment",
+        "signer_unavailable",
+        False,
+    )
+    assert net.log == ["signer info"]  # no runner was asked and nothing was signed
     assert engine.admission.running == 0
 
 

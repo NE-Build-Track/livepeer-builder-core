@@ -112,11 +112,14 @@ class FakeJobs:
                 status_code=scripted.status_code,
                 body=scripted.body,
                 payment_sent=scripted.payment_sent,
+                reason=scripted.reason,
             )
             outcome = attempt_outcome(scripted.kind)  # a paid 502 or 504 may have run, as in the engine
             may_have_run = attempt_verdict(outcome, scripted.status_code, True) == "uncertain"
             paid_unknown = scripted.payment_sent and (outcome in UNCERTAIN_OUTCOMES or may_have_run)
-            raise JobFailed(self.record(actor, request, "uncertain" if paid_unknown else "failed", failure))
+            signer_unknown = outcome == "payment_unknown"  # the signer may have charged, paid or not
+            state: JobState = "uncertain" if paid_unknown or signer_unknown else "failed"
+            raise JobFailed(self.record(actor, request, state, failure))
         return scripted
 
     def _check_operation(self, actor: ActorContext, request: JobRequest) -> None:
@@ -248,6 +251,7 @@ class FakeJobs:
             status_code=fails.status_code,
             body=fails.body,
             payment_sent=True,
+            reason=fails.reason,
         )
         return self.ended(job, attempt_outcome(fails.kind), status, failure=failure)
 

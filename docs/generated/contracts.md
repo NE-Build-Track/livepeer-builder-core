@@ -86,6 +86,7 @@ classDiagram
         +int? status_code
         +str? body
         +bool payment_sent
+        +enum? reason
     }
     class ResultRef {
         +enum storage

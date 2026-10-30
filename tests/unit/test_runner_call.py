@@ -218,7 +218,9 @@ async def test_unreachable_runner_or_signer_is_unpaid() -> None:
     assert (runner_down.value.kind, runner_down.value.payment_sent) == ("unreachable", False)
     with pytest.raises(RunnerCallError) as signer_down:
         await SdkRunnerTransport(closed).call(target, JobRequest(app=APP), "lpg_k")
-    assert (signer_down.value.kind, signer_down.value.payment_sent) == ("unreachable", False)
+    # D58: the signer is not a runner; every runner shares it, so this is not a reason to fail over
+    down = signer_down.value
+    assert (down.kind, down.reason, down.payment_sent) == ("payment", "signer_unavailable", False)
 
 
 async def test_payment_retries_are_bounded(net: Net) -> None:

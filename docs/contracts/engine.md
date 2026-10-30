@@ -106,12 +106,17 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
      `SignerRefreshRequired` (HTTP 480) that uses up the payment retry budget is the same refusal:
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
      challenge and does not fail the attempt. Another orchestrator may succeed.
-   - **`payment`:** caller- or signer-side refusals, such as 402 (allowance exhausted) and 403.
-     The stored manifest becomes `unpaid` (D54), so it is never matched or billed, and the job
-     ends `failed`. They do **not** fail over, because every orchestrator would fail the same way.
-     A failed write of the manifest before signing is also `payment`: nothing was signed. A signer
-     502 or 503 is not a refusal: it is `payment_unknown`, the manifest stays `unknown`, and the job
-     ends `uncertain`. The cost stays `pending` until usage matches it.
+   - **`payment`:** caller- or signer-side refusals: 401 or 403 (`not_authorized`) and 402
+     (`allowance_exhausted`). The stored manifest becomes `unpaid` (D54), so it is never matched or
+     billed, and the job ends `failed`. They do **not** fail over, because every orchestrator would
+     fail the same way. A signer that cannot be reached, or fails, before anything is signed is
+     `payment` too (`signer_unavailable`, D58): a refused connection or a DNS failure on any signer
+     call, since such a request never reached the signer, or a 5xx, timeout or dropped connection at
+     `/sign-orchestrator-info`, which signs nothing. Every runner shares the signer, so it does not
+     fail over either. A failed write of the manifest before signing is also `payment`: nothing was
+     signed. A signer 5xx, timeout or lost reply **while signing** is not a refusal: it is
+     `payment_unknown` (`signer_unknown`), the manifest stays `unknown`, and the job ends
+     `uncertain`. The cost stays `pending` until usage matches it.
 2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
    most one job that reaches a runner. A job that failed before any runner accepted the work may be
    dispatched again under the same reference (see [idempotency](#idempotency)).
@@ -125,7 +130,9 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
    signer validates the manifest, before the paid request goes out, and the engine stores
    `payment_sent` then (D42). An expired challenge (a 480 refresh), `SkipPaymentCycle`, and a signer
    400, 401, 402, 403 or 481 make it `unpaid`: it is never matched to usage and costs nothing, so a
-   debit on it stays unattributed on the allocation and is never billed. A lost reply, a signer 5xx,
+   debit on it stays unattributed on the allocation and is never billed. So does a connection the
+   signer refused, or a signer name that did not resolve (D58, Q3): aiohttp fails those before a
+   byte of the request is written. A lost reply, a timeout, a dropped connection, a signer 5xx,
    or a cancel during `get_payment` is not a refusal: the session stays `unknown`, and the job pays no
    other orchestrator. The cost stays `pending` until usage matches that manifest, which confirms it
    `paid`; then the attempt is `uncertain` with the fee. This holds across a crash, because the
@@ -195,19 +202,34 @@ retention window may dispatch again, so use UUIDs or ULIDs.
 
 ### Failures
 
-| `Failure.kind` | Payment possible? | REST status |
-| --- | --- | --- |
-| `no_offering` | no | 404 |
-| `no_capacity` | no | 503 + `Retry-After` |
-| `not_provisioned` | no | 402 |
-| `refused`, `unreachable` (all runners) | no | 503 + `Retry-After` |
-| `payment` (402 or 403: the signer refused, and the manifest is `unpaid`; or the manifest could not be stored, so nothing was signed) | no | 503 + `Retry-After` |
-| `payment_unknown` (the signer was asked and did not refuse) | maybe | 503, no `Retry-After` |
-| `timeout` | maybe → `uncertain` when paid, else `failed` | 504 |
-| `runner_rejected` (4xx) | yes | the runner's own 4xx |
-| `runner_error` (5xx) | yes | 502 |
-| `interrupted` (restart) | maybe | 502 |
-| `abandoned` (the caller stopped reading a stream) | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started |
+`Failure` has `kind`, `message`, `status_code`, `body`, `payment_sent` and, for a payment failure,
+`reason` (D58). **Branch on `kind` for behavior** (it decides failover and cost) and on `reason` for
+what to tell the builder. `reason` is set only on `payment` and `payment_unknown`; jobs stored before
+D58 have none. For a payment failure `message` is the engine's own words ("the signer refused payment:
+allowance exhausted (HTTP 402)") and `status_code` is the signer's status, when it answered; the
+signer's URL and its own text go to the engine log only, and `body` is never the signer's
+([payments.md](payments.md#who-answers-what)).
+
+| `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
+| --- | --- | --- | --- | --- |
+| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings` |
+| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header |
+| `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help |
+| `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header |
+| `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying does not help |
+| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again ([idempotency](#idempotency)) |
+| `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry later |
+| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, or a refresh past its budget), the signer refused with another status, or its identity reply was malformed |
+| `payment_unknown` | `signer_unknown` | maybe | 503, no `Retry-After` | The signer was asked and gave no validated answer while signing (a 5xx, a timeout, a dropped or malformed reply): it may have charged. The job is `uncertain` and the cost `pending` until usage settles it. Do not retry blindly: a repeat under the same `operation_ref` is 409, and a new one could pay twice |
+| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time |
+| `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner refused the request: fix the request |
+| `runner_error` (5xx) | | yes | 502 | The runner failed, or the engine did (`engine error: …`) |
+| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran |
+| `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | |
+
+`not_provisioned` and `allowance_exhausted` are both 402: `kind` tells them apart. A 403 from
+`POST /v1/jobs` is either the access policy (`AccessDenied`, no job in the body) or `not_authorized`
+(the job in the body).
 
 ## Streaming
 

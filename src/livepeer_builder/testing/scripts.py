@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, cast
 
-from livepeer_builder.contracts import AttemptOutcome, FailureKind
+from livepeer_builder.contracts import AttemptOutcome, FailureKind, PaymentReason
 from livepeer_builder.errors import EngineError
 from livepeer_builder.services import failover
 
@@ -33,6 +33,8 @@ class Fails:
     ``timeout`` or ``unreachable``, since the runner may have run. ``no_offering``,
     ``no_capacity`` and ``not_provisioned`` fail before any attempt. ``body`` is the runner's own
     words. Among stream chunks the stream was paid when it opened, so ``payment_sent`` does not apply.
+    ``reason`` is a payment failure's (D58): ``signer_unknown`` with ``payment_unknown``, which leaves
+    the job ``uncertain`` as in the engine, any other with ``payment``.
     """
 
     kind: FailureKind = "runner_error"
@@ -40,6 +42,7 @@ class Fails:
     status_code: int | None = 500
     payment_sent: bool = False
     body: str | None = None
+    reason: PaymentReason | None = None
 
 
 @dataclass(frozen=True)

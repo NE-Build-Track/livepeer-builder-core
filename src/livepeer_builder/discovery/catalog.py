@@ -94,10 +94,7 @@ class Catalog:
         self._probed_at = self._now()
 
     def inventory(self) -> list[dict[str, Any]]:
-        """One entry per serving orchestrator, in directory order.
-
-        Each runner is the JSON text the probe stored, not a parsed object.
-        """
+        """livepeer-node's ``/discovery`` inventory: an entry per serving orchestrator, directory order."""
         return [self._inventory[o.url] for o in self._orchestrators or () if o.url in self._inventory]
 
     def status(self) -> CatalogStatus:

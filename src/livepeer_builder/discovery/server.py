@@ -10,12 +10,11 @@ import logging
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from livepeer_builder.discovery.catalog import Catalog, Probes
 from livepeer_builder.discovery.directory import OrchestratorDirectory
-from livepeer_builder.discovery.document import discovery_document
 from livepeer_builder.discovery.onchain import OnChainDirectory
 from livepeer_builder.discovery.probe import Prober
 from livepeer_builder.discovery.rpc import JsonRpcChain
@@ -29,9 +28,8 @@ def create_app(catalog: Catalog, *, refresh: "asyncio.Task[None] | None" = None)
     """The HTTP surface. With ``refresh``, readiness also needs that task alive: a stopped refresh would
     serve a frozen inventory, so it must not look ready (#46 review)."""
 
-    async def discovery(_: Request) -> Response:
-        # Runner objects are the orchestrator's JSON text. json.dumps would quote them.
-        return Response(discovery_document(catalog.inventory()), media_type="application/json")
+    async def discovery(_: Request) -> JSONResponse:
+        return JSONResponse(catalog.inventory())
 
     async def healthz(_: Request) -> JSONResponse:
         return JSONResponse({"ok": True})

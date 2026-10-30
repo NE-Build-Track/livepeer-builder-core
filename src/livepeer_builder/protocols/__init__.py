@@ -390,9 +390,9 @@ class CostSnapshot(Protocol):
 
     async def projections_and_unprojected(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> tuple[list[JobCost], list[Job]]:
-        """The stored projections of jobs created in the window, and the jobs no projection covers:
-        running, or ended since their projection was stored."""
+    ) -> tuple[list[tuple[str, JobCost]], list[Job]]:
+        """The stored projections of jobs created in the window, each with its job's runner app, and the
+        jobs no projection covers: running, or ended since their projection was stored."""
         ...
 
     async def recent_with_projections(

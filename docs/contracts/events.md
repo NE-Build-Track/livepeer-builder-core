@@ -1,7 +1,10 @@
 # Events contract (definition only)
 
-**Decision:** D10. Defined in M2; implemented in M3. **Code:** `contracts/reserved.py`
-(`EngineEvent`, `EventPage`), `protocols.EventFeed`, `services/reserved.py` (answers 501).
+**Decision:** D10. Defined in M2. **Held:** the feed is not built in M3, by the
+[M3 scope decision of 21 October 2026](https://github.com/Cloud-SPE/Network-Engineering-SPE/blob/3c365a46550c2099e92b1df1adfb3756b4508c95/docs/decisions/2026-10-21-m3-reference-app-and-scope.md) (item 4), kept for M3 by
+[D60](../design-docs/m3-decisions.md) (ISS-18 stays open as partial). **Code:** `contracts/reserved.py`
+(`EngineEvent`, `EventPage`), `protocols.EventFeed`, `services/reserved.py`: `GET /v1/events` answers 501
+with `milestone: "held"`, `ticket: "ISS-18"` and a message naming the decision.
 
 Enterprises keep their retail records in step with the engine by consuming a versioned event feed.
 

@@ -271,7 +271,26 @@
       },
       "CostSummary": {
         "additionalProperties": false,
+        "description": "The costs of the jobs created in ``[start, end)``, in the caller's scope. ``by_app`` attributes\nthe same attempt fees to each job's runner app, kept by class as in ``by_class`` (D60), so a final fee\nand a ``pending`` one that can still grow are never one figure. For every class, the apps add up to\nits ``by_class`` total. An app appears once one of its jobs has a costed attempt, with only the classes\nits attempts have.",
         "properties": {
+          "by_app": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Fees"
+              },
+              "propertyNames": {
+                "enum": [
+                  "delivered",
+                  "failed_after_payment",
+                  "uncertain",
+                  "pending"
+                ]
+              },
+              "type": "object"
+            },
+            "title": "By App",
+            "type": "object"
+          },
           "by_class": {
             "additionalProperties": {
               "$ref": "#/components/schemas/Fees"

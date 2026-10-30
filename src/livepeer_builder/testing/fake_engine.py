@@ -49,7 +49,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound, NotProvisioned
 from livepeer_builder.protocols import AccessPolicy
-from livepeer_builder.services.costs import classify
+from livepeer_builder.services.costs import classify, summarize
 from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.operations import retry_of
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
@@ -293,12 +293,18 @@ class FakeJobs:
         )
         mine = [
             job
-            for job in self._jobs.values()
-            if job.application_id == actor.application_id
-            and target in (None, job.actor_id)
-            and (before is None or job.created_at < before)
+            for job in self.in_scope(actor.application_id, target)
+            if before is None or job.created_at < before
         ]
         return sorted(mine, key=lambda job: job.created_at, reverse=True)[:limit]
+
+    def in_scope(self, application_id: str, actor_id: str | None) -> list[Job]:
+        """The jobs of one application, and of one actor when given: what an admin or an actor sees."""
+        return [
+            job
+            for job in self._jobs.values()
+            if job.application_id == application_id and actor_id in (None, job.actor_id)
+        ]
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
         self.owned(actor, Operation.JOBS_READ, job_id)
@@ -318,7 +324,8 @@ class FakeJobs:
 
 class FakeCosts:
     """A scripted cost wins. Otherwise a job the fake ran costs what the engine reports before any usage
-    arrives (``classify`` with no rows): ``pending`` while running or once paid, ``none`` if unpaid."""
+    arrives (``classify`` with no rows): ``pending`` while running or once paid, ``none`` if unpaid. An
+    unscripted summary totals those costs the engine's way (``summarize``), in its window and scope."""
 
     def __init__(
         self, costs: Mapping[UUID, JobCost | Raises], summary: CostSummary | None, jobs: FakeJobs
@@ -346,9 +353,12 @@ class FakeCosts:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
         owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
         self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
-        if self._summary is None:
-            raise NotFound("no cost summary scripted")
-        return self._summary
+        if self._summary is not None:
+            return self._summary
+        ran = self._jobs.in_scope(actor.application_id, target)
+        return summarize(
+            start, end, [(job.app, classify(job, ())) for job in ran if start <= job.created_at < end]
+        )
 
 
 class FakeDiscovery:

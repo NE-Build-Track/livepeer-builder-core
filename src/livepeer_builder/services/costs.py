@@ -212,22 +212,9 @@ class CostService:
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
-        totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
-        with_cost = pending = 0
         async with self._store.cost_snapshot() as reads:
             costs = await _rollup(reads, actor.application_id, target, start, end)
-        for cost in costs:
-            with_cost += cost.status in ("observed", "corrected")
-            pending += cost.status == "pending"
-            for attempt in cost.attempts:
-                totals[attempt.cost_class].append(attempt.fees)
-        return CostSummary(
-            start=start,
-            end=end,
-            by_class={cls: add_fees(totals[cls]) for cls in COST_CLASSES},
-            jobs_with_cost=with_cost,
-            jobs_pending=pending,
-        )
+        return summarize(start, end, costs)
 
     async def reconcile(
         self, admin: ActorContext, application_id: str, actor_id: str | None
@@ -248,7 +235,7 @@ class CostService:
         async with self._store.cost_snapshot() as reads:
             costs = await _rollup(reads, application_id, actor_id, _EPOCH, _FAR_FUTURE)
             unattributed = fees_of(await reads.unattributed_usage(allocation_id))
-        for cost in costs:
+        for _, cost in costs:
             for attempt in cost.attempts:
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
@@ -277,13 +264,15 @@ class _UsageReads(Protocol):
 
 async def _rollup(
     reads: CostSnapshot, application_id: str, actor_id: str | None, start: datetime, end: datetime
-) -> list[JobCost]:
-    """One cost per job in the window: the stored projections, plus a live compute of the jobs none covers."""
+) -> list[tuple[str, JobCost]]:
+    """One cost per job in the window, with the job's runner app: the stored projections, plus a live
+    compute of the jobs none covers."""
     stored, not_projected = await reads.projections_and_unprojected(application_id, actor_id, start, end)
-    costs = {cost.job_id: cost for cost in stored}
+    costs = {cost.job_id: cost for _, cost in stored}
+    apps = {cost.job_id: app for app, cost in stored} | {job.id: job.app for job in not_projected}
     due = [job for job in not_projected if not _covered(costs.get(job.id), job)]
     costs.update((cost.job_id, cost) for cost in await _compute_all(due, reads))
-    return list(costs.values())
+    return [(apps[job_id], cost) for job_id, cost in costs.items()]
 
 
 async def _compute_all(jobs: Sequence[Job], reads: _UsageReads) -> list[JobCost]:
@@ -388,6 +377,31 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
         first_observed_at=None,
         updated_at=None,
         billable=billable_fees(attempts),
+    )
+
+
+def summarize(start: datetime, end: datetime, costs: Iterable[tuple[str, JobCost]]) -> CostSummary:
+    """Totals of each job's cost, given with its runner app: by class, and the same fees by app and class
+    (D60). Pending jobs are counted beside the totals; their fees so far stay in the ``pending`` class."""
+    totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
+    per_app: dict[str, dict[CostClass, list[Fees]]] = {}
+    with_cost = pending = 0
+    for app, cost in costs:
+        with_cost += cost.status in ("observed", "corrected")
+        pending += cost.status == "pending"
+        for attempt in cost.attempts:
+            totals[attempt.cost_class].append(attempt.fees)
+            per_app.setdefault(app, {}).setdefault(attempt.cost_class, []).append(attempt.fees)
+    return CostSummary(
+        start=start,
+        end=end,
+        by_class={cls: add_fees(totals[cls]) for cls in COST_CLASSES},
+        jobs_with_cost=with_cost,
+        jobs_pending=pending,
+        by_app={
+            app: {cls: add_fees(classes[cls]) for cls in COST_CLASSES if cls in classes}
+            for app, classes in sorted(per_app.items())
+        },
     )
 
 

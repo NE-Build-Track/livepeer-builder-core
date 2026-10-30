@@ -76,6 +76,10 @@ engine-side too.
 
 ## Open questions to lock
 
+**Locked by Mike, 30 October 2026:** Q1 `by_app` only (no `by_orchestrator`, no usage totals in M3); Q2
+the events feed stays held for M3 (the 21 October decision, item 4), and ISS-18 stays open as partial.
+The rules become [D60](../m3-decisions.md).
+
 - **Q1.** Add `by_app` only (recommended), also `by_orchestrator`, or neither in M3?
 - **Q2.** Leave the events feed held for M3 (the decision), or lift the hold if the other M3 work lands
   early?

@@ -30,7 +30,7 @@ from livepeer_builder import (
     OperationExists,
     OperationInProgress,
 )
-from livepeer_builder.contracts import AttemptOutcome, FailureKind, PaymentReason, ProvisionRequest
+from livepeer_builder.contracts import AttemptOutcome, FailureKind, Fees, PaymentReason, ProvisionRequest
 from livepeer_builder.errors import AccessDenied, NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
@@ -195,6 +195,27 @@ async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) ->
             await engine.payments.allowance(no_costs)
         with pytest.raises(AccessDenied):
             engine.discovery.runners(no_discover, APP)
+
+
+async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -> None:
+    """Before any usage arrives a paid job is pending on both sides, and ``by_app`` names each app it
+    ran with the same fees (D60). The window and the scope are the engine's."""
+    window = (datetime(2000, 1, 1, tzinfo=UTC), datetime(2100, 1, 1, tzinfo=UTC))
+    nothing_yet = Fees(fee_eth=Decimal(0), fee_usd=Decimal(0), row_count=0)
+    async with side() as engine:
+        await engine.jobs.run(ALICE, JobRequest(app=APP))
+        await engine.jobs.run(ALICE, JobRequest(app=OTHER))
+        summary = await engine.costs.summary(ALICE, *window)
+        everyone = await engine.costs.summary(ADMIN, *window, actor_id="alice")
+        none_for_bob = await engine.costs.summary(BOB, *window)
+        before = await engine.costs.summary(ALICE, window[0], datetime(2001, 1, 1, tzinfo=UTC))
+    assert (
+        summary.by_app == everyone.by_app == {APP: {"pending": nothing_yet}, OTHER: {"pending": nothing_yet}}
+    )
+    assert (summary.jobs_with_cost, summary.jobs_pending) == (0, 2)
+    assert summary.by_class["pending"] == nothing_yet
+    assert (none_for_bob.by_app, none_for_bob.jobs_pending) == ({}, 0)
+    assert (before.by_app, before.jobs_pending) == ({}, 0)
 
 
 async def test_an_auditor_reads_every_actor_and_runs_nothing(side: Side) -> None:

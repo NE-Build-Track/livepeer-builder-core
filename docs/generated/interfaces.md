@@ -92,7 +92,7 @@ classDiagram
     class CostSnapshot {
         <<interface>>
         +async job_with_projection(job_id) Job[]?
-        +async projections_and_unprojected(application_id, actor_id, start, end) JobCost[][]
+        +async projections_and_unprojected(application_id, actor_id, start, end) str[][][]
         +async recent_with_projections(application_id, actor_id, limit) Job[][]
         +async unattributed_usage(allocation_id) UsageRow[]
         +async usage_for_payment_sessions(payment_session_ids) UsageRow[]

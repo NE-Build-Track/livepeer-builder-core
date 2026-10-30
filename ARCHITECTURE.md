@@ -84,7 +84,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |
 | `EngineStore` (+ repos) | `SqlStore` | — (one store; two databases) |
-| `EventFeed`, `SessionManager` | reserved (raise 501) | — implemented in M3 / M4 |
+| `EventFeed`, `SessionManager` | reserved (raise 501) | — events held in M3 (D60); sessions in M4 |
 
 How to replace each default with an enterprise implementation, with class diagrams and runnable
 examples, is in [docs/design-docs/extending-the-engine.md](docs/design-docs/extending-the-engine.md).

@@ -15,6 +15,18 @@ def test_a_nodes_entry_and_a_null_runners_contribute_nothing() -> None:
     assert runner_records(body) == []
 
 
+def test_an_entry_that_is_not_an_object_or_is_empty_contributes_nothing() -> None:
+    body = b'[1, "o", {}, {"runners":[{"url":"kept"}]}]'
+    assert runner_records(body) == ['{"url":"kept"}']
+
+
+@pytest.mark.parametrize("body", [b"[1", b"[1,", b"[1 2]", b"[1, }]"])
+def test_an_inventory_that_is_not_valid_json_is_refused(body: bytes) -> None:
+    """Truncated, missing a comma, or with a bad value: the probe fails, never a partial inventory."""
+    with pytest.raises(ValueError, match="not valid JSON"):
+        runner_records(body)
+
+
 TOO_BIG = "1e" + "9" * 20  # past Decimal's exponent range; inf as a float
 TOO_SMALL = "1e-" + "9" * 20  # past it the other way; 0.0 as a float
 AT_RANGE = "1e" + "9" * 18  # Decimal still builds it: Decimal('1E+999999999999999999')

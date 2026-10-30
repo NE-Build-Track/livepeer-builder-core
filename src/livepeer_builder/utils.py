@@ -47,10 +47,7 @@ def decimal_json_number(token: str) -> Decimal:
     ``lpb discovery`` refuses that inventory, so the token is never re-served for every engine's refresh
     to fail on.
     """
-    try:
-        amount = Decimal(token)
+    try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
+        return Decimal(token)
     except InvalidOperation as exc:
         raise ValueError(f"{token} is not a JSON number") from exc
-    if not amount.is_finite():
-        raise ValueError(f"{token} is not a JSON number")
-    return amount

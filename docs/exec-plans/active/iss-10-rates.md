@@ -239,3 +239,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   replaces "kept as advertised, `missing`" for that unit, and amends D62 (6): this is the one
   go-livepeer-specific rule. By John's choice no test names the unit; `is_payable` refuses every unit
   but `seconds` and `fixed`.
+- 30 October: an `observed_at` that parses but cannot convert to UTC (`0001-01-01T00:00:00+01:00`,
+  `9999-12-31T23:00:00-01:00`) raised `OverflowError` inside `_stamp` and failed the whole engine refresh.
+  It is an unreadable stamp (`None`), and the other runners stay. An integer longer than the runtime digit
+  limit did the same from `json.loads`; that field is `UNREADABLE_NUMBER`, one runner's rate, not the poll.

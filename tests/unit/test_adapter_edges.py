@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import sys
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
@@ -33,6 +34,7 @@ from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
+from livepeer_builder.utils import loads_json_numbers
 
 # -- Batteries -----------------------------------------------------------------------------------------
 
@@ -280,6 +282,25 @@ async def test_a_number_decimal_cannot_build_fails_one_runner_not_the_refresh() 
     assert (good.rate, good.rate_error) == (wei, None)
     assert (bad_usd.rate, bad_usd.rate_error) == (wei, "price_usd is not a nonnegative number")
     assert (bad_price.rate, bad_price.rate_error) == (None, PRICE_RULE)
+
+
+def test_an_integer_past_the_digit_limit_fails_one_runner_not_the_refresh() -> None:
+    """``json.loads`` raises ValueError past ``sys.get_int_max_str_digits()`` (4300). One such price must not
+    stop the rest of the inventory from updating."""
+    huge = "9" * (sys.get_int_max_str_digits() + 1)
+    body = (
+        '[{"address":"https://a","runners":['
+        '{"url":"https://a/apps/good/app","app":"a/b","price_info":{"price":10,"currency":"wei","unit":"fixed"}},'
+        '{"url":"https://a/apps/big/app","app":"a/b","price_info":{"price":'
+        + huge
+        + ',"currency":"wei","unit":"fixed"}}]}]'
+    )
+    good, bad = runners_from_entries(loads_json_numbers(body))
+    assert (good.rate, good.rate_error) == (
+        NetworkRate(amount=Decimal(10), currency="wei", unit="fixed"),
+        None,
+    )
+    assert (bad.rate, bad.rate_error) == (None, PRICE_RULE)
 
 
 def test_rates_reject_bad_prices() -> None:

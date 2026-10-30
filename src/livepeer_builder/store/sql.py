@@ -259,13 +259,11 @@ class SqlStore(SqlKeys, SqlOperations):
             for chunk in chunks([row.id for row in rows]):
                 found = await conn.execute(select(*fees).where(t.usage_rows.c.id.in_(chunk)))
                 stored.update((row_id, (eth, usd)) for row_id, eth, usd in found)
-            seen = set(stored)
             for row in rows:
-                if row.id in seen:
-                    if row.id in stored:
-                        _log_another_fee(row, *stored[row.id])
+                if row.id in stored:  # stored before, or earlier on this page (#83)
+                    _log_another_fee(row, *stored[row.id])
                     continue
-                seen.add(row.id)
+                stored[row.id] = _fee_text(row)
                 await conn.execute(insert(t.usage_rows).values(_usage_values(row) | {"synced_at": synced_at}))
                 new.append(row)
             await bump_evidence_on_new_rows(conn, new)
@@ -432,6 +430,12 @@ def _attempt_values(attempt: Attempt) -> dict[str, Any]:
     values = attempt.model_dump(exclude={"sessions"})
     values["job_id"] = str(attempt.job_id)
     return values
+
+
+def _fee_text(row: UsageRow) -> tuple[str | None, str | None]:
+    """A row's fees as the store holds them, to compare a later copy of the same id against."""
+    eth, usd = row.computed_fee_eth, row.computed_fee_usd
+    return (None if eth is None else str(eth), None if usd is None else str(usd))
 
 
 def _log_another_fee(row: UsageRow, eth: str | None, usd: str | None) -> None:

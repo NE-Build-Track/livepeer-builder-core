@@ -124,6 +124,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Measured usage is reported once, by the owner | `tests/unit/test_jobs.py::test_usage_is_reported_once_by_the_owner` | U | fixture | ISS-23 |
 | Rows Batteries marks `duplicate` or `ignored` are never counted, on the job or as unattributed | `tests/unit/test_cost_observations.py::test_rows_batteries_marks_duplicate_or_ignored_are_never_counted` | U | fixture | ISS-23 |
 | A row id delivered again with another fee is ignored and logged (`costs.usage_redelivered`), never a correction (Q2) | `tests/unit/test_cost_observations.py::test_a_redelivered_row_with_another_fee_is_ignored_and_logged` | U | fixture | ISS-23 |
+| The same, when a new row id comes twice on one page: the first copy is stored, the second logged | `tests/unit/test_cost_observations.py::test_a_row_id_twice_on_one_page_with_another_fee_keeps_the_first_and_is_logged` | U | fixture | ISS-23 |
 | A late row for a job retention purged stays unattributed, and reconciliation still balances | `tests/unit/test_cost_observations.py::test_a_late_row_for_a_job_retention_purged_stays_unattributed` | U | fixture | ISS-23 |
 
 ## Live probe

@@ -55,6 +55,13 @@ From the ticket and the 21 October M3 plan, as the guide's definition of done:
 
 ## Progress
 
+- 2026-10-30: Cursor's review of #83. (1) `live_probe.py` reads how its first job ended and sends the second
+  only after a `no_offering` failure with nothing paid: if some runner advertised the probe's app, the
+  shared key could have paid in `per_application` mode. (2) Its keys are revoked in a `finally`, one
+  failed revoke not stopping the next, and a body that is not JSON is a FAIL, not a crash. (3) A 201
+  without a key id is a failed issue, never the previous key. (4) A new usage row id twice on one page
+  with another fee is logged like a later re-delivery (D61 (3)).
+
 - 2026-10-30: Live run on the console's stack with the engine built from `ade673f`: 25 passed, 0 failed,
   one 0.01 USD fund applied once. The review changes (repeat revoke 204, 413 over 16 MiB, `before`
   422 without an offset, `by_app` by class) seen on the same engine.

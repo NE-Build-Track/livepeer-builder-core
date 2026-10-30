@@ -91,8 +91,13 @@ class Probe:
         body = {"kind": kind, "actor_id": actor_id, "operation_ref": f"{actor_id}-key"}
         answer = await self.call("POST", "/v1/admin/keys", self.admin_key, json=body)
         token = answer.json().get("token") if answer.status_code == 201 else None
-        self.record("PASS" if token else "FAIL", f"issue a key ({kind})", f"{answer.status_code}")
-        return (token, self.issued[-1]) if isinstance(token, str) else None
+        key_id = _issued_key_id(answer)  # never the previous key's id: a 201 without one is a failure
+        if isinstance(token, str) and key_id is not None:
+            self.record("PASS", f"issue a key ({kind})", f"{answer.status_code}")
+            return token, key_id
+        missing = ", no key id" if answer.status_code == 201 and key_id is None else ""
+        self.record("FAIL", f"issue a key ({kind})", f"{answer.status_code}{missing}")
+        return None
 
 
 async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_amount: str | None) -> None:
@@ -122,12 +127,21 @@ async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_
 async def cross_actor(probe: Probe, a: str, b: str) -> None:
     job = {"app": NO_SUCH_APP, "operation_ref": f"{probe.run}-job"}
     first = (await probe.call("POST", "/v1/jobs", a, json=job)).headers.get("livepeer-job-id")
-    second = (await probe.call("POST", "/v1/jobs", b, json=job)).headers.get("livepeer-job-id")
-    if not probe.record("PASS" if first else "FAIL", "a job is recorded without payment", str(first)):
+    read = await probe.call("GET", f"/v1/jobs/{first}", a) if first else None
+    record = read.json() if read is not None and read.status_code == 200 else {}
+    # Some runner could advertise the app; in per_application mode the shared key would then pay. Only a
+    # job that failed before dispatch, with nothing paid, lets the probe send a second one (#83).
+    failure, attempts = record.get("failure") or {}, record.get("attempts") or []
+    unpaid = record.get("state") == "failed" and failure.get("kind") == "no_offering"
+    unpaid = unpaid and not any(attempt.get("payment_sent") for attempt in attempts)
+    ending = f"{first}: {record.get('state')} / {failure.get('kind')}"
+    if not probe.record("PASS" if unpaid else "FAIL", "a job is recorded without payment", ending):
         return
+    second = (await probe.call("POST", "/v1/jobs", b, json=job)).headers.get("livepeer-job-id")
     reused = "PASS" if second and second != first else "FAIL"
     probe.record(reused, "another actor's operation_ref is a new job", str(second))
-    probe.expect("the owner reads the job", await probe.call("GET", f"/v1/jobs/{first}", a), 200)
+    assert read is not None
+    probe.expect("the owner reads the job", read, 200)
     probe.expect("another actor: GET the job", await probe.call("GET", f"/v1/jobs/{first}", b), 404)
     probe.expect("another actor: GET its cost", await probe.call("GET", f"/v1/jobs/{first}/cost", b), 404)
     listed = await probe.call("GET", "/v1/jobs", b)
@@ -187,8 +201,15 @@ async def revoked(probe: Probe, token: str, key_id: str) -> None:
 
 
 async def cleanup(probe: Probe) -> None:
-    answers = [await probe.call("POST", f"/v1/admin/keys/{k}/revoke", probe.admin_key) for k in probe.issued]
-    left = [key for key, answer in zip(probe.issued, answers, strict=True) if answer.status_code != 204]
+    """Revoke every key the probe still holds; one that fails does not stop the next."""
+    left = []
+    for key in list(probe.issued):
+        try:
+            answer = await probe.call("POST", f"/v1/admin/keys/{key}/revoke", probe.admin_key)
+        except httpx.HTTPError:
+            answer = None
+        if answer is None or answer.status_code != 204:
+            left.append(key)
     if probe.issued:
         probe.record("FAIL" if left else "PASS", "revoke the probe's other keys", ", ".join(left))
 
@@ -199,12 +220,16 @@ async def probe(settings: ProbeSettings, *, spend: bool, client: httpx.AsyncClie
     http = client or httpx.AsyncClient(base_url=settings.url, timeout=30.0)
     checks = Probe(http, settings.admin_key)
     try:
-        await run_checks(
-            checks, spend=spend, fund_actor=settings.fund_actor, fund_amount=settings.fund_amount
-        )
-        await cleanup(checks)
-    except httpx.HTTPError as exc:
-        checks.record("FAIL", "the engine answered", type(exc).__name__)
+        try:
+            await run_checks(
+                checks, spend=spend, fund_actor=settings.fund_actor, fund_amount=settings.fund_amount
+            )
+        except httpx.HTTPError as exc:
+            checks.record("FAIL", "the engine answered", type(exc).__name__)
+        except ValueError as exc:  # a body that is not what the contract says (JSON included)
+            checks.record("FAIL", "the engine answered as the contract says", type(exc).__name__)
+        finally:
+            await cleanup(checks)  # whatever broke, the probe's keys are revoked (#83)
     finally:
         if own:
             await http.aclose()

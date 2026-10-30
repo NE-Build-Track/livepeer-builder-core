@@ -64,6 +64,26 @@ async def test_a_redelivered_row_with_another_fee_is_ignored_and_logged(
     assert (logged.row_id, logged.stored_fee_eth, logged.delivered_fee_eth) == ("u1", "0.5", "0.9")  # type: ignore[attr-defined]
 
 
+async def test_a_row_id_twice_on_one_page_with_another_fee_keeps_the_first_and_is_logged(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource, caplog: pytest.LogCaptureFixture,
+) -> None:  # fmt: skip
+    """A new id delivered twice in one page (Cursor, #83): the first copy is stored, and the second with
+    another fee is logged like any later re-delivery, not dropped in silence (D61, Q2)."""
+    engine, job, allocation = await paid_job(make_engine, admin, alice, transport)
+    caplog.set_level(logging.INFO, logger="livepeer_builder")
+    usage.rows = [
+        row("u1", "s-1", "0.5", allocation=allocation, manifest="m-1"),
+        row("u1", "s-1", "0.9", allocation=allocation, manifest="m-1"),
+    ]
+    report = await engine.costs.sync_once()
+    assert report.rows_new == 1
+    cost = await engine.costs.for_job(alice, job.id)
+    assert (cost.status, cost.fees.fee_eth) == ("observed", Decimal("0.5"))
+    [logged] = [r for r in caplog.records if getattr(r, "event", "") == "costs.usage_redelivered"]
+    assert (logged.row_id, logged.stored_fee_eth, logged.delivered_fee_eth) == ("u1", "0.5", "0.9")  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize("status", ["duplicate", "ignored"])
 async def test_rows_batteries_marks_duplicate_or_ignored_are_never_counted(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,

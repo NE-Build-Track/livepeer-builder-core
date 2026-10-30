@@ -53,8 +53,10 @@ def test_a_failure_row_that_may_follow_failover_ties_a_repeat_to_the_closed_list
         row.split("|")[1].strip() + " " + row.split("|")[2].strip()
         for row in rows
         if not row.split("|")[1].strip().startswith(before_dispatch)
-        and ("same `operation_ref` runs again" in row or "with the same `operation_ref`" in row)
-        and "never reached a runner" not in row
+        and (
+            ("runs again" in row and "same `operation_ref`" in row) or "with the same `operation_ref`" in row
+        )
+        and "[the closed list](#idempotency)" not in row
     ]
     assert not loose, f"tie the repeat advice of {loose} to the closed list (engine.md#idempotency)"
 

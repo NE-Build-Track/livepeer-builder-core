@@ -93,3 +93,6 @@ From the ticket and the 21 October M3 plan:
   a paid 500 from a paid 502/504 by `failure.status_code` and ties "wait for the cost" to `job.state`
   being `uncertain`. (2) `not_authorized` said retrying does not help; once an operator fixes the key,
   the same reference runs again under the closed list. Both pinned by the doc tests.
+- 2026-10-30: Cursor's third review of #81: the `interrupted` row re-ran only a job with no attempt, but a
+  restart mid-failover with every attempt refused before the app ran and nothing paid is on the closed
+  list too. It now uses the closed-list wording; the doc test matches any row that promises a re-run.

@@ -34,6 +34,9 @@ from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import INVENTORY_MAX_BYTES, loads_json_numbers, read_capped
 
 _LOG = logging.getLogger(__name__)
+# Runners priced in these units are dropped from discovery: never listed, never routed to, never paid.
+# go-livepeer advertises per-pixel video in it; no signer takes such a ceiling (#77 review, 30 October).
+DROPPED_UNITS = frozenset({"720p-pixel-seconds"})
 
 
 class HttpDiscoverySource:
@@ -178,6 +181,8 @@ def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
             continue
         orchestrator_url = _text(entry.get("address"))
         for raw in records:
+            if _in_dropped_unit(raw):
+                continue
             runner = _runner_from_raw(raw, orchestrator_url)
             if runner is None:
                 skipped_runners += 1
@@ -193,6 +198,12 @@ def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
             },
         )
     return runners
+
+
+def _in_dropped_unit(raw: object) -> bool:
+    price_info = raw.get("price_info") if isinstance(raw, dict) else None
+    unit = _text(price_info.get("unit")) if isinstance(price_info, dict) else None
+    return unit is not None and unit.lower() in DROPPED_UNITS
 
 
 def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None:

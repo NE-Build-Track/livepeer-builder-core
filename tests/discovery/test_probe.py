@@ -98,10 +98,13 @@ async def test_nan_or_infinity_is_not_json_and_fails_the_probe(serve: Serve, tls
         assert (probe.entry, probe.failure) == (None, "failed"), token
 
 
-async def test_a_number_too_large_to_reparse_fails_only_that_orchestrator(serve: Serve, tls: Tls) -> None:
-    """``1e1000000000000000000`` is ``inf`` as a float and not a ``Decimal``. Forwarding it would fail
-    every engine refresh, so this orchestrator is left out and the next one is kept."""
-    poison = b'[{"runners":[{"url":"https://orch/apps/r1/app","app":"a/b","price":1e1000000000000000000}]}]'
+@pytest.mark.parametrize("token", ["1e" + "9" * 20, "1e-" + "9" * 20])
+async def test_a_number_decimal_cannot_build_fails_only_that_orchestrator(
+    serve: Serve, tls: Tls, token: str
+) -> None:
+    """``inf`` or ``0.0`` as a float, but no ``Decimal``. Forwarding it would fail every engine refresh,
+    so this orchestrator is left out and the next one is kept (#77 review)."""
+    poison = f'[{{"runners":[{{"url":"https://orch/apps/r1/app","app":"a/b","price":{token}}}]}}]'.encode()
 
     async def poisoned(_: web.Request) -> web.StreamResponse:
         return web.Response(body=poison, content_type="application/json")

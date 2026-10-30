@@ -209,6 +209,9 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
     over a datetime with no offset, and comparing it with the poll time raised `TypeError`, failing the
     whole catalog. Such a stamp is unreadable, as HTTP's are: the rate is `observed_by` the engine. Red
     first (`TypeError`).
+- 30 October: the `720p-pixel-seconds` drop is removed. `test_a_per_pixel_unit_is_kept_and_has_no_ceiling`
+  was red first (the inventory returned no runner), then green once `DROPPED_UNITS` was gone. The unit
+  lowercases like any other, and `max_price` is `None`.
 
 ## Decision log
 
@@ -256,7 +259,11 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   The engine drops a runner priced in it from discovery: not listed, not routed to, not paid. This
   replaces "kept as advertised, `missing`" for that unit, and amends D62 (6): this is the one
   go-livepeer-specific rule. By John's choice no test names the unit; `is_payable` refuses every unit
-  but `seconds` and `fixed`.
+  but `seconds` and `fixed`. Superseded the same day, below: the drop is removed.
+- 30 October (John): the `720p-pixel-seconds` drop is removed. Offerings already group by
+  `(currency, unit)`, so a per-pixel rate never shares a range with `seconds` or `fixed`, and
+  `is_payable` already marks it `missing` and refuses its ceiling. The runner is kept, listed, and
+  last resort on a paid job, like `hour`. `DROPPED_UNITS` is gone; D62 (6) has no go-livepeer exception.
 - 30 October (John): #77 was too large. The `lpb discovery` changes (runner records kept as received,
   `b22b9c1`; #84's fix; the exponent tests) moved to
   [#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87), so the discovery service is
@@ -278,3 +285,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   `9999-12-31T23:00:00-01:00`) raised `OverflowError` inside `_stamp` and failed the whole engine refresh.
   It is an unreadable stamp (`None`), and the other runners stay. An integer longer than the runtime digit
   limit did the same from `json.loads`; that field is `UNREADABLE_NUMBER`, one runner's rate, not the poll.
+- 31 October: #87 merged into `releases/m3`, and this branch was rebased onto `releases/m3`. `lpb discovery` now
+  re-serves each runner record as received and refuses a number `Decimal` cannot build, so the "until #87
+  merges" behaviour above no longer applies. `utils.py` keeps both sides: this branch's
+  `loads_json_numbers` and `read_capped` for the engine, and #87's `decimal_json_number` for the probe.

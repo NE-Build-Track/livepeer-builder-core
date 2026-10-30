@@ -670,24 +670,26 @@ classDiagram
     class ApprovedOnly {
         example: wraps any directory
     }
-    class Probes {
-        <<interface>>
-        +async probe_all(orchestrators) Probe[]
-    }
     class Prober {
+        +async probe_all(orchestrators) Probe[]
         16 at a time, 5 s, 1 MiB
         deployment trust store
         public_only: resolve, check, pin the address
     }
     class Probe {
         +orchestrator Orchestrator
-        +entry map?
+        +entry InventoryEntry?
         +failure untrusted_certificate, private_address or failed
+    }
+    class InventoryEntry {
+        +address str
+        +runners RawJson[]
+        each runner as the JSON text received
     }
     class Catalog {
         +async load_directory() None
         +async probe() None
-        +inventory() map[]
+        +inventory() InventoryEntry[]
         +status() CatalogStatus
         +async run(stop, directory_interval_s, probe_interval_s) None
     }
@@ -697,10 +699,10 @@ classDiagram
     OrchestratorDirectory ..> Orchestrator : returns
     OnChainDirectory --> EthCall
     EthCall <|.. JsonRpcChain
-    Probes <|.. Prober
     Prober ..> Probe : returns
+    Probe --> InventoryEntry
     Catalog --> OrchestratorDirectory
-    Catalog --> Probes
+    Catalog --> Prober
 ```
 
 ```mermaid
@@ -1072,7 +1074,7 @@ classDiagram
     direction LR
     class server_py {
         <<module>>
-        +async serve(settings, directory, prober) None
+        +async serve(settings, directory) None
         +create_app(catalog) Starlette
         +directory_from(settings) OrchestratorDirectory
     }

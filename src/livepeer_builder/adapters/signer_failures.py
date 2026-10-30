@@ -33,6 +33,12 @@ _REFUSAL_REASONS: dict[int, PaymentReason] = {
     402: "allowance_exhausted",
 }
 _REFUSED = {"not_authorized": "not authorized", "allowance_exhausted": "allowance exhausted"}
+_NOT_REACHED = "the signer is unavailable: it could not be reached; nothing was signed"
+
+
+def signer_not_reached() -> str:
+    """``Failure.message`` when the signer was never asked and nothing was signed (D58)."""
+    return _NOT_REACHED
 
 
 def classify(
@@ -55,8 +61,12 @@ def classify(
         kind = "payment"
     elif never_reached_signer(error):  # nothing was signed, and every runner shares the signer (Q3)
         kind, reason = "payment", "signer_unavailable"
+    elif unknown:
+        kind = network_kind(error)  # the caller recorded that the signer may have charged
     else:
-        kind = network_kind(error)
+        # Not a refusal and not a transport failure (invalid JSON, a non-object): nothing was signed,
+        # so this is ``payment`` and the reference can run again. ``http`` would read as a runner error.
+        kind = "payment"
     return kind, signer_message(error, reason, unknown=unknown), status, reason
 
 
@@ -105,7 +115,7 @@ def signer_message(error: LivepeerGatewayError, reason: PaymentReason | None, *,
     if unknown:
         return f"the signer gave no answer while signing{status}; it may have charged"
     if reason == "signer_unavailable":
-        return f"the signer is unavailable{status or ': it could not be reached'}; nothing was signed"
+        return f"the signer is unavailable{status}; nothing was signed" if status else signer_not_reached()
     if reason in _REFUSED:
         return f"the signer refused payment: {_REFUSED[reason]}{status}"
     if isinstance(error, SignerRefreshRequired):

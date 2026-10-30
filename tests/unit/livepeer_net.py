@@ -47,8 +47,9 @@ class Net:
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
     sign: list[SignStep] = field(default_factory=list)
-    # /sign-orchestrator-info: "ok", an HTTP status, "drop", or "malformed" (no signature)
-    info: list[int | str] = field(default_factory=list)
+    # /sign-orchestrator-info: "ok", an HTTP status, "drop", "malformed" (no signature),
+    # "garbage" (not JSON), "array" (JSON that is not an object), or seconds to hang before answering
+    info: list[int | float | str] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     bodies: list[Any] = field(default_factory=list)  # what each runner request carried, as JSON
@@ -84,10 +85,18 @@ class Net:
             assert request.transport is not None
             request.transport.close()
             return web.Response()
-        if isinstance(step, int):
+        if isinstance(step, bool):
+            raise AssertionError(step)
+        if isinstance(step, float):
+            await self.hang(step)
+        elif isinstance(step, int):
             return web.Response(status=step, text="UPSTREAM-INFO: signer auth webhook failed")
-        if step == "malformed":
+        elif step == "malformed":
             return web.json_response({"address": "0x" + "ab" * 20})
+        elif step == "garbage":
+            return web.Response(text="not-json", content_type="text/plain")
+        elif step == "array":
+            return web.Response(text="[]", content_type="application/json")
         return web.json_response({"address": "0x" + "ab" * 20, "signature": "0xsig"})
 
     async def _generate(self, request: web.Request) -> web.StreamResponse:

@@ -112,6 +112,9 @@ attempts = Table(
     Column("status_code", Integer, nullable=True),
     Column("started_at", UTCDateTime, nullable=False),
     Column("ended_at", UTCDateTime, nullable=True),
+    Column("challenge_ms", Integer, nullable=True),
+    Column("signing_ms", Integer, nullable=True),
+    Column("response_ms", Integer, nullable=True),
 )
 
 payment_sessions = Table(

@@ -6,7 +6,7 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from livepeer_builder.contracts import Attempt, AttemptOutcome, Failure, FailureKind, Runner
+from livepeer_builder.contracts import Attempt, AttemptOutcome, CallTimings, Failure, FailureKind, Runner
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
 from livepeer_builder.utils import BODY_LIMIT
@@ -103,10 +103,18 @@ def returned_failover(
         payment_sent=paid,
         manifest_ids=opened.manifest_ids,
         status_code=status,
+        timings=stream_timings(opened),
     )
     if attempt_verdict(error.kind, status, paid) != "failover" or not candidates.more_after(runner, paid):
         return None
     return error
+
+
+def stream_timings(stream: object) -> CallTimings | None:
+    """A stream's timings, if its transport measures. ``RunnerStream`` doesn't require them, so an
+    application's own transport keeps working."""
+    timings = getattr(stream, "timings", None)
+    return timings if isinstance(timings, CallTimings) else None
 
 
 def failure_of(error: RunnerCallError, paid: bool, tried: int = 1) -> Failure:

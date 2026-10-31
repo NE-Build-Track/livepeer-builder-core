@@ -14,6 +14,7 @@ from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
+    CallTimings,
     Job,
     JobRequest,
     Money,
@@ -734,3 +735,30 @@ async def test_usage_is_reported_once_by_the_owner(
     assert stored.usage is not None and stored.usage.quantities == {"tokens_out": 42}
     with pytest.raises(Exception, match="already reported"):
         await engine.jobs.report_usage(alice, result.job.id, {"tokens_out": 1})
+
+
+async def test_an_attempt_keeps_where_its_time_went(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice")
+    timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=240)
+    transport.steps = [ScriptedTransport.ok().model_copy(update={"timings": timings})]
+    result = await engine.jobs.run(alice, JobRequest(app=APP, path="/echo", payload={"x": 1}))
+    stored = await engine.jobs.get(alice, result.job.id)
+    assert stored.attempts[0].timings == timings
+
+
+async def test_a_failed_attempt_keeps_where_its_time_went(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(
+        make_engine, admin, "alice", runners=(runner(url="https://r1"), runner(url="https://r2"))
+    )
+    timings = CallTimings(challenge_ms=110, signing_ms=1700)
+    transport.steps = [
+        RunnerCallError("refused", "503", payment_sent=False, timings=timings),
+        ScriptedTransport.ok(),
+    ]
+    result = await engine.jobs.run(alice, JobRequest(app=APP))
+    assert result.job.attempts[0].timings == timings
+    assert result.job.attempts[1].timings is None, "this transport measured nothing for the second call"

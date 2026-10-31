@@ -123,6 +123,15 @@ class SignedSession(Contract):
     payment_state: PaymentState = "paid"  # rows from before D54 are signatures the signer confirmed
 
 
+class CallTimings(Contract):
+    """Where one runner call's time went before the runner answered, in milliseconds (#89). A step the
+    call never reached is ``None``, and each step adds up its repeats."""
+
+    challenge_ms: int | None = None  # the unpaid requests, until their 402s
+    signing_ms: int | None = None  # the signer's answers
+    response_ms: int | None = None  # the request the runner answered, until its response headers
+
+
 class Attempt(Contract):
     """One runner call. Written as ``in_flight`` before the call, updated after it."""
 
@@ -137,6 +146,7 @@ class Attempt(Contract):
     status_code: int | None
     started_at: datetime
     ended_at: datetime | None
+    timings: CallTimings | None = None  # None when the transport doesn't measure, or the call is open
 
 
 FailureKind = Literal[
@@ -211,6 +221,7 @@ class RunnerReply(Contract):
     data: dict[str, Any] | None
     manifest_ids: tuple[str, ...]  # one per signed session, in signing order
     payment_sent: bool
+    timings: CallTimings | None = None
 
 
 class JobResult(Contract):

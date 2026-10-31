@@ -53,7 +53,8 @@ from livepeer_gateway.remote_signer import (
     get_signer_info,
 )
 
-from livepeer_builder.contracts import AttemptOutcome, NetworkRate
+from livepeer_builder.adapters.call_timer import CallTimer
+from livepeer_builder.contracts import AttemptOutcome, CallTimings, NetworkRate
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import BODY_LIMIT
@@ -89,6 +90,7 @@ class PaymentEvents:
         self.signed = False
         self.unknown = False
         self.manifest_ids: list[str] = []
+        self.timer = CallTimer()
         self._on_signed = on_signed
 
     @property
@@ -132,6 +134,7 @@ class PaymentEvents:
             status_code=status_code,
             body=body,
             payment_unknown=self.unknown,
+            timings=self.timer.timings,
         )
 
 
@@ -176,7 +179,7 @@ class PaidRequest:
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
         async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
             with translated(self._events):
-                response, funding = await self._answered(session)
+                response, funding = await self._timed_answer(session)
                 try:
                     body = await response.read()
                 finally:
@@ -189,7 +192,7 @@ class PaidRequest:
         session = self._session(timeout)
         try:
             with translated(self._events):
-                response, funding = await self._answered(session)
+                response, funding = await self._timed_answer(session)
         except BaseException:
             await session.close()
             raise
@@ -201,6 +204,14 @@ class PaidRequest:
         # carries a payment, so it goes out once (tests/unit/test_native_runner_call.py).
         session._retry_connection = False
         return session
+
+    async def _timed_answer(
+        self, session: aiohttp.ClientSession
+    ) -> tuple[aiohttp.ClientResponse, asyncio.Task[Any] | None]:
+        try:
+            return await self._answered(session)
+        finally:
+            self._events.timer.log(self._events.ids, self._events.signed)
 
     async def _answered(
         self, session: aiohttp.ClientSession
@@ -239,6 +250,7 @@ class PaidRequest:
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
             funding = start_funding(payment) if self._payment_type == "live" else None
+            started = self._events.timer.start()
             try:
                 # A redirect would replay the payment headers to another host.
                 response = await session.request(
@@ -247,6 +259,7 @@ class PaidRequest:
             except BaseException:
                 await stop_funding(funding)
                 raise
+            self._events.timer.spent("challenge" if response.status == 402 else "response", started)
             if response.status < 300 or (self._return_http_errors and response.status != 402):
                 return response, funding
             await stop_funding(funding)
@@ -272,6 +285,7 @@ class PaidRequest:
             await self._events.remember(manifest_id)
         except Exception as error:  # fail closed: nothing is signed without the intent on record (D54)
             raise self._events.error("payment", f"could not record payment intent: {error}") from error
+        started = self._events.timer.start()
         try:
             signed = await session.get_payment()
         except SignerRefreshRequired as error:
@@ -285,6 +299,8 @@ class PaidRequest:
             self._events.unknown = True
             self._log_signer_error(manifest_id, error)
             raise
+        finally:
+            self._events.timer.spent("signing", started)
         await self._events.confirmed(manifest_id)
         return signed
 
@@ -354,6 +370,10 @@ class SdkRunnerStream:
     @property
     def payment_sent(self) -> bool:
         return self._events.signed
+
+    @property
+    def timings(self) -> CallTimings:
+        return self._events.timer.timings
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self._iterate()

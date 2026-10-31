@@ -49,6 +49,9 @@ erDiagram
         integer status_code
         datetime started_at
         datetime ended_at
+        integer challenge_ms
+        integer signing_ms
+        integer response_ms
     }
     lpb_cost_cursor {
         integer id PK
@@ -194,6 +197,9 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `status_code` | INTEGER | yes |  |
 | `started_at` | DATETIME | no |  |
 | `ended_at` | DATETIME | yes |  |
+| `challenge_ms` | INTEGER | yes |  |
+| `signing_ms` | INTEGER | yes |  |
+| `response_ms` | INTEGER | yes |  |
 
 ## `lpb_cost_cursor`
 

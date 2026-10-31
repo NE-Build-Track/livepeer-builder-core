@@ -1,6 +1,6 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from livepeer_builder.contracts import AttemptOutcome, Job, OperationRecord, ProvisionedActor
+from livepeer_builder.contracts import AttemptOutcome, CallTimings, Job, OperationRecord, ProvisionedActor
 
 
 class EngineError(Exception):
@@ -154,6 +154,7 @@ class RunnerCallError(EngineError):
         status_code: int | None = None,
         body: str | None = None,
         payment_unknown: bool = False,
+        timings: CallTimings | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -162,3 +163,4 @@ class RunnerCallError(EngineError):
         self.status_code = status_code
         self.body = body
         self.payment_unknown = payment_unknown
+        self.timings = timings

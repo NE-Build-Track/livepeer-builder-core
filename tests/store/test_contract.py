@@ -12,6 +12,7 @@ from livepeer_builder.contracts import (
     AccessKey,
     Attempt,
     AttemptCost,
+    CallTimings,
     Failure,
     Fees,
     JobCost,
@@ -699,3 +700,16 @@ async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, 
     assert await sql.get_sighting("default", "4f6c2a1e") == kept
     assert await sql.get_sighting("default", "nobody") is None
     assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by application, then actor
+
+
+async def test_an_attempts_timings_round_trip(sql: SqlStore, clock: FixedClock) -> None:
+    job = make_job(clock, state="running")
+    await sql.create_job(job, "fp")
+    started = make_attempt(job.id, clock).model_copy(update={"outcome": "in_flight", "ended_at": None})
+    await sql.start_attempt(started)
+    assert (await sql.get_job(job.id)).attempts[0].timings is None  # type: ignore[union-attr]
+    timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=None)
+    await sql.finish_attempt(make_attempt(job.id, clock).model_copy(update={"timings": timings}))
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert loaded.attempts[0].timings == timings

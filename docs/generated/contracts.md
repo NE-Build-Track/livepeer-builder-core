@@ -115,6 +115,8 @@ classDiagram
         +int? capacity
         +int? capacity_available
         +NetworkRate? rate
+        +str? rate_error
+        +datetime? observed_at
         +str? version
         +str? metadata
         +RunnerGPU? gpu
@@ -128,12 +130,25 @@ classDiagram
         +Decimal amount
         +str currency
         +str unit
+        +Decimal? price_usd
+        +enum source
+    }
+    class ObservedRate {
+        +Decimal amount
+        +str currency
+        +str unit
+        +Decimal? price_usd
+        +enum source
+        +datetime observed_at
+        +enum observed_by
     }
     class Offering {
         +str app
         +str[] modes
-        +NetworkRate? rate_low
-        +NetworkRate? rate_high
+        +ObservedRate? rate_low
+        +ObservedRate? rate_high
+        +enum rate_status
+        +bool stale
         +int runner_count
         +int ready_count
         +datetime observed_at
@@ -197,8 +212,8 @@ classDiagram
     JobCost *-- Fees : billable
     JobCost *-- Fees : fees
     JobResult *-- Job : job
-    Offering *-- NetworkRate : rate_high
-    Offering *-- NetworkRate : rate_low
+    Offering *-- ObservedRate : rate_high
+    Offering *-- ObservedRate : rate_low
     ProvisionedActor *-- SecretRef : secret_ref
     Runner *-- NetworkRate : rate
     Runner *-- RunnerGPU : gpu

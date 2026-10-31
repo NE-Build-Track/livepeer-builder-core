@@ -79,7 +79,7 @@ async def test_a_paid_call_records_the_intent_signs_then_sends(net: Net) -> None
     assert net.bodies == [{"x": 1}, {"x": 1}]
     sent = net.signer_requests[0]
     assert (sent["type"], sent["app"], sent["ManifestID"]) == ("fixed", APP, "m-1")
-    assert sent["maxPrice"] == {"price": pytest.approx(0.1012), "currency": "usd", "unit": "fixed"}
+    assert sent["maxPrice"] == {"price": pytest.approx(0.1012), "currency": "wei", "unit": "fixed"}
 
 
 async def test_a_missing_payload_is_sent_as_an_empty_json_object(net: Net) -> None:
@@ -97,6 +97,47 @@ async def test_an_unpaid_call_never_reaches_the_signer(net: Net) -> None:
         await call(net, credential=None)
     assert (unpaid.value.kind, unpaid.value.status_code, unpaid.value.payment_sent) == ("http", 402, False)
     assert not any(entry.startswith("sign") for entry in net.log)
+
+
+def _rate(amount: str, currency: str = "wei", unit: str = "fixed") -> NetworkRate:
+    return NetworkRate(amount=Decimal(amount), currency=currency, unit=unit)
+
+
+@pytest.mark.parametrize(
+    ("rate", "reason"),
+    [
+        # no rate means no maxPrice, and the signer then checks no ceiling at all (ISS-10)
+        (None, "advertised no usable price"),
+        # a price of 0 needs no ceiling, and a 0.0 ceiling is a signer 400 after the intent (#77 review)
+        (_rate("0"), "advertised a price of 0"),
+        # livepeer/node's signer takes only a wei ceiling (checkMaxPrice) ...
+        (_rate("0.10", "usd", "seconds"), "which the signer takes no ceiling in"),
+        # ... per second for a live payment, per request for a fixed one
+        (_rate("0.10", unit="hour"), "unsupported runner price unit 'hour'"),
+    ],
+)
+async def test_a_runner_the_signer_cannot_cap_is_never_signed_for(
+    net: Net, rate: NetworkRate | None, reason: str
+) -> None:
+    """Its 402 is refused before the signer is asked, so the job fails over unpaid."""
+    with pytest.raises(RunnerCallError) as refused:
+        await call(net, runner=net.runner().model_copy(update={"rate": rate}))
+    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
+    assert reason in str(refused.value)
+    assert not any(
+        entry.startswith(("intent ", "sign ")) for entry in net.log
+    )  # "signer info" is not signing
+    assert net.signer_requests == []
+
+
+@pytest.mark.parametrize("rate", [_rate("0"), _rate("0.10", unit="hour")])
+async def test_a_runner_the_signer_cannot_cap_still_serves_a_call_it_does_not_charge(
+    net: Net, rate: NetworkRate
+) -> None:
+    """The price is checked only when the runner asks for payment (#77 review)."""
+    net.paid = False
+    reply = await call(net, runner=net.runner().model_copy(update={"rate": rate}))
+    assert (reply.status_code, reply.payment_sent) == (200, False)
 
 
 @pytest.mark.parametrize(
@@ -397,10 +438,13 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
 
 
 def test_price_unit_and_ceiling() -> None:
-    rate = NetworkRate(amount=Decimal("2"), currency="USD", unit="Seconds")
-    assert (payment_type(rate), payment_type(None)) == ("live", "live")
-    assert max_price(rate) == {"price": pytest.approx(2.024), "currency": "usd", "unit": "seconds"}
+    rate = NetworkRate(amount=Decimal("2"), currency="WEI", unit="Seconds")
+    assert payment_type(rate) == "live"
+    assert max_price(rate) == {"price": pytest.approx(2.024), "currency": "wei", "unit": "seconds"}
     assert max_price(None) is None
+    # The signer takes neither: an hour ceiling and a usd ceiling are each a 400 (checkMaxPrice).
+    assert max_price(NetworkRate(amount=Decimal("2"), currency="wei", unit="hour")) is None
+    assert max_price(NetworkRate(amount=Decimal("2"), currency="usd", unit="seconds")) is None
     with pytest.raises(RunnerCallError, match="unsupported runner price unit") as unsupported:
         payment_type(NetworkRate(amount=Decimal("1"), currency="usd", unit="request"))
     assert (unsupported.value.kind, unsupported.value.payment_sent) == (
@@ -427,3 +471,9 @@ async def test_stopping_the_funding_never_swallows_the_caller_s_own_cancel() -> 
         await caller
     release.set()
     await asyncio.wait([funding])
+
+
+def test_the_live_runner_transport_pays_only_with_a_signer() -> None:
+    """With no LPB_SIGNER_URL a credential is never used to pay, so paid jobs are not re-ordered (#77 review)."""
+    assert SdkRunnerTransport("https://signer.example").pays
+    assert not SdkRunnerTransport(None).pays

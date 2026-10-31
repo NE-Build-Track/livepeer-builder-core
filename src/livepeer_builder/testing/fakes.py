@@ -57,7 +57,7 @@ def runner(
         orchestrator_url=orchestrator_url,
         capacity=capacity_available,
         capacity_available=capacity_available,
-        rate=NetworkRate(amount=Decimal(price), currency="usd", unit="request") if price else None,
+        rate=NetworkRate(amount=Decimal(price), currency="wei", unit="fixed") if price else None,
         metadata=metadata,
     )
 
@@ -79,6 +79,7 @@ class ScriptedTransport:
 
     steps: list[Step] = field(default_factory=list)
     calls: list[tuple[str, str | None]] = field(default_factory=list)
+    pays: bool = True  # whether a credential pays the runner, as a transport with a signer does
 
     async def call(
         self,

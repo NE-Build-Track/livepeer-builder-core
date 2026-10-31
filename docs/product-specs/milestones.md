@@ -34,7 +34,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | --- | --- | --- |
 | ISS-08 Standalone credentials and ownership controls | M3 | `ApiKeyAuthenticator`, `KeyService` (issue, list, revoke) and `DefaultPolicy` from ISS-03; inspection, rotation, the 403/404 rule and the key audit log in progress ([plan](../exec-plans/active/iss-08-standalone-credentials.md), D44) |
 | ISS-09 Dynamic capability discovery | M3 | `DiscoveryService` (implemented); capability resolution is T3 |
-| ISS-10 Network rates and pricing assumptions | M3 | `Offering.rate_low/high` (implemented) |
+| ISS-10 Network rates and pricing assumptions | M3 | Rates as advertised with source and age (`ObservedRate`), missing and stale explicit, never signed for without a ceiling; [plan](../exec-plans/active/iss-10-rates.md) (in review, D62) |
 | ISS-11 Scoped allocation provisioning and management | M3 | `PaymentsService` (implemented) |
 | ISS-12 SDK payment authorization and remote signing | M3 | `SdkRunnerTransport` (implemented); funded proof on public orchestrators, 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | ISS-13 First funded payment configuration | M3 | `deploy/dev-stack` |

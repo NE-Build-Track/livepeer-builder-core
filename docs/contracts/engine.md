@@ -19,14 +19,98 @@ empty unless an embedder supplies a source.
 
 `offerings(app=None)` is public: it takes no actor and checks no permission, and `GET /v1/offerings`
 needs no key (D51, proposed, [#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)).
-The handler returns the full `Offering`: modes, the rate range, `runner_count` and `ready_count`. It
-has no runner URL. `runners(actor, app)` returns runner URLs and still checks `discover`.
+The handler returns the full `Offering`: modes, the rate range with each rate's source and age, whether
+a rate is missing or stale, `runner_count` and `ready_count`. It has no runner URL. `runners(actor, app)`
+returns runner URLs and still checks `discover`.
 
 | Model | Meaning |
 | --- | --- |
-| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
-| `NetworkRate` | Wholesale network rate as advertised (`amount`, `currency`, `unit`). Not a retail price |
-| `Offering` | One runner app: its modes, the cheapest and dearest comparable rate, runner and ready counts, `observed_at` |
+| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, `rate_error`, `observed_at`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
+| `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. `amount` is `0` (free) or from `1e-300` to below `1e300` from any source, so the engine can always pad a positive amount into a positive float ceiling above the price; it never signs for `0`. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
+| `ObservedRate` | A `NetworkRate` as the catalog serves it, plus `observed_at` and `observed_by` |
+| `Offering` | One runner app in one `(currency, unit)`: its modes, the cheapest and dearest rate (`rate_low`, `rate_high`), `rate_status`, `stale`, runner and ready counts, and `observed_at` (the engine's last good poll). An app advertised in two units is two offerings. Its runners with no rate are one more offering, after those, with no range (`rate_low` and `rate_high` are `null`) and `rate_status` `missing`: they still serve jobs, so every app is listed |
+
+### Rates (ISS-10)
+
+The engine reports each rate as the orchestrator advertised it. It never converts a currency, quotes a
+job total or applies a margin ([payments.md](payments.md#pricing-assumptions)).
+
+**Parsing (`adapters/sdk.py`).** livepeer-node advertises, per runner on-chain,
+`{"price": <wei>, "price_usd": <USD>, "currency": "wei", "unit": "seconds" | "fixed"}`, and no
+`price_info` off-chain. The adapter keeps `price`, `currency` and `unit` as advertised (lower-cased) and
+invents nothing:
+
+| `price_info` | `Runner.rate` | `Runner.rate_error` |
+| --- | --- | --- |
+| absent or `null` (off-chain) | `None` | `None` |
+| complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
+| not an object, a bad price (not finite, negative, above `0` but below `1e-300`, or `1e300` or more), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` or `"price must be 0, or from 1e-300 to below 1e300"` |
+| complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
+| a `price` or `price_usd` number whose exponent `Decimal` cannot build (past `10**18` either way, for example `1e` and twenty 9s), or an integer longer than the runtime digit limit (4300 digits by default) | as for a bad `price` (`None`) or a bad `price_usd` (the rate, without it) | the same reasons. Only that field is unreadable, never the document: a cache that passes the token through (livepeer-node's discovery) does not stop every other orchestrator from updating. `lpb discovery` refuses such an orchestrator instead ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87)) |
+
+The floor for a positive price is `1e-300`, inside the normal float range. Below it, `1E-400` and
+`1E-999999` pad to the float `0.0`, and near the bottom of the range the 1.2% pad can land under the
+price (`7e-324` becomes `5e-324`). Every positive amount the contract keeps pads to a positive float
+strictly above the price. `0` itself is a rate: free. It needs no ceiling, and a `0.0` ceiling is a signer
+400, so a runner priced at `0` that asks for payment is refused before the signer is asked.
+A price from `1e300` up, including `1E+1000000`, is not a rate, so `max_price` does not raise
+`decimal.Overflow` inside the paid call.
+
+Before ISS-10 a price with no currency or unit was labelled `usd` per `hour`. No released livepeer-node
+or go-livepeer advertises such a price, so the label only ever hid a malformed inventory.
+
+`price_usd` is livepeer-node's figure: the runner's registered USD price per the same unit (USD/3600 for
+an hourly registration, which is metered in `seconds`). It is not a conversion by the engine, and the wei
+`amount` is what is paid.
+
+**Currencies and units.** The node signer takes a ceiling only in `wei`, per `seconds` for a live payment
+or per `fixed` request (`checkMaxPrice` in `signer/service.go`); anything else is a 400. That is what
+livepeer-node advertises on-chain, and the only rate the engine pays. Any other rate is kept as advertised,
+its offering is `missing`, and a paid call to its runner is `payment_refused` before any signing:
+the registration unit `hour` (no released orchestrator advertises it; the SDK still signs it as `live`,
+T23), and any currency but `wei`. The unit and the currency are checked only when the runner asks for
+payment (a 402): a runner priced in `hour` that answers without asking serves a credentialed call.
+
+**Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
+[RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
+`v1.0.4`). The stamp is the orchestrator's **response time**. Read directly from an orchestrator it is
+about the engine's poll time. Read through a cache (`lpb discovery`, livepeer-node's `livepeer discovery`)
+it is when that cache last read the orchestrator, which is the age the catalog needs. Each served rate
+says which clock it used:
+
+| Runner stamp | `observed_at` | `observed_by` |
+| --- | --- | --- |
+| present and at most 30 s after the poll | the stamp | `orchestrator` |
+| absent (livepeer-node `v1.0.2`, go-livepeer), unreadable (including one with no UTC offset from a non-HTTP source), or more than 30 s ahead | the poll time | `engine` |
+
+The 30 s bound is livepeer-node's own (`ClockSkew` in `discovery/shared/inventory.go`). The engine is
+deliberately looser than livepeer-node's collectors: they drop a runner with no or a future stamp (#70),
+while the engine keeps it with its poll time.
+
+**Offering status.**
+
+| Field | Meaning |
+| --- | --- |
+| `rate_status` | `available` when the offering has a rate range in a currency and unit the signer takes a ceiling in (`wei` per `seconds` or `fixed`); otherwise `missing`: no readable rate (no `price_info`, or one that is not a rate), or a unit or currency such as `hour` or `usd` |
+| `stale` | `true` when the snapshot is not fresh (three missed polls), or when the oldest rate in the range is older than `LPB_RATE_MAX_AGE_S` (default 600 s: two of livepeer-node discovery's default 5-minute refreshes). An offering with no range is stale only with the snapshot |
+
+Staleness is information, never a payment gate. Payment always uses the advertised wei rate with its
+ceiling ([payments.md](payments.md#pricing-assumptions)).
+
+### go-livepeer compatibility (until retired, D2)
+
+livepeer/node replaced go-livepeer (D2) in our stacks, but runner-app-examples run go-livepeer `v0.9.1`,
+and the public orchestrators sampled on 29 October serve go-livepeer's inventory. Their `/discovery` (`ai/runner/live_runner.go`, `v0.9.0` to master) differs from
+livepeer-node's, and the engine reads it as follows. No rule is go-livepeer-specific: each difference
+falls under a rule above, and its tests (`test_rates.py`, `test_runner_call.py`) pin it. Delete this
+section when go-livepeer is retired (D2).
+
+| go-livepeer `/discovery` | What the engine does |
+| --- | --- |
+| `price` always wei, `currency` always `wei`, **no `price_usd`** (the field exists from `v0.9.3`, but only go-livepeer's remote signer fills it, with its own wei-to-USD conversion) | `price_usd` is `None`. go-livepeer keeps the registered USD price internally; no upstream change is planned (go-livepeer is deprecated) |
+| no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
+| an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
+| wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
 
 Capability → app resolution (descriptor or configuration table) is a later contract. In M2 the caller
 names the runner `app`; `capability` and `model` are labels only.
@@ -56,8 +140,13 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 ### Behavior the contract fixes
 
 1. **Fail over when another runner can do what this one did not (D52).** Runners are tried in
-   selection order, at most `max_attempts` of them. A failed attempt decides what happens next
-   (`services/failover.py`):
+   selection order, at most `max_attempts` of them. On a paid job (the actor's credential has a signer
+   bearer, and the transport pays: `LPB_SIGNER_URL` is set), free runners (a price of `0`) and the runners
+   the signer takes a ceiling for come first, in the policy's order; the rest (no rate, or a currency or
+   unit the signer refuses) are the last resort, since a 402 from them is refused (D62). A free runner that
+   answers 402 is refused too, but it advertised that it would not ask. An unpaid job keeps the policy's
+   order. A failed attempt decides what happens
+   next (`services/failover.py`):
 
    | Attempt | Outcome | Next |
    | --- | --- | --- |

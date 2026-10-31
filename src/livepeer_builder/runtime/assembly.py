@@ -235,7 +235,9 @@ async def default_parts(
     if not isinstance(supply.discovery_source, _Unset):
         discovery_source = supply.discovery_source
     elif settings.discovery_url:  # the signer only signs; it is not a discovery source (#45)
-        discovery_source = HttpDiscoverySource(settings.discovery_url, max_bytes=settings.discovery_max_bytes)
+        http_source = HttpDiscoverySource(settings.discovery_url, max_bytes=settings.discovery_max_bytes)
+        own(stack, http_source, http_source.aclose)
+        discovery_source = http_source
     else:
         discovery_source = StaticDiscoverySource()
 

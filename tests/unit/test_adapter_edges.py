@@ -158,6 +158,24 @@ async def test_http_discovery_keeps_every_digit_of_a_node_price_usd() -> None:
     assert runner.rate.amount == Decimal(4492197255)
 
 
+async def test_http_discovery_keeps_one_client_across_polls_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client per poll opened a new connection every LPB_DISCOVERY_INTERVAL_S (#77 review)."""
+    made: list[httpx.AsyncClient] = []
+    real = httpx.AsyncClient
+
+    def client(**kwargs: object) -> httpx.AsyncClient:
+        made.append(real(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b"[]"))))
+        return made[-1]
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    source = HttpDiscoverySource("http://discovery:8939/discovery")
+    assert await source.fetch() == await source.fetch() == ()
+    await source.aclose()
+    assert len(made) == 1 and made[0].is_closed
+
+
 def discovery_streaming(chunks: AsyncIterator[bytes]) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=chunks)))
 

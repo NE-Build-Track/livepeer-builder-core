@@ -45,6 +45,13 @@ class NetworkRate(Contract):
             raise ValueError(PRICE_RULE)
         return Decimal(0) if amount == 0 else amount  # -0 and 0E-10 are 0
 
+    @field_validator("currency", "unit")
+    @classmethod
+    def _normalized(cls, value: str) -> str:
+        return (
+            value.strip().lower()
+        )  # once, here: grouping, is_payable and the signer's ceiling all compare it
+
 
 ObservedBy = Literal["orchestrator", "engine"]
 

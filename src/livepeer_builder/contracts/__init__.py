@@ -32,6 +32,7 @@ from livepeer_builder.contracts.health import EngineHealth, PurgeReport
 from livepeer_builder.contracts.jobs import (
     Attempt,
     AttemptOutcome,
+    CallTimings,
     ExecutionMode,
     Failure,
     FailureKind,
@@ -83,6 +84,7 @@ __all__ = [
     "AttemptOutcome",
     "AuthProvenance",
     "AuthRequest",
+    "CallTimings",
     "Contract",
     "CostClass",
     "CostStatus",

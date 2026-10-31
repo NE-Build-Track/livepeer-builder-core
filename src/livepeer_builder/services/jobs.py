@@ -73,6 +73,7 @@ from livepeer_builder.services.failover import (
     payment_unresolved,
     recover_interrupted,
     returned_failover,
+    stream_timings,
 )
 from livepeer_builder.services.operations import check_operation, claim_operation
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
@@ -310,7 +311,12 @@ class JobService:
         """
         outcome = "payment_unknown" if error.payment_unknown else error.kind  # stored: recovery must see it
         attempts[-1] = with_evidence(attempts[-1], error.manifest_ids, error.payment_sent).model_copy(
-            update={"outcome": outcome, "status_code": error.status_code, "ended_at": self._clock.now()}
+            update={
+                "outcome": outcome,
+                "status_code": error.status_code,
+                "ended_at": self._clock.now(),
+                "timings": error.timings,
+            }
         )
         await self._store.finish_attempt(attempts[-1])
         paid = attempts[-1].payment_sent
@@ -350,6 +356,7 @@ class JobService:
                     "outcome": "succeeded",
                     "status_code": reply.status_code,
                     "ended_at": self._clock.now(),
+                    "timings": reply.timings,
                 }
             )
             await self._store.finish_attempt(attempts[-1])
@@ -404,7 +411,7 @@ class JobService:
                 continue
             # Payment evidence is recorded now, so a restart mid-stream resolves the job as uncertain.
             attempts[-1] = with_evidence(attempts[-1], opened.manifest_ids, opened.payment_sent).model_copy(
-                update={"status_code": opened.status_code}
+                update={"status_code": opened.status_code, "timings": stream_timings(opened)}
             )
             try:
                 await self._store.finish_attempt(attempts[-1])

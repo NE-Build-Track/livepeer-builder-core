@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from livepeer_builder.contracts import (
     Attempt,
     AttemptCost,
+    CallTimings,
     Failure,
     Fees,
     Job,
@@ -45,6 +46,11 @@ def projection(row: Any) -> JobCost:
 def usage_row(row: Any) -> UsageRow:
     data = {key: row[key] for key in UsageRow.model_fields}
     return UsageRow.model_validate(data)
+
+
+def _timings(attempt: dict[str, Any]) -> CallTimings | None:
+    fields = {name: attempt[name] for name in ("challenge_ms", "signing_ms", "response_ms")}
+    return CallTimings(**fields) if any(value is not None for value in fields.values()) else None
 
 
 def chunks(values: list[str], size: int = 500) -> Iterable[list[str]]:
@@ -94,6 +100,7 @@ async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
                 status_code=a["status_code"],
                 started_at=a["started_at"],
                 ended_at=a["ended_at"],
+                timings=_timings(a),
             )
             for a in attempts_by_job[row["id"]]
         )

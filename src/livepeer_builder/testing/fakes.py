@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     Allowance,
+    CallTimings,
     GrantPage,
     GrantRecord,
     JobRequest,
@@ -129,6 +130,7 @@ class StreamScript:
     content_type: str = "text/event-stream"
     manifest_ids: tuple[str, ...] = ("manifest-1",)
     payment_sent: bool = True
+    timings: CallTimings | None = None
     open_delay_s: float = 0.0
     honors_deadline: bool = True
 
@@ -138,6 +140,10 @@ class ScriptedStream:
         self._script = script
         self.closed = False
         self.delivered = 0
+
+    @property
+    def timings(self) -> CallTimings | None:
+        return self._script.timings
 
     @property
     def status_code(self) -> int:

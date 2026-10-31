@@ -109,6 +109,9 @@ class RunnerTransport(Protocol):
     the paid request keeps the charge attributed to its job. The engine's recorder also has
     ``remember(manifest_id)``, which a transport awaits before asking the signer and signs nothing if it
     raises, and ``refused(manifest_id)`` for a refusal (D54; ``adapters/runner_call.py``).
+
+    A transport may also have ``pays: bool``, false when a credential never pays a runner (no signer). The
+    engine then keeps the selection policy's order on every job; a transport without it is taken to pay.
     """
 
     async def call(

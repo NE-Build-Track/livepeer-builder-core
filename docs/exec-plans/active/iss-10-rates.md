@@ -212,6 +212,19 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 - 30 October: the `720p-pixel-seconds` drop is removed. `test_a_per_pixel_unit_is_kept_and_has_no_ceiling`
   was red first (the inventory returned no runner), then green once `DROPPED_UNITS` was gone. The unit
   lowercases like any other, and `max_price` is `None`.
+- 31 October: review of `26970b7`. Test-first, each new test seen red for the right reason:
+  - **Padded `LPB_DISCOVERY_URL`** (`tests/unit/test_adapters.py`): a trailing newline or surrounding
+    spaces passed the startup check (`urlsplit` ignores them), then httpx refused the newline and sent the
+    space as `/discovery%20` on every poll. The URL is stripped (red: stored padded), and whitespace inside
+    it is refused at startup (red: accepted).
+  - **httpx timeout** (`tests/unit/test_adapter_edges.py`): `httpx.ReadTimeout` is no `TimeoutError` and
+    its text is empty, so `/readyz` showed `discovery_error: ""`. It now gets the engine's own message
+    (red: `last_error` was `""`).
+  - **Paid order** (`tests/unit/test_jobs.py`, `test_runner_call.py`): the order keyed on the credential,
+    so with no `LPB_SIGNER_URL` a provisioned actor's unpaid job was still re-ordered. A priced runner's
+    402 then ends that job. A transport says whether it pays (`SdkRunnerTransport.pays`, true with a
+    signer; a transport without the attribute is taken to pay), and the order applies only when it does
+    (red: re-ordered). A free runner is tried before one with no rate (red: tried after).
 
 ## Decision log
 
@@ -289,3 +302,8 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   re-serves each runner record as received and refuses a number `Decimal` cannot build, so the "until #87
   merges" behaviour above no longer applies. `utils.py` keeps both sides: this branch's
   `loads_json_numbers` and `read_capped` for the engine, and #87's `decimal_json_number` for the probe.
+- 31 October (John, on the review of `26970b7`): a free runner (`0`) joins the first group on a paid job,
+  reversing "a runner priced at `0` has no ceiling, so it is in the last group too" (30 October). It is
+  the cheapest runner and advertised that it would not ask for payment. A 402 from it is still refused
+  unsigned: there is no ceiling to give the signer. The order applies only when the transport pays. A
+  provisioned actor with no signer still has a token, and a priced runner's 402 ends that unpaid job.

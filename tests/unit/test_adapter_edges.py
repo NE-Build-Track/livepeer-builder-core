@@ -178,6 +178,19 @@ async def test_http_discovery_gives_up_on_a_slow_body_at_its_deadline() -> None:
             await source.fetch()
 
 
+async def test_an_httpx_timeout_says_which_inventory_did_not_arrive(clock: FixedClock) -> None:
+    """httpx's ReadTimeout is not a TimeoutError and its text is empty: /readyz showed discovery_error ""."""
+
+    def silent(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(silent)) as client:
+        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
+        snapshot = await DiscoveryService(source, DefaultPolicy(), clock).refresh()
+    assert snapshot.last_error is not None
+    assert "no inventory from http://discovery:8939/discovery within 5s" in snapshot.last_error
+
+
 @pytest.mark.parametrize(("padding", "refused"), [((16 << 20) - 2, False), (16 << 20, True)])
 async def test_http_discovery_reads_at_most_16_mib(padding: int, refused: bool) -> None:
     """A discovery service's combined inventory: livepeer/node's MaxBody (1 MiB) is per orchestrator, and

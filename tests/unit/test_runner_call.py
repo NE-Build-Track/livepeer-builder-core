@@ -471,3 +471,9 @@ async def test_stopping_the_funding_never_swallows_the_caller_s_own_cancel() -> 
         await caller
     release.set()
     await asyncio.wait([funding])
+
+
+def test_the_live_runner_transport_pays_only_with_a_signer() -> None:
+    """With no LPB_SIGNER_URL a credential is never used to pay, so paid jobs are not re-ordered (#77 review)."""
+    assert SdkRunnerTransport("https://signer.example").pays
+    assert not SdkRunnerTransport(None).pays

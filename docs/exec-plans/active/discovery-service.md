@@ -258,3 +258,9 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     is built and flagged by mypy, so it can no longer make every `GET /discovery` a 500.
   - **`Probes` retired:** the directory is the service's one port, so the prober is no longer
     replaceable. `Catalog` takes a `Prober`, and `serve()` has no `prober=` argument.
+- **30 October, T26.** A leading BOM is accepted (`utf-8-sig`; `test_a_leading_bom_is_the_inventory_without_it`).
+  Each entry is walked once. `utils._not_json` and `utils.read_capped` are shared with the engine.
+  A `runners` value that is not a list still fails that probe. An empty success would replace the last
+  good inventory, and livepeer/node `Decode` fails the whole document for `runners: {}` (`wrong runner
+  list`). The engine skips one bad entry inside a combined document; a probe is one orchestrator, so the
+  others are already unaffected.

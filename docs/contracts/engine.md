@@ -111,7 +111,6 @@ section when go-livepeer is retired (D2).
 | no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
 | an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
 | wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
-| per-pixel video priced in `720p-pixel-seconds` | Kept, like any other unpaid unit. Its own offering, `rate_status` `missing` (the signer takes a ceiling only in `wei` per `seconds` or `fixed`). On a paid job it is last resort; a 402 is refused before the signer is asked |
 
 Capability → app resolution (descriptor or configuration table) is a later contract. In M2 the caller
 names the runner `app`; `capability` and `model` are labels only.
@@ -142,9 +141,11 @@ code and timestamps. The cost key is the matched `payment_session_id`, not the m
 
 1. **Fail over when another runner can do what this one did not (D52).** Runners are tried in
    selection order, at most `max_attempts` of them. On a paid job (the actor's credential has a signer
-   bearer), the runners the signer takes a ceiling for come first, in the policy's order; the rest (no
-   rate, a price of `0`, or a currency or unit the signer refuses) are the last resort, since a 402 from
-   them is refused (D62). An unpaid job keeps the policy's order. A failed attempt decides what happens
+   bearer, and the transport pays: `LPB_SIGNER_URL` is set), free runners (a price of `0`) and the runners
+   the signer takes a ceiling for come first, in the policy's order; the rest (no rate, or a currency or
+   unit the signer refuses) are the last resort, since a 402 from them is refused (D62). A free runner that
+   answers 402 is refused too, but it advertised that it would not ask. An unpaid job keeps the policy's
+   order. A failed attempt decides what happens
    next (`services/failover.py`):
 
    | Attempt | Outcome | Next |

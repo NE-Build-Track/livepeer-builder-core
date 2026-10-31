@@ -271,7 +271,8 @@ class JobService:
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
         ordered = tuple(self._selection.order(candidates, request))
-        if credential.token is not None:  # paid: a runner with no usable ceiling is refused at its 402 (D62)
+        # paid: a runner with no usable ceiling is refused at its 402 (D62); with no signer, nothing pays
+        if credential.token is not None and getattr(self._transport, "pays", True):
             ordered = _capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
@@ -481,13 +482,13 @@ class JobService:
 
 
 def _capped_first(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
-    """The policy's order, runners the signer takes a ceiling for first; the rest are the last resort."""
-    return tuple(sorted(runners, key=lambda runner: not _can_cap(runner)))  # stable: keeps the policy's order
+    """The policy's order, free runners and those the signer takes a ceiling for first; the rest last."""
+    return tuple(sorted(runners, key=lambda runner: not _paid_ready(runner)))  # stable: the policy's order
 
 
-def _can_cap(runner: Runner) -> bool:
-    rate = runner.rate
-    return rate is not None and signable(rate.amount, rate.currency, rate.unit)
+def _paid_ready(runner: Runner) -> bool:
+    rate = runner.rate  # a free runner is never asked to pay; a 402 from it is still refused
+    return rate is not None and (rate.amount == 0 or signable(rate.amount, rate.currency, rate.unit))
 
 
 def _result_ref(reply: RunnerReply) -> ResultRef:

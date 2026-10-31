@@ -66,7 +66,7 @@ class HttpDiscoverySource:
             # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
             async with asyncio.timeout(self._timeout_s):
                 body = await self._body(client)
-        except TimeoutError as error:
+        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
             message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
             raise TimeoutError(message) from error
         finally:
@@ -96,6 +96,11 @@ class SdkRunnerTransport:
     def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
+
+    @property
+    def pays(self) -> bool:
+        """A credential pays the runner only through a signer; with none, every call is unpaid."""
+        return self._signer_url is not None
 
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents

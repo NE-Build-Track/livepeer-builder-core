@@ -119,9 +119,14 @@ class EngineSettings(Contract):
         # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
         if value is None:
             return None
+        value = value.strip()  # urlsplit ignores padding; httpx refuses a newline and sends a space as %20
         try:
             parts = urlsplit(value)
-            valid = parts.scheme in ("http", "https") and bool(parts.hostname)
+            valid = (
+                parts.scheme in ("http", "https")
+                and bool(parts.hostname)
+                and not any(char.isspace() for char in value)
+            )
         except ValueError:  # an unclosed IPv6 literal, for example
             valid = False
         if not valid:

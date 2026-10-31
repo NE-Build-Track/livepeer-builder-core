@@ -79,6 +79,7 @@ class ScriptedTransport:
 
     steps: list[Step] = field(default_factory=list)
     calls: list[tuple[str, str | None]] = field(default_factory=list)
+    pays: bool = True  # whether a credential pays the runner, as a transport with a signer does
 
     async def call(
         self,

@@ -1,8 +1,8 @@
-# NE-Build-Track/node releases/final (VERSION 1.0.2). Includes f970be6 (TicketParams.Recipient).
+# livepeer/node v1.0.2, on upstream main. Includes f970be6 (TicketParams.Recipient).
 # The dev stack builds the same commit from docker/Dockerfile.
 # This image adds the Railway entrypoint. The dev stack bind-mounts signer.toml.
 FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS build
-ARG NODE_REPO=https://github.com/NE-Build-Track/node.git
+ARG NODE_REPO=https://github.com/livepeer/node.git
 ARG NODE_REF=406b248f6cb8728e6e7eba1809901f589060bc6b
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOENV=off GOWORK=off \
     GOFLAGS=-mod=readonly GOAMD64=v1 GOARM64=v8.0
@@ -32,7 +32,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/livepeer-signer /usr/local/bin/livepeer-signer
 COPY entrypoint.py /usr/local/bin/entrypoint.py
-COPY orchestrators.txt /etc/orchestrators.txt
 RUN chmod 0755 /usr/local/bin/entrypoint.py
 EXPOSE 8937
 ENTRYPOINT ["python3", "-u", "/usr/local/bin/entrypoint.py"]

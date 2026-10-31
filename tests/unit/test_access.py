@@ -1,14 +1,27 @@
-"""ISS-03: DefaultPolicy, engine-issued keys, the API-key authenticator and the chain."""
+"""ISS-03 and ISS-08: DefaultPolicy, engine-issued keys (issue, inspect, rotate, revoke, audit log), the
+API-key authenticator and the chain."""
+
+import logging
+from decimal import Decimal
 
 import pytest
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
-from livepeer_builder.contracts import ActorContext, AuthRequest, Operation, ResourceRef
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotAuthenticated
+from livepeer_builder.contracts import (
+    ActorContext,
+    AuthRequest,
+    Money,
+    Operation,
+    ProvisionRequest,
+    ResourceRef,
+)
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotAuthenticated, NotFound
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
+from livepeer_builder.utils import token_hash
+from tests.conftest import EngineFactory
 
 
 def bearer(token: str) -> AuthRequest:
@@ -47,7 +60,9 @@ async def test_issued_key_authenticates_and_revocation_stops_it(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
-    issued = await keys.issue(admin, kind="actor", actor_id="alice", application_id="app-1")
+    issued = await keys.issue(
+        admin, kind="actor", actor_id="alice", application_id="app-1", operation_ref="issue-access-63"
+    )
     authenticator = ApiKeyAuthenticator(store)
     actor = await authenticator.authenticate(bearer(issued.token))
     assert actor is not None
@@ -63,16 +78,32 @@ async def test_issued_key_authenticates_and_revocation_stops_it(
 
 async def test_only_admins_issue_keys(store: SqlStore, clock: FixedClock, alice: ActorContext) -> None:
     with pytest.raises(AccessDenied):
-        await KeyService(store, DefaultPolicy(), clock).issue(alice, kind="actor", actor_id="mallory")
+        await KeyService(store, DefaultPolicy(), clock).issue(
+            alice, kind="actor", actor_id="mallory", operation_ref="issue-access-79"
+        )
 
 
 async def test_permission_validation(store: SqlStore, clock: FixedClock, admin: ActorContext) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
     with pytest.raises(InvalidRequest, match="unknown"):
-        await keys.issue(admin, kind="actor", actor_id="a", permissions=["jobs.everything"])
+        await keys.issue(
+            admin,
+            kind="actor",
+            actor_id="a",
+            permissions=["jobs.everything"],
+            operation_ref="issue-access-85",
+        )
     with pytest.raises(InvalidRequest, match="service credential"):
-        await keys.issue(admin, kind="actor", actor_id="a", permissions=["actors.assert"])
-    service = await keys.issue(admin, kind="service", actor_id="backend", permissions=["actors.assert"])
+        await keys.issue(
+            admin, kind="actor", actor_id="a", permissions=["actors.assert"], operation_ref="issue-access-87"
+        )
+    service = await keys.issue(
+        admin,
+        kind="service",
+        actor_id="backend",
+        permissions=["actors.assert"],
+        operation_ref="issue-access-88",
+    )
     assert service.key.permissions == ("actors.assert",)
 
 
@@ -109,3 +140,221 @@ async def test_request_fields_cannot_establish_identity(store: SqlStore) -> None
         method="POST", path="/v1/jobs", headers={"x-actor-id": "admin", "livepeer-actor": "admin"}
     )
     assert await ApiKeyAuthenticator(store).authenticate(request) is None
+
+
+async def test_a_key_is_inspected_without_its_secret(
+    store: SqlStore, clock: FixedClock, admin: ActorContext, alice: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    issued = await keys.issue(
+        admin, kind="actor", actor_id="alice", label="laptop", operation_ref="issue-access-131"
+    )
+    shown = await keys.get(admin, issued.key.key_id)
+    assert shown == issued.key
+    assert issued.token not in shown.model_dump_json()
+    with pytest.raises(NotFound):
+        await keys.get(admin, "key_unknown")
+    with pytest.raises(AccessDenied):
+        await keys.get(alice, issued.key.key_id)  # inspecting keys is admin work
+
+
+async def test_rotation_replaces_a_key_at_once_with_the_same_identity(
+    store: SqlStore, clock: FixedClock, admin: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    authenticator = ApiKeyAuthenticator(store)
+    old = await keys.issue(
+        admin,
+        kind="actor",
+        actor_id="alice",
+        application_id="app-1",
+        permissions=["jobs.run"],
+        label="ci",
+        operation_ref="issue-access-146",
+    )
+    new = await keys.rotate(admin, old.key.key_id, operation_ref="rotate-access-175")
+    assert new.token != old.token and new.key.key_id != old.key.key_id
+    assert (new.key.kind, new.key.actor_id, new.key.application_id, new.key.permissions, new.key.label) == (
+        "actor", "alice", "app-1", ("jobs.run",), "ci",
+    )  # fmt: skip
+    actor = await authenticator.authenticate(bearer(new.token))
+    assert actor is not None and (actor.actor_id, actor.application_id) == ("alice", "app-1")
+    with pytest.raises(NotAuthenticated):
+        await authenticator.authenticate(bearer(old.token))  # no overlap window (D44)
+    relabelled = await keys.rotate(admin, new.key.key_id, label="ci-2", operation_ref="rotate-access-184")
+    assert relabelled.key.label == "ci-2"
+
+
+async def test_only_an_admin_rotates_and_only_an_active_key(
+    store: SqlStore, clock: FixedClock, admin: ActorContext, alice: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    issued = await keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-access-166")
+    with pytest.raises(AccessDenied):
+        await keys.rotate(alice, issued.key.key_id, operation_ref="rotate-access-194")
+    await keys.revoke(admin, issued.key.key_id)
+    with pytest.raises(InvalidRequest, match="no active key"):
+        await keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-197")
+    with pytest.raises(InvalidRequest, match="no active key"):
+        await keys.rotate(admin, "key_unknown", operation_ref="rotate-access-199")
+
+
+async def test_key_changes_are_logged_with_who_acted_and_never_the_secret(
+    store: SqlStore, clock: FixedClock, admin: ActorContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    with caplog.at_level(logging.DEBUG):
+        first = await keys.bootstrap_admin()
+        issued = await keys.issue(
+            admin, kind="actor", actor_id="alice", application_id="app-1", operation_ref="issue-access-182"
+        )
+        rotated = await keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-211")
+        await keys.revoke(admin, rotated.key.key_id)
+    events = {
+        getattr(r, "event", ""): r for r in caplog.records if getattr(r, "event", "").startswith("keys.")
+    }
+    assert list(events) == ["keys.bootstrapped", "keys.issued", "keys.rotated", "keys.revoked"]
+    assert (events["keys.bootstrapped"].key_id, events["keys.bootstrapped"].by) == (first.key.key_id, "cli")
+    issued_event = events["keys.issued"]
+    assert (issued_event.key_id, issued_event.kind, issued_event.actor_id, issued_event.application_id) == (
+        issued.key.key_id, "actor", "alice", "app-1",
+    )  # fmt: skip
+    assert issued_event.by == admin.actor_id
+    assert (events["keys.rotated"].key_id, events["keys.rotated"].replaced_key_id) == (
+        rotated.key.key_id, issued.key.key_id,
+    )  # fmt: skip
+    revoked = events["keys.revoked"]  # the line an operator reads alone, once the issue event has rolled off
+    assert (revoked.key_id, revoked.kind, revoked.actor_id, revoked.application_id, revoked.by) == (
+        rotated.key.key_id, "actor", "alice", "app-1", admin.actor_id,
+    )  # fmt: skip
+
+
+async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Engine keys and payment keys, issued, used, rotated and revoked, with every logger at DEBUG.
+
+    A raw secret never appears anywhere. A token hash is not a credential (authentication hashes what is
+    presented), but the engine never logs one either; only a database driver's own DEBUG output, which
+    the engine's logging never enables, echoes the stored parameters.
+    """
+    engine = await make_engine()
+    assert engine.keys is not None
+    with caplog.at_level(logging.DEBUG):
+        first = await engine.keys.bootstrap_admin()
+        issued = await engine.keys.issue(
+            admin, kind="actor", actor_id="alice", operation_ref="issue-access-217"
+        )
+        assert await ApiKeyAuthenticator(engine.store).authenticate(bearer(issued.token)) is not None
+        rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-249")
+        await engine.keys.revoke(admin, rotated.key.key_id)
+        await engine.payments.provision(
+            admin,
+            ProvisionRequest(operation_ref="provision:default:alice",
+                application_id="default", actor_id="alice", amount=Money(amount=Decimal("1"), currency="USD"),
+                grant_id="g-1",
+            ),
+        )  # fmt: skip
+        payment_keys = [(await engine.payments.credential(alice)).token]
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        payment_keys.append((await engine.payments.credential(alice)).token)
+        await engine.payments.revoke(admin, "default", "alice")
+    tokens = [first.token, issued.token, rotated.token]
+    secrets = [*tokens, *(key for key in payment_keys if key)]
+    assert len(secrets) == 5 and all(s.startswith(("lpk_", "lpg_")) for s in secrets)
+    for record in caplog.records:
+        text = f"{record.getMessage()} {record.__dict__}"
+        assert not [s for s in secrets if s in text], f"a secret reached the log: {record.name}"
+        if record.name.startswith("livepeer_builder") or record.levelno >= logging.INFO:
+            assert not [t for t in tokens if token_hash(t) in text], (
+                f"a token hash reached the log: {record.name}"
+            )
+
+
+# -- the auditor: a read-only admin (#52, D46) ------------------------------------------------------------
+
+AUDITOR = ActorContext(actor_id="dashboard", application_id="app-1", credential_kind="auditor")
+
+
+def theirs(kind: str = "job", application_id: str = "app-1") -> ResourceRef:
+    return ResourceRef(kind=kind, application_id=application_id, owner_actor_id="alice")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        Operation.ADMIN_READ,
+        Operation.DISCOVER,
+        Operation.JOBS_READ,
+        Operation.COSTS_READ,
+        Operation.EVENTS_READ,
+    ],
+)
+def test_an_auditor_reads_every_actor_in_its_application(operation: Operation) -> None:
+    DefaultPolicy().check(AUDITOR, operation, theirs())  # another actor's record: allowed
+    DefaultPolicy().check(AUDITOR, operation)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        Operation.JOBS_RUN,
+        Operation.ADMIN_KEYS,
+        Operation.ADMIN_ALLOCATIONS,
+        Operation.ADMIN_COSTS,
+        Operation.ACTORS_ASSERT,
+    ],
+)
+def test_an_auditor_never_writes(operation: Operation) -> None:
+    with pytest.raises(AccessDenied, match="read"):
+        DefaultPolicy().check(AUDITOR, operation)
+
+
+def test_an_auditor_stays_in_its_application() -> None:
+    with pytest.raises(AccessDenied, match="another application"):
+        DefaultPolicy().check(AUDITOR, Operation.JOBS_READ, theirs(application_id="app-2"))
+
+
+def test_admin_read_is_an_admin_operation_for_everyone_else(alice: ActorContext, admin: ActorContext) -> None:
+    loaded = alice.model_copy(update={"permissions": alice.permissions | {"admin.read"}})
+    with pytest.raises(AccessDenied, match="admin credential"):
+        DefaultPolicy().check(
+            loaded, Operation.ADMIN_READ
+        )  # a permission string on an actor key is not enough
+    DefaultPolicy().check(admin, Operation.ADMIN_READ, theirs(application_id="any"))
+
+
+async def test_an_auditor_key_is_issued_without_permissions_and_authenticates_as_one(
+    store: SqlStore, clock: FixedClock, admin: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    issued = await keys.issue(
+        admin, kind="auditor", actor_id="dashboard", application_id="app-1", operation_ref="issue-access-301"
+    )
+    assert issued.key.permissions == ()
+    actor = await ApiKeyAuthenticator(store).authenticate(bearer(issued.token))
+    assert actor is not None and actor.credential_kind == "auditor"
+    with pytest.raises(AccessDenied):
+        await keys.issue(
+            actor, kind="actor", actor_id="mallory", operation_ref="issue-access-306"
+        )  # an auditor cannot issue keys
+    assert [k.key_id for k in await keys.list_keys(actor)] != []  # but can read them
+
+
+async def test_an_auditor_reads_only_its_own_applications_keys(
+    store: SqlStore, clock: FixedClock, admin: ActorContext
+) -> None:
+    keys = KeyService(store, DefaultPolicy(), clock)
+    own = await keys.issue(
+        admin, kind="actor", actor_id="alice", application_id="app-1", operation_ref="issue-access-314"
+    )
+    other = await keys.issue(
+        admin, kind="actor", actor_id="bob", application_id="app-2", operation_ref="issue-access-315"
+    )
+    assert {k.key_id for k in await keys.list_keys(AUDITOR)} == {own.key.key_id}
+    assert (await keys.get(AUDITOR, own.key.key_id)).actor_id == "alice"
+    with pytest.raises(NotFound):
+        await keys.get(AUDITOR, other.key.key_id)  # another application's key reads as missing
+    with pytest.raises(AccessDenied, match="another application"):
+        await keys.list_keys(AUDITOR, "app-2")
+    assert {k.key_id for k in await keys.list_keys(admin)} >= {own.key.key_id, other.key.key_id}

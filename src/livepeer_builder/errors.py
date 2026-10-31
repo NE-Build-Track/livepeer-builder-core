@@ -1,9 +1,6 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from livepeer_builder.contracts import AttemptOutcome, Job
+from livepeer_builder.contracts import AttemptOutcome, CallTimings, Job, OperationRecord, ProvisionedActor
 
 
 class EngineError(Exception):
@@ -27,25 +24,54 @@ class InvalidRequest(EngineError):
 
 
 class OperationExists(EngineError):
-    """This (application, actor, operation_ref) already dispatched a job with the same request (409)."""
+    """This (application, actor, operation_ref) already dispatched a job with the same request (409).
 
-    def __init__(self, job: "Job") -> None:
-        super().__init__(f"operation_ref {job.operation_ref!r} already used by job {job.id}")
-        self.job = job
+    ``job`` is that job. ``operation`` is set instead when the reference names an admin command (D57,
+    ISS-11); such a repeat is answered with the command's result, so only ``OperationInProgress`` carries one.
+    """
+
+    def __init__(self, holder: Job | OperationRecord) -> None:
+        super().__init__(f"operation_ref {holder.operation_ref!r} already used by {_name(holder)}")
+        self.job, self.operation = _held(holder)
+
+
+class OperationInProgress(OperationExists):
+    """The job or admin command holding this operation_ref is still running (409, ``Retry-After``; D57).
+    Ask again later.
+
+    An ``OperationExists``, so callers that catch that keep working."""
+
+    def __init__(self, holder: Job | OperationRecord, retry_after_s: int = 1) -> None:
+        EngineError.__init__(
+            self, f"operation_ref {holder.operation_ref!r} is still running as {_name(holder)}"
+        )
+        self.job, self.operation = _held(holder)
+        # A job may end any second; a stuck admin command can be resumed only once it is stale.
+        self.retry_after_s = retry_after_s
 
 
 class OperationConflict(EngineError):
-    """The operation_ref was reused with a different request body (409)."""
+    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it."""
 
-    def __init__(self, job: "Job") -> None:
-        super().__init__(f"operation_ref {job.operation_ref!r} was used by job {job.id} with another request")
-        self.job = job
+    def __init__(self, holder: Job | OperationRecord) -> None:
+        super().__init__(
+            f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
+        )
+        self.job, self.operation = _held(holder)
+
+
+def _held(holder: Job | OperationRecord) -> tuple[Job | None, OperationRecord | None]:
+    return (holder, None) if isinstance(holder, Job) else (None, holder)
+
+
+def _name(holder: Job | OperationRecord) -> str:
+    return f"job {holder.id}" if isinstance(holder, Job) else f"a {holder.command} command"
 
 
 class JobFailed(EngineError):
     """The job ended without a result. Switch on ``job.failure.kind``."""
 
-    def __init__(self, job: "Job") -> None:
+    def __init__(self, job: Job) -> None:
         failure = job.failure
         super().__init__(failure.message if failure is not None else f"job {job.id} {job.state}")
         self.job = job
@@ -61,6 +87,18 @@ class NoCapacity(EngineError):
 
 class NotProvisioned(EngineError):
     """per_actor mode and this actor has no allocation. Provisioning is always explicit."""
+
+
+class AlreadyProvisioned(EngineError):
+    """Provisioning an actor that already has an allocation, under a new reference (409; D57). Nothing is
+    applied, the amount included: funding an existing actor is ``fund``."""
+
+    def __init__(self, actor: ProvisionedActor) -> None:
+        super().__init__(
+            f"actor {actor.actor_id!r} is already provisioned (allocation {actor.allocation_id}); "
+            "fund it instead"
+        )
+        self.actor = actor
 
 
 class ProviderUnavailable(EngineError):
@@ -97,21 +135,26 @@ class UnsupportedForBackend(EngineError):
 class RunnerCallError(EngineError):
     """One runner call failed. Raised by a RunnerTransport.
 
-    ``payment_sent`` is True once tickets went out with the request: the job is then bound to this
-    runner and must not fail over. ``manifest_ids`` lists the orchestrator sessions the signer
-    signed, one per session in signing order. It can be non-empty even when ``payment_sent`` is
-    False, because the signer charges when it signs.
+    ``payment_sent`` is True once the signer's payment for the call was validated, before the paid
+    request goes out (D41, D53): the allocation is charged, whatever happens next. The job may then
+    fail over only to another orchestrator, and only when the failure did not run the work (D52).
+    ``manifest_ids`` lists the orchestrator sessions the signer signed, one per session in signing
+    order; with the Live Runner transport, a non-empty list means ``payment_sent``.
+    ``payment_unknown`` is True when the signer was asked and gave no validated answer (a lost or
+    malformed reply, a 5xx, a cancel): it may have charged, so the job must not pay anyone else.
     """
 
     def __init__(
         self,
-        kind: "AttemptOutcome",
+        kind: AttemptOutcome,
         message: str,
         *,
         payment_sent: bool,
         manifest_ids: tuple[str, ...] = (),
         status_code: int | None = None,
         body: str | None = None,
+        payment_unknown: bool = False,
+        timings: CallTimings | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -119,3 +162,5 @@ class RunnerCallError(EngineError):
         self.manifest_ids = manifest_ids
         self.status_code = status_code
         self.body = body
+        self.payment_unknown = payment_unknown
+        self.timings = timings

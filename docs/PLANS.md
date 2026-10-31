@@ -31,4 +31,20 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | ISS-07 Builds and CI | [completed/iss-07-ci.md](exec-plans/completed/iss-07-ci.md) | John, Mike |
 | Evidence re-run | [completed/m2-attribution-rerun.md](exec-plans/completed/m2-attribution-rerun.md) | John |
 
+## M3 (open)
+
+| Ticket | Plan | Owners |
+| --- | --- | --- |
+| Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
+| Dependency-injection refactor (internal, before ISS-32) | [active/dependency-injection-refactor.md](exec-plans/active/dependency-injection-refactor.md) | Mike |
+| Discovery service, [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45) (ISS-09) | [active/discovery-service.md](exec-plans/active/discovery-service.md) | Mike |
+| ISS-08 Standalone credentials and ownership controls | [active/iss-08-standalone-credentials.md](exec-plans/active/iss-08-standalone-credentials.md) | Mike (John reviews) |
+| JWT bearer, chosen by `LPB_AUTH` (#49, ISS-33 in M4) | [completed/jwt-bearer.md](exec-plans/completed/jwt-bearer.md) | Mike (John reviews) |
+| Neon Postgres, with a database branch per pull request | [active/neon-preview-branches.md](exec-plans/active/neon-preview-branches.md) | John |
+| Actor collection and read-only admin (#52) | [active/admin-read-and-actors.md](exec-plans/active/admin-read-and-actors.md) | Mike (John reviews) |
+| ISS-11 + ISS-14 Repeat-safe commands (idempotency) | [active/iss-11-14-idempotency.md](exec-plans/active/iss-11-14-idempotency.md) | John (Mike reviews) |
+
 Nothing closes without Mike's review. Josh reviews engine code.
+
+- [Native HTTP transport](exec-plans/active/native-http-transport.md): bounded raw bodies,
+  operation identity and stream headers; remaining SDK dependencies are explicit.

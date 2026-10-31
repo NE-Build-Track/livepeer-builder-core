@@ -62,7 +62,7 @@ Batteries feed.
 | Proposal rule | Status |
 | --- | --- |
 | 1. Fail over only before payment, on `refused`/`unreachable` | Implemented |
-| 2. One `(application, actor, operation_ref)` dispatches at most once | Implemented (interim 409 semantics; John owns the final design, D11) |
+| 2. One `(application, actor, operation_ref)` dispatches at most once | Implemented; the final rules are D57 (a failure that never reached a runner may run again) |
 | 3. Write the attempt before the call; paid-but-unknown is `uncertain` | Implemented, plus restart recovery |
 | 4. A stream is returned only after its first byte; `first_byte_timeout_s` | Deferred with streaming |
 | 5. Missing cost is `pending`; `none` only when nothing was paid | Implemented |
@@ -91,7 +91,7 @@ Batteries feed.
 | 1 | Who pays: a credential per request, or per application | **Resolved:** `per_actor` (default) / `per_application` modes; a `CredentialResolver` per actor (D17) |
 | 2 | Cost reporting assumed Batteries; `unavailable` status | Batteries is the payment path; no `unavailable` status (missing = `pending`) |
 | 3 | Capability → app mapping in config; `allowed_orchestrators` | Deferred (T3). In the dev stack, the signer's `Orchestrators` list bounds who is paid |
-| 4 | Idempotency: join-and-return; release on pre-dispatch decline | Owned by John's PR (D11). Interim: 409 |
+| 4 | Idempotency: join-and-return; release on pre-dispatch decline | D57: no join (409 `OperationInProgress` with the job, `Retry-After: 1`); a pre-dispatch decline releases the reference |
 | 5 | BYOC as a second transport | **Excluded:** Live Runner only. `RunnerTransport` stays transport-agnostic |
 | 6 | Admission limits | **Implemented:** `AdmissionLimiter`, 503 + `Retry-After` before payment |
 
@@ -134,7 +134,7 @@ unpaid dispatch (`per_application` with no key gives unpaid calls).
 | --- | --- |
 | Trusted access for cost/event/key/provider methods | Every service method takes an `ActorContext` and calls the `AccessPolicy` |
 | Payment secrets copied into actor attributes | Never: `SecretStore` + `SecretRef` (D15) |
-| `OperationExists` vs join-and-return | Interim 409; John's PR (D11) |
+| `OperationExists` vs join-and-return | 409 with a stable `code` (D57) |
 | Atomic persistence and recovery after dispatch | Attempt written before the call; restart recovery → `uncertain` |
 | `payment_sent` evidence at the SDK revision | SDK #71 (`3250c08`); verified in the 12 October run |
 | Manifest uniqueness and multi-attempt cost | Keyed by `auth_id` per attempt; a job sums its attempts |

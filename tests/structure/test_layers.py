@@ -16,30 +16,70 @@ ALLOWED: dict[str, set[str]] = {
     "contracts": set(),
     "errors": {"contracts"},
     "protocols": {"contracts", "errors"},
+    "api": {"contracts", "errors", "protocols"},
     "config": {"contracts", "errors"},
     "services": {"contracts", "errors", "protocols", "config", "utils"},
     "store": {"contracts", "errors", "protocols", "config", "utils"},
     "adapters": {"contracts", "errors", "protocols", "config", "utils"},
-    "testing": {"contracts", "errors", "protocols", "utils"},
-    "runtime": {"contracts", "errors", "protocols", "config", "utils", "services", "store", "adapters"},
-    "http": {"contracts", "errors", "runtime", "config"},
+    # make_engine builds a real engine, so testing may import what runtime does
+    "testing": {
+        "contracts",
+        "errors",
+        "protocols",
+        "api",
+        "utils",
+        "config",
+        "runtime",
+        "store",
+        "adapters",
+        "services",
+    },
+    "runtime": {
+        "contracts",
+        "errors",
+        "protocols",
+        "api",
+        "config",
+        "utils",
+        "services",
+        "store",
+        "adapters",
+    },
+    "http": {"contracts", "errors", "api", "runtime", "config"},
+    # the discovery service is its own process (#45): it shares nothing with the engine but utils
+    "discovery": {"utils"},
     "entry": {"*"},
 }
 
 # third-party package -> the only modules (path prefixes under src/livepeer_builder) that may import it
 CONFINED: dict[str, tuple[str, ...]] = {
-    "livepeer_gateway": ("adapters/sdk.py",),
-    "aiohttp": ("adapters/sdk.py",),
-    "httpx": ("adapters/batteries.py",),
+    "livepeer_gateway": ("adapters/sdk.py", "adapters/runner_call.py"),
+    "aiohttp": ("adapters/runner_call.py",),
+    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "discovery/"),
+    "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),
     "alembic": ("store/",),
     "asyncpg": ("store/",),
     "aiosqlite": ("store/",),
     "fastapi": ("http/",),
-    "starlette": ("http/",),
-    "uvicorn": ("cli.py",),
+    "starlette": ("http/", "discovery/server.py"),
+    "uvicorn": ("http/server.py", "discovery/server.py"),
 }
+# DI containers are allowed nowhere: the engine is wired by hand in runtime/assembly.py (decision 1 in
+# docs/exec-plans/active/dependency-injection-refactor.md).
+CONTAINERS = (
+    "dishka",
+    "dependency_injector",
+    "wireup",
+    "punq",
+    "lagom",
+    "kink",
+    "svcs",
+    "injector",
+    "that_depends",
+)
+CONFINED.update(dict.fromkeys(CONTAINERS, ()))
 
 REMEDIATION = {
     "services": "Services reach persistence and the network only through protocols in livepeer_builder.protocols.",
@@ -49,6 +89,7 @@ REMEDIATION = {
     "contracts": "Contracts are the bottom layer and import nothing else in the package.",
     "http": "The HTTP layer calls BuilderEngine (runtime); it never reaches services or stores directly.",
     "testing": "Fakes implement protocols with contract types; they must not depend on implementations.",
+    "discovery": "The discovery service runs as its own process: it imports nothing from the engine.",
 }
 
 
@@ -104,6 +145,11 @@ def test_third_party_packages_are_confined(path: Path) -> None:
             continue
         if package == "fastapi" and relative == "cli.py":
             continue
+        if not homes:
+            pytest.fail(
+                f"{relative}:{line} imports {package}, a DI container. The engine is wired by hand: supply "
+                "or decorate parts through EngineSupply and BuilderEngine.create (decision 1)."
+            )
         pytest.fail(
             f"{relative}:{line} imports {package}, which is confined to {homes}. Wrap it behind a protocol "
             f"and implement that protocol in the owning module (ARCHITECTURE.md#third-party-boundaries)."

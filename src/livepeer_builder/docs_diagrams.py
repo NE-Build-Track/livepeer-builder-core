@@ -15,7 +15,9 @@ from livepeer_builder import protocols
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, SignerDiscoverySource
+from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
+from livepeer_builder.adapters.runner_call import SdkRunnerStream
+from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
@@ -39,6 +41,7 @@ from livepeer_builder.contracts import (
     ResourceRef,
     ResultRef,
     Runner,
+    RunnerGPU,
     SecretRef,
 )
 from livepeer_builder.services.discovery import MostCapacityFirst
@@ -46,31 +49,37 @@ from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.store import SqlStore
+from livepeer_builder.store.cost_reads import SqlCostSnapshot
+from livepeer_builder.store.maintenance import SqlMaintenance
 
 # Extension protocols shown in the diagram, with their default implementations.
 DEFAULTS: dict[str, tuple[type, ...]] = {
-    "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain),
+    "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain, JwtBearerAuthenticator),
     "AccessPolicy": (DefaultPolicy,),
     "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
-    "DiscoverySource": (SignerDiscoverySource, StaticDiscoverySource),
+    "DiscoverySource": (HttpDiscoverySource, StaticDiscoverySource),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
+    "StreamingRunnerTransport": (SdkRunnerTransport,),
+    "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient,),
     "UsageSource": (BatteriesUsageSource,),
     "AllowanceReader": (PaymentsService,),
     "EngineStore": (SqlStore,),
+    "StoreMaintenance": (SqlMaintenance,),
+    "CostSnapshot": (SqlCostSnapshot,),
     "Clock": (SystemClock,),
     "EventFeed": (ReservedEventFeed,),
     "SessionManager": (ReservedSessions,),
 }
 # Persistence sub-interfaces: implemented through EngineStore, listed in a table instead of the diagram.
-REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "CostRepo", "SecretRepo")
+REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "OperationRepo", "CostRepo", "SecretRepo")
 
 CONTRACTS: tuple[type[BaseModel], ...] = (
     AuthRequest, ActorContext, AuthProvenance, ResourceRef,
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
-    Runner, NetworkRate, Offering,
+    Runner, RunnerGPU, NetworkRate, Offering,
     JobCost, AttemptCost, Fees,
     ProvisionedActor, SecretRef, Allowance, Money,
 )  # fmt: skip
@@ -106,10 +115,14 @@ def type_name(annotation: Any) -> str:
 
 
 def _methods(cls: type, own_only: bool = False) -> list[str]:
-    """Public methods, inherited included unless ``own_only`` (EngineStore lists its repos separately)."""
+    """Public properties and methods, inherited included unless ``own_only`` (EngineStore lists its repos
+    separately). ``__aiter__`` counts as public: it is how a stream is read."""
     lines = []
+    for name, prop in inspect.getmembers(cls, predicate=lambda m: isinstance(m, property)):
+        if not name.startswith("_") and prop.fget is not None:
+            lines.append(f"        +{name} {type_name(typing.get_type_hints(prop.fget).get('return'))}")
     for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
-        if name.startswith("_") or (own_only and name not in vars(cls)):
+        if (name.startswith("_") and name != "__aiter__") or (own_only and name not in vars(cls)):
             continue
         hints = typing.get_type_hints(member)
         params = [p for p in inspect.signature(member).parameters if p != "self"]
@@ -141,7 +154,10 @@ def render_interfaces() -> str:
         lines.append(f"    class {name} {{")
         lines.append("        <<interface>>")
         if name == "EngineStore":
-            lines.append("        +async ...ActorRepo, KeyRepo, JobRepo, CostRepo, SecretRepo methods() None")
+            lines.append(
+                "        +async ...ActorRepo, KeyRepo, JobRepo, OperationRepo, CostRepo, SecretRepo"
+                " methods() None"
+            )
         lines += _methods(found[name], own_only=name == "EngineStore")
         lines.append("    }")
     implementations = sorted({cls.__name__ for defaults in DEFAULTS.values() for cls in defaults})

@@ -1,91 +1,70 @@
 #!/usr/bin/env python3
-"""Start the engine on Railway Postgres, with bearer auth in Swagger.
+"""Start the engine on Neon Postgres.
 
-Railway's DATABASE_URL uses the postgresql:// scheme. The engine's async
-SQLAlchemy engine requires postgresql+asyncpg://. The rest of the URL,
-including the password, is left unchanged and is not logged.
-
-Swagger's Authorize button is added here so this deployment can send
-Authorization: Bearer without changing the upstream API.
+The engine's async SQLAlchemy engine requires postgresql+asyncpg://. Neon
+and Railway hand out postgresql:// or postgres://, and Neon adds libpq
+parameters asyncpg does not accept. This rewrites the scheme, maps sslmode
+to asyncpg's ssl parameter, and drops channel_binding. The password is left
+unchanged and is not logged. The rewritten URL is passed as a settings value
+to the server and as an explicit environment to the `lpb` subprocesses; the
+process environment is not changed.
 """
 
 import asyncio
 import os
 import subprocess
 import sys
-from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import uvicorn
-from fastapi import FastAPI
-from fastapi.openapi.utils import get_openapi
-
-from livepeer_builder.config import EngineSettings
-from livepeer_builder.http import create_app
-from livepeer_builder.runtime import BuilderEngine
-from livepeer_builder.runtime.logging import configure_logging
+from livepeer_builder import EngineSettings
+from livepeer_builder.http import serve
 
 ASYNCPG_SCHEME = "postgresql+asyncpg://"
 
 
 def asyncpg_url(url: str) -> str:
-    if url.startswith(ASYNCPG_SCHEME):
-        return url
-    if url.startswith("postgresql://"):
-        return ASYNCPG_SCHEME + url.removeprefix("postgresql://")
     if url.startswith("postgres://"):
-        return ASYNCPG_SCHEME + url.removeprefix("postgres://")
-    sys.exit("LPB_DATABASE_URL must be a postgresql URL")
+        url = "postgresql://" + url.removeprefix("postgres://")
+    if url.startswith("postgresql://"):
+        url = ASYNCPG_SCHEME + url.removeprefix("postgresql://")
+    if not url.startswith(ASYNCPG_SCHEME):
+        sys.exit("LPB_DATABASE_URL must be a postgresql URL")
+    return _asyncpg_query(url)
 
 
-def install_swagger_bearer(app: FastAPI) -> None:
-    """Expose an optional bearer scheme so Swagger can set Authorization."""
-
-    def openapi() -> dict[str, Any]:
-        if app.openapi_schema:
-            return app.openapi_schema
-        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
-        components = schema.setdefault("components", {})
-        schemes = components.setdefault("securitySchemes", {})
-        schemes["bearerAuth"] = {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "lpk",
-            "description": "Engine access key. Swagger sends Authorization: Bearer <key>.",
-        }
-        # The empty alternative keeps routes callable when no token is entered.
-        schema["security"] = [{"bearerAuth": []}, {}]
-        app.openapi_schema = schema
-        return schema
-
-    app.openapi = openapi
-
-
-async def serve() -> None:
-    settings = EngineSettings.from_env()
-    configure_logging(json_lines=settings.log_json)
-    app = create_app(await BuilderEngine.from_settings(settings))
-    install_swagger_bearer(app)
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host=settings.http_host,
-            port=settings.http_port,
-            log_config=None,
-        )
-    )
-    await server.serve()
+def _asyncpg_query(url: str) -> str:
+    parts = urlsplit(url)
+    kept: list[tuple[str, str]] = []
+    ssl: str | None = None
+    saw_ssl = False
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key == "channel_binding":
+            continue
+        if key == "sslmode":
+            if not saw_ssl:
+                ssl = value
+            continue
+        if key == "ssl":
+            saw_ssl = True
+            ssl = value
+            continue
+        kept.append((key, value))
+    if ssl is not None:
+        kept.append(("ssl", ssl))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
 
 
-def prepare_database_url() -> None:
+def database_url() -> str:
     raw = os.environ.get("LPB_DATABASE_URL", "")
     if not raw:
         sys.exit("LPB_DATABASE_URL is required")
-    os.environ["LPB_DATABASE_URL"] = asyncpg_url(raw)
+    return asyncpg_url(raw)
 
 
 def lpb(command: str) -> int:
     # `command` is only "migrate" or "revision", chosen by this file.
-    completed = subprocess.run(["/usr/local/bin/lpb", command], check=False)  # noqa: S603
+    env = {**os.environ, "LPB_DATABASE_URL": database_url()}
+    completed = subprocess.run(["/usr/local/bin/lpb", command], check=False, env=env)  # noqa: S603
     return completed.returncode
 
 
@@ -95,14 +74,12 @@ def migrate() -> int:
     Railway runs this as the pre-deploy command. A non-zero exit stops the
     deployment, so the previous engine keeps serving.
 
-    Preview shares one Postgres across every branch, so a preview deploy only
-    checks the revision. Production applies the packaged migrations first.
+    Production migrates the protected Neon main branch. A preview deploy
+    migrates that pull request's branch, which is a copy of main.
     """
-    prepare_database_url()
-    if os.environ.get("RAILWAY_ENVIRONMENT_NAME") != "preview":
-        code = lpb("migrate")
-        if code != 0:
-            return code
+    code = lpb("migrate")
+    if code != 0:
+        return code
     return lpb("revision")
 
 
@@ -113,14 +90,14 @@ def main() -> None:
         sys.exit(migrate())
     if sys.argv[1:] not in ([], ["serve"]):
         sys.exit("usage: entrypoint.py [serve|migrate]")
-    prepare_database_url()
+    settings = EngineSettings.from_env().model_copy(update={"database_url": database_url()})
     # LPB_AUTO_MIGRATE=false: refuse a database that is not at package head
     # rather than migrating from the process that is about to take traffic.
-    if not EngineSettings.from_env().auto_migrate:
+    if not settings.auto_migrate:
         code = lpb("revision")
         if code != 0:
             sys.exit(code)
-    asyncio.run(serve())
+    asyncio.run(serve(settings))
 
 
 if __name__ == "__main__":

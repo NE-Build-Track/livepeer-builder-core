@@ -1,14 +1,18 @@
 """The EngineStore contract, identical on SQLite and PostgreSQL (ISS-06)."""
 
+import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC
+from datetime import UTC, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import event, text
 
 from livepeer_builder.contracts import (
     AccessKey,
+    Attempt,
     AttemptCost,
+    CallTimings,
     Failure,
     Fees,
     JobCost,
@@ -16,10 +20,12 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SecretRef,
+    SeenActor,
+    SignedSession,
     SyncCheckpoint,
     UsageRow,
 )
-from livepeer_builder.errors import OperationExists
+from livepeer_builder.errors import OperationConflict, OperationExists
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
 from tests.store.conftest import make_attempt, make_job
@@ -72,6 +78,68 @@ async def test_operation_ref_is_unique_per_actor(sql: SqlStore, clock: FixedCloc
     assert found is not None and found[1] == "fp"
 
 
+async def test_a_duplicate_with_a_different_body_is_a_conflict(sql: SqlStore, clock: FixedClock) -> None:
+    """B2: a concurrent duplicate passes the service's lookup and lands on the unique index. The store
+    compares fingerprints there, so a different request is a conflict, not a repeat."""
+    first = make_job(clock, ref="order-1")
+    await sql.create_job(first, "fp-a")
+    with pytest.raises(OperationConflict) as conflict:
+        await sql.create_job(make_job(clock, ref="order-1"), "fp-b")
+    assert conflict.value.job.id == first.id
+
+
+async def test_a_retry_supersedes_the_failed_job_holding_the_ref(sql: SqlStore, clock: FixedClock) -> None:
+    """D57: re-dispatch under the same reference marks the old job superseded and inserts the new one, in
+    one transaction. The old job keeps its reference for history; the new one holds it."""
+    old = make_job(clock, ref="order-1", state="failed")
+    await sql.create_job(old, "fp")
+    new = make_job(clock, ref="order-1", state="running")
+    await sql.create_job(new, "fp", retry_of=old.id)
+    found = await sql.job_by_operation_ref("default", "alice", "order-1")
+    assert found is not None and found[0].id == new.id
+    async with sql.engine.connect() as conn:
+        rows = dict(
+            (
+                await conn.execute(
+                    text("SELECT id, superseded_by FROM lpb_jobs WHERE operation_ref = 'order-1'")
+                )
+            ).all()
+        )
+        query = text("SELECT retry_of FROM lpb_jobs WHERE id = :id")
+        retry_of = (await conn.execute(query, {"id": str(new.id)})).scalar()
+    assert rows == {str(old.id): str(new.id), str(new.id): None}
+    assert retry_of == str(old.id)
+
+
+async def test_two_concurrent_retries_of_one_failed_job_make_one_new_job(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """D57: the compare-and-set lets one retry win; the other is answered from the winner."""
+    old = make_job(clock, ref="order-1", state="failed")
+    await sql.create_job(old, "fp")
+    retries = [make_job(clock, ref="order-1", state="running") for _ in range(2)]
+    outcomes = await asyncio.gather(
+        *(sql.create_job(retry, "fp", retry_of=old.id) for retry in retries), return_exceptions=True
+    )
+    won = [retry for retry, outcome in zip(retries, outcomes, strict=True) if outcome is None]
+    lost = [outcome for outcome in outcomes if outcome is not None]
+    assert len(won) == 1
+    assert len(lost) == 1 and type(lost[0]) is OperationExists and lost[0].job.id == won[0].id
+    async with sql.engine.connect() as conn:
+        count = (await conn.execute(text("SELECT count(*) FROM lpb_jobs"))).scalar()
+    assert count == 2  # the failed job and the one retry
+
+
+async def test_a_retry_supersedes_only_a_failed_job(sql: SqlStore, clock: FixedClock) -> None:
+    """The compare-and-set checks the state where the effect lands: a job that succeeded is never
+    superseded, whatever the caller believed."""
+    done = make_job(clock, ref="order-1", state="succeeded")
+    await sql.create_job(done, "fp")
+    with pytest.raises(OperationExists) as exists:
+        await sql.create_job(make_job(clock, ref="order-1", state="running"), "fp", retry_of=done.id)
+    assert exists.value.job.id == done.id
+
+
 async def test_failure_and_listing(sql: SqlStore, clock: FixedClock) -> None:
     job = make_job(clock, state="running")
     await sql.create_job(job, None)
@@ -86,10 +154,12 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
         application_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:x"), currency="USD", status="active", created_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_actor(actor)
-    await sql.save_actor(actor.model_copy(update={"status": "paused"}))
+    await sql.save_actor(actor.model_copy(update={"label": "Alice Smith"}))
+    await sql.save_actor(actor.model_copy(update={"status": "paused", "label": "Alice Smith"}))
     loaded = await sql.get_actor("default", "alice")
     assert loaded is not None and loaded.status == "paused" and loaded.secret_ref.ref == "db:x"
+    assert loaded.label == "Alice Smith"  # the readable name beside an opaque actor_id (D46)
+    assert [a.label for a in await sql.list_actors("default")] == ["Alice Smith"]
 
     key = AccessKey(
         key_id="k", kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
@@ -100,10 +170,34 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
     assert await sql.revoke_access_key("k", clock.now()) is True
     assert await sql.revoke_access_key("k", clock.now()) is False
 
+    assert await sql.get_access_key("k") == key.model_copy(update={"revoked_at": clock.now()})
+    assert await sql.get_access_key("missing") is None
+
     await sql.put_secret("db:x", "ciphertext", clock.now())
     assert await sql.get_secret("db:x") == "ciphertext"
     await sql.delete_secret("db:x")
     assert await sql.get_secret("db:x") is None
+
+
+async def test_rotating_a_key_revokes_it_and_inserts_its_replacement_together(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    def key(key_id: str) -> AccessKey:
+        return AccessKey(
+            key_id=key_id, kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
+            label="", created_at=clock.now(), revoked_at=None,
+        )  # fmt: skip
+
+    await sql.insert_access_key(key("old"), "old-hash")
+    assert await sql.rotate_access_key("old", key("new"), "new-hash", clock.now()) is True
+    old = await sql.get_access_key("old")
+    assert old is not None and old.revoked_at == clock.now()
+    assert await sql.access_key_by_hash("new-hash") == key("new")
+
+    # a revoked or unknown key is not rotated, and its replacement is not inserted
+    assert await sql.rotate_access_key("old", key("again"), "again-hash", clock.now()) is False
+    assert await sql.rotate_access_key("missing", key("other"), "other-hash", clock.now()) is False
+    assert await sql.get_access_key("again") is None and await sql.get_access_key("other") is None
 
 
 async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock: FixedClock) -> None:
@@ -154,8 +248,8 @@ async def test_usage_rows_cursor_projection_and_attribution(sql: SqlStore, clock
         job_id=job.id, status="observed", fees=Fees(fee_eth=Decimal("1.5"), fee_usd=None, row_count=1), attempts=(attempt_cost,),
         first_observed_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
-    await sql.save_projection(projection)
-    await sql.save_projection(projection.model_copy(update={"status": "corrected"}))
+    await sql.save_projection(projection, evidence_version=0)
+    await sql.save_projection(projection.model_copy(update={"status": "corrected"}), evidence_version=0)
     loaded = await sql.get_projection(job.id)
     assert loaded is not None and loaded.status == "corrected" and loaded.fees.fee_eth == Decimal("1.5")
     assert loaded.attempts == (attempt_cost,)
@@ -181,7 +275,8 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
             attempts=(),
             first_observed_at=clock.now(),
             updated_at=clock.now(),
-        )
+        ),
+        evidence_version=0,
     )
     await sql.save_projection(
         JobCost(
@@ -191,13 +286,430 @@ async def test_empty_attempt_lists_are_rebuilt_and_recent_reads_are_newest_first
             attempts=(AttemptCost(attempt_number=1, cost_class="delivered", fees=delivered),),
             first_observed_at=clock.now(),
             updated_at=clock.now(),
-        )
+        ),
+        evidence_version=0,
     )
 
     selected = {job.id for job in await sql.jobs_for_projection(())}
     assert first.id in selected and unprojected.id in selected and latest.id not in selected
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 1)] == [latest.id]
-    assert [cost.job_id for cost in await sql.recent_projections("default", None, 5)] == [
-        latest.id,
-        first.id,
+    async with sql.cost_snapshot() as reads:
+        newest = await reads.recent_with_projections("default", None, 1)
+        every = await reads.recent_with_projections(
+            "default", None, 5
+        )  # each recent job, projection if stored
+    assert [(job.id, cost is not None) for job, cost in newest] == [(latest.id, True)]
+    assert [(job.id, cost is not None) for job, cost in every] == [
+        (latest.id, True),
+        (unprojected.id, False),
+        (first.id, True),
     ]
+
+
+async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_jobs(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # #33: a projection of a running job goes stale the moment it pays
+    running = make_job(clock, state="running")
+    await sql.create_job(running, None)
+    covered = make_job(clock)
+    await sql.create_job(covered, None)
+    clock.advance(1)
+    stale = make_job(clock)  # projected, then ended later: its projection predates its end
+    await sql.create_job(stale, None)
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    for job_id, at in ((covered.id, clock.now()), (stale.id, clock.now() - timedelta(seconds=5))):
+        await sql.save_projection(
+            JobCost(
+                job_id=job_id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=at
+            ),
+            evidence_version=0,
+        )
+    assert running.id not in {job.id for job in await sql.jobs_for_projection([running.id])}
+    window = (clock.now() - timedelta(hours=1), clock.now() + timedelta(hours=1))
+    async with sql.cost_snapshot() as reads:
+        stored, uncovered = await reads.projections_and_unprojected("default", None, *window)
+        _, none_for_bob = await reads.projections_and_unprojected("default", "bob", *window)
+    assert {job.id for job in uncovered} == {running.id, stale.id}
+    assert {cost.job_id for cost in stored} == {covered.id, stale.id} and none_for_bob == []
+
+
+async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:
+    """A stream writes its sessions at open and at end; a match made in between survives (D39)."""
+    usage = UsageRow(
+        id="u1", event_id=None, status="applied", manifest_id="m1", allocation_id="a1", payment_session_id="s1",
+        request_id=None, pipeline=None, computed_fee_eth=Decimal("1"), computed_fee_usd=None, currency=None,
+        created_at=clock.now(),
+    )  # fmt: skip
+    await sql.apply_usage([usage], SyncCheckpoint(resume_cursor="c1"))
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    await sql.start_attempt(make_attempt(job.id, clock))
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1",), allocation_id="a1"))
+    assert await sql.match_sessions(()) == {job.id}  # cost sync matched it while the stream ran
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1", "m2"), allocation_id="a1"))
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert [(s.manifest_id, s.payment_session_id, s.match) for s in loaded.attempts[0].sessions] == [
+        ("m1", "s1", "matched"),
+        ("m2", None, "unmatched"),
+    ]
+
+
+async def test_a_cost_snapshot_does_not_see_a_write_committed_while_it_is_open(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # a cost read must not mix states while cost sync writes (#43 review)
+    def usage(row_id: str) -> UsageRow:
+        return UsageRow(
+            id=row_id, event_id=None, status="applied", manifest_id=None, allocation_id="a1",
+            payment_session_id=None, request_id=None, pipeline=None, computed_fee_eth=Decimal("1"),
+            computed_fee_usd=None, currency=None, created_at=clock.now(),
+        )  # fmt: skip
+
+    await sql.apply_usage([usage("u1")], SyncCheckpoint(resume_cursor="c1"))
+    async with sql.cost_snapshot() as reads:
+        assert [row.id for row in await reads.unattributed_usage("a1")] == ["u1"]
+        await sql.apply_usage([usage("u2")], SyncCheckpoint(resume_cursor="c2"))  # a sync commits
+        assert [row.id for row in await reads.unattributed_usage("a1")] == ["u1"]  # still the same state
+    assert sorted(row.id for row in await sql.unattributed_usage("a1")) == ["u1", "u2"]
+
+
+async def test_new_evidence_puts_a_projection_out_of_date_until_one_from_that_evidence_is_stored(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # #43 review: sync commits rows and matches before it stores the projection, if it gets there
+    def usage(row_id: str) -> UsageRow:
+        return UsageRow(
+            id=row_id, event_id=None, status="applied", manifest_id="m1", allocation_id="a1",
+            payment_session_id="s1", request_id=None, pipeline=None, computed_fee_eth=Decimal("1"),
+            computed_fee_usd=None, currency=None, created_at=clock.now(),
+        )  # fmt: skip
+
+    async def served() -> JobCost | None:
+        async with sql.cost_snapshot() as reads:
+            found = await reads.job_with_projection(job.id)
+        assert found is not None
+        return found[1]
+
+    async def needs_projection() -> bool:
+        return job.id in {selected.id for selected in await sql.jobs_for_projection([])}
+
+    job = make_job(clock)  # ended
+    await sql.create_job(job, None)
+    await sql.start_attempt(make_attempt(job.id, clock))
+    await sql.finish_attempt(make_attempt(job.id, clock, manifest_ids=("m1",), allocation_id="a1"))
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    stored = JobCost(
+        job_id=job.id, status="none", fees=none, attempts=(), first_observed_at=None, updated_at=clock.now()
+    )
+
+    async def version() -> int:
+        found = await sql.job_for_projection(job.id)
+        assert found is not None
+        return found[1]
+
+    await sql.save_projection(stored, evidence_version=await version())
+    await sql.apply_usage([usage("u1")], SyncCheckpoint(resume_cursor="c1"))  # its session is not matched yet
+    assert await served() is not None and not await needs_projection()
+    before = await version()
+    assert await sql.match_sessions([usage("u1")]) == {job.id}  # the match changed
+    assert await served() is None and await needs_projection()
+    await sql.save_projection(stored, evidence_version=before)  # a sync that classified before the match
+    assert await served() is None and await needs_projection()  # cannot hide it
+    current = await version()
+    await sql.save_projection(stored, evidence_version=current)
+    assert await served() is not None and not await needs_projection()
+    await sql.save_projection(stored.model_copy(update={"status": "pending"}), evidence_version=before)
+    served_now = await served()
+    assert served_now is not None and served_now.status == "none"  # an older save never replaces a newer one
+    await sql.apply_usage([usage("u2")], SyncCheckpoint(resume_cursor="c2"))  # a new row, matched session
+    assert await served() is None and await needs_projection()
+    assert await version() == current + 1
+    assert await sql.get_projection(job.id) is not None  # sync still reads it (first observed, corrected)
+
+
+async def test_a_late_evidence_report_never_reopens_a_finished_attempt(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="a1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await sql.start_attempt(attempt)
+    signed = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),), "payment_sent": True})
+    await sql.record_payment_evidence(signed)  # while the call runs
+    done = signed.model_copy(update={"outcome": "succeeded", "status_code": 200, "ended_at": clock.now()})
+    await sql.finish_attempt(done)
+    late = done.model_copy(
+        update={"sessions": (SignedSession(manifest_id="m1"), SignedSession(manifest_id="m2"))}
+    )
+    await sql.record_payment_evidence(late.model_copy(update={"outcome": "in_flight", "ended_at": None}))
+    stored = await sql.get_job(job.id)
+    assert stored is not None
+    [kept] = stored.attempts
+    assert (kept.outcome, kept.status_code, kept.payment_sent) == ("succeeded", 200, True)  # not reopened
+    assert [session.manifest_id for session in kept.sessions] == ["m1", "m2"]  # appended once each
+
+
+async def test_an_intent_recorded_before_signing_is_not_a_payment(sql: SqlStore, clock: FixedClock) -> None:
+    """A session stored unpaid is not a payment. Signing marks it paid, and a later unpaid copy does not
+    unmark it. The job path does not write this row before the signer is asked."""
+    job = make_job(clock, state="running")
+    await sql.create_job(job, None)
+    attempt = Attempt(
+        job_id=job.id, number=1, runner_url="r", orchestrator_url=None, allocation_id="a1", sessions=(),
+        payment_sent=False, outcome="in_flight", status_code=None, started_at=clock.now(), ended_at=None,
+    )  # fmt: skip
+    await sql.start_attempt(attempt)
+    intent = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),)})
+    await sql.record_payment_evidence(intent)
+
+    async def kept() -> Attempt:
+        stored = await sql.get_job(job.id)
+        assert stored is not None
+        return stored.attempts[0]
+
+    assert ((await kept()).payment_sent, [s.manifest_id for s in (await kept()).sessions]) == (False, ["m1"])
+    await sql.record_payment_evidence(intent.model_copy(update={"payment_sent": True}))  # the signer signed
+    await sql.record_payment_evidence(intent)  # a stale unpaid copy arrives late
+    assert (await kept()).payment_sent and [s.manifest_id for s in (await kept()).sessions] == ["m1"]
+
+
+async def test_a_late_evidence_report_on_an_ended_job_puts_its_projection_out_of_date(
+    sql: SqlStore, clock: FixedClock
+) -> None:  # a projection stored before the report would serve none for a paid job
+    job = make_job(clock)  # ended
+    await sql.create_job(job, None)
+    attempt = make_attempt(job.id, clock)
+    await sql.start_attempt(attempt)
+    none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
+    await sql.save_projection(
+        JobCost(
+            job_id=job.id,
+            status="none",
+            fees=none,
+            attempts=(),
+            first_observed_at=None,
+            updated_at=clock.now(),
+        ),
+        evidence_version=0,
+    )
+    late = attempt.model_copy(update={"sessions": (SignedSession(manifest_id="m1"),), "payment_sent": True})
+    await sql.record_payment_evidence(late)
+    async with sql.cost_snapshot() as reads:
+        found = await reads.job_with_projection(job.id)
+    assert found is not None and found[1] is None  # computed live: pending, not the stored none
+    assert job.id in {selected.id for selected in await sql.jobs_for_projection([])}
+
+
+# -- payment intent before signing (D54) ----------------------------------------------------------------
+
+
+async def test_payment_intent_is_durable_without_asserting_payment(sql: SqlStore, clock: FixedClock) -> None:
+    job = make_job(clock, state="running")
+    attempt = make_attempt(job.id, clock).model_copy(update={"payment_sent": False})
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    intent = attempt.model_copy(
+        update={"sessions": (SignedSession(manifest_id="possibly-charged", payment_state="unknown"),)}
+    )
+    await sql.record_payment_evidence(intent)
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert not loaded.attempts[0].payment_sent
+    assert loaded.attempts[0].sessions[0].payment_state == "unknown"
+
+
+async def test_payment_intent_only_moves_forward(sql: SqlStore, clock: FixedClock) -> None:
+    """``unknown`` may become ``unpaid`` or ``paid``; ``paid`` never goes back (D54)."""
+    job = make_job(clock, state="running")
+    attempt = make_attempt(job.id, clock).model_copy(update={"payment_sent": False})
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    for state, expected in [
+        ("unknown", "unknown"),
+        ("unpaid", "unpaid"),
+        ("unknown", "unknown"),
+        ("paid", "paid"),
+        ("unpaid", "paid"),
+        ("unknown", "paid"),
+    ]:
+        evidence = attempt.model_copy(
+            update={
+                "payment_sent": state == "paid",
+                "sessions": (SignedSession(manifest_id="m", payment_state=state),),
+            }
+        )
+        await sql.record_payment_evidence(evidence)
+        loaded = await sql.get_job(job.id)
+        assert loaded is not None
+        assert loaded.attempts[0].sessions[0].payment_state == expected
+    await sql.finish_attempt(attempt)  # a stale finisher must not erase the confirmed payment
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None and loaded.attempts[0].payment_sent
+
+
+async def test_a_refused_intent_is_never_matched(sql: SqlStore, clock: FixedClock) -> None:
+    """Usage for a manifest the signer refused stays unattributed; it never makes a paid one ambiguous."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    await sql.create_job(job, None)
+    for number, state in [(1, "unpaid"), (2, "unknown")]:
+        attempt = make_attempt(job.id, clock, number, allocation_id="alloc_1").model_copy(
+            update={"sessions": (SignedSession(manifest_id="m", payment_state=state),)}
+        )
+        await sql.start_attempt(attempt)
+        await sql.record_payment_evidence(attempt)
+    rows = [row("u", "s", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    assert await sql.match_sessions(rows) == {job.id}
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert [(a.sessions[0].payment_state, a.sessions[0].match) for a in loaded.attempts] == [
+        ("unpaid", "unmatched"),
+        ("paid", "matched"),  # unique usage confirms an unknown intent
+    ]
+    assert loaded.attempts[1].payment_sent
+    assert await sql.unattributed_usage("alloc_1") == []
+
+
+async def test_a_refusal_lets_the_next_sync_resolve_an_ambiguous_manifest(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """Two attempts on one allocation name the same manifest, so its usage is ambiguous. When the signer
+    then refuses one, the next sync matches the other, with no new usage (#64 review)."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    await sql.create_job(job, None)
+    attempts = []
+    for number, state in [(1, "unknown"), (2, "paid")]:
+        attempt = make_attempt(job.id, clock, number, allocation_id="alloc_1").model_copy(
+            update={"sessions": (SignedSession(manifest_id="m", payment_state=state),)}
+        )
+        await sql.start_attempt(attempt)
+        await sql.record_payment_evidence(attempt)
+        attempts.append(attempt)
+    rows = [row("u", "s", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    await sql.match_sessions(rows)
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None and [a.sessions[0].match for a in loaded.attempts] == ["ambiguous", "ambiguous"]
+    refused = attempts[0].model_copy(
+        update={"sessions": (SignedSession(manifest_id="m", payment_state="unpaid"),)}
+    )
+    await sql.record_payment_evidence(refused)
+    assert await sql.match_sessions([]) == {job.id}
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    paid = loaded.attempts[1].sessions[0]
+    assert (paid.payment_state, paid.match, paid.payment_session_id) == ("paid", "matched", "s")
+    assert loaded.attempts[0].sessions[0].payment_state == "unpaid"
+
+
+async def test_matching_keeps_a_confirmation_that_arrived_after_its_read(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    attempt = make_attempt(job.id, clock, allocation_id="alloc_1").model_copy(
+        update={"sessions": (SignedSession(manifest_id="m", payment_state="unknown"),)}
+    )
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    await sql.record_payment_evidence(attempt)
+    rows = [row("u1", "s1", "1", manifest="m"), row("u2", "s2", "1", manifest="m")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    confirmed = False
+
+    def confirm_before_match_write(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        nonlocal confirmed
+        if not confirmed and statement.startswith("UPDATE lpb_payment_sessions"):
+            confirmed = True
+            # the signer's success callback lands after matching read the unknown intent
+            conn.execute(text("UPDATE lpb_payment_sessions SET payment_state = 'paid'"))
+
+    event.listen(sql.engine.sync_engine, "before_cursor_execute", confirm_before_match_write)
+    try:
+        await sql.match_sessions(rows)
+    finally:
+        event.remove(sql.engine.sync_engine, "before_cursor_execute", confirm_before_match_write)
+    loaded = await sql.get_job(job.id)
+    assert confirmed and loaded is not None
+    assert loaded.attempts[0].sessions[0].match == "ambiguous"
+    assert loaded.attempts[0].sessions[0].payment_state == "paid"
+
+
+async def test_a_refusal_that_lands_during_matching_is_never_billed(sql: SqlStore, clock: FixedClock) -> None:
+    """Matching read the intent as ``unknown``; the signer's refusal commits before matching writes. The
+    refusal stands: the manifest stays ``unpaid`` and unmatched, the attempt unpaid, the usage unattributed."""
+    from tests.unit.test_costs import row
+
+    job = make_job(clock)
+    attempt = make_attempt(job.id, clock, allocation_id="alloc_1").model_copy(
+        update={"payment_sent": False, "sessions": (SignedSession(manifest_id="m", payment_state="unknown"),)}
+    )
+    await sql.create_job(job, None)
+    await sql.start_attempt(attempt)
+    await sql.record_payment_evidence(attempt)
+    rows = [row("u1", "s1", "1", manifest="m", allocation="alloc_1")]
+    await sql.apply_usage(rows, SyncCheckpoint(resume_cursor=None))
+    refused = False
+
+    def refuse_before_match_write(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        nonlocal refused
+        if not refused and statement.startswith("UPDATE lpb_payment_sessions"):
+            refused = True
+            conn.execute(text("UPDATE lpb_payment_sessions SET payment_state = 'unpaid'"))
+
+    event.listen(sql.engine.sync_engine, "before_cursor_execute", refuse_before_match_write)
+    try:
+        await sql.match_sessions(rows)
+    finally:
+        event.remove(sql.engine.sync_engine, "before_cursor_execute", refuse_before_match_write)
+    loaded = await sql.get_job(job.id)
+    assert refused and loaded is not None
+    session = loaded.attempts[0].sessions[0]
+    assert (session.payment_state, session.match) == ("unpaid", "unmatched")
+    assert not loaded.attempts[0].payment_sent
+    assert [r.computed_fee_eth for r in await sql.unattributed_usage("alloc_1")] == [Decimal(1)]
+
+
+async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, clock: FixedClock) -> None:
+    """A person the identity provider signed in, before any allocation (D48)."""
+    first = clock.now()
+    seen = SeenActor(
+        application_id="default", actor_id="4f6c2a1e", name="alice", first_seen_at=first, last_seen_at=first
+    )
+    await sql.save_sighting(seen)
+    later = first + timedelta(hours=2)
+    await sql.save_sighting(
+        seen.model_copy(update={"name": "alice.smith", "first_seen_at": later, "last_seen_at": later})
+    )
+    await sql.save_sighting(
+        SeenActor(application_id="app-2", actor_id="b", name="bob", first_seen_at=first, last_seen_at=first)
+    )
+    nameless = later + timedelta(hours=1)  # the name claim switched off: the name is kept, the time moves
+    await sql.save_sighting(
+        seen.model_copy(update={"name": "", "first_seen_at": nameless, "last_seen_at": nameless})
+    )
+    later = nameless
+    [kept] = await sql.list_sightings("default")
+    assert (kept.name, kept.first_seen_at, kept.last_seen_at) == ("alice.smith", first, later)
+    assert await sql.get_sighting("default", "4f6c2a1e") == kept
+    assert await sql.get_sighting("default", "nobody") is None
+    assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by application, then actor
+
+
+async def test_an_attempts_timings_round_trip(sql: SqlStore, clock: FixedClock) -> None:
+    job = make_job(clock, state="running")
+    await sql.create_job(job, "fp")
+    started = make_attempt(job.id, clock).model_copy(update={"outcome": "in_flight", "ended_at": None})
+    await sql.start_attempt(started)
+    assert (await sql.get_job(job.id)).attempts[0].timings is None  # type: ignore[union-attr]
+    timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=None)
+    await sql.finish_attempt(make_attempt(job.id, clock).model_copy(update={"timings": timings}))
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert loaded.attempts[0].timings == timings

@@ -8,8 +8,9 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import insert, inspect, text
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder.contracts import OperationRecord, SignedSession
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import (
     SqlStore,
@@ -163,8 +164,8 @@ async def test_records_survive_restart_and_interrupted_jobs_resolve(
     await first.close()  # the process dies mid-call
 
     settings = EngineSettings(database_url=database_url, log_json=False)
-    engine = await BuilderEngine.from_settings(
-        settings, clock=clock, discovery_source=StaticDiscoverySource()
+    engine = await BuilderEngine.create(
+        settings, supply=EngineSupply(clock=clock, discovery_source=StaticDiscoverySource())
     )
     await engine.start()
     recovered = await engine.store.get_job(running.id)
@@ -218,3 +219,136 @@ async def test_retention_keeps_uncertain_and_recent_jobs(database_url: str, cloc
     await store.close()
     assert report.jobs_deleted == 1
     assert remaining == {recent.id, unresolved.id}
+
+
+# -- payment intent before signing (D54) ----------------------------------------------------------------
+
+
+async def test_the_payment_intent_migration_keeps_every_old_session_paid(
+    database_url: str, clock: FixedClock
+) -> None:
+    """Rows written before 0006 are signatures the signer confirmed: they read as ``paid``."""
+    engine = create_engine(database_url)
+    await upgrade(engine, "0005")
+    job = make_job(clock)
+    store = SqlStore(engine)
+    await store.create_job(job, None)
+    await store.start_attempt(make_attempt(job.id, clock, manifest_ids=("old",)))
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_payment_sessions (job_id, attempt_number, seq, manifest_id, match_status) "
+                "VALUES (:id, 1, 0, 'old', 'unmatched')"
+            ),
+            {"id": str(job.id)},
+        )
+    await upgrade(engine)
+    loaded = await store.get_job(job.id)
+    assert loaded is not None and loaded.attempts[0].payment_sent
+    assert loaded.attempts[0].sessions[0].payment_state == "paid"
+    await store.close()
+
+
+async def test_a_crash_while_signing_leaves_the_cost_pending(database_url: str, clock: FixedClock) -> None:
+    """What the database holds when the engine dies during ``get_payment``: the intent, written first.
+    After a real restart the job is ``uncertain`` and its cost ``pending``, never ``none`` at 0 (#61)."""
+    store = await SqlStore.connect(database_url)
+    job = make_job(clock, state="running")
+    attempt = make_attempt(job.id, clock, allocation_id="alloc").model_copy(
+        update={
+            "outcome": "in_flight",
+            "ended_at": None,
+            "payment_sent": False,
+            "sessions": (SignedSession(manifest_id="maybe-paid", payment_state="unknown"),),
+        }
+    )
+    await store.create_job(job, None)
+    await store.start_attempt(attempt)
+    await store.record_payment_evidence(attempt)
+    await store.close()
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=database_url, log_json=False),
+        supply=EngineSupply(clock=clock, discovery_source=StaticDiscoverySource()),
+    )
+    await engine.start()
+    try:
+        recovered = await engine.store.get_job(job.id)
+        assert recovered is not None and recovered.state == "uncertain"
+        assert [s.payment_state for s in recovered.attempts[0].sessions] == ["unknown"]
+        assert not recovered.attempts[0].payment_sent
+        cost = await engine.costs.refresh_projection(job.id)
+        assert cost is not None and cost.status == "pending"
+    finally:
+        await engine.stop()
+
+
+async def test_the_retry_migration_keeps_references_and_downgrades(
+    database_url: str, clock: FixedClock
+) -> None:
+    """0009 (D57): a reference written before it still holds; a downgrade gives a superseded job's up,
+    since the old index allows one job per reference."""
+    engine = create_engine(database_url)
+    await upgrade(engine, "0008")
+    old = make_job(clock, ref="order-1", state="failed")
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO lpb_jobs (id, application_id, actor_id, operation_ref, request_fingerprint, mode, "
+                "app, state, created_at) VALUES (:id, 'default', 'alice', 'order-1', 'fp', 'immediate', 'a/b', "
+                "'failed', :at)"
+            ),
+            {"id": str(old.id), "at": clock.now()},
+        )
+    await upgrade(engine)
+    store = SqlStore(engine)
+    found = await store.job_by_operation_ref("default", "alice", "order-1")
+    assert found is not None and found[0].id == old.id
+    retry = make_job(clock, ref="order-1", state="running")
+    await store.create_job(retry, "fp", retry_of=old.id)
+    await downgrade(engine, "0008")
+    async with engine.connect() as conn:
+        refs = dict((await conn.execute(text("SELECT id, operation_ref FROM lpb_jobs"))).all())
+    assert refs == {str(old.id): None, str(retry.id): "order-1"}
+    await store.close()
+
+
+async def test_a_purged_job_frees_its_reference(database_url: str, clock: FixedClock) -> None:
+    """D57: a reference lives as long as its job. Once retention purges it, the reference dispatches
+    again, and a retry whose failed job was purged meanwhile is written as a new job."""
+    store = await SqlStore.connect(database_url)
+    done, failed = make_job(clock, ref="order-1"), make_job(clock, ref="order-2", state="failed")
+    await store.create_job(done, "fp")
+    await store.create_job(failed, "fp")
+    clock.advance(timedelta(days=40).total_seconds())
+    await purge(store.engine, clock.now(), jobs_days=30, usage_days=None)
+    assert await store.job_by_operation_ref("default", "alice", "order-1") is None
+    again = make_job(clock, ref="order-1")
+    await store.create_job(again, "fp")
+    retry = make_job(clock, ref="order-2", state="running")
+    await store.create_job(retry, "fp", retry_of=failed.id)  # it looked before the purge
+    holders = [await store.job_by_operation_ref("default", "alice", ref) for ref in ("order-1", "order-2")]
+    await store.close()
+    assert [found[0].id for found in holders if found] == [again.id, retry.id]
+
+
+async def test_the_operation_ledger_outlives_retention_and_downgrades(
+    database_url: str, clock: FixedClock
+) -> None:
+    """0010 (D57, ISS-11): ledger rows are kept (no purge in M3), so a reference never applies twice; a
+    downgrade drops the table."""
+    engine = create_engine(database_url)
+    await upgrade(engine)
+    store = SqlStore(engine)
+    record = OperationRecord(
+        application_id="default", actor_id="operator", operation_ref="op-1", command="fund",
+        fingerprint="f", state="started", started_at=clock.now(),
+    )  # fmt: skip
+    await store.begin_operation(record)
+    clock.advance(timedelta(days=400).total_seconds())
+    await purge(engine, clock.now(), jobs_days=1, usage_days=1)
+    assert await store.get_operation("default", "operator", "op-1") == record
+    await downgrade(engine, "0009")
+    async with engine.connect() as conn:
+        tables = await conn.run_sync(lambda sync: inspect(sync).get_table_names())
+    assert "lpb_operations" not in tables
+    await store.close()

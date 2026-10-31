@@ -1,25 +1,31 @@
-"""Adapters: the Batteries wire format, SDK error mapping, secret stores, and settings."""
+"""Adapters: the Batteries wire format, runner discovery, secret stores, and settings."""
 
+import asyncio
 import json
 from decimal import Decimal
-from types import SimpleNamespace
 
 import httpx
 import pytest
-from livepeer_gateway.errors import LivepeerHTTPError
+from pydantic import ValidationError
 
+from livepeer_builder import generate_secret_key
 from livepeer_builder.adapters import sdk
-from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource, allowance_from_body
-from livepeer_builder.adapters.sdk import SdkRunnerTransport, call_error, runners_from_entries
+from livepeer_builder.adapters.batteries import (
+    TOKEN_HEADER,
+    BatteriesClient,
+    BatteriesUsageSource,
+    allowance_from_body,
+    batteries_http_client,
+)
+from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import JobRequest, Money, Runner, SecretRef
+from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     CursorMismatch,
     InvalidRequest,
     ProviderError,
     ProviderUnavailable,
-    RunnerCallError,
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
@@ -111,6 +117,79 @@ async def test_create_grant_returns_the_response_record() -> None:
     assert error.value.status_code == 200
 
 
+async def test_a_created_grant_is_read_back_since_batteries_answers_with_its_id_only() -> None:
+    """At ca09e47, ``POST /v1/grants`` answers ``{"id": ...}`` (``management.go``); the record the engine
+    returns, and the ledger replays (D57), is the grant as Batteries stored it."""
+    requests: list[tuple[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "grant_9"})
+        stored = {"id": "grant_9", "name": "ops", "status": "active", "currency": "usd", "total_usd": "2.5"}
+        return httpx.Response(200, json=stored)
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    grant = await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"))
+    assert (grant.id, grant.name, grant.status, grant.currency, grant.total) == (
+        "grant_9",
+        "ops",
+        "active",
+        "USD",
+        "2.5",
+    )
+    assert requests == [("POST", "/v1/grants"), ("GET", "/v1/grants/grant_9")]
+
+
+async def test_a_grant_created_but_not_read_back_is_an_unknown_outcome_not_a_refusal() -> None:
+    """The grant exists once the create answered, so a failed read must not free the reference (a 4xx is a
+    definite refusal to the ledger, D57): it is unavailable, and a resume adopts the grant by its tag."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "grant_9"})
+        return httpx.Response(404, json={"error": "not found"})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    with pytest.raises(ProviderUnavailable, match="grant_9"):
+        await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"))
+
+
+async def test_a_grant_carries_the_engines_tag_as_batteries_metadata() -> None:
+    """D57, Q5: Batteries takes string fields only, so the tag travels as a JSON object in ``metadata``
+    (at ca09e47, ``managementFields`` refuses any non-string value), and grant reads parse it back."""
+    sent: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            sent.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": "grant_9"})
+        tagged = {"id": "grant_9", "name": "ops", "metadata": '{"lpb_operation": "abc"}'}
+        free_text = {"id": "grant_1", "name": "legacy", "metadata": "set up by hand"}
+        return httpx.Response(200, json={"items": [free_text, tagged], "next_cursor": ""})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    await client.create_grant("ops", Money(amount=Decimal("2.5"), currency="USD"), {"lpb_operation": "abc"})
+    assert json.loads(sent[0]["metadata"]) == {"lpb_operation": "abc"}
+    assert [grant.metadata for grant in await client.list_grants()] == [{}, {"lpb_operation": "abc"}]
+
+
+async def test_the_grant_list_reads_every_page() -> None:
+    """Batteries pages grant lists (100 by default, at most 1000, at ca09e47); a resumed grant create must
+    see every grant to find its tag."""
+    seen: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        if "cursor" not in request.url.params:
+            return httpx.Response(200, json={"items": [{"id": "grant_1"}], "next_cursor": "c1"})
+        return httpx.Response(200, json={"items": [{"id": "grant_2"}], "next_cursor": ""})
+
+    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
+    assert [grant.id for grant in await client.list_grants()] == ["grant_1", "grant_2"]
+    assert seen == [{"limit": "1000"}, {"limit": "1000", "cursor": "c1"}]
+
+
 async def test_provider_errors_and_outages_are_distinct() -> None:
     def conflict(_: httpx.Request) -> httpx.Response:
         return httpx.Response(409, json={"error": "idempotency key reused"})
@@ -165,96 +244,6 @@ async def test_usage_pages_and_cursor_mismatch() -> None:
         await source.page("bad")
 
 
-def test_sdk_errors_keep_payment_evidence() -> None:
-    runner_url = "https://runner.example/run"
-    refused = LivepeerHTTPError(503, runner_url, body="busy")
-    mapped = call_error(refused, runner_url, payment_sent=False)
-    assert (mapped.kind, mapped.payment_sent, mapped.status_code) == ("refused", False, 503)
-
-    signer = "https://signer.example/generate-live-payment"
-    params = LivepeerHTTPError(400, signer, body="incomplete params")
-    assert call_error(params, runner_url, payment_sent=False).kind == "payment_refused"  # fail over
-    ceiling = LivepeerHTTPError(481, signer)
-    assert call_error(ceiling, runner_url, payment_sent=False).kind == "payment_refused"
-    exhausted = LivepeerHTTPError(402, signer)
-    assert call_error(exhausted, runner_url, payment_sent=False).kind == "payment"  # caller-side: no failover
-
-    after_signing = call_error(
-        LivepeerHTTPError(400, signer), runner_url, payment_sent=True, manifest_ids=("m-7",)
-    )
-    assert (after_signing.kind, after_signing.payment_sent, after_signing.manifest_ids) == (
-        "payment",
-        True,
-        ("m-7",),
-    )
-
-
-class _Session:
-    def __init__(self, manifest_id: str) -> None:
-        self.manifest_id = manifest_id
-
-
-def _runner() -> Runner:
-    return Runner(
-        url="https://runner.example", app="a/b", runner_id="r1", mode="single-shot",
-        orchestrator_url="https://orch.example", capacity=1, capacity_available=1, rate=None,
-    )  # fmt: skip
-
-
-async def test_transport_collects_signed_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def paid_twice(url: str, **kwargs: object) -> SimpleNamespace:
-        callback = kwargs["on_payment_session"]
-        callback(_Session("m-1"))  # type: ignore[operator]
-        callback(_Session("m-2"))  # type: ignore[operator]  # the runner answered 402 again
-        callback(_Session("m-2"))  # type: ignore[operator]  # a second session, same manifest
-        return SimpleNamespace(
-            content=b'{"ok": 1}', data={}, content_type="application/json", session_id="m-1"
-        )
-
-    monkeypatch.setattr(sdk, "call_runner", paid_twice)
-    reply = await SdkRunnerTransport("https://signer.example").call(_runner(), JobRequest(app="a/b"), "lpg_k")
-    assert (reply.manifest_ids, reply.payment_sent) == (("m-1", "m-2", "m-2"), True)
-
-
-async def test_transport_failures_carry_the_sessions_signed_before_them(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def signed_then_500(url: str, **kwargs: object) -> SimpleNamespace:
-        kwargs["on_payment_session"](_Session("m-9"))  # type: ignore[operator]
-        raise LivepeerHTTPError(500, url, body="boom")
-
-    monkeypatch.setattr(sdk, "call_runner", signed_then_500)
-    with pytest.raises(RunnerCallError) as failed:
-        await SdkRunnerTransport("https://signer.example").call(
-            _runner(), JobRequest(app="a/b", path="/x"), "lpg_k"
-        )
-    assert (failed.value.kind, failed.value.payment_sent, failed.value.manifest_ids) == (
-        "http",
-        True,
-        ("m-9",),
-    )
-
-    async def refused_by_signer(url: str, **kwargs: object) -> SimpleNamespace:
-        raise LivepeerHTTPError(400, "https://signer.example/generate-live-payment", body="incomplete params")
-
-    monkeypatch.setattr(sdk, "call_runner", refused_by_signer)
-    with pytest.raises(RunnerCallError) as refused:
-        await SdkRunnerTransport("https://signer.example").call(_runner(), JobRequest(app="a/b"), "lpg_k")
-    assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)
-
-
-async def test_unpaid_calls_register_no_callback(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, object] = {}
-
-    async def free(url: str, **kwargs: object) -> SimpleNamespace:
-        seen.update(kwargs)
-        return SimpleNamespace(content=b"{}", data={}, content_type="application/json", session_id="")
-
-    monkeypatch.setattr(sdk, "call_runner", free)
-    reply = await SdkRunnerTransport(None).call(_runner(), JobRequest(app="a/b"), None)
-    assert seen["on_payment_session"] is None and reply.payment_sent is False
-
-
 def test_discovery_entries_become_runners() -> None:
     entries = [
         {
@@ -276,12 +265,12 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
     with pytest.raises(InvalidRequest):
         await configured.put("x", "y")
 
-    key = EncryptedDbSecretStore.generate_key()
+    key = generate_secret_key()
     database = EncryptedDbSecretStore(store, key, clock)
     ref = await database.put("lpg/default/alice", "lpg_alice")
     assert await database.get(ref) == "lpg_alice"
     with pytest.raises(InvalidRequest, match="decrypted"):
-        await EncryptedDbSecretStore(store, EncryptedDbSecretStore.generate_key(), clock).get(ref)
+        await EncryptedDbSecretStore(store, generate_secret_key(), clock).get(ref)
 
     routing = RoutingSecretStore(configured, database)
     assert await routing.get(SecretRef(ref="settings:shared")) == "lpg_shared"
@@ -303,3 +292,103 @@ def test_settings_from_environment() -> None:
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
     ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
     assert "grant_id" not in ignored.model_dump()
+
+
+def test_tuning_values_are_settings_with_todays_defaults() -> None:
+    defaults = EngineSettings()
+    assert (defaults.stream_open_grace_s, defaults.batteries_timeout_s, defaults.retention_interval_s) == (
+        5.0,
+        30.0,
+        6 * 3600,
+    )
+    tuned = EngineSettings.from_env(
+        {"LPB_STREAM_OPEN_GRACE_S": "0.5", "LPB_BATTERIES_TIMEOUT_S": "7", "LPB_RETENTION_INTERVAL_S": "60"}
+    )
+    assert (tuned.stream_open_grace_s, tuned.batteries_timeout_s, tuned.retention_interval_s) == (
+        0.5,
+        7.0,
+        60.0,
+    )
+    for field in ("stream_open_grace_s", "batteries_timeout_s", "retention_interval_s"):
+        with pytest.raises(ValidationError):
+            EngineSettings.model_validate({field: 0})
+
+
+def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
+    assert EngineSettings().max_paid_attempts == 2  # D55
+    assert EngineSettings.from_env({"LPB_MAX_PAID_ATTEMPTS": "3"}).max_paid_attempts == 3
+    for value in (0, 11):
+        with pytest.raises(ValidationError):
+            EngineSettings.model_validate({"max_paid_attempts": value})
+
+
+def test_batteries_http_client_uses_the_configured_timeout() -> None:
+    client = batteries_http_client("https://batteries.example/", "t", timeout_s=7.0)
+    assert client.timeout == httpx.Timeout(7.0)
+    assert str(client.base_url) == "https://batteries.example" and client.headers[TOKEN_HEADER] == "t"
+
+
+# -- streaming (docs/contracts/engine.md#streaming) --------------------------------------------------
+
+
+def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
+    entries = [
+        {
+            "address": "https://orch.example:8935",
+            "runners": [
+                {
+                    "url": "https://orch.example:8935/apps/r/app",
+                    "app": "blueclaw/chat/qwen3.8-27b",
+                    "version": "1.2.0",
+                    "metadata": '{"model_id":"Qwen3.8-27B","max_context":131072}',
+                    "gpu": {"id": "0", "name": "H100", "vram_mb": 81920},
+                    "mode": "single-shot",
+                    "capacity": 8,
+                    "capacity_used": 3,
+                    "capacity_available": 5,
+                    "price_info": {"price": 4634466808, "currency": "wei", "unit": "seconds"},
+                },
+                {
+                    "url": "https://orch.example:8935/apps/q/app",
+                    "app": "x/y",
+                    "capacity": 1,
+                    "session_ids": ["s"],
+                },
+            ],
+        }
+    ]
+    first, second = sdk.runners_from_entries(entries)
+    assert first.version == "1.2.0" and first.metadata is not None and "max_context" in first.metadata
+    assert first.gpu is not None and (first.gpu.name, first.gpu.vram_mb) == ("H100", 81920)
+    assert first.capacity_available == 5  # the node's own figure wins over counting session_ids
+    assert (second.version, second.metadata, second.gpu, second.capacity_available) == (None, None, None, 0)
+
+
+async def test_usage_feed_is_unfiltered_by_default() -> None:
+    seen: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": [], "next_cursor": None})
+
+    source = BatteriesUsageSource(
+        "https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle))
+    )
+    await source.page(None, limit=10)
+    assert seen == [{"limit": "10"}]  # iss-04: no filters, so desk-created grants still reconcile
+
+
+async def test_a_batteries_call_has_one_deadline_for_the_whole_request() -> None:
+    """Cursor, #76 review: httpx applies the timeout to each phase (connect, write, read, pool) in turn, so
+    one call could take several times LPB_BATTERIES_TIMEOUT_S. A resume is a lease timed in those calls
+    (D57), so each call is bounded as a whole, and running out is unavailable, an unknown outcome."""
+
+    async def slow(_: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={"items": [], "next_cursor": ""})
+
+    client = BatteriesClient(
+        "https://batteries.test", "t", client=mock_client(httpx.MockTransport(slow)), timeout_s=0.05
+    )
+    with pytest.raises(ProviderUnavailable, match=r"0\.05 s"):
+        await client.list_grants()

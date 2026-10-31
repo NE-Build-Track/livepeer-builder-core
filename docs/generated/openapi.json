@@ -26,6 +26,7 @@
             "enum": [
               "actor",
               "admin",
+              "auditor",
               "service"
             ],
             "title": "Kind",
@@ -177,7 +178,9 @@
               "payment_refused",
               "payment",
               "timeout",
-              "http"
+              "http",
+              "abandoned",
+              "payment_unknown"
             ],
             "title": "Outcome",
             "type": "string"
@@ -219,6 +222,16 @@
               }
             ],
             "title": "Status Code"
+          },
+          "timings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallTimings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -264,6 +277,47 @@
           "fees"
         ],
         "title": "AttemptCost",
+        "type": "object"
+      },
+      "CallTimings": {
+        "additionalProperties": false,
+        "description": "Where one runner call's time went before the runner answered, in milliseconds (#89). A step the\ncall never reached is ``None``, and each step adds up its repeats.",
+        "properties": {
+          "challenge_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenge Ms"
+          },
+          "response_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Ms"
+          },
+          "signing_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signing Ms"
+          }
+        },
+        "title": "CallTimings",
         "type": "object"
       },
       "CostSummary": {
@@ -521,10 +575,12 @@
               "refused",
               "unreachable",
               "payment",
+              "payment_unknown",
               "timeout",
               "runner_rejected",
               "runner_error",
-              "interrupted"
+              "interrupted",
+              "abandoned"
             ],
             "title": "Kind",
             "type": "string"
@@ -619,11 +675,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
           }
         },
         "required": [
           "name",
-          "amount"
+          "amount",
+          "operation_ref"
         ],
         "title": "GrantBody",
         "type": "object"
@@ -639,6 +702,13 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
           },
           "name": {
             "title": "Name",
@@ -692,6 +762,7 @@
             "enum": [
               "actor",
               "admin",
+              "auditor",
               "service"
             ],
             "title": "Kind",
@@ -700,6 +771,12 @@
           "label": {
             "default": "",
             "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
             "type": "string"
           },
           "permissions": {
@@ -718,7 +795,8 @@
           }
         },
         "required": [
-          "actor_id"
+          "actor_id",
+          "operation_ref"
         ],
         "title": "IssueKeyBody",
         "type": "object"
@@ -729,9 +807,21 @@
           "key": {
             "$ref": "#/components/schemas/AccessKey"
           },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
           "token": {
-            "title": "Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
           }
         },
         "required": [
@@ -890,6 +980,7 @@
       },
       "JobCost": {
         "additionalProperties": false,
+        "description": "``fees`` is everything the job's attempts cost the allocation. ``billable`` is the part an\nenterprise bills its user for: the ``delivered`` attempts only, so a job that failed, or the\nattempts a job failed over from, are never billable (D52). Both are final once ``status`` is\n``observed`` or ``corrected``.",
         "properties": {
           "attempts": {
             "items": {
@@ -897,6 +988,9 @@
             },
             "title": "Attempts",
             "type": "array"
+          },
+          "billable": {
+            "$ref": "#/components/schemas/Fees"
           },
           "fees": {
             "$ref": "#/components/schemas/Fees"
@@ -971,6 +1065,58 @@
             ],
             "title": "Capability"
           },
+          "content_type": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "first_byte_timeout_s": {
+            "default": 60.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 3600.0,
+            "title": "First Byte Timeout S",
+            "type": "number"
+          },
+          "headers": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Headers",
+            "type": "array"
+          },
+          "idle_timeout_s": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 3600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 60.0,
+            "title": "Idle Timeout S"
+          },
           "max_attempts": {
             "default": 3,
             "maximum": 10.0,
@@ -1039,6 +1185,25 @@
             ],
             "title": "Payload"
           },
+          "raw_body": {
+            "anyOf": [
+              {
+                "contentEncoding": "base64",
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 11184812,
+            "title": "Raw Body"
+          },
+          "return_http_errors": {
+            "default": false,
+            "title": "Return Http Errors",
+            "type": "boolean"
+          },
           "timeout_s": {
             "default": 300.0,
             "exclusiveMinimum": 0.0,
@@ -1051,6 +1216,86 @@
           "app"
         ],
         "title": "JobRequest",
+        "type": "object"
+      },
+      "KnownActor": {
+        "additionalProperties": false,
+        "description": "One row of the operator's actor list (D46, D48): provisioned, signed in, or both.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvisionedActor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "provisioned": {
+            "readOnly": true,
+            "title": "Provisioned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "application_id",
+          "actor_id",
+          "label",
+          "name",
+          "allocation",
+          "first_seen_at",
+          "last_seen_at",
+          "provisioned"
+        ],
+        "title": "KnownActor",
         "type": "object"
       },
       "MeasuredUsage": {
@@ -1239,12 +1484,20 @@
           },
           "label": {
             "default": "",
+            "maxLength": 200,
             "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
             "type": "string"
           }
         },
         "required": [
-          "amount"
+          "amount",
+          "operation_ref"
         ],
         "title": "ProvisionBody",
         "type": "object"
@@ -1283,6 +1536,12 @@
           },
           "grant_id": {
             "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
             "type": "string"
           },
           "secret_ref": {
@@ -1454,6 +1713,32 @@
         "title": "RotateBody",
         "type": "object"
       },
+      "RotateKeyBody": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_ref"
+        ],
+        "title": "RotateKeyBody",
+        "type": "object"
+      },
       "Runner": {
         "additionalProperties": false,
         "properties": {
@@ -1482,6 +1767,27 @@
               }
             ],
             "title": "Capacity Available"
+          },
+          "gpu": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunnerGPU"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
           },
           "mode": {
             "anyOf": [
@@ -1529,6 +1835,17 @@
           "url": {
             "title": "Url",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [
@@ -1542,6 +1859,47 @@
           "rate"
         ],
         "title": "Runner",
+        "type": "object"
+      },
+      "RunnerGPU": {
+        "additionalProperties": false,
+        "description": "The GPU a runner reports in its registration, as the node echoes it.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "vram_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vram Mb"
+          }
+        },
+        "title": "RunnerGPU",
         "type": "object"
       },
       "SecretRef": {
@@ -1678,7 +2036,7 @@
       },
       "SignedSession": {
         "additionalProperties": false,
-        "description": "One session the signer signed for an attempt.\n\n``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to\nthe Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays\n``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session\nand one log entry share the key, and ``ambiguous`` when they do not.",
+        "description": "One manifest an attempt asked the signer to sign, stored before the signer is asked (D54).\n\n``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to\nthe Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays\n``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session\nand one log entry share the key, and ``ambiguous`` when they do not.\n\n``payment_state`` is ``unknown`` until the signer answers: it may have charged. A validated\nreply makes it ``paid`` and a refusal ``unpaid``; unique usage also confirms an ``unknown`` one\nas ``paid``. ``paid`` is final, and an ``unpaid`` manifest is never matched to usage.",
         "properties": {
           "manifest_id": {
             "title": "Manifest Id",
@@ -1704,6 +2062,16 @@
               }
             ],
             "title": "Payment Session Id"
+          },
+          "payment_state": {
+            "default": "paid",
+            "enum": [
+              "unknown",
+              "paid",
+              "unpaid"
+            ],
+            "title": "Payment State",
+            "type": "string"
           }
         },
         "required": [
@@ -1816,6 +2184,14 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "bearerFormat": "lpk",
+        "description": "An engine API key: `lpk_...`",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -1842,7 +2218,164 @@
         "summary": "Readyz"
       }
     },
+    "/v1/admin/actors": {
+      "get": {
+        "description": "Provisioned actors and people an identity provider signed in (D46, D48).",
+        "operationId": "list_actors_v1_admin_actors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "application_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Application Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "exhausted",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provisioned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provisioned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KnownActor"
+                  },
+                  "title": "Response List Actors V1 Admin Actors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Actors"
+      }
+    },
     "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation": {
+      "get": {
+        "operationId": "get_actor_v1_admin_applications__application_id__actors__actor_id__allocation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Actor"
+      },
       "post": {
         "operationId": "provision_v1_admin_applications__application_id__actors__actor_id__allocation_post",
         "parameters": [
@@ -1897,6 +2430,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Provision"
       }
     },
@@ -1955,6 +2493,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Fund"
       }
     },
@@ -2003,6 +2546,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Revoke"
       }
     },
@@ -2061,6 +2609,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Rotate"
       }
     },
@@ -2119,6 +2672,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Set Status"
       }
     },
@@ -2137,6 +2695,11 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Sync Costs"
       }
     },
@@ -2168,6 +2731,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Fund Grant"
       }
     },
@@ -2190,6 +2758,11 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Grants"
       },
       "post": {
@@ -2226,6 +2799,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Grant"
       }
     },
@@ -2276,6 +2854,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Keys"
       },
       "post": {
@@ -2312,7 +2895,56 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Issue Key"
+      }
+    },
+    "/v1/admin/keys/{key_id}": {
+      "get": {
+        "operationId": "get_key_v1_admin_keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Key"
       }
     },
     "/v1/admin/keys/{key_id}/revoke": {
@@ -2344,7 +2976,66 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Revoke Key"
+      }
+    },
+    "/v1/admin/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_key_v1_admin_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Key"
       }
     },
     "/v1/admin/reconciliation": {
@@ -2400,6 +3091,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Reconcile"
       }
     },
@@ -2446,6 +3142,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Allowance"
       }
     },
@@ -2492,6 +3193,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Cost Projections"
       }
     },
@@ -2572,6 +3278,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Cost Summary"
       }
     },
@@ -2624,6 +3335,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Events"
       }
     },
@@ -2670,10 +3386,29 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Jobs"
       },
       "post": {
         "operationId": "run_job_v1_jobs_post",
+        "parameters": [
+          {
+            "description": "stream the runner's response as it arrives",
+            "in": "query",
+            "name": "stream",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "stream the runner's response as it arrives",
+              "title": "Stream",
+              "type": "boolean"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2691,7 +3426,7 @@
                 "schema": {}
               }
             },
-            "description": "The runner's own status, content type and body"
+            "description": "The runner's own status, content type and body. With `Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives (docs/contracts/engine.md#streaming)."
           },
           "422": {
             "content": {
@@ -2704,6 +3439,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Run Job"
       }
     },
@@ -2744,6 +3484,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Job"
       }
     },
@@ -2784,6 +3529,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Job Cost"
       }
     },
@@ -2822,6 +3572,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Result"
       }
     },
@@ -2872,6 +3627,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Report Usage"
       }
     },
@@ -2965,6 +3725,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Runners"
       }
     },
@@ -3003,6 +3768,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Open Session"
       }
     }

@@ -8,14 +8,8 @@ MaxHourlyPrice = "100"
 MaxFixedPrice = "1"
 AuthWebhookFile = "/run/secrets/webhook-url"
 AuthWebhookHeadersFile = "/run/secrets/webhook-headers"
-# The signer discovers and pays only these public on-chain orchestrators (public hosts need no grants).
-Orchestrators = [
-  "https://orch-us-central.xodeapp.xyz:18935",
-  "https://us-central-metrics.speedybird.xyz:28935",
-  "https://orch-eu-central.open-pool.com:443",
-  "https://hky.eliteencoder.net:8936",
-]
-DiscoveryGrants = []
+# The signer only signs payments. Discovery is the discovery service (config/orchestrators.txt, D43);
+# an Orchestrators list here was never a payment control, so there is none.
 
 [Kafka]
 Broker = "kafka://127.0.0.1:9092"

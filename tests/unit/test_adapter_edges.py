@@ -1,14 +1,11 @@
-"""Adapter edge cases: Batteries routes and errors, SDK error classification and parsing, secret stores."""
+"""Adapter edge cases: Batteries routes and errors, network error classification, discovery parsing, secret stores."""
 
 from decimal import Decimal
-from types import SimpleNamespace
 
-import aiohttp
 import httpx
 import pytest
-from livepeer_gateway.errors import PaymentError
 
-from livepeer_builder.adapters import sdk
+from livepeer_builder import generate_secret_key
 from livepeer_builder.adapters.batteries import (
     BatteriesClient,
     BatteriesUsageSource,
@@ -16,21 +13,15 @@ from livepeer_builder.adapters.batteries import (
     error_message,
     usage_row_from_item,
 )
-from livepeer_builder.adapters.sdk import (
-    SdkRunnerTransport,
-    SignerDiscoverySource,
-    call_error,
-    network_kind,
-    runners_from_entries,
-)
+from livepeer_builder.adapters.runner_call import network_kind
+from livepeer_builder.adapters.sdk import HttpDiscoverySource, runners_from_entries
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
-from livepeer_builder.contracts import JobRequest, Money, NetworkRate, Runner, SecretRef
+from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
     ProviderError,
     ProviderUnavailable,
-    RunnerCallError,
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
@@ -128,9 +119,9 @@ def test_wire_format_edges() -> None:
 # -- SDK -----------------------------------------------------------------------------------------------
 
 
-async def test_signer_discovery_parses_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_http_discovery_reads_only_the_discovery_url_and_parses_entries() -> None:
     async def fake_discover(**kwargs: object) -> list[dict[str, object]]:
-        assert kwargs["signer_headers"] == {"Authorization": "Bearer k"}
+        assert kwargs == {"discovery_url": "http://discovery:8939/discovery"}  # no signer, no credentials
         return [
             {
                 "address": "https://o",
@@ -138,8 +129,7 @@ async def test_signer_discovery_parses_entries(monkeypatch: pytest.MonkeyPatch) 
             }
         ]
 
-    monkeypatch.setattr(sdk, "discover_runners", fake_discover)
-    source = SignerDiscoverySource(signer_url="https://s", signer_headers={"Authorization": "Bearer k"})
+    source = HttpDiscoverySource("http://discovery:8939/discovery", discover=fake_discover)
     (runner,) = await source.fetch()
     assert runner.rate is None and runner.orchestrator_url == "https://o"
 
@@ -165,25 +155,6 @@ def test_network_errors_are_classified_through_their_causes() -> None:
         "unreachable",
         "http",
     )
-    assert call_error(PaymentError("signer said no"), "https://r", payment_sent=False).kind == "payment"
-
-
-async def test_transport_maps_client_errors_and_passes_rates(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = Runner(
-        url="https://r", app="a", runner_id=None, mode=None, orchestrator_url=None, capacity=None,
-        capacity_available=None, rate=NetworkRate(amount=Decimal("0.1"), currency="usd", unit="request"),
-    )  # fmt: skip
-    seen: dict[str, object] = {}
-
-    async def unreachable(url: str, **kwargs: object) -> SimpleNamespace:
-        seen.update(kwargs)
-        raise aiohttp.ClientConnectionError("no route")
-
-    monkeypatch.setattr(sdk, "call_runner", unreachable)
-    with pytest.raises(RunnerCallError) as failed:
-        await SdkRunnerTransport("https://signer").call(runner, JobRequest(app="a"), "lpg_k")
-    assert (failed.value.kind, failed.value.payment_sent) == ("unreachable", False)
-    assert seen["runner"].price_info.price == "0.1"  # type: ignore[attr-defined]
 
 
 # -- secret stores ---------------------------------------------------------------------------------------
@@ -198,7 +169,7 @@ async def test_secret_store_edges(store: SqlStore, clock: FixedClock) -> None:
     await configured.delete(configured.ref("k"))  # configuration owns it: a no-op
     assert await configured.get(configured.ref("k")) == "v"
 
-    database = EncryptedDbSecretStore(store, EncryptedDbSecretStore.generate_key(), clock)
+    database = EncryptedDbSecretStore(store, generate_secret_key(), clock)
     with pytest.raises(NotFound):
         await database.get(SecretRef(ref="db:nope"))
 

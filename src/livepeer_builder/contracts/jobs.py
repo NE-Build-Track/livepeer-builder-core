@@ -1,51 +1,135 @@
 """Job contracts: requests, attempts, failures, results and measured usage (docs/contracts/engine.md)."""
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.http import request_headers
 
 ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 SessionMatch = Literal["unmatched", "matched", "ambiguous"]
+# D54: ``unknown`` before the signer answers (it may have charged), then ``paid`` or ``unpaid`` (refused).
+PaymentState = Literal["unknown", "paid", "unpaid"]
 
 
 class JobRequest(Contract):
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
     app: str = Field(min_length=1)  # the runner app a discovery entry advertises
     path: str = ""  # appended to the runner URL; must start with "/" when set
     method: HttpMethod = "POST"
     payload: dict[str, Any] | None = None
+    raw_body: bytes | None = Field(
+        default=None, strict=True, repr=False, json_schema_extra={"maxLength": 11184812}
+    )
+    content_type: str | None = Field(default=None, min_length=1, max_length=256)
+    headers: tuple[tuple[str, str], ...] = Field(default=(), repr=False)
+    return_http_errors: bool = False
+
+    @field_validator("raw_body")
+    @classmethod
+    def _body_limit(cls, value: bytes | None) -> bytes | None:
+        if value is not None and len(value) > 8388608:
+            raise ValueError("raw_body exceeds 8 MiB decoded limit")
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def _headers(cls, value: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        return request_headers(value)
+
+    @field_validator("content_type")
+    @classmethod
+    def _media_type(cls, value: str | None) -> str | None:
+        if value is not None and any(ord(c) < 32 or ord(c) > 126 for c in value):
+            raise ValueError("Invalid content type")
+        return value
+
     operation_ref: str | None = Field(default=None, max_length=200)  # the caller's retry key
     capability: str | None = None  # label only in M2; resolution is a later contract
     model: str | None = None
     mode: ExecutionMode = "immediate"
     max_attempts: int = Field(default=3, ge=1, le=10)
-    timeout_s: float = Field(default=300.0, gt=0, le=3600)
+    timeout_s: float = Field(default=300.0, gt=0, le=3600)  # the whole job, from its start to the last byte
+    # streams only (D35): request → first body chunk (capped at timeout_s), and the longest gap between
+    # chunks once data flows. None turns the idle limit off.
+    first_byte_timeout_s: float = Field(default=60.0, gt=0, le=3600)
+    idle_timeout_s: float | None = Field(default=60.0, gt=0, le=3600)
+
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_json(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The runner receives the payload as JSON, so it is checked here, before any attempt or payment."""
+        if value is not None:
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"payload must be JSON: {error}") from error
+        return value
+
+    @model_validator(mode="after")
+    def _first_byte_within_total(self) -> "JobRequest":
+        if self.raw_body is not None and self.payload is not None:
+            raise ValueError("Use either payload or raw_body")
+        if self.raw_body is not None and self.content_type is None:
+            raise ValueError("raw_body requires an explicit content_type")
+        if "first_byte_timeout_s" in self.model_fields_set and self.first_byte_timeout_s > self.timeout_s:
+            raise ValueError("first_byte_timeout_s cannot be longer than timeout_s")
+        return self
 
 
-# "payment_refused": the signer refused to pay *this orchestrator* before anything was sent (bad payment
-# params, price above the session ceiling). Safe to fail over. "payment": any other payment failure.
+# "payment_refused": the signer refused to pay *this orchestrator* (bad payment params, price above the
+# session ceiling). Another orchestrator may succeed, so the job fails over (D26, D52).
+# "payment": any other payment failure.
+# "abandoned": the caller stopped reading a stream before the runner finished
+# (docs/contracts/engine.md#streaming).
+# "payment_unknown": the signer was asked and gave neither a validated payment nor a refusal (a lost or
+# malformed reply, a 5xx, a cancel), so it may have charged; the job is uncertain (D53).
 AttemptOutcome = Literal[
-    "in_flight", "succeeded", "refused", "unreachable", "payment_refused", "payment", "timeout", "http"
+    "in_flight",
+    "succeeded",
+    "refused",
+    "unreachable",
+    "payment_refused",
+    "payment",
+    "timeout",
+    "http",
+    "abandoned",
+    "payment_unknown",
 ]
 
 
 class SignedSession(Contract):
-    """One session the signer signed for an attempt.
+    """One manifest an attempt asked the signer to sign, stored before the signer is asked (D54).
 
     ``manifest_id`` is the orchestrator's label from the 402 challenge. Cost sync resolves it to
     the Batteries ``payment_session_id`` on ``(allocation_id, manifest_id)``. ``match`` stays
     ``unmatched`` until that resolution, becomes ``matched`` when exactly one Batteries session
     and one log entry share the key, and ``ambiguous`` when they do not.
+
+    ``payment_state`` is ``unknown`` until the signer answers: it may have charged. A validated
+    reply makes it ``paid`` and a refusal ``unpaid``; unique usage also confirms an ``unknown`` one
+    as ``paid``. ``paid`` is final, and an ``unpaid`` manifest is never matched to usage.
     """
 
     manifest_id: str
     payment_session_id: str | None = None
     match: SessionMatch = "unmatched"
+    payment_state: PaymentState = "paid"  # rows from before D54 are signatures the signer confirmed
+
+
+class CallTimings(Contract):
+    """Where one runner call's time went before the runner answered, in milliseconds (#89). A step the
+    call never reached is ``None``, and each step adds up its repeats."""
+
+    challenge_ms: int | None = None  # the unpaid requests, until their 402s
+    signing_ms: int | None = None  # the signer's answers
+    response_ms: int | None = None  # the request the runner answered, until its response headers
 
 
 class Attempt(Contract):
@@ -56,12 +140,13 @@ class Attempt(Contract):
     runner_url: str | None
     orchestrator_url: str | None
     allocation_id: str | None  # the allocation whose key paid; None when the call was unpaid
-    sessions: tuple[SignedSession, ...]  # one entry per signed session, in signing order
+    sessions: tuple[SignedSession, ...]  # one entry per manifest asked for, in signing order
     payment_sent: bool
     outcome: AttemptOutcome
     status_code: int | None
     started_at: datetime
     ended_at: datetime | None
+    timings: CallTimings | None = None  # None when the transport doesn't measure, or the call is open
 
 
 FailureKind = Literal[
@@ -71,10 +156,12 @@ FailureKind = Literal[
     "refused",
     "unreachable",
     "payment",
+    "payment_unknown",
     "timeout",
     "runner_rejected",
     "runner_error",
     "interrupted",
+    "abandoned",
 ]
 
 
@@ -134,6 +221,7 @@ class RunnerReply(Contract):
     data: dict[str, Any] | None
     manifest_ids: tuple[str, ...]  # one per signed session, in signing order
     payment_sent: bool
+    timings: CallTimings | None = None
 
 
 class JobResult(Contract):

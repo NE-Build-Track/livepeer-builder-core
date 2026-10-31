@@ -19,6 +19,7 @@ classDiagram
         +enum credential_kind
         +map attributes
         +AuthProvenance? auth
+        +str? display_name
     }
     class AuthProvenance {
         +str method
@@ -36,12 +37,18 @@ classDiagram
         +str path
         +enum method
         +map? payload
+        +bytes? raw_body
+        +str? content_type
+        +str[][] headers
+        +bool return_http_errors
         +str? operation_ref
         +str? capability
         +str? model
         +enum mode
         +int max_attempts
         +float timeout_s
+        +float first_byte_timeout_s
+        +float? idle_timeout_s
     }
     class Job {
         +UUID id
@@ -72,6 +79,7 @@ classDiagram
         +int? status_code
         +datetime started_at
         +datetime? ended_at
+        +CallTimings? timings
     }
     class Failure {
         +enum kind
@@ -108,6 +116,14 @@ classDiagram
         +int? capacity
         +int? capacity_available
         +NetworkRate? rate
+        +str? version
+        +str? metadata
+        +RunnerGPU? gpu
+    }
+    class RunnerGPU {
+        +str? id
+        +str? name
+        +int? vram_mb
     }
     class NetworkRate {
         +Decimal amount
@@ -130,6 +146,7 @@ classDiagram
         +AttemptCost[] attempts
         +datetime? first_observed_at
         +datetime? updated_at
+        +Fees billable
     }
     class AttemptCost {
         +int attempt_number
@@ -152,6 +169,7 @@ classDiagram
         +enum status
         +datetime created_at
         +datetime updated_at
+        +str label
     }
     class SecretRef {
         +str ref
@@ -177,10 +195,12 @@ classDiagram
     Job *-- MeasuredUsage : usage
     Job *-- ResultRef : result
     JobCost *-- AttemptCost : attempts
+    JobCost *-- Fees : billable
     JobCost *-- Fees : fees
     JobResult *-- Job : job
     Offering *-- NetworkRate : rate_high
     Offering *-- NetworkRate : rate_low
     ProvisionedActor *-- SecretRef : secret_ref
     Runner *-- NetworkRate : rate
+    Runner *-- RunnerGPU : gpu
 ```

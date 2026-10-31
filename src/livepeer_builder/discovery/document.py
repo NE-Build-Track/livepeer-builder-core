@@ -31,9 +31,10 @@ def runner_records(body: str | bytes | bytearray) -> list[RawJson]:
     """The runner objects in an orchestrator's ``GET /discovery`` body, in order, as received.
 
     A metadata entry, or an entry whose ``runners`` is null, contributes nothing. A ``runners`` value that
-    is not a list is refused. A runner that is not an object is dropped. ``NaN`` and ``Infinity`` are not
-    JSON and raise ``ValueError``. A number ``Decimal`` cannot construct does too, so it is never re-served
-    for every engine's refresh to trip on.
+    is not a list is refused. A runner that is not an object is dropped. An object key that is not a string
+    is refused, so ``[{1:2}]`` is not an empty success. ``NaN`` and ``Infinity`` are not JSON and raise
+    ``ValueError``. A number ``Decimal`` cannot construct does too, so it is never re-served for every
+    engine's refresh to trip on.
     """
     text = body.decode("utf-8-sig") if isinstance(body, bytes | bytearray) else body.removeprefix("\ufeff")
     # Same parser as the engine. A float parser turns 1e1000000000000000000 into inf and would keep the
@@ -111,6 +112,8 @@ def _entry(text: str, index: int, decoder: json.JSONDecoder) -> tuple[list[RawJs
         return runners, index + 1
     while index < len(text):
         key, index = _decode(text, index, decoder)
+        if not isinstance(key, str):
+            raise ValueError("inventory is not valid JSON")
         index = _skip(text, index)
         if index >= len(text) or text[index] != ":":
             raise ValueError("inventory is not valid JSON")

@@ -233,6 +233,10 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
     range stays: it is `price_usd`'s only check (`test_a_bad_price_usd_drops_only_price_usd_and_says_so`
     fails without it). The `Co-authored-by` trailer on `694c437` (was `9f3366e`) is reworded away, so every
     later hash on this branch changed; the hashes above are the new ones.
+- 30 October: Copilot on `db58202`. A non-string object key (`[{1:2}]`) was an empty success, so the probe
+  replaced that orchestrator's last inventory and reset its failure count. The entry walker now requires a
+  string key before the colon (red: `runner_records` returned `[]`, and kept a runner that came before the
+  bad key).
 
 ## Decision log
 

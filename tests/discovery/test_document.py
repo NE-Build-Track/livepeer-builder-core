@@ -27,6 +27,20 @@ def test_an_inventory_that_is_not_valid_json_is_refused(body: bytes) -> None:
         runner_records(body)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[{1:2}]",
+        b"[{true:1}]",
+        b'[{"runners":[{"url":"kept"}],1:2}]',
+    ],
+)
+def test_a_non_string_object_key_is_refused(body: bytes) -> None:
+    """JSON keys are strings. A number key must not read as an empty success the probe keeps."""
+    with pytest.raises(ValueError, match="not valid JSON"):
+        runner_records(body)
+
+
 TOO_BIG = "1e" + "9" * 20  # past Decimal's exponent range; inf as a float
 TOO_SMALL = "1e-" + "9" * 20  # past it the other way; 0.0 as a float
 AT_RANGE = "1e" + "9" * 18  # Decimal still builds it: Decimal('1E+999999999999999999')

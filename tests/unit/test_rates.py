@@ -105,6 +105,12 @@ def test_any_source_s_rate_is_refused_unless_a_float_ceiling_holds_it() -> None:
         assert Decimal(ceiling["price"]) > Decimal(bound), bound  # padded above the price, as a float
 
 
+def test_any_source_s_currency_and_unit_are_read_lowercase_and_trimmed() -> None:
+    """Normalized once, on the rate, so a custom DiscoverySource's "WEI"/" Seconds" groups and pays as wei/seconds."""
+    rate = NetworkRate(amount=Decimal(2), currency=" WEI ", unit="Seconds ")
+    assert (rate.currency, rate.unit) == ("wei", "seconds")
+
+
 def test_a_node_on_chain_price_is_kept_as_advertised() -> None:
     """livepeer-node converts a registered 0.01 USD/hour into wei per second and keeps the USD figure per second."""
     payload = (
@@ -147,6 +153,8 @@ def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
         "2026-10-29T02:05:55.123456789Z",
         "2026-10-29T04:05:55+02:00",
         "2026-10-29T02:05:55",
+        "20261029T020555Z",  # ISO 8601 basic format: fromisoformat reads it, RFC 3339 does not
+        "2026-10-29 02:05:55Z",  # a space for the T: RFC 3339 allows it only by agreement, Go does not write it
         "yesterday",
         17,
     ]
@@ -157,6 +165,8 @@ def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
         datetime(2026, 10, 29, 2, 5, 55, 123456, tzinfo=UTC),  # nanoseconds truncated to microseconds
         datetime(2026, 10, 29, 2, 5, 55, tzinfo=UTC),
         None,  # no offset: not RFC 3339
+        None,
+        None,
         None,
         None,
     ]

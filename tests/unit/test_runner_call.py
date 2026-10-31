@@ -439,7 +439,7 @@ def test_a_challenge_may_send_payments_to_the_runner_or_its_orchestrator_only() 
 
 def test_price_unit_and_ceiling() -> None:
     rate = NetworkRate(amount=Decimal("2"), currency="WEI", unit="Seconds")
-    assert (payment_type(rate), payment_type(None)) == ("live", "live")
+    assert payment_type(rate) == "live"
     assert max_price(rate) == {"price": pytest.approx(2.024), "currency": "wei", "unit": "seconds"}
     assert max_price(None) is None
     # The signer takes neither: an hour ceiling and a usd ceiling are each a 400 (checkMaxPrice).

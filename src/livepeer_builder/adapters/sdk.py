@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -34,6 +35,8 @@ from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import loads_json_numbers, read_capped
 
 _LOG = logging.getLogger(__name__)
+# RFC 3339 as Go writes it (time.RFC3339Nano); fromisoformat alone also takes ISO 8601's other forms
+_RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
 
 class HttpDiscoverySource:
@@ -56,22 +59,25 @@ class HttpDiscoverySource:
         max_bytes: int = DISCOVERY_MAX_BYTES,
     ) -> None:
         self._discovery_url = discovery_url
-        self._client = client
+        self._client = client or httpx.AsyncClient(
+            timeout=timeout_s
+        )  # one per source: polls reuse its connection
+        self._owns_client = client is None
         self._timeout_s = timeout_s
         self._max_bytes = max_bytes
 
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
     async def fetch(self) -> tuple[Runner, ...]:
-        client = self._client or httpx.AsyncClient(timeout=self._timeout_s)
         try:
             # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
             async with asyncio.timeout(self._timeout_s):
-                body = await self._body(client)
+                body = await self._body(self._client)
         except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
             message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
             raise TimeoutError(message) from error
-        finally:
-            if self._client is None:
-                await client.aclose()
         entries = loads_json_numbers(body)
         if not isinstance(entries, list):
             raise ValueError("discovery response is not a JSON list")
@@ -264,8 +270,8 @@ def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
         error = "price_usd is not a nonnegative number"
     return NetworkRate(
         amount=amount,
-        currency=currency.lower(),
-        unit=unit.lower(),
+        currency=currency,
+        unit=unit,
         price_usd=price_usd,
     ), error
 
@@ -277,13 +283,10 @@ def _stamp(value: object) -> datetime | None:
     with a positive offset, ``9999-12-31`` with a negative one) is unreadable too: ``astimezone`` raises
     ``OverflowError``, and that must not fail the rest of the inventory.
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not _RFC3339.fullmatch(value):
         return None
     try:
-        stamp = datetime.fromisoformat(value)
-        if stamp.tzinfo is None:
-            return None
-        return stamp.astimezone(UTC)
+        return datetime.fromisoformat(value).astimezone(UTC)
     except (ValueError, OverflowError):
         return None
 

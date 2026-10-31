@@ -19,7 +19,7 @@ PAYMENT_TYPES_BY_UNIT = {"seconds": "live", "fixed": "fixed"}
 
 def is_payable(currency: str, unit: str) -> bool:
     """The signer takes a ceiling in this currency and unit; it refuses any other (HTTP 400)."""
-    return currency.strip().lower() == PAYMENT_CURRENCY and unit.strip().lower() in PAYMENT_TYPES_BY_UNIT
+    return currency == PAYMENT_CURRENCY and unit in PAYMENT_TYPES_BY_UNIT  # NetworkRate normalizes both
 
 
 def signable(amount: Decimal, currency: str, unit: str) -> bool:

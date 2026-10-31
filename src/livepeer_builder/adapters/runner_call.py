@@ -262,7 +262,8 @@ class PaidRequest:
                 raise self._events.error(
                     "http", f"{self.url} asks for payment; the call is unpaid", status_code=402
                 )
-            self._payment_type = self._payable_type()
+            if self._rate is not None:  # with none, there is no ceiling either: refused just below
+                self._payment_type = self._payable_type(self._rate)
             if self._max_price is None:  # the signer checks no ceiling without one: never sign uncapped
                 raise self._events.error(
                     "payment_refused",
@@ -272,10 +273,10 @@ class PaidRequest:
             challenge = self._challenge(text)
         raise self._events.error("http", f"{self.url} kept asking for payment", status_code=402)
 
-    def _payable_type(self) -> str:
+    def _payable_type(self, rate: NetworkRate) -> str:
         """The payment type for this rate's unit; a unit the engine does not pay is refused, unsigned."""
         try:
-            return payment_type(self._rate)
+            return payment_type(rate)
         except RunnerCallError as error:
             raise self._events.error(
                 error.kind, f"{self.url} asks for payment: {error}", status_code=402
@@ -440,10 +441,8 @@ def network_kind(error: BaseException) -> AttemptOutcome:
     return "http"
 
 
-def payment_type(rate: NetworkRate | None) -> str:
-    unit = rate.unit.strip().lower() if rate is not None else ""
-    if not unit:
-        return "live"
+def payment_type(rate: NetworkRate) -> str:
+    unit = rate.unit
     if unit not in PAYMENT_TYPES_BY_UNIT:
         expected = ", ".join(sorted(PAYMENT_TYPES_BY_UNIT))
         message = f"unsupported runner price unit {unit!r}; expected {expected}"
@@ -458,8 +457,8 @@ def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
         return None
     return {
         "price": float(rate.amount * _PRICE_PADDING),
-        "currency": rate.currency.strip().lower(),
-        "unit": rate.unit.strip().lower(),
+        "currency": rate.currency,
+        "unit": rate.unit,
     }
 
 

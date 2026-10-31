@@ -163,7 +163,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   - **Catalog** (`tests/unit/test_rates.py`): an app with no rate is listed as `missing` with no range; an
     app's runners with no rate are an offering after its priced ones (mutation: missing group first);
     `available` with no range is not an `Offering`. 10(c): two `ObservedRate`s per offering, not one per
-    runner (`test_an_offering_builds_two_observed_rates_however_many_runners_it_has`, added on 31 October).
+    runner (`test_an_offering_builds_two_observed_rates_however_many_runners_it_has`, added on 30 October).
   - **Paid order** (`tests/unit/test_jobs.py`): a paid job tries a runner it can cap before a busier one
     with no rate; the one with no rate is still tried last (mutation: dropping it); an unpaid job keeps
     `MostCapacityFirst` (mutation: re-ordering unpaid jobs too).
@@ -192,7 +192,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
     drop was driven by tests that were red first (per-pixel runners dropped, case-insensitively and even
     with no usable price, while a `seconds` runner in the same inventory is kept), then green. Those tests
     were then deleted on John's instruction, so no test names the unit.
-- 31 October: Mike's re-check at `a7299aa`, and Copilot's two findings on it. Test-first; each new test
+- 30 October: Mike's re-check at `241b8a1`, and Copilot's two findings on it. Test-first; each new test
   seen red for the right reason, or, where the behaviour already held, shown to fail under a mutation:
   - **Inventory cap** (`tests/unit/test_adapter_edges.py`, `test_adapters.py`, `test_runtime.py`): the
     engine read every inventory under livepeer/node's 1 MiB per-orchestrator limit, so `lpb discovery`'s
@@ -212,7 +212,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
 - 30 October: the `720p-pixel-seconds` drop is removed. `test_a_per_pixel_unit_is_kept_and_has_no_ceiling`
   was red first (the inventory returned no runner), then green once `DROPPED_UNITS` was gone. The unit
   lowercases like any other, and `max_price` is `None`.
-- 31 October: review of `26970b7`. Test-first, each new test seen red for the right reason:
+- 30 October: Mike's re-review of `31957e3`. Test-first, each new test seen red for the right reason:
   - **Padded `LPB_DISCOVERY_URL`** (`tests/unit/test_adapters.py`): a trailing newline or surrounding
     spaces passed the startup check (`urlsplit` ignores them), then httpx refused the newline and sent the
     space as `/discovery%20` on every poll. The URL is stripped (red: stored padded), and whitespace inside
@@ -225,6 +225,14 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
     402 then ends that job. A transport says whether it pays (`SdkRunnerTransport.pays`, true with a
     signer; a transport without the attribute is taken to pay), and the order applies only when it does
     (red: re-ordered). A free runner is tried before one with no rate (red: tried after).
+  - **Minor items (5).** One client per `HttpDiscoverySource`, closed with the engine (red: a client per
+    poll). `NetworkRate` lowercases and trims `currency` and `unit` itself, so a custom source's `WEI` groups
+    and pays as `wei` (red: kept as given); the copies in the adapter, `max_price` and `is_payable` are gone.
+    `_stamp` reads only RFC 3339 as Go writes it (red: `20261029T020555Z` was read). `payment_type` takes a
+    rate; its unit-less `"live"` was never used, since no rate means no ceiling and a refusal. `_decimal`'s
+    range stays: it is `price_usd`'s only check (`test_a_bad_price_usd_drops_only_price_usd_and_says_so`
+    fails without it). The `Co-authored-by` trailer on `694c437` (was `9f3366e`) is reworded away, so every
+    later hash on this branch changed; the hashes above are the new ones.
 
 ## Decision log
 
@@ -286,7 +294,7 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   so every engine refresh fails and keeps its last snapshot, and one too small is re-served as `0.0`. #87
   fixes both. The engine's own fetch keeps every digit, and makes such a number one field's problem, from
   any source that passes it through (livepeer-node's discovery cache, one orchestrator).
-- 30 October (Mike, review of `6d44652`): `decimal_json_number` claimed `lpb discovery` refuses such a
+- 30 October (Mike, review of `2b4c6ff`): `decimal_json_number` claimed `lpb discovery` refuses such a
   number, which is true only with #87. On this branch only the engine used it, so it is folded into
   `_lenient_number` and removed; #87 adds it with the probe change.
 - 30 October (John): tests consolidated with no behaviour change. `test_go_livepeer_compat.py` is gone: its
@@ -298,11 +306,11 @@ The contract and rules are in [engine.md](../../contracts/engine.md#rates-iss-10
   `9999-12-31T23:00:00-01:00`) raised `OverflowError` inside `_stamp` and failed the whole engine refresh.
   It is an unreadable stamp (`None`), and the other runners stay. An integer longer than the runtime digit
   limit did the same from `json.loads`; that field is `UNREADABLE_NUMBER`, one runner's rate, not the poll.
-- 31 October: #87 merged into `releases/m3`, and `releases/m3` merged into this branch. `lpb discovery` now
+- 30 October: #87 merged into `releases/m3`, and `releases/m3` merged into this branch. `lpb discovery` now
   re-serves each runner record as received and refuses a number `Decimal` cannot build, so the "until #87
   merges" behaviour above no longer applies. `utils.py` keeps both sides: this branch's
   `loads_json_numbers` and `read_capped` for the engine, and #87's `decimal_json_number` for the probe.
-- 31 October (John, on the review of `26970b7`): a free runner (`0`) joins the first group on a paid job,
+- 30 October (John, on Mike's re-review of `31957e3`): a free runner (`0`) joins the first group on a paid job,
   reversing "a runner priced at `0` has no ceiling, so it is in the last group too" (30 October). It is
   the cheapest runner and advertised that it would not ask for payment. A 402 from it is still refused
   unsigned: there is no ceiling to give the signer. The order applies only when the transport pays. A

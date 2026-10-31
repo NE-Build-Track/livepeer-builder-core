@@ -53,6 +53,13 @@ def test_trailing_json_is_refused() -> None:
         runner_records(b"[][]")
 
 
+def test_a_leading_bom_is_the_inventory_without_it() -> None:
+    """json.loads on bytes decodes utf-8-sig. A strict decode keeps the BOM and the probe fails."""
+    inventory = b'[{"runners":[{"url":"kept"}]}]'
+    assert runner_records(b"\xef\xbb\xbf" + inventory) == runner_records(inventory)
+    assert runner_records("\ufeff" + inventory.decode()) == runner_records(inventory)
+
+
 def test_the_served_document_embeds_runner_text_without_quoting_it() -> None:
     runners = (RawJson('{"price_usd":1e-999999}'), RawJson('{"price":1e-999999}'))
     assert discovery_document([InventoryEntry(address='https://a.example/"b', runners=runners)]) == (

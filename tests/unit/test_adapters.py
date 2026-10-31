@@ -341,6 +341,25 @@ def test_a_discovery_url_without_an_http_scheme_and_host_is_refused_at_startup(u
         EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
 
 
+@pytest.mark.parametrize("padded", ["http://discovery:8939/discovery\n", " http://discovery:8939/discovery "])
+def test_a_padded_discovery_url_is_read_without_its_padding(padded: str) -> None:
+    """urlsplit ignores the padding; httpx refuses the newline and sends the space as /discovery%20 (#77 review)."""
+    assert (
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": padded}).discovery_url
+        == "http://discovery:8939/discovery"
+    )
+
+
+@pytest.mark.parametrize(
+    "url", ["http://discovery:8939/disc overy", "http://discovery:8939/\tdiscovery", "http://disc\novery/x"]
+)
+def test_a_discovery_url_with_whitespace_inside_is_refused_at_startup(url: str) -> None:
+    with pytest.raises(
+        ValidationError, match="LPB_DISCOVERY_URL must be an http:// or https:// URL with a host"
+    ):
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
+
+
 def test_an_http_or_https_discovery_url_is_accepted() -> None:
     for url in ("http://discovery:8939/discovery", "https://orch.example:8935/discovery"):
         assert EngineSettings.from_env({"LPB_DISCOVERY_URL": url}).discovery_url == url

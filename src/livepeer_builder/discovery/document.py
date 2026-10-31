@@ -5,12 +5,12 @@ is not parsed into a float and written back.
 """
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, NewType
 
 from pydantic import BaseModel, ConfigDict
 
-from livepeer_builder.utils import decimal_json_number
+from livepeer_builder.utils import _not_json, decimal_json_number
 
 _WS = " \t\r\n"
 
@@ -35,29 +35,28 @@ def runner_records(body: str | bytes | bytearray) -> list[RawJson]:
     JSON and raise ``ValueError``. A number ``Decimal`` cannot construct does too, so it is never re-served
     for every engine's refresh to trip on.
     """
-    text = body.decode() if isinstance(body, bytes | bytearray) else body
+    text = body.decode("utf-8-sig") if isinstance(body, bytes | bytearray) else body.removeprefix("\ufeff")
     # Same parser as the engine. A float parser turns 1e1000000000000000000 into inf and would keep the
     # token; the served document would then fail every consumer's refresh.
     decoder = json.JSONDecoder(parse_float=decimal_json_number, parse_constant=_not_json)
     index = _skip(text, 0)
     if index >= len(text) or text[index] != "[":
         raise ValueError("inventory is not a JSON list")
-    entries, index = _array(text, index, decoder)
+    index += 1
+    found: list[RawJson] = []
+
+    def element(text: str, index: int) -> int:
+        if text[index] == "{":
+            records, index = _entry(text, index, decoder)
+            found.extend(records)
+            return index
+        _, index = _decode(text, index, decoder)
+        return index
+
+    index = _array(text, index, element)
     if _skip(text, index) != len(text):
         raise ValueError("inventory is not a JSON list")
-    runners: list[RawJson] = []
-    for value, raw in entries:
-        if not isinstance(value, dict):
-            continue
-        found = _field(raw, "runners", decoder)
-        if found is None or found[0] is None:  # missing, or null: a Go nil slice
-            continue
-        runners_value, runners_raw = found
-        if not isinstance(runners_value, list):
-            raise ValueError("runners is not a JSON list")
-        items, _ = _array(runners_raw, 0, decoder)
-        runners += [RawJson(raw_item) for item, raw_item in items if isinstance(item, dict)]
-    return runners
+    return found
 
 
 def discovery_document(entries: Sequence[InventoryEntry]) -> str:
@@ -76,10 +75,6 @@ def _json_array(items: Iterable[str]) -> str:
     return "[" + ",".join(items) + "]"
 
 
-def _not_json(token: str) -> Any:
-    raise ValueError(f"{token} is not a JSON number")
-
-
 def _skip(text: str, index: int) -> int:
     length = len(text)
     while index < length and text[index] in _WS:
@@ -87,54 +82,72 @@ def _skip(text: str, index: int) -> int:
     return index
 
 
-def _array(text: str, index: int, decoder: json.JSONDecoder) -> tuple[list[tuple[Any, str]], int]:
-    index = _skip(text, index)
-    if index >= len(text) or text[index] != "[":
-        raise ValueError("runners is not a JSON list")
-    index += 1
-    items: list[tuple[Any, str]] = []
+def _array(text: str, index: int, element: Callable[[str, int], int]) -> int:
+    """One JSON array, ``index`` just after ``[``. ``element`` reads one value and returns the next index."""
     index = _skip(text, index)
     if index < len(text) and text[index] == "]":
-        return items, index + 1
+        return index + 1
     while index < len(text):
-        start = index
-        value, index = _decode(text, index, decoder)
-        items.append((value, text[start:index]))
+        index = element(text, index)
         index = _skip(text, index)
         if index < len(text) and text[index] == "]":
-            return items, index + 1
+            return index + 1
         if index >= len(text) or text[index] != ",":
             raise ValueError("inventory is not valid JSON")
         index = _skip(text, index + 1)
     raise ValueError("inventory is not valid JSON")
 
 
-def _field(text: str, name: str, decoder: json.JSONDecoder) -> tuple[Any, str] | None:
-    """The last value of ``name`` in a JSON object, with the text it occupies. Absent is ``None``."""
-    index = _skip(text, 0)
-    if index >= len(text) or text[index] != "{":
-        raise ValueError("inventory is not valid JSON")
-    index = _skip(text, index + 1)
-    found: tuple[Any, str] | None = None
+def _entry(text: str, index: int, decoder: json.JSONDecoder) -> tuple[list[RawJson], int]:
+    """The runner objects in this entry's last ``runners`` array, and the index after the object.
+
+    A missing ``runners``, or null, contributes nothing. The last ``runners`` field wins. One that is not
+    a list refuses the inventory, so a bad entry does not replace the last good one with an empty success.
+    """
+    index = _skip(text, index + 1)  # the caller is on '{'
+    runners: list[RawJson] = []
+    refused = False
     if index < len(text) and text[index] == "}":
-        return None
+        return runners, index + 1
     while index < len(text):
         key, index = _decode(text, index, decoder)
         index = _skip(text, index)
         if index >= len(text) or text[index] != ":":
             raise ValueError("inventory is not valid JSON")
         index = _skip(text, index + 1)
-        start = index
-        value, index = _decode(text, index, decoder)
-        if key == name:
-            found = (value, text[start:index])
+        if key == "runners" and index < len(text) and text[index] == "[":
+            taken, index = _runner_objects(text, index + 1, decoder)
+            runners = taken
+            refused = False
+        elif key == "runners":
+            value, index = _decode(text, index, decoder)
+            runners = []
+            refused = value is not None  # null is an empty list; anything else is not a list
+        else:
+            _, index = _decode(text, index, decoder)
         index = _skip(text, index)
         if index < len(text) and text[index] == "}":
-            return found
+            if refused:
+                raise ValueError("runners is not a JSON list")
+            return runners, index + 1
         if index >= len(text) or text[index] != ",":
             raise ValueError("inventory is not valid JSON")
         index = _skip(text, index + 1)
     raise ValueError("inventory is not valid JSON")
+
+
+def _runner_objects(text: str, index: int, decoder: json.JSONDecoder) -> tuple[list[RawJson], int]:
+    """The object elements of a ``runners`` array, as received. ``index`` is just after ``[``."""
+    found: list[RawJson] = []
+
+    def element(text: str, index: int) -> int:
+        start = index
+        value, index = _decode(text, index, decoder)
+        if isinstance(value, dict):
+            found.append(RawJson(text[start:index]))
+        return index
+
+    return found, _array(text, index, element)
 
 
 def _decode(text: str, index: int, decoder: json.JSONDecoder) -> tuple[Any, int]:

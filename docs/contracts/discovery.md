@@ -89,7 +89,8 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
   address but the last has 1 s to connect (TLS included) before the next is tried. Otherwise
   `reason="private_address"`;
 - an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
-  an empty inventory that replaces the last good one. `null` means no runners;
+  an empty inventory that replaces the last good one. `null` means no runners. An object key that is
+  not a string (`[{1:2}]`) is not JSON either, so that probe fails instead of reading an empty inventory;
 - `NaN` or `Infinity` anywhere in an inventory is not JSON, so the probe fails. A number `Decimal`
   cannot construct fails the same way: a float parser would keep the token, and re-serving it would
   fail every engine's discovery refresh. The limit is the platform's `decimal`. On 64-bit CPython that

@@ -235,7 +235,9 @@ async def default_parts(
     if not isinstance(supply.discovery_source, _Unset):
         discovery_source = supply.discovery_source
     elif settings.discovery_url:  # the signer only signs; it is not a discovery source (#45)
-        discovery_source = HttpDiscoverySource(settings.discovery_url)
+        http_source = HttpDiscoverySource(settings.discovery_url, max_bytes=settings.discovery_max_bytes)
+        own(stack, http_source, http_source.aclose)
+        discovery_source = http_source
     else:
         discovery_source = StaticDiscoverySource()
 
@@ -283,7 +285,11 @@ class EngineServices:
 def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     """Build every service from the final parts. No I/O: it opens nothing, so it leaves nothing open."""
     discovery = DiscoveryService(
-        parts.discovery_source, parts.policy, parts.clock, settings.discovery_interval_s
+        parts.discovery_source,
+        parts.policy,
+        parts.clock,
+        settings.discovery_interval_s,
+        rate_max_age_s=settings.rate_max_age_s,
     )
     ledger = OperationLedger(parts.store, parts.clock, settings.operation_stale_s)  # one, for every command
     payments = PaymentsService(

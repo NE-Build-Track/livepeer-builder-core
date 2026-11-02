@@ -218,7 +218,7 @@ async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock) -> None
         async def fetch(self) -> tuple:  # type: ignore[type-arg]
             if self.fail:
                 raise RuntimeError("signer down")
-            return (runner(price=None),)
+            return (runner(),)
 
     source = Flaky()
     discovery = DiscoveryService(source, DefaultPolicy(), clock, interval_s=0.01)
@@ -228,7 +228,7 @@ async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock) -> None
     snapshot = await discovery.refresh()
     assert snapshot.last_error == "signer down" and len(snapshot.runners) == 1
     (offering,) = discovery.offerings()
-    assert offering.rate_low is None  # no priced runners: no comparable rate
+    assert offering.runner_count == 1  # still served from the last good snapshot
 
     stop = asyncio.Event()
     task = asyncio.create_task(discovery.run(stop))

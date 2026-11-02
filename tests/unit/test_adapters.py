@@ -322,6 +322,50 @@ def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
             EngineSettings.model_validate({"max_paid_attempts": value})
 
 
+def test_the_discovery_inventory_cap_is_an_operator_setting() -> None:
+    assert EngineSettings().discovery_max_bytes == 16 << 20
+    assert EngineSettings.from_env({"LPB_DISCOVERY_MAX_BYTES": "33554432"}).discovery_max_bytes == 32 << 20
+    with pytest.raises(ValidationError):
+        EngineSettings.model_validate({"discovery_max_bytes": 0})
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["discovery:8939/discovery", "ftp://discovery/discovery", "http:///discovery", "http://[::1/discovery"],
+)
+def test_a_discovery_url_without_an_http_scheme_and_host_is_refused_at_startup(url: str) -> None:
+    """The SDK used to add a scheme to host:port; httpx does not, so every poll would fail (#77 review)."""
+    with pytest.raises(
+        ValidationError, match="LPB_DISCOVERY_URL must be an http:// or https:// URL with a host"
+    ):
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
+
+
+@pytest.mark.parametrize("padded", ["http://discovery:8939/discovery\n", " http://discovery:8939/discovery "])
+def test_a_padded_discovery_url_is_read_without_its_padding(padded: str) -> None:
+    """urlsplit ignores the padding; httpx refuses the newline and sends the space as /discovery%20 (#77 review)."""
+    assert (
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": padded}).discovery_url
+        == "http://discovery:8939/discovery"
+    )
+
+
+@pytest.mark.parametrize(
+    "url", ["http://discovery:8939/disc overy", "http://discovery:8939/\tdiscovery", "http://disc\novery/x"]
+)
+def test_a_discovery_url_with_whitespace_inside_is_refused_at_startup(url: str) -> None:
+    with pytest.raises(
+        ValidationError, match="LPB_DISCOVERY_URL must be an http:// or https:// URL with a host"
+    ):
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
+
+
+def test_an_http_or_https_discovery_url_is_accepted() -> None:
+    for url in ("http://discovery:8939/discovery", "https://orch.example:8935/discovery"):
+        assert EngineSettings.from_env({"LPB_DISCOVERY_URL": url}).discovery_url == url
+    assert EngineSettings.model_validate({"discovery_url": None}).discovery_url is None  # static discovery
+
+
 def test_batteries_http_client_uses_the_configured_timeout() -> None:
     client = batteries_http_client("https://batteries.example/", "t", timeout_s=7.0)
     assert client.timeout == httpx.Timeout(7.0)

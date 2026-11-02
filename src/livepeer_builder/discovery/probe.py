@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict
 
 from livepeer_builder.discovery.directory import Orchestrator
 from livepeer_builder.discovery.document import InventoryEntry, RawJson, runner_records
+from livepeer_builder.utils import read_capped
 
 _LOG = logging.getLogger(__name__)
 
@@ -186,11 +187,7 @@ class Prober:
         async with contextlib.aclosing(response):
             if response.status_code != 200:
                 raise ValueError(f"HTTP {response.status_code}")
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                body += chunk
-                if len(body) > self._max_bytes:
-                    raise ValueError(f"inventory larger than {self._max_bytes} bytes")
+            body = await read_capped(response.aiter_bytes(), self._max_bytes)
         return runner_records(body)
 
     def _excluded(self, orchestrator: Orchestrator, reason: Failure, exc: BaseException) -> Probe:

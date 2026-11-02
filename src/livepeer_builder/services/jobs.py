@@ -64,7 +64,7 @@ from livepeer_builder.protocols import (
     StreamingRunnerTransport,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
-from livepeer_builder.services.discovery import DiscoveryService
+from livepeer_builder.services.discovery import DiscoveryService, capped_first
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.failover import (
     Candidates,
@@ -272,6 +272,9 @@ class JobService:
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
         ordered = tuple(self._selection.order(candidates, request))
+        # paid: a runner with no usable ceiling is refused at its 402 (D62); with no signer, nothing pays
+        if credential.token is not None and getattr(self._transport, "pays", True):
+            ordered = capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
         return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential

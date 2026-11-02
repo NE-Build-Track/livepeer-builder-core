@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from collections.abc import Coroutine
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
@@ -37,3 +38,20 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
     _SHIELDED.add(task)
     task.add_done_callback(_SHIELDED.discard)
     return task
+
+
+def decimal_json_number(token: str) -> Decimal:
+    """A JSON number token as :class:`Decimal`.
+
+    A number ``Decimal`` cannot build raises ``InvalidOperation``, here a ``ValueError``. ``lpb discovery``
+    refuses that inventory, so the token is never re-served for every engine's refresh to fail on.
+
+    The limit is the platform's, not ours. On 64-bit CPython (libmpdec) a number is refused when its
+    adjusted exponent is above ``MAX_EMAX`` (999999999999999999) or its exponent is below ``MIN_ETINY``
+    (-1999999999999999997), so ``1e-1000000000000000000`` is kept. 32-bit builds refuse sooner, and the
+    pure-Python ``_pydecimal`` builds both. No price comes near either limit.
+    """
+    try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
+        return Decimal(token)
+    except InvalidOperation as exc:
+        raise ValueError(f"{token} is not a JSON number") from exc

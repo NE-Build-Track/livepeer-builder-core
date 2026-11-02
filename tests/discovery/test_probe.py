@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+from decimal import Decimal
 
 import pytest
 from aiohttp import web
+from pydantic import ValidationError
 
 from livepeer_builder.discovery import Orchestrator, Prober
-from livepeer_builder.discovery.probe import public_address
+from livepeer_builder.discovery.document import InventoryEntry
+from livepeer_builder.discovery.probe import Probe, public_address
 from tests.discovery.conftest import Handler, Serve, Tls
 
 RUNNER = {
@@ -25,6 +28,52 @@ def answering(body: object, status: int = 200) -> Handler:
     return handler
 
 
+async def test_a_runner_record_is_kept_as_the_orchestrator_spelled_it(serve: Serve, tls: Tls) -> None:
+    """The service forwards the runner object. It does not parse its numbers and write them back."""
+    runner = (
+        '{"url":"https://orch/apps/r1/app","app":"example/echo",'
+        '"price_info":{"price":4492197255,"price_usd":1e-999999}}'
+    )
+    payload = f'[{{"address":"https://claims-elsewhere","runners":[{runner}]}}]'.encode()
+
+    async def handler(_: web.Request) -> web.StreamResponse:
+        return web.Response(body=payload, content_type="application/json")
+
+    url = await serve(handler, tls.trusted)
+    probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
+    assert probe.failure is None and probe.entry == InventoryEntry(address=url, runners=(runner,))
+
+
+def test_a_probe_with_parsed_runners_is_refused_when_built() -> None:
+    """Runners are the JSON text received. A parsed object would make every GET /discovery a 500 (#87 review)."""
+    with pytest.raises(ValidationError):
+        Probe(
+            orchestrator=Orchestrator(url="https://a.example"),
+            entry={"address": "https://a.example", "runners": [RUNNER]},
+        )
+
+
+async def test_a_node_price_usd_stays_a_decimal_through_the_probe(serve: Serve, tls: Tls) -> None:
+    payload = (
+        b'[{"address":"https://claims-elsewhere","runners":[{"url":"https://orch/apps/r1/app",'
+        b'"app":"example/echo","price_info":{"price":4492197255,'
+        b'"price_usd":0.0000027777777777777777777777777777,"currency":"wei","unit":"seconds"}}]}]'
+    )
+
+    async def handler(_: web.Request) -> web.StreamResponse:
+        return web.Response(body=payload, content_type="application/json")
+
+    url = await serve(handler, tls.trusted)
+    probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
+    assert probe.failure is None and probe.entry is not None
+    (runner,) = probe.entry.runners
+    price_usd = "0.0000027777777777777777777777777777"
+    assert f'"price_usd":{price_usd}' in runner  # the token, not a float of it
+    price_info = json.loads(runner, parse_float=Decimal)["price_info"]
+    assert price_info["price"] == 4492197255
+    assert price_info["price_usd"] == Decimal(price_usd)
+
+
 async def test_a_trusted_orchestrator_yields_one_entry_under_its_probed_address(
     serve: Serve, tls: Tls
 ) -> None:
@@ -32,17 +81,51 @@ async def test_a_trusted_orchestrator_yields_one_entry_under_its_probed_address(
     url = await serve(answering([{"address": "https://claims-elsewhere", "runners": [RUNNER]}, {"runners": [other]}]),
                       tls.trusted)  # fmt: skip
     probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
-    assert probe.failure is None
-    assert probe.entry == {
-        "address": url,
-        "runners": [RUNNER, other],
-    }  # our address; runner records untouched
+    assert probe.failure is None and probe.entry is not None
+    assert probe.entry.address == url  # the address we probed, not the one the body claimed
+    assert [json.loads(runner) for runner in probe.entry.runners] == [RUNNER, other]
 
 
 async def test_a_self_signed_orchestrator_is_excluded_as_untrusted(serve: Serve, tls: Tls) -> None:
     url = await serve(answering([{"address": "x", "runners": [RUNNER]}]), tls.self_signed)
     probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
     assert (probe.entry, probe.failure) == (None, "untrusted_certificate")
+
+
+async def test_nan_or_infinity_is_not_json_and_fails_the_probe(serve: Serve, tls: Tls) -> None:
+    """``NaN`` and ``Infinity`` are not JSON. The probe refuses the body rather than forwarding them."""
+    prober = Prober(ssl_context=tls.client)
+    for token in (b"NaN", b"Infinity", b"-Infinity"):
+        body = (
+            b'[{"runners":[{"url":"https://orch/apps/r1/app","app":"a/b","price_info":{"price_usd":%s}}]}]'
+            % token
+        )
+
+        async def handler(_: web.Request, body: bytes = body) -> web.StreamResponse:
+            return web.Response(body=body, content_type="application/json")
+
+        url = await serve(handler, tls.trusted)
+        probe = await prober.probe(Orchestrator(url=url))
+        assert (probe.entry, probe.failure) == (None, "failed"), token
+
+
+@pytest.mark.parametrize("token", ["1e" + "9" * 20, "1e-" + "9" * 20])
+async def test_a_number_decimal_cannot_build_fails_only_that_orchestrator(
+    serve: Serve, tls: Tls, token: str
+) -> None:
+    """``inf`` or ``0.0`` as a float, but no ``Decimal``. Forwarding it would fail every engine refresh,
+    so this orchestrator is left out and the next one is kept (#77 review)."""
+    poison = f'[{{"runners":[{{"url":"https://orch/apps/r1/app","app":"a/b","price":{token}}}]}}]'.encode()
+
+    async def poisoned(_: web.Request) -> web.StreamResponse:
+        return web.Response(body=poison, content_type="application/json")
+
+    bad = await serve(poisoned, tls.trusted)
+    good = await serve(answering([{"runners": [RUNNER]}]), tls.trusted)
+    probes = await Prober(ssl_context=tls.client).probe_all([Orchestrator(url=bad), Orchestrator(url=good)])
+    assert (probes[0].entry, probes[0].failure) == (None, "failed")
+    assert probes[1].failure is None and probes[1].entry is not None
+    assert json.loads(probes[1].entry.runners[0])["url"] == RUNNER["url"]
 
 
 async def test_bad_answers_fail(serve: Serve, tls: Tls) -> None:
@@ -66,7 +149,7 @@ async def test_bad_answers_fail(serve: Serve, tls: Tls) -> None:
 async def test_an_empty_inventory_is_a_success(serve: Serve, tls: Tls) -> None:
     url = await serve(answering([{"address": "x", "runners": []}]), tls.trusted)
     probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
-    assert probe.failure is None and probe.entry == {"address": url, "runners": []}
+    assert probe.failure is None and probe.entry == InventoryEntry(address=url, runners=())
 
 
 async def test_unreachable_is_a_failure_and_probing_many_keeps_their_order(serve: Serve, tls: Tls) -> None:
@@ -108,7 +191,7 @@ async def test_null_runners_is_an_orchestrator_with_none(serve: Serve, tls: Tls)
         answering([{"address": "x", "runners": None}]), tls.trusted
     )  # Go marshals a nil slice as null
     probe = await Prober(ssl_context=tls.client).probe(Orchestrator(url=url))
-    assert probe.failure is None and probe.entry == {"address": url, "runners": []}
+    assert probe.failure is None and probe.entry == InventoryEntry(address=url, runners=())
 
 
 async def test_one_orchestrators_unexpected_error_never_aborts_the_pass(
@@ -177,7 +260,9 @@ async def test_an_on_chain_uri_is_fetched_from_the_address_that_was_checked(serv
     prober = Prober(ssl_context=tls.client, resolve=resolve, address_allowed=lambda address: True)
     url = f"https://orch.test:{port}"
     probe = await prober.probe(Orchestrator(url=url, public_only=True))
-    assert probe.failure is None and probe.entry == {"address": url, "runners": [RUNNER]}
+    assert probe.failure is None and probe.entry is not None
+    assert probe.entry.address == url
+    assert [json.loads(runner) for runner in probe.entry.runners] == [RUNNER]
     assert looked_up == ["orch.test"] and hosts == [f"orch.test:{port}"]
 
 

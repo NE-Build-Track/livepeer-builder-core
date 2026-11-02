@@ -420,9 +420,9 @@ def _job_values(job: Job) -> dict[str, Any]:
 
 
 def _attempt_values(attempt: Attempt) -> dict[str, Any]:
-    values = attempt.model_dump(exclude={"sessions"})
+    values = attempt.model_dump(exclude={"sessions", "timings"})
     values["job_id"] = str(attempt.job_id)
-    return values
+    return values | attempt.timings.model_dump() if attempt.timings else values
 
 
 def _usage_values(row: UsageRow) -> dict[str, Any]:

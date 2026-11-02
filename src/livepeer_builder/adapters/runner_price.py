@@ -1,5 +1,6 @@
 # Portions of this file are adapted from livepeer-python-gateway (src/livepeer_gateway/live_runner.py,
-# ``call_runner``, at 2017a80), https://github.com/livepeer/livepeer-python-gateway, under this license:
+# ``_runner_payment_type`` and ``_pad_runner_price``, at 2017a80),
+# https://github.com/livepeer/livepeer-python-gateway, under this license:
 #
 # MIT License
 #

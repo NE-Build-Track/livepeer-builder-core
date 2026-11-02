@@ -69,7 +69,7 @@ rules become decisions (numbered then).\
 `interfaces-and-http-servers.md` (Routes) omits `GET /v1/admin/actors` and key get/rotate, and says
 events answer 501 "until M4"; `docs/contracts/index.md` still lists JWT as "defined (M4)" although D45
 built it; D51 (public catalog) is still under "Proposed" in `m3-decisions.md` while `GET /v1/offerings`
-is public in code (`app.py:206-209`); `ReservedEventFeed` names milestone "M3" although the feed is held.
+is public in code (`app.py:206-209`); `ReservedEventFeed` names the hold (`milestone: "held"`, `ticket: "ISS-18"`, D60).
 
 ## Decision proposed
 

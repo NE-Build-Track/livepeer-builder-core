@@ -58,14 +58,14 @@ class SqlCostSnapshot:
 
     async def projections_and_unprojected(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> tuple[list[JobCost], list[Job]]:
+    ) -> tuple[list[tuple[str, JobCost]], list[Job]]:
         window = in_window(application_id, actor_id, start, end)
         stored = (
-            select(t.cost_projections)
+            select(t.cost_projections, t.jobs.c.app)
             .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
             .where(*window, projection_current())
         )
-        projections = [projection(row) for row in (await self._conn.execute(stored)).mappings()]
+        projections = [(row["app"], projection(row)) for row in (await self._conn.execute(stored)).mappings()]
         selected = (
             select(t.jobs.c.id)
             .outerjoin(t.cost_projections, t.cost_projections.c.job_id == t.jobs.c.id)

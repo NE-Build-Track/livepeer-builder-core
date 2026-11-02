@@ -90,6 +90,14 @@ format from any system and point `LPB_DISCOVERY_URL` at it.
   `reason="private_address"`;
 - an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
   an empty inventory that replaces the last good one. `null` means no runners;
+- `NaN` or `Infinity` anywhere in an inventory is not JSON, so the probe fails. A number `Decimal`
+  cannot construct fails the same way: a float parser would keep the token, and re-serving it would
+  fail every engine's discovery refresh. The limit is the platform's `decimal`. On 64-bit CPython that
+  is an adjusted exponent above `999999999999999999` (`1e1000000000000000000` is refused) or an
+  exponent below `-1999999999999999997` (`1e-1000000000000000000` is kept). Other numbers with a
+  fraction are kept as the orchestrator sent them and re-served with those digits. An engine keeps
+  those digits once ISS-10 ([#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77)) is
+  in; before that, the SDK reads `price_usd` as a float;
 - any other failure, of any kind, is `reason="failed"` for that orchestrator alone: it never ends the
   pass;
 - an empty inventory counts as a success.

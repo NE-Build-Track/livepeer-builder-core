@@ -24,7 +24,8 @@ from livepeer_builder.adapters import runner_call, runner_price
 
 COPIED_AT = "2017a80"
 # The first 16 hex digits of each function's source sha256 at COPIED_AT. When one fails: read the SDK
-# diff, carry what matters into adapters/runner_call.py, then update the digest and COPIED_AT.
+# diff, carry what matters into adapters/runner_call.py or adapters/runner_price.py (_runner_payment_type,
+# _pad_runner_price), then update the digest and COPIED_AT.
 COPIED = {
     "live_runner.call_runner": "deff844bd224b1a6",
     "live_runner._parse_runner_payment_challenge": "379451580ba148b3",
@@ -53,7 +54,8 @@ def test_the_copied_sdk_call_path_is_unchanged(name: str) -> None:
     digest = hashlib.sha256(source.encode()).hexdigest()[:16]
     assert digest == COPIED[name], (
         f"livepeer_gateway {name} changed since {COPIED_AT}: review the diff, update "
-        "adapters/runner_call.py to match, then update its digest in this test"
+        "adapters/runner_call.py (or adapters/runner_price.py, for _runner_payment_type and _pad_runner_price) "
+        "to match, then update its digest in this test"
     )
 
 

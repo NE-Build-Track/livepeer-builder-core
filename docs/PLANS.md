@@ -46,6 +46,7 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | ISS-12 Distinct payment failures | [active/iss-12-payment-failures.md](exec-plans/active/iss-12-payment-failures.md) | John (Mike reviews) |
 | ISS-15 Owned job history and basic results | [active/iss-15-history-results.md](exec-plans/active/iss-15-history-results.md) | John (Mike reviews) |
 | ISS-18 Cost reports (M3 part; events feed held) | [active/iss-18-cost-reports.md](exec-plans/active/iss-18-cost-reports.md) | John (Mike reviews) |
+| ISS-23 Verification of access, repeated commands and accounting | [active/iss-23-verification.md](exec-plans/active/iss-23-verification.md) | John (Mike reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.
 

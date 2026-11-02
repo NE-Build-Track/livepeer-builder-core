@@ -113,7 +113,7 @@ Each third-party package is confined to one module so a dependency change has on
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
 | Discovery | `services/discovery.py` | [engine](docs/contracts/engine.md#discovery) |
 | Jobs | `services/jobs.py`, `services/admission.py` | [engine](docs/contracts/engine.md) |
-| Payments | `services/payments.py` | [payments](docs/contracts/payments.md) |
+| Payments | `services/payments.py`, `services/grants.py` (the grant desk) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |
 | Persistence | `store/` | [persistence](docs/contracts/persistence.md) |

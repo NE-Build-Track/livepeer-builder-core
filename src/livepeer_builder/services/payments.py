@@ -9,8 +9,6 @@ Every provider write that moves money carries an idempotency key derived from
 (engine_id, operation, step), so a retried command never applies twice.
 """
 
-import base64
-import hashlib
 import logging
 from datetime import datetime
 
@@ -23,9 +21,7 @@ from livepeer_builder.contracts import (
     Allowance,
     Currency,
     FundRequest,
-    GrantRecord,
     KnownActor,
-    Money,
     NewAllocationKey,
     Operation,
     PaymentCredential,
@@ -44,91 +40,14 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import AccessPolicy, ActorRepo, AllocationManager, Clock, SecretStore
+from livepeer_builder.services.grants import GrantDesk, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation, TakenOver
 from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
 _ACTOR = TypeAdapter(ProvisionedActor)
 _NOTHING = TypeAdapter(type(None))
-_GRANT = TypeAdapter(GrantRecord)
 _UNREADABLE = "the allowance could not be read"  # what a builder reads when the provider fails (D58)
-GRANT_TAG = "lpb_operation"  # the metadata key that tags a grant the engine created (D57, Q5)
-
-
-def idempotency_key(engine_id: str, operation: str, step: str) -> str:
-    """base64url(sha256(engine_id:operation:step)): 43 chars, inside Batteries' 256-char limit."""
-    digest = hashlib.sha256(f"{engine_id}:{operation}:{step}".encode()).digest()
-    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
-
-
-class GrantDesk:
-    """Listing and creating grants: an optional capability (decision 7 in the DI refactor plan).
-
-    Present only when a grants manager exists (``LPB_BATTERIES_OPERATOR_TOKEN``, or one supplied).
-    The engine's own token can fund grants but not list or create them, so without the operator
-    credential the desk is absent rather than failing at first use.
-    """
-
-    def __init__(
-        self,
-        manager: AllocationManager,
-        policy: AccessPolicy,
-        currency: Currency,
-        ledger: OperationLedger,
-        engine_id: str,
-    ) -> None:
-        self._manager = manager
-        self._engine_id = engine_id
-        self._policy = policy
-        self._currency = currency
-        self._ledger = ledger
-
-    async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        # The provisioning catalog: grants fund every application and carry none, so an auditor bound to
-        # one application never reads them (John, #53 review).
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
-        return await self._manager.list_grants()
-
-    async def create_grant(
-        self, admin: ActorContext, name: str, amount: Money, *, operation_ref: str
-    ) -> GrantRecord:
-        """Create a grant, on the ledger (D57): a repeat of the reference gets the first grant back."""
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
-        if not name.strip():
-            raise InvalidRequest("a grant name is required")
-        if amount.currency != self._currency or amount.amount <= 0:
-            raise InvalidRequest(f"a grant needs a positive amount in {self._currency}")
-
-        # Batteries has no idempotency key on grant creation (Q5): the tag finds an earlier run's grant
-        tag = idempotency_key(
-            self._engine_id, f"create-grant:{admin.application_id}:{admin.actor_id}:{operation_ref}", "grant"
-        )
-
-        async def steps(run: RunningOperation) -> GrantRecord:
-            if run.resumed:
-                found = await self._tagged_grant(run, tag)
-                if found is not None:
-                    return found
-            return await self._manager.create_grant(name.strip(), amount, {GRANT_TAG: tag})
-
-        request = {"name": name.strip(), "amount": amount}
-        return await self._ledger.run(admin, "create_grant", operation_ref, request, steps, _GRANT)
-
-    async def _tagged_grant(self, run: RunningOperation, tag: str) -> GrantRecord | None:
-        """The grant an earlier run created, found by its tag, page by page from where the last resume
-        stopped: the cursor is recorded after each page, so a resume that runs out of its budget in a slow
-        catalog leaves the next one less to read. Pages already read lacked the tag, and a grant created
-        later is always on a later page (Batteries lists oldest first)."""
-        cursor = run.context.get("grant_list_cursor")
-        while True:
-            page = await self._manager.grant_page(cursor)
-            for grant in page.grants:
-                if grant.metadata.get(GRANT_TAG) == tag:
-                    return grant
-            if page.next_cursor is None:
-                return None
-            cursor = page.next_cursor
-            await run.remember(grant_list_cursor=cursor)
 
 
 class PaymentsService:
@@ -358,8 +277,14 @@ class PaymentsService:
         return await self._update_status(actor, status)
 
     async def revoke(self, admin: ActorContext, application_id: str, actor_id: str) -> ProvisionedActor:
-        """Revoke the allocation (unused funds return to the grant) and forget the key."""
+        """Revoke the allocation (unused funds return to the grant) and forget the key.
+
+        It takes no reference (D57): a repeat after it finished answers with the revoked actor and calls
+        nothing, so a retry after a lost answer is not an error (D61). One cut short is still active here
+        and runs again; Batteries' revoke is repeat-safe."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        if (done := await self._store.get_actor(application_id, actor_id)) and done.status == "revoked":
+            return done
         actor = await self._require_actor(application_id, actor_id)
         await self._require_manager().revoke_allocation(actor.allocation_id)
         await self._secrets.delete(actor.secret_ref)

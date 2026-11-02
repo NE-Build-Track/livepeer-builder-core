@@ -315,7 +315,9 @@ as it was issued, **`"token": null`** and **`"replayed": true`** (`false` on the
 the engine keeps only the token's hash, so it cannot show the token again. An admin who lost it
 rotates the key (under a new reference). The same reference with another request, or on another
 command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). Revoking
-a key takes no reference: a repeat cannot revoke twice. `lpb bootstrap-admin` takes none either.
+a key takes no reference: a repeat cannot revoke twice, and a repeat of one that finished answers as
+the first did (`204`), so a retry after a lost answer is not an error (D61); a key that never existed is
+`400`. `lpb bootstrap-admin` takes none either.
 
 **Audit log.** Each change is one INFO line: `keys.bootstrapped`, `keys.issued`, `keys.rotated` (with
 `replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `application_id` and

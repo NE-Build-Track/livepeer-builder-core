@@ -1,6 +1,13 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from livepeer_builder.contracts import AttemptOutcome, CallTimings, Job, OperationRecord, ProvisionedActor
+from livepeer_builder.contracts import (
+    AttemptOutcome,
+    CallTimings,
+    Job,
+    OperationRecord,
+    PaymentReason,
+    ProvisionedActor,
+)
 
 
 class EngineError(Exception):
@@ -142,6 +149,7 @@ class RunnerCallError(EngineError):
     order; with the Live Runner transport, a non-empty list means ``payment_sent``.
     ``payment_unknown`` is True when the signer was asked and gave no validated answer (a lost or
     malformed reply, a 5xx, a cancel): it may have charged, so the job must not pay anyone else.
+    ``reason`` says why a payment failed, for the builder (D58); it becomes ``Failure.reason``.
     """
 
     def __init__(
@@ -155,6 +163,7 @@ class RunnerCallError(EngineError):
         body: str | None = None,
         payment_unknown: bool = False,
         timings: CallTimings | None = None,
+        reason: PaymentReason | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -164,3 +173,4 @@ class RunnerCallError(EngineError):
         self.body = body
         self.payment_unknown = payment_unknown
         self.timings = timings
+        self.reason = reason

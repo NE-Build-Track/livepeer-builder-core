@@ -61,11 +61,17 @@ async def net() -> AsyncIterator[Net]:
 
 
 async def paid_engine(
-    make_engine: EngineFactory, admin: ActorContext, net: Net, *, retries: int = 3
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    net: Net,
+    *,
+    retries: int = 3,
+    signer_url: str | None = None,
 ) -> tuple[BuilderEngine, str]:
+    """Two runners on two orchestrators; the signer is ``net`` unless ``signer_url`` names another."""
     runners = (net.runner(name="a1"), net.runner(name="b1", orchestrator_url="https://orch-b.example"))
     transport = SdkRunnerTransport(
-        net.url,
+        signer_url or net.url,
         max_payment_challenge_retries=retries,
     )
     engine = await make_engine(

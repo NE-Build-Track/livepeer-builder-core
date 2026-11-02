@@ -86,6 +86,8 @@ _FAILURE_STATUS = {
     "interrupted": 502,
 }
 _RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
+# A signer refusal is the payer's to fix, not a reason to retry (D58): no Retry-After.
+_REFUSAL_STATUS = {"not_authorized": 403, "allowance_exhausted": 402}
 _HELD = {"command", "operation_ref", "state"}  # what a 409 shows of an admin command holding the reference
 
 
@@ -393,12 +395,15 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
     async def _failed(_: Request, exc: JobFailed) -> Response:
         failure = exc.job.failure
         kind = failure.kind if failure else "runner_error"
-        if failure and kind == "runner_rejected" and failure.status_code:
+        refusal = _REFUSAL_STATUS.get(failure.reason or "") if failure else None
+        if refusal is not None:
+            status = refusal
+        elif failure and kind == "runner_rejected" and failure.status_code:
             status = failure.status_code
         else:
             status = _FAILURE_STATUS.get(kind, 502)
         headers = {JOB_ID_HEADER: str(exc.job.id)}
-        if kind in _RETRY_AFTER:
+        if kind in _RETRY_AFTER and refusal is None:
             headers["Retry-After"] = _RETRY_AFTER[kind]
         return problem(status, str(exc), headers, job=exc.job.model_dump(mode="json"))
 

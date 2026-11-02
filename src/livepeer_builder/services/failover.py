@@ -17,7 +17,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
-from livepeer_builder.utils import BODY_LIMIT
+from livepeer_builder.utils import BODY_LIMIT, signable
 
 _LOG = logging.getLogger(__name__)
 
@@ -228,3 +228,13 @@ def orchestrator_of(runner: Runner) -> str:
     if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
         return url.strip().lower()
     return f"{scheme}://{host}:{port}"
+
+
+def capped_first(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
+    """The policy's order, free runners and those the signer takes a ceiling for first; the rest last."""
+    return tuple(sorted(runners, key=lambda runner: not _paid_ready(runner)))  # stable: the policy's order
+
+
+def _paid_ready(runner: Runner) -> bool:
+    rate = runner.rate  # a free runner is never asked to pay; a 402 from it is still refused
+    return rate is not None and (rate.amount == 0 or signable(rate.amount, rate.currency, rate.unit))

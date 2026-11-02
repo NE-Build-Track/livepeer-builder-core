@@ -60,6 +60,10 @@ Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness
 cost sync and its error, running jobs, the allocation mode and the version. Logs are JSON lines; every
 line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 
+`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
+(D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
+`LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).
+
 ## Backup and restore
 
 - **SQLite:** `lpb backup FILE` uses SQLite's online backup API, so the copy is consistent while the
@@ -78,6 +82,7 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | The signer or runner times out after payment | Job `uncertain`; cost classified `uncertain` |
 | Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
+| Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
 | The discovery service loses an orchestrator | Its last inventory is served until `LPD_MAX_FAILED_REFRESHES` consecutive failed probes, then evicted. A failed directory load (an RPC outage, for the on-chain directory) keeps the previous directory ([contract](contracts/discovery.md#probing-and-caching)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |

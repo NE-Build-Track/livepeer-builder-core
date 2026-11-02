@@ -86,7 +86,7 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
-| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application |
+| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application. Newest first, paged with `before` ([job history](engine.md#job-history)) |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |

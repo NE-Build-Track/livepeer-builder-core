@@ -92,7 +92,8 @@ the three journeys against a scripted engine.**
    today); a missing or stale rate stays marked; a job page whose job has no `usage` (`Job.usage` is
    `MeasuredUsage | None`, `contracts/jobs.py:200`) says "no usage reported".
 7. **Reporting.** My jobs lists all three modes with a mode column; Usage and cost is unchanged apart
-   from `by_app` (ISS-18) when the engine provides it.
+   from `by_app` (ISS-18, D60: per app and class, so pending spend is shown apart) when the engine
+   provides it.
 
 No new top-level page; Operator actions are untouched (ISS-31 may hide money actions in its second
 configuration).

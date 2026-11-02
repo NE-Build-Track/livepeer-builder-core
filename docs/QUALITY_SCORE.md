@@ -13,7 +13,7 @@ Update this file in the same change that moves a grade.
 | Jobs (async), sessions | C | Contracts and 501 tests | M4 |
 | Payments | A | `test_payments.py`: explicit provisioning, idempotency, custody, rotation | Mode B (M4) |
 | Costs | A | `test_costs.py`: classification, corrected, reconciliation, cursor | — |
-| Events | C | Contract and 501 test | M3 |
+| Events | C | Contract and 501 test | Held in M3 (D60) |
 | Store | A | Store suite on SQLite and PostgreSQL; migrations, drift, restart, backup, retention | — |
 | HTTP | B | `test_http.py` | Metrics endpoint (T4) |
 | CI | A | Green on PRs; coverage, per-layer and diff-coverage gates | — |

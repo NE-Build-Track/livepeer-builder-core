@@ -13,6 +13,10 @@ task stays open as partial until the hold is lifted.
 
 ## Criteria check (verified)
 
+As found at `d3df806`, before this work. What ISS-18 changed, criterion by criterion, is in the
+[exec plan](../../exec-plans/active/iss-18-cost-reports.md#acceptance): `by_app` (D60), the Batteries-down
+test, and the feed marked held everywhere.
+
 | Criterion | Status | Evidence |
 | --- | --- | --- |
 | Job-level usage and observed network cost | **Met** | `GET /v1/jobs/{id}/cost` (store only, never Batteries); `POST /v1/jobs/{id}/usage` (`app_reported`, once, owner only, succeeded jobs); `test_jobs.py`, `test_costs.py` |
@@ -33,7 +37,8 @@ smallest attribution the aggregate report lacks.**
 
 ### Code
 
-- **`CostSummary.by_app`** (`dict[str, Fees]`): fees per runner app in the same window and scope. Built
+- **`CostSummary.by_app`** (proposed as `dict[str, Fees]`; built as `dict[str, dict[CostClass, Fees]]`,
+  D60, so a final fee and a `pending` one are never one figure): fees per runner app in the same window and scope. Built
   from the job records the summary already reads; no new store query shape beyond a group-by. This is
   the attribution a builder needs ("what did each app cost me") and the console's Usage page already
   shows it from Batteries.
@@ -52,12 +57,14 @@ smallest attribution the aggregate report lacks.**
 
 ## Test plan (test-driven)
 
+The proposed list. The exec plan carries it checked off, with each result.
+
 ```text
 [ ] Batteries down: a job still ends succeeded, its cost reads pending, health shows the sync error, the job record is unchanged
 [ ] a refused usage report (wrong owner, failed job, second report) leaves the job's state and usage unchanged
 [ ] summary by_class totals across delivered, failed_after_payment, uncertain and pending, with a failover job
 [ ] summary scope: an actor sees its own; an admin sees the application's, or one actor with actor_id
-[ ] summary by_app sums to the by_class total for the same window and scope
+[ ] summary by_app adds up, class by class, to by_class for the same window and scope
 [ ] pending jobs are counted in jobs_pending and never in a class total (exists: keep)
 [ ] GET /v1/events answers 501 naming the hold
 [ ] FakeEngine summary matches (by_app)
@@ -75,6 +82,10 @@ what is needed (including grant and allocation filters at `ca09e47`). The feed, 
 engine-side too.
 
 ## Open questions to lock
+
+**Locked by Mike, 30 October 2026:** Q1 `by_app` only (no `by_orchestrator`, no usage totals in M3); Q2
+the events feed stays held for M3 (the 21 October decision, item 4), and ISS-18 stays open as partial.
+The rules become [D60](../m3-decisions.md).
 
 - **Q1.** Add `by_app` only (recommended), also `by_orchestrator`, or neither in M3?
 - **Q2.** Leave the events feed held for M3 (the decision), or lift the hold if the other M3 work lands

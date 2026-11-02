@@ -321,6 +321,6 @@ named here show each one.
 | Interface | Status |
 | --- | --- |
 | `ServiceCredentialAuthenticator` (trusted backend with `actors.assert`) | Defined in [access.md](../contracts/access.md#service-mode); built in M4 |
-| `EventFeed` | Defined in [events.md](../contracts/events.md); built in M3 |
+| `EventFeed` | Defined in [events.md](../contracts/events.md); held in M3 ([D60](m3-decisions.md)) |
 | `SessionManager` | Defined in [engine.md](../contracts/engine.md#persistent-sessions); built in M4 |
 | `UsageMeter` (engine-side usage measurement) | A later extension; today usage is app-reported |

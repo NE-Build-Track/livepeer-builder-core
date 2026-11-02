@@ -42,7 +42,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | ISS-15 Owned job history and basic results | M3 | `GET /v1/jobs`, `ResultRef` (implemented) |
 | ISS-16 Capture usage; correlate jobs with payment evidence | M3 | `report_usage`; `manifest_id` → `payment_session_id` correlation through the session log (implemented) |
 | ISS-17 Replayable network-cost projections | M3 | `CostService` projections and `corrected` (implemented) |
-| ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads (implemented); events feed **defined** ([events.md](../contracts/events.md)) |
+| ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads and the summary with `by_app` (implemented, [D60](../design-docs/m3-decisions.md)); events feed **defined and held** ([events.md](../contracts/events.md), [M3 decision, item 4](https://github.com/Cloud-SPE/Network-Engineering-SPE/blob/3c365a46550c2099e92b1df1adfb3756b4508c95/docs/decisions/2026-10-21-m3-reference-app-and-scope.md)): open as partial |
 | ISS-19 Representative jobs and acceptance matrix | M3 | Open |
 | ISS-20 REST for the first journey | M3 | `http/app.py` (minimal, implemented) |
 | ISS-21–25 Reference app, journey guide, funded seven-outcome proof | M3 | Out of this repository (reference app); evidence plans in `docs/exec-plans/` |

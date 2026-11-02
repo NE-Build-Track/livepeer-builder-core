@@ -10,8 +10,8 @@ Retail pricing, customer accounts and billing stay in your application. The engi
 wholesale **network** cost and classifies every charge, so you can reconcile what you bill.
 
 > Status: **M3 in progress** (Cloud SPE Build Track; M2 closed 19 October 2026). The contracts are defined; the core paths work.
-> Async jobs, persistent sessions and the events feed are defined but not yet implemented: they
-> answer `501`. See [docs/PLANS.md](docs/PLANS.md).
+> Async jobs, persistent sessions and the events feed are defined but not yet implemented (the feed is
+> held in M3): they answer `501`. See [docs/PLANS.md](docs/PLANS.md).
 
 ## Install
 

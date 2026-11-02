@@ -48,5 +48,5 @@ Found while writing these guides and checked against the code; each is handled i
   and purging a job moves its delivered fees to `unattributed`. ISS-35.
 - **Nothing reads `Livepeer-Actor`**, so a service credential with `actors.assert` does nothing yet. ISS-32.
 - **The console decides state by matching error text** ("no allocation"). ISS-29's `code` field.
-- **The events feed is held** (M3 decision, item 4) but `ReservedEventFeed` still says M3; ISS-26, ISS-29
+- **The events feed is held** (M3 decision, item 4), and since D60 `ReservedEventFeed` says so (`milestone: "held"`); ISS-26, ISS-29
   and ISS-32 depend on that hold being lifted.

@@ -79,6 +79,7 @@ classDiagram
         +int? status_code
         +datetime started_at
         +datetime? ended_at
+        +CallTimings? timings
     }
     class Failure {
         +enum kind

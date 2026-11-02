@@ -105,6 +105,7 @@ class SdkRunnerTransport:
             data=json_object(body, content_type),
             manifest_ids=events.ids,
             payment_sent=events.signed,
+            timings=events.timer.timings,
         )
 
     async def open(

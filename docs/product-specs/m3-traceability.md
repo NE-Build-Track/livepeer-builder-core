@@ -57,7 +57,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Re-provisioning after a revoke is a new operation | `tests/unit/test_service_edges.py::test_reprovisioning_after_revoke_is_a_new_operation` | U | fixture | ISS-11/14 |
 | On a live stack: a revoked actor key answers 401 | `scripts/live_probe.py` (revocation checks) | L | live | ISS-23 |
 | On a live stack: a revoked auditor key is 401 on admin reads | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run B | L | live | ISS-23 |
-| On a live stack: a job after revoke-allocation fails `not_provisioned` (402) and pays nothing | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-23 |
+| On a live stack: a job after revoke-allocation fails `not_provisioned` (402) with no reason | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-23 |
 
 ## Duplicate job submissions
 
@@ -75,7 +75,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | `FakeEngine` raises the same | `tests/unit/test_fake_engine_contract.py::test_a_repeated_operation_ref_raises_operation_exists_or_conflict` | U | fixture | ISS-11/14 |
 | A repeat after a payment refusal runs again; after a signer that may have charged it is 409 | `tests/unit/test_payment_failures.py::test_a_repeat_after_a_payment_refusal_runs_again_under_its_reference`, `tests/unit/test_payment_failures.py::test_a_repeat_after_a_signer_that_may_have_charged_is_operation_exists` | U | fixture | ISS-12 |
 | On a live stack: after an unpaid `allowance_exhausted` refusal and a fund, the same `operation_ref` runs a new job (the closed list) | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-11/14 |
-| On a live stack: job repeats: in progress, exists, conflict, re-run after an unpaid failure | builder-core-console `scripts/live-check-d57.py` (46 checks, 30 October) | L | live | ISS-11/14 |
+| On a live stack: job repeats: in progress, exists, conflict, re-run after a failure before dispatch | [builder-core-console evidence, 29 October](https://github.com/NE-Build-Track/builder-core-console/blob/ca43baa22ebc86bfcb67afe22169c8835d4209af/docs/references/evidence/2026-10-29-d57-live-check.md) (`scripts/live-check-d57.py` at `ca43baa`, 37 checks, engine `a6ed9b5`) | L | live | ISS-11/14 |
 
 ## Duplicate admin commands
 
@@ -93,7 +93,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Repeated set-status, revoke-allocation and revoke-key change nothing more; the provider is not called again to revoke | `tests/unit/test_verification_access.py::test_repeating_set_status_revoke_allocation_or_revoke_key_changes_nothing_more` | U | fixture | ISS-23 |
 | The same over REST: set-status 200 twice; revoke-allocation 200 twice and revoke-key 204 twice (a retry gets the first answer, D61); an unknown actor 404, an unknown key 400 | `tests/unit/test_verification_access.py::test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest` | H | fixture | ISS-23 |
 | On a live stack: a fund sent twice under one `operation_ref` is replayed (`Idempotent-Replayed: true`) and applied once | `scripts/live_probe.py` (with `--yes`) | L | live | ISS-23 |
-| On a live stack: admin commands repeated under one reference replay (`Idempotent-Replayed: true`) and apply once; a reference reused for another request is 409 | builder-core-console `scripts/live-check-d57.py` (46 checks, 30 October) | L | live | ISS-11/14 |
+| On a live stack: admin commands repeated under one reference replay (`Idempotent-Replayed: true`) and apply once; a reference reused for another request is 409 | [builder-core-console evidence, 29 October](https://github.com/NE-Build-Track/builder-core-console/blob/ca43baa22ebc86bfcb67afe22169c8835d4209af/docs/references/evidence/2026-10-29-d57-live-check.md) (`scripts/live-check-d57.py` at `ca43baa`, 37 checks, engine `a6ed9b5`) | L | live | ISS-11/14 |
 
 ## Authorization denial
 

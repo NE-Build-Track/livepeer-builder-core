@@ -53,6 +53,13 @@ match of `unmatched`, `matched` or `ambiguous`), `payment_sent`, `outcome` (`in_
 `payment_unknown`), the status
 code and timestamps. The cost key is the matched `payment_session_id`, not the manifest.
 
+An attempt also records `timings`, where the call's time went before the runner answered, in
+milliseconds: `challenge_ms` (the unpaid requests, until their 402s), `signing_ms` (the signer) and
+`response_ms` (the request the runner answered, until its response headers). A step the call never
+reached is `null`, each step adds up its repeats, and `timings` is `null` when the attempt is from
+before this, or from a transport that doesn't measure. Each call also logs them as
+`runner.call_timings`.
+
 ### Behavior the contract fixes
 
 1. **Fail over when another runner can do what this one did not (D52).** Runners are tried in

@@ -222,6 +222,16 @@
               }
             ],
             "title": "Status Code"
+          },
+          "timings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallTimings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -267,6 +277,47 @@
           "fees"
         ],
         "title": "AttemptCost",
+        "type": "object"
+      },
+      "CallTimings": {
+        "additionalProperties": false,
+        "description": "Where one runner call's time went before the runner answered, in milliseconds (#89). A step the\ncall never reached is ``None``, and each step adds up its repeats.",
+        "properties": {
+          "challenge_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenge Ms"
+          },
+          "response_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Ms"
+          },
+          "signing_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signing Ms"
+          }
+        },
+        "title": "CallTimings",
         "type": "object"
       },
       "CostSummary": {

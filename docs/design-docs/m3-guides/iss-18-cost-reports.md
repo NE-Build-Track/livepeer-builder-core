@@ -13,10 +13,14 @@ task stays open as partial until the hold is lifted.
 
 ## Criteria check (verified)
 
+As found at `d3df806`, before this work. What ISS-18 changed, criterion by criterion, is in the
+[exec plan](../../exec-plans/active/iss-18-cost-reports.md#acceptance): `by_app` (D60), the Batteries-down
+test, and the feed marked held everywhere.
+
 | Criterion | Status | Evidence |
 | --- | --- | --- |
 | Job-level usage and observed network cost | **Met** | `GET /v1/jobs/{id}/cost` (store only, never Batteries); `POST /v1/jobs/{id}/usage` (`app_reported`, once, owner only, succeeded jobs); `test_jobs.py`, `test_costs.py` |
-| Aggregate report with units, attribution and uncertainty | **Partial** | `GET /v1/costs/summary` gives `by_class` (`Fees`: `fee_eth`, `fee_usd`, `row_count`), `jobs_with_cost`, `jobs_pending`. Uncertainty: yes (classes; pending never folded in). Units: yes (ETH and USD fields). **Attribution: only by actor scope**; no breakdown by app or orchestrator; no usage totals; `unattributed` is admin-only (reconciliation). **Since D60:** `by_app`, per app and class |
+| Aggregate report with units, attribution and uncertainty | **Partial** | `GET /v1/costs/summary` gives `by_class` (`Fees`: `fee_eth`, `fee_usd`, `row_count`), `jobs_with_cost`, `jobs_pending`. Uncertainty: yes (classes; pending never folded in). Units: yes (ETH and USD fields). **Attribution: only by actor scope**; no breakdown by app or orchestrator; no usage totals; `unattributed` is admin-only (reconciliation) |
 | Stable IDs | **Met** | Job UUID, attempt `(job_id, number)`, `operation_ref`, `manifest_id`, Batteries `payment_session_id`, `UsageRow.id` |
 | Versioned feed with replay and de-duplication | **Held** | `events.md` defines it; `GET /v1/events` answers 501 |
 | Reporting failures preserve execution state | **Met by design, partly tested** | Job completion never calls cost code; cost sync runs in its own loop and reports errors in health (`test_runtime.py`); no test with Batteries down end to end |
@@ -52,6 +56,8 @@ smallest attribution the aggregate report lacks.**
 - ISS-18 tracker comment: the criteria table above, with the feed held.
 
 ## Test plan (test-driven)
+
+The proposed list. The exec plan carries it checked off, with each result.
 
 ```text
 [ ] Batteries down: a job still ends succeeded, its cost reads pending, health shows the sync error, the job record is unchanged

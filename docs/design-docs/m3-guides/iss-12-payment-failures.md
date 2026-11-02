@@ -133,6 +133,10 @@ on `reason`. Embedded callers see the same `JobFailed` with a richer `Failure`.
 
 ## Open questions to lock
 
+**Locked by Mike, 29 October 2026:** Q1 `Failure.reason`; Q2 status by reason (403 / 402 / 503); Q3 a
+refused connection (connect phase only) is `signer_unavailable`. The rules become
+[D58](../m3-decisions.md).
+
 - **Q1.** `Failure.reason` (recommended) or new `Failure.kind` values?
 - **Q2.** REST status by reason (403 / 402 / 503), or keep 503 for every payment failure and rely on the
   body?

@@ -9,7 +9,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | --- | --- | --- |
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
-| `LPB_SIGNER_URL` | unset | The remote signer, for payments only |
+| `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
 | `LPB_DISCOVERY_URL` | unset | A livepeer-node `/discovery` inventory to read runners from: the discovery service (`lpb discovery`, [contract](contracts/discovery.md)), livepeer-node's own, or one orchestrator. Unset → empty static discovery. No credential is sent |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |

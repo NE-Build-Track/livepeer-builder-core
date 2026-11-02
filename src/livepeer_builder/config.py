@@ -101,6 +101,8 @@ class EngineSettings(Contract):
     log_json: bool = True
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8080, ge=1, le=65535)
+    # A /v1/ body over this is refused with 413 before it is read (D59); fits an 8 MiB raw_body as base64
+    http_max_request_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
 
     @field_validator("auth", "jwt_algorithms", "jwt_token_types", mode="before")
     @classmethod

@@ -109,7 +109,10 @@ MCP tool errors reuse the same table ([iss-30-mcp.md](iss-30-mcp.md) puts `code`
 **4. Paging, one convention.** List routes keep returning arrays (no envelope, so no break) and gain
 keyset paging: `before` (an ISO time, as the ISS-15 guide proposes) on `GET /v1/jobs`,
 `GET /v1/costs/projections` and `GET /v1/admin/actors`, plus an RFC 8288 `Link: <…>; rel="next"` header.
-The store orders by `(created_at, id)` so equal times do not skip rows (Q3).
+The store orders by `(created_at, id)`, and the **cursor carries both**: ordering alone does not stop
+a skip, because `before` with a time only cannot tell which of two jobs with an equal `created_at` the
+last page already returned (the M3 limit D59 documents). So the next page is `created_at < t OR
+(created_at = t AND id < last_id)`, with the pair in the `Link` header or a `before_id` parameter (Q3).
 
 **5. Versioning rule** (in `rest.md`): within `/v1` changes are additive only (new routes, new optional
 fields, new codes and enum values, which clients must tolerate). Until the M5 release (ISS-38) a breaking
@@ -228,7 +231,8 @@ Compatibility
 - **Q1.** Does ISS-29 wait for the events hold to lift, or close with `/v1/events` documented as held
   (recommended: close with the hold recorded, as the ISS-18 guide does)?
 - **Q2.** `code` beside `error` (recommended) or RFC 9457 now?
-- **Q3.** Keyset `before` (time) with an `(created_at, id)` order (recommended), or an opaque cursor?
+- **Q3.** Keyset paging on `(created_at, id)`, with the cursor carrying both (`before` plus `before_id`,
+  recommended), or an opaque cursor? Either way a time-only `before` keeps D59's equal-time skip.
 - **Q4.** `/v1/me` as a facade member (`whoami`, recommended so MCP gets it too) or REST only?
 - **Q5.** Rename `POST /v1/admin/grant/fund` to `POST /v1/admin/grants/{id}/fund` before the M5 release,
   keeping the old path as an alias until then?

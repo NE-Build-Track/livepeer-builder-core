@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 from livepeer_gateway import http, live_runner
-from livepeer_gateway.discovery import discover_runners
 from livepeer_gateway.remote_signer import (
     GetPaymentResponse,
     LivePaymentChallenge,
@@ -21,7 +20,6 @@ from livepeer_gateway.remote_signer import (
 )
 
 from livepeer_builder.adapters import runner_call
-from livepeer_builder.adapters.sdk import HttpDiscoverySource
 
 COPIED_AT = "2017a80"
 # The first 16 hex digits of each function's source sha256 at COPIED_AT. When one fails: read the SDK
@@ -66,7 +64,11 @@ def test_the_copy_keeps_the_sdk_s_mit_notice() -> None:
 
 
 def test_the_copied_protocol_constants_match() -> None:
-    assert runner_call._PAYMENT_TYPES_BY_UNIT == live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT
+    # The engine pays only units livepeer/node's signer takes a ceiling in (checkMaxPrice): not the SDK's
+    # "hour", which no orchestrator advertises (T23). Every other entry, and any the SDK adds, must match.
+    signer_refuses = {"hour"}
+    paid = {u: t for u, t in live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT.items() if u not in signer_refuses}
+    assert paid == runner_call.PAYMENT_TYPES_BY_UNIT
     assert runner_call.PAYER_ADDRESS_HEADER == live_runner._LIVE_RUNNER_PAYER_ADDRESS_HEADER
 
 
@@ -80,14 +82,3 @@ def test_the_signer_client_accepts_what_the_call_path_passes() -> None:
     for method in ("get_payment", "run_payments"):
         assert inspect.iscoroutinefunction(getattr(LivePaymentSession, method))
     assert isinstance(inspect.getattr_static(LivePaymentSession, "manifest_id"), property)
-
-
-async def test_discover_runners_accepts_every_keyword_the_source_passes() -> None:
-    seen: list[set[str]] = []
-
-    async def recorder(**kwargs: object) -> list[dict[str, Any]]:
-        seen.append(set(kwargs))
-        return []
-
-    await HttpDiscoverySource("http://discovery.example/discovery", discover=recorder).fetch()
-    assert _accepts(discover_runners, *seen[0])

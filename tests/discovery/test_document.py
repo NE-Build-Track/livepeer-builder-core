@@ -27,6 +27,20 @@ def test_an_inventory_that_is_not_valid_json_is_refused(body: bytes) -> None:
         runner_records(body)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[{1:2}]",
+        b"[{true:1}]",
+        b'[{"runners":[{"url":"kept"}],1:2}]',
+    ],
+)
+def test_a_non_string_object_key_is_refused(body: bytes) -> None:
+    """JSON keys are strings. A number key must not read as an empty success the probe keeps."""
+    with pytest.raises(ValueError, match="not valid JSON"):
+        runner_records(body)
+
+
 TOO_BIG = "1e" + "9" * 20  # past Decimal's exponent range; inf as a float
 TOO_SMALL = "1e-" + "9" * 20  # past it the other way; 0.0 as a float
 AT_RANGE = "1e" + "9" * 18  # Decimal still builds it: Decimal('1E+999999999999999999')
@@ -51,6 +65,13 @@ def test_a_number_decimal_can_parse_is_kept_as_received(token: str) -> None:
 def test_trailing_json_is_refused() -> None:
     with pytest.raises(ValueError, match="JSON list"):
         runner_records(b"[][]")
+
+
+def test_a_leading_bom_is_the_inventory_without_it() -> None:
+    """json.loads on bytes decodes utf-8-sig. A strict decode keeps the BOM and the probe fails."""
+    inventory = b'[{"runners":[{"url":"kept"}]}]'
+    assert runner_records(b"\xef\xbb\xbf" + inventory) == runner_records(inventory)
+    assert runner_records("\ufeff" + inventory.decode()) == runner_records(inventory)
 
 
 def test_the_served_document_embeds_runner_text_without_quoting_it() -> None:

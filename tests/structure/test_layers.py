@@ -56,7 +56,7 @@ CONFINED: dict[str, tuple[str, ...]] = {
     # adapters/signer_failures.py is runner_call's reading of the SDK's signer errors (D58)
     "livepeer_gateway": ("adapters/sdk.py", "adapters/runner_call.py", "adapters/signer_failures.py"),
     "aiohttp": ("adapters/runner_call.py", "adapters/signer_failures.py"),
-    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "discovery/"),
+    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py", "discovery/"),
     "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),

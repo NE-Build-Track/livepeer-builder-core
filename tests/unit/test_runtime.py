@@ -109,6 +109,28 @@ async def test_a_discovery_url_reads_the_discovery_service() -> None:
         assert isinstance(parts.discovery_source, HttpDiscoverySource)
 
 
+async def test_the_discovery_service_is_read_under_lpb_discovery_max_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource
+
+    built: list[HttpDiscoverySource] = []
+
+    def source(url: str, *, max_bytes: int) -> HttpDiscoverySource:
+        built.append(HttpDiscoverySource(url, max_bytes=max_bytes))
+        return built[-1]
+
+    monkeypatch.setattr("livepeer_builder.adapters.sdk.HttpDiscoverySource", source)
+    settings = EngineSettings(
+        database_url=MEMORY, discovery_url="http://d/discovery", discovery_max_bytes=7, log_json=False
+    )
+    async with contextlib.AsyncExitStack() as stack:
+        await default_parts(settings, stack)
+    (made,) = built
+    assert (made._discovery_url, made._max_bytes) == ("http://d/discovery", 7)
+    assert made._client.is_closed  # the engine closes the source's client when it stops
+
+
 async def test_operator_token_wires_a_separate_grants_client() -> None:
     settings = EngineSettings(
         database_url=MEMORY,

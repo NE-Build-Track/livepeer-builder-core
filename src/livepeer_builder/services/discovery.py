@@ -2,22 +2,27 @@
 
 import asyncio
 import logging
-from collections import Counter
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from livepeer_builder.contracts import (
     ActorContext,
     DiscoverySnapshot,
     JobRequest,
     NetworkRate,
+    ObservedRate,
     Offering,
     Operation,
     Runner,
 )
+from livepeer_builder.contracts.discovery import ObservedBy
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
+from livepeer_builder.utils import is_payable
 
 _LOG = logging.getLogger(__name__)
+# livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).
+# The engine is deliberately looser: such a rate is kept, with the poll time instead of the stamp.
+_CLOCK_SKEW = timedelta(seconds=30)
 
 
 class MostCapacityFirst:
@@ -35,11 +40,13 @@ class DiscoveryService:
         policy: AccessPolicy,
         clock: Clock,
         interval_s: float = 15.0,
+        rate_max_age_s: float = 600.0,
     ) -> None:
         self._source = source
         self._policy = policy
         self._clock = clock
         self._interval_s = interval_s
+        self._rate_max_age = timedelta(seconds=rate_max_age_s)
         self._snapshot = DiscoverySnapshot(
             runners=(), observed_at=None, last_attempt_at=None, last_error=None
         )
@@ -90,26 +97,37 @@ class DiscoveryService:
         observed = self._snapshot.observed_at
         if observed is None:
             return []
-        by_app: dict[str, list[Runner]] = {}
+        # one group per app and (currency, unit); an app's runners with no rate are one more group, after them
+        by_unit: dict[tuple[str, bool, str, str], list[Runner]] = {}
         for runner in self._snapshot.runners:
             if app is None or runner.app == app:
-                by_app.setdefault(runner.app, []).append(runner)
+                rate = runner.rate
+                key = (runner.app, False, rate.currency, rate.unit) if rate else (runner.app, True, "", "")
+                by_unit.setdefault(key, []).append(runner)
+        fresh = self.is_fresh()
         offerings = []
-        for name in sorted(by_app):
-            group = by_app[name]
-            rates = _comparable_rates(group)
+        for key in sorted(by_unit):
+            name, _, currency, unit = key
+            group = by_unit[key]
+            span = _range(group, observed)
             offerings.append(
                 Offering(
                     app=name,
                     modes=tuple(sorted({runner.mode for runner in group if runner.mode})),
-                    rate_low=rates[0] if rates else None,
-                    rate_high=rates[-1] if rates else None,
+                    rate_low=span[0] if span else None,
+                    rate_high=span[1] if span else None,
+                    rate_status="available" if span and is_payable(currency, unit) else "missing",
+                    stale=not fresh or (span is not None and self._too_old(span[2])),
                     runner_count=len(group),
                     ready_count=sum(1 for runner in group if _is_ready(runner)),
                     observed_at=observed,
                 )
             )
         return offerings
+
+    def _too_old(self, oldest: datetime) -> bool:
+        """The oldest rate in the range is older than the max age: its source missed refreshes."""
+        return self._clock.now() - oldest > self._rate_max_age
 
 
 def _free_capacity(runner: Runner) -> int:
@@ -120,10 +138,29 @@ def _is_ready(runner: Runner) -> bool:
     return runner.capacity_available is None or runner.capacity_available > 0
 
 
-def _comparable_rates(group: list[Runner]) -> list[NetworkRate]:
-    """Rates in the group's most common (currency, unit), cheapest first; other units do not compare."""
-    rates = [runner.rate for runner in group if runner.rate is not None]
-    if not rates:
-        return []
-    common, _ = Counter((rate.currency, rate.unit) for rate in rates).most_common(1)[0]
-    return sorted((rate for rate in rates if (rate.currency, rate.unit) == common), key=lambda r: r.amount)
+def _range(group: list[Runner], polled_at: datetime) -> tuple[ObservedRate, ObservedRate, datetime] | None:
+    """The cheapest and dearest rate, and the oldest time any rate in the group was known; None with no rate.
+
+    Two ``ObservedRate`` are built, not one per runner: the catalog is public, built on every request.
+    """
+    rated = [(runner.rate, runner.observed_at) for runner in group if runner.rate is not None]
+    if not rated:
+        return None
+    cheapest = min(rated, key=lambda pair: pair[0].amount)
+    dearest = max(rated, key=lambda pair: pair[0].amount)
+    oldest = min(_known(stamp, polled_at)[0] for _, stamp in rated)
+    return _observed(*cheapest, polled_at), _observed(*dearest, polled_at), oldest
+
+
+def _observed(rate: NetworkRate, stamp: datetime | None, polled_at: datetime) -> ObservedRate:
+    observed_at, observed_by = _known(stamp, polled_at)
+    return ObservedRate(**rate.model_dump(), observed_at=observed_at, observed_by=observed_by)
+
+
+def _known(stamp: datetime | None, polled_at: datetime) -> tuple[datetime, ObservedBy]:
+    """When a rate was last known, and whose clock says so: its orchestrator's stamp, else the poll time.
+
+    A stamp with no UTC offset (a source other than HTTP can hand one over) is unreadable, as HTTP's are."""
+    if stamp is None or stamp.utcoffset() is None or stamp > polled_at + _CLOCK_SKEW:
+        return polled_at, "engine"
+    return stamp, "orchestrator"

@@ -12,6 +12,7 @@ from livepeer_builder.contracts import (
     AccessKey,
     Attempt,
     AttemptCost,
+    CallTimings,
     Failure,
     Fees,
     JobCost,
@@ -312,7 +313,8 @@ async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_job
     covered = make_job(clock)
     await sql.create_job(covered, None)
     clock.advance(1)
-    stale = make_job(clock)  # projected, then ended later: its projection predates its end
+    # Projected, then ended later: its projection predates its end. Another app, to tell them apart.
+    stale = make_job(clock).model_copy(update={"app": "a/other"})
     await sql.create_job(stale, None)
     none = Fees(fee_eth=Decimal("0"), fee_usd=None, row_count=0)
     for job_id, at in ((covered.id, clock.now()), (stale.id, clock.now() - timedelta(seconds=5))):
@@ -328,7 +330,8 @@ async def test_running_jobs_are_never_projected_and_reads_find_the_uncovered_job
         stored, uncovered = await reads.projections_and_unprojected("default", None, *window)
         _, none_for_bob = await reads.projections_and_unprojected("default", "bob", *window)
     assert {job.id for job in uncovered} == {running.id, stale.id}
-    assert {cost.job_id for cost in stored} == {covered.id, stale.id} and none_for_bob == []
+    assert {cost.job_id: app for app, cost in stored} == {covered.id: "a/b", stale.id: "a/other"}  # D60
+    assert none_for_bob == []
 
 
 async def test_session_rows_are_append_only(sql: SqlStore, clock: FixedClock) -> None:
@@ -699,3 +702,16 @@ async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, 
     assert await sql.get_sighting("default", "4f6c2a1e") == kept
     assert await sql.get_sighting("default", "nobody") is None
     assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by application, then actor
+
+
+async def test_an_attempts_timings_round_trip(sql: SqlStore, clock: FixedClock) -> None:
+    job = make_job(clock, state="running")
+    await sql.create_job(job, "fp")
+    started = make_attempt(job.id, clock).model_copy(update={"outcome": "in_flight", "ended_at": None})
+    await sql.start_attempt(started)
+    assert (await sql.get_job(job.id)).attempts[0].timings is None  # type: ignore[union-attr]
+    timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=None)
+    await sql.finish_attempt(make_attempt(job.id, clock).model_copy(update={"timings": timings}))
+    loaded = await sql.get_job(job.id)
+    assert loaded is not None
+    assert loaded.attempts[0].timings == timings

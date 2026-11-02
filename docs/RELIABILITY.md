@@ -10,7 +10,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
-| `LPB_DISCOVERY_URL` | unset | A livepeer-node `/discovery` inventory to read runners from: the discovery service (`lpb discovery`, [contract](contracts/discovery.md)), livepeer-node's own, or one orchestrator. Unset → empty static discovery. No credential is sent |
+| `LPB_DISCOVERY_URL` | unset | A livepeer-node `/discovery` inventory to read runners from: the discovery service (`lpb discovery`, [contract](contracts/discovery.md)), livepeer-node's own, or one orchestrator. Unset → empty static discovery. No credential is sent. Must be an `http://` or `https://` URL with a host, or the engine refuses to start (a bare `host:port` is refused). Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all and reads at most `LPB_DISCOVERY_MAX_BYTES`; a failed poll keeps the last good snapshot, and an entry or runner record that does not parse is skipped (`discovery.inventory_skipped`) |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
@@ -22,7 +22,9 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
 | `LPB_MAX_PAID_ATTEMPTS` | `2` | Paid attempts a job may fail over from (1 to 10; `1` turns paid failover off). The operator pays for them, so the caller's `max_attempts` cannot raise it (D55) |
+| `LPB_DISCOVERY_MAX_BYTES` | `16777216` (16 MiB) | The largest inventory one poll of `LPB_DISCOVERY_URL` reads; a larger one is a failed refresh. livepeer/node reads at most 1 MiB from one orchestrator, but a discovery service's combined inventory holds many, and 1 MiB is only about 2,000 runner records |
 | `LPB_DISCOVERY_INTERVAL_S`, `LPB_COST_SYNC_INTERVAL_S` | `15`, `30` | Background loops |
+| `LPB_RATE_MAX_AGE_S` | `600` | An orchestrator-stamped rate older than this makes its offering `stale` ([engine.md](contracts/engine.md#rates-iss-10)). The default is two of livepeer-node discovery's default 5-minute refreshes; `lpb discovery` evicts a failing orchestrator sooner (30 s probes, 6 failures) |
 | `LPB_STREAM_FINALIZE_TIMEOUT_S` | `10` | The most a stream's closing writes may take; the slot is released regardless (D34) |
 | `LPB_STREAM_DRAIN_TIMEOUT_S` | `30` | On stop, how long open streams may finish before they are abandoned (D36) |
 | `LPB_STREAM_SETTLE_S` | `1` | After a disconnect or cancel, how long the runner may take to end the stream and count as succeeded; `0` turns it off (D38) |
@@ -42,6 +44,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging |
+| `LPB_HTTP_MAX_REQUEST_BYTES` | `16777216` (16 MiB) | A `/v1/` request body over it is refused with 413 `request_too_large` before it is read (D59); at least 1024. It fits an 8 MiB `raw_body` as base64 |
 
 ## Operations
 
@@ -58,6 +61,10 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors, the last
 cost sync and its error, running jobs, the allocation mode and the version. Logs are JSON lines; every
 line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
+
+`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
+(D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
+`LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).
 
 ## Backup and restore
 
@@ -77,6 +84,7 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | The signer or runner times out after payment | Job `uncertain`; cost classified `uncertain` |
 | Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
+| Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
 | The discovery service loses an orchestrator | Its last inventory is served until `LPD_MAX_FAILED_REFRESHES` consecutive failed probes, then evicted. A failed directory load (an RPC outage, for the on-chain directory) keeps the previous directory ([contract](contracts/discovery.md#probing-and-caching)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |

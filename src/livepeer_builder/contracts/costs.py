@@ -98,11 +98,18 @@ def billable_fees(attempts: Iterable[AttemptCost]) -> Fees:
 
 
 class CostSummary(Contract):
+    """The costs of the jobs created in ``[start, end)``, in the caller's scope. ``by_app`` attributes
+    the same attempt fees to each job's runner app, kept by class as in ``by_class`` (D60), so a final fee
+    and a ``pending`` one that can still grow are never one figure. For every class, the apps add up to
+    its ``by_class`` total. An app appears once one of its jobs has a costed attempt, with only the classes
+    its attempts have."""
+
     start: datetime
     end: datetime
     by_class: dict[CostClass, Fees]
     jobs_with_cost: int
     jobs_pending: int  # reported beside the totals, never folded into them
+    by_app: dict[str, dict[CostClass, Fees]] = Field(default_factory=dict)
 
 
 class Reconciliation(Contract):

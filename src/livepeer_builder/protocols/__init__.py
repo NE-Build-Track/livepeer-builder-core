@@ -109,6 +109,9 @@ class RunnerTransport(Protocol):
     the paid request keeps the charge attributed to its job. The engine's recorder also has
     ``remember(manifest_id)``, which a transport awaits before asking the signer and signs nothing if it
     raises, and ``refused(manifest_id)`` for a refusal (D54; ``adapters/runner_call.py``).
+
+    A transport may also have ``pays: bool``, false when a credential never pays a runner (no signer). The
+    engine then keeps the selection policy's order on every job; a transport without it is taken to pay.
     """
 
     async def call(
@@ -149,8 +152,8 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
     """A transport that can also hand the response back unbuffered. ``jobs.streaming`` exists only with one.
 
     ``open`` returns once the runner answered with its status and headers. It must give up after
-    ``request.first_byte_timeout_s``. A deadline during signer identity, before the runner is asked,
-    is ``payment`` / ``signer_unavailable`` (nothing was signed, D58). Any later deadline is
+    ``request.first_byte_timeout_s``. A deadline during signer identity, before the runner is asked, is
+    ``payment`` / ``signer_unavailable`` (nothing was signed, D58 (4)); any later one is
     ``RunnerCallError("timeout", ...)`` with the payment evidence so far. The engine stops an ``open``
     that runs well past that and treats it as paid (D35).
     """
@@ -392,9 +395,9 @@ class CostSnapshot(Protocol):
 
     async def projections_and_unprojected(
         self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> tuple[list[JobCost], list[Job]]:
-        """The stored projections of jobs created in the window, and the jobs no projection covers:
-        running, or ended since their projection was stored."""
+    ) -> tuple[list[tuple[str, JobCost]], list[Job]]:
+        """The stored projections of jobs created in the window, each with its job's runner app, and the
+        jobs no projection covers: running, or ended since their projection was stored."""
         ...
 
     async def recent_with_projections(

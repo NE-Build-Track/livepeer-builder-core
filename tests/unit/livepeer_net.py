@@ -47,8 +47,8 @@ class Net:
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
     sign: list[SignStep] = field(default_factory=list)
-    # /sign-orchestrator-info: "ok", an HTTP status, "drop", "malformed" (no signature),
-    # "garbage" (not JSON), "array" (JSON that is not an object), or seconds to hang before answering
+    # /sign-orchestrator-info: "ok", an HTTP status, "drop", "malformed" (no signature), "garbage" (not
+    # JSON), "array" (JSON that is not an object), or seconds to hang
     info: list[int | float | str] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
@@ -75,27 +75,26 @@ class Net:
             url=f"{self.url}/app" + (f"/{name}" if name else ""), app="example/echo", runner_id=name or "r1",
             mode="single-shot",
             orchestrator_url=orchestrator_url or self.url, capacity=1, capacity_available=1,
-            rate=NetworkRate(amount=Decimal(price), currency="usd", unit=unit),
+            rate=NetworkRate(amount=Decimal(price), currency="wei", unit=unit),
         )  # fmt: skip
 
     async def _sign_info(self, request: web.Request) -> web.Response:
         self.log.append("signer info")
         step = self.info.pop(0) if self.info else "ok"
+        if isinstance(step, float):
+            await self.hang(step)
+            step = "ok"
         if step == "drop":
             assert request.transport is not None
             request.transport.close()
             return web.Response()
-        if isinstance(step, bool):
-            raise AssertionError(step)
-        if isinstance(step, float):
-            await self.hang(step)
-        elif isinstance(step, int):
+        if isinstance(step, int):
             return web.Response(status=step, text="UPSTREAM-INFO: signer auth webhook failed")
-        elif step == "malformed":
+        if step == "malformed":
             return web.json_response({"address": "0x" + "ab" * 20})
-        elif step == "garbage":
+        if step == "garbage":
             return web.Response(text="not-json", content_type="text/plain")
-        elif step == "array":
+        if step == "array":
             return web.Response(text="[]", content_type="application/json")
         return web.json_response({"address": "0x" + "ab" * 20, "signature": "0xsig"})
 

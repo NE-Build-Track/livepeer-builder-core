@@ -86,7 +86,7 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
-| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application |
+| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application. Newest first, paged with `before` ([job history](engine.md#job-history)) |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
@@ -315,7 +315,9 @@ as it was issued, **`"token": null`** and **`"replayed": true`** (`false` on the
 the engine keeps only the token's hash, so it cannot show the token again. An admin who lost it
 rotates the key (under a new reference). The same reference with another request, or on another
 command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). Revoking
-a key takes no reference: a repeat cannot revoke twice. `lpb bootstrap-admin` takes none either.
+a key takes no reference: a repeat cannot revoke twice, and a repeat of one that finished answers as
+the first did (`204`), so a retry after a lost answer is not an error (D61); a key that never existed is
+`400`. `lpb bootstrap-admin` takes none either.
 
 **Audit log.** Each change is one INFO line: `keys.bootstrapped`, `keys.issued`, `keys.rotated` (with
 `replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `application_id` and

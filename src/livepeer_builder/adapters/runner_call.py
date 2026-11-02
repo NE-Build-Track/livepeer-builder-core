@@ -33,7 +33,6 @@ import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Iterator
-from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -47,6 +46,8 @@ from livepeer_gateway.remote_signer import (
     get_signer_info,
 )
 
+from livepeer_builder.adapters.call_timer import CallTimer
+from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
 from livepeer_builder.adapters.signer_failures import (
     classify,
     network_kind,
@@ -54,7 +55,7 @@ from livepeer_builder.adapters.signer_failures import (
     signer_message,
     unavailable_before_signing,
 )
-from livepeer_builder.contracts import AttemptOutcome, NetworkRate, PaymentReason
+from livepeer_builder.contracts import AttemptOutcome, CallTimings, NetworkRate, PaymentReason
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.utils import BODY_LIMIT
@@ -64,8 +65,6 @@ _LOG = logging.getLogger(__name__)
 PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
-_PAYMENT_TYPES_BY_UNIT = {"hour": "live", "seconds": "live", "fixed": "fixed"}
-_PRICE_PADDING = Decimal("1.012")  # the signer refuses a ceiling below the price it is asked to pay
 
 
 @runtime_checkable
@@ -85,6 +84,7 @@ class PaymentEvents:
         self.signed = False
         self.unknown = False
         self.manifest_ids: list[str] = []
+        self.timer = CallTimer()
         self._on_signed = on_signed
 
     @property
@@ -132,6 +132,7 @@ class PaymentEvents:
             body=body,
             payment_unknown=self.unknown,
             reason=reason,
+            timings=self.timer.timings,
         )
 
 
@@ -170,15 +171,15 @@ class PaidRequest:
         self._signer_headers = signer_headers or {}
         self._attempts = (max(0, retries) + 1) * 2
         self._events = events
-        self._payment_type = payment_type(rate) if signer_url is not None else ""
+        self._rate = rate
+        self._payment_type = ""  # set by the first 402: a unit matters only when payment is asked for
         self._max_price = max_price(rate) if signer_url is not None else None
-        # Set once the runner is about to be asked. A deadline before that is still in signer identity.
-        self.runner_contacted = False
+        self.identifying = False  # waiting on /sign-orchestrator-info: nothing signed, no runner asked
 
     async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
         async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
             with translated(self._events):
-                response, funding = await self._answered(session)
+                response, funding = await self._timed_answer(session)
                 try:
                     body = await response.read()
                 finally:
@@ -191,7 +192,7 @@ class PaidRequest:
         session = self._session(timeout)
         try:
             with translated(self._events):
-                response, funding = await self._answered(session)
+                response, funding = await self._timed_answer(session)
         except BaseException:
             await session.close()
             raise
@@ -203,6 +204,14 @@ class PaidRequest:
         # carries a payment, so it goes out once (tests/unit/test_native_runner_call.py).
         session._retry_connection = False
         return session
+
+    async def _timed_answer(
+        self, session: aiohttp.ClientSession
+    ) -> tuple[aiohttp.ClientResponse, asyncio.Task[Any] | None]:
+        try:
+            return await self._answered(session)
+        finally:
+            self._events.timer.log(self._events.ids, self._events.signed)
 
     async def _answered(
         self, session: aiohttp.ClientSession
@@ -241,7 +250,7 @@ class PaidRequest:
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
             funding = start_funding(payment) if self._payment_type == "live" else None
-            self.runner_contacted = True
+            started = self._events.timer.start()
             try:
                 # A redirect would replay the payment headers to another host.
                 response = await session.request(
@@ -250,6 +259,7 @@ class PaidRequest:
             except BaseException:
                 await stop_funding(funding)
                 raise
+            self._events.timer.spent("challenge" if response.status == 402 else "response", started)
             if response.status < 300 or (self._return_http_errors and response.status != 402):
                 return response, funding
             await stop_funding(funding)
@@ -265,23 +275,47 @@ class PaidRequest:
                 raise self._events.error(
                     "http", f"{self.url} asks for payment; the call is unpaid", status_code=402
                 )
+            if self._rate is not None:  # with none, there is no ceiling either: refused just below
+                self._payment_type = self._payable_type(self._rate)
+            if self._max_price is None:  # the signer checks no ceiling without one: never sign uncapped
+                raise self._events.error(
+                    "payment_refused",
+                    f"{self.url} asks for payment but advertised {no_ceiling(self._rate)}",
+                    status_code=402,
+                )
             challenge = self._challenge(text)
         raise self._events.error("http", f"{self.url} kept asking for payment", status_code=402)
 
     async def _signer_identity(self, signer_url: str) -> SignerMaterial:
         """Before any runner is asked to work. Nothing is signed here, and every runner shares the signer,
         so a signer that cannot answer fails the job ``payment`` / ``signer_unavailable`` (D58)."""
+        self.identifying = True  # left set if the stream's deadline cancels the call (adapters/sdk.py)
         try:
-            return await get_signer_info(signer_url, frozenset(self._signer_headers.items()))
+            material = await get_signer_info(signer_url, frozenset(self._signer_headers.items()))
         except LivepeerGatewayError as error:
             self._log_signer_error(None, error)
             if not unavailable_before_signing(error):
-                raise
+                kind, message, status, reason = classify(error, unknown=False)
+                # A 200 that is no identity (not JSON, not an object) is the signer's: no runner was asked,
+                # so it is not a runner's ``http``, and the reference may run again (D57)
+                kind = "payment" if kind == "http" else kind
+                raise self._events.error(kind, message, status_code=status, reason=reason) from error
             status = error.status_code if isinstance(error, LivepeerHTTPError) else None
             message = signer_message(error, "signer_unavailable", unknown=False)
             raise self._events.error(
                 "payment", message, status_code=status, reason="signer_unavailable"
             ) from error
+        self.identifying = False
+        return material
+
+    def _payable_type(self, rate: NetworkRate) -> str:
+        """The payment type for this rate's unit; a unit the engine does not pay is refused, unsigned."""
+        try:
+            return payment_type(rate)
+        except RunnerCallError as error:
+            raise self._events.error(
+                error.kind, f"{self.url} asks for payment: {error}", status_code=402
+            ) from None
 
     async def _sign(self, session: LivePaymentSession) -> GetPaymentResponse:
         """``manifest_id`` is known before ``get_payment`` returns."""
@@ -290,6 +324,7 @@ class PaidRequest:
             await self._events.remember(manifest_id)
         except Exception as error:  # fail closed: nothing is signed without the intent on record (D54)
             raise self._events.error("payment", f"could not record payment intent: {error}") from error
+        started = self._events.timer.start()
         try:
             signed = await session.get_payment()
         except SignerRefreshRequired as error:
@@ -303,6 +338,8 @@ class PaidRequest:
             self._events.unknown = True
             self._log_signer_error(manifest_id, error)
             raise
+        finally:
+            self._events.timer.spent("signing", started)
         await self._events.confirmed(manifest_id)
         return signed
 
@@ -376,6 +413,10 @@ class SdkRunnerStream:
     def payment_sent(self) -> bool:
         return self._events.signed
 
+    @property
+    def timings(self) -> CallTimings:
+        return self._events.timer.timings
+
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self._iterate()
 
@@ -425,27 +466,6 @@ def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCa
     """The engine's account of a signer failure (``signer_failures.classify``, D58)."""
     kind, message, status, reason = classify(error, unknown=events.unknown)
     return events.error(kind, message, status_code=status, reason=reason)
-
-
-def payment_type(rate: NetworkRate | None) -> str:
-    unit = rate.unit.strip().lower() if rate is not None else ""
-    if not unit:
-        return "live"
-    if unit not in _PAYMENT_TYPES_BY_UNIT:
-        expected = ", ".join(sorted(_PAYMENT_TYPES_BY_UNIT))
-        message = f"unsupported runner price unit {unit!r}; expected {expected}"
-        raise RunnerCallError("payment_refused", message, payment_sent=False)
-    return _PAYMENT_TYPES_BY_UNIT[unit]
-
-
-def max_price(rate: NetworkRate | None) -> dict[str, Any] | None:
-    if rate is None:
-        return None
-    return {
-        "price": float(rate.amount * _PRICE_PADDING),
-        "currency": (rate.currency or "usd").strip().lower(),
-        "unit": (rate.unit or "hour").strip().lower(),
-    }
 
 
 def start_funding(payment: LivePaymentSession | None) -> asyncio.Task[Any] | None:

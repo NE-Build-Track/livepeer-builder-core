@@ -19,14 +19,98 @@ empty unless an embedder supplies a source.
 
 `offerings(app=None)` is public: it takes no actor and checks no permission, and `GET /v1/offerings`
 needs no key (D51, proposed, [#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)).
-The handler returns the full `Offering`: modes, the rate range, `runner_count` and `ready_count`. It
-has no runner URL. `runners(actor, app)` returns runner URLs and still checks `discover`.
+The handler returns the full `Offering`: modes, the rate range with each rate's source and age, whether
+a rate is missing or stale, `runner_count` and `ready_count`. It has no runner URL. `runners(actor, app)`
+returns runner URLs and still checks `discover`.
 
 | Model | Meaning |
 | --- | --- |
-| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
-| `NetworkRate` | Wholesale network rate as advertised (`amount`, `currency`, `unit`). Not a retail price |
-| `Offering` | One runner app: its modes, the cheapest and dearest comparable rate, runner and ready counts, `observed_at` |
+| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, `rate_error`, `observed_at`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
+| `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. `amount` is `0` (free) or from `1e-300` to below `1e300` from any source, so the engine can always pad a positive amount into a positive float ceiling above the price; it never signs for `0`. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
+| `ObservedRate` | A `NetworkRate` as the catalog serves it, plus `observed_at` and `observed_by` |
+| `Offering` | One runner app in one `(currency, unit)`: its modes, the cheapest and dearest rate (`rate_low`, `rate_high`), `rate_status`, `stale`, runner and ready counts, and `observed_at` (the engine's last good poll). An app advertised in two units is two offerings. Its runners with no rate are one more offering, after those, with no range (`rate_low` and `rate_high` are `null`) and `rate_status` `missing`: they still serve jobs, so every app is listed |
+
+### Rates (ISS-10)
+
+The engine reports each rate as the orchestrator advertised it. It never converts a currency, quotes a
+job total or applies a margin ([payments.md](payments.md#pricing-assumptions)).
+
+**Parsing (`adapters/sdk.py`).** livepeer-node advertises, per runner on-chain,
+`{"price": <wei>, "price_usd": <USD>, "currency": "wei", "unit": "seconds" | "fixed"}`, and no
+`price_info` off-chain. The adapter keeps `price`, `currency` and `unit` as advertised (lower-cased) and
+invents nothing:
+
+| `price_info` | `Runner.rate` | `Runner.rate_error` |
+| --- | --- | --- |
+| absent or `null` (off-chain) | `None` | `None` |
+| complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
+| not an object, a bad price (not finite, negative, above `0` but below `1e-300`, or `1e300` or more), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` or `"price must be 0, or from 1e-300 to below 1e300"` |
+| complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
+| a `price` or `price_usd` number whose exponent `Decimal` cannot build (past `10**18` either way, for example `1e` and twenty 9s), or an integer longer than the runtime digit limit (4300 digits by default) | as for a bad `price` (`None`) or a bad `price_usd` (the rate, without it) | the same reasons. Only that field is unreadable, never the document: a cache that passes the token through (livepeer-node's discovery) does not stop every other orchestrator from updating. `lpb discovery` refuses such an orchestrator instead ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87)) |
+
+The floor for a positive price is `1e-300`, inside the normal float range. Below it, `1E-400` and
+`1E-999999` pad to the float `0.0`, and near the bottom of the range the 1.2% pad can land under the
+price (`7e-324` becomes `5e-324`). Every positive amount the contract keeps pads to a positive float
+strictly above the price. `0` itself is a rate: free. It needs no ceiling, and a `0.0` ceiling is a signer
+400, so a runner priced at `0` that asks for payment is refused before the signer is asked.
+A price from `1e300` up, including `1E+1000000`, is not a rate, so `max_price` does not raise
+`decimal.Overflow` inside the paid call.
+
+Before ISS-10 a price with no currency or unit was labelled `usd` per `hour`. No released livepeer-node
+or go-livepeer advertises such a price, so the label only ever hid a malformed inventory.
+
+`price_usd` is livepeer-node's figure: the runner's registered USD price per the same unit (USD/3600 for
+an hourly registration, which is metered in `seconds`). It is not a conversion by the engine, and the wei
+`amount` is what is paid.
+
+**Currencies and units.** The node signer takes a ceiling only in `wei`, per `seconds` for a live payment
+or per `fixed` request (`checkMaxPrice` in `signer/service.go`); anything else is a 400. That is what
+livepeer-node advertises on-chain, and the only rate the engine pays. Any other rate is kept as advertised,
+its offering is `missing`, and a paid call to its runner is `payment_refused` before any signing:
+the registration unit `hour` (no released orchestrator advertises it; the SDK still signs it as `live`,
+T23), and any currency but `wei`. The unit and the currency are checked only when the runner asks for
+payment (a 402): a runner priced in `hour` that answers without asking serves a credentialed call.
+
+**Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
+[RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
+`v1.0.4`). The stamp is the orchestrator's **response time**. Read directly from an orchestrator it is
+about the engine's poll time. Read through a cache (`lpb discovery`, livepeer-node's `livepeer discovery`)
+it is when that cache last read the orchestrator, which is the age the catalog needs. Each served rate
+says which clock it used:
+
+| Runner stamp | `observed_at` | `observed_by` |
+| --- | --- | --- |
+| present and at most 30 s after the poll | the stamp | `orchestrator` |
+| absent (livepeer-node `v1.0.2`, go-livepeer), unreadable (including one with no UTC offset from a non-HTTP source), or more than 30 s ahead | the poll time | `engine` |
+
+The 30 s bound is livepeer-node's own (`ClockSkew` in `discovery/shared/inventory.go`). The engine is
+deliberately looser than livepeer-node's collectors: they drop a runner with no or a future stamp (#70),
+while the engine keeps it with its poll time.
+
+**Offering status.**
+
+| Field | Meaning |
+| --- | --- |
+| `rate_status` | `available` when the offering has a rate range in a currency and unit the signer takes a ceiling in (`wei` per `seconds` or `fixed`); otherwise `missing`: no readable rate (no `price_info`, or one that is not a rate), or a unit or currency such as `hour` or `usd` |
+| `stale` | `true` when the snapshot is not fresh (three missed polls), or when the oldest rate in the range is older than `LPB_RATE_MAX_AGE_S` (default 600 s: two of livepeer-node discovery's default 5-minute refreshes). An offering with no range is stale only with the snapshot |
+
+Staleness is information, never a payment gate. Payment always uses the advertised wei rate with its
+ceiling ([payments.md](payments.md#pricing-assumptions)).
+
+### go-livepeer compatibility (until retired, D2)
+
+livepeer/node replaced go-livepeer (D2) in our stacks, but runner-app-examples run go-livepeer `v0.9.1`,
+and the public orchestrators sampled on 29 October serve go-livepeer's inventory. Their `/discovery` (`ai/runner/live_runner.go`, `v0.9.0` to master) differs from
+livepeer-node's, and the engine reads it as follows. No rule is go-livepeer-specific: each difference
+falls under a rule above, and its tests (`test_rates.py`, `test_runner_call.py`) pin it. Delete this
+section when go-livepeer is retired (D2).
+
+| go-livepeer `/discovery` | What the engine does |
+| --- | --- |
+| `price` always wei, `currency` always `wei`, **no `price_usd`** (the field exists from `v0.9.3`, but only go-livepeer's remote signer fills it, with its own wei-to-USD conversion) | `price_usd` is `None`. go-livepeer keeps the registered USD price internally; no upstream change is planned (go-livepeer is deprecated) |
+| no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
+| an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
+| wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
 
 Capability → app resolution (descriptor or configuration table) is a later contract. In M2 the caller
 names the runner `app`; `capability` and `model` are labels only.
@@ -53,11 +137,23 @@ match of `unmatched`, `matched` or `ambiguous`), `payment_sent`, `outcome` (`in_
 `payment_unknown`), the status
 code and timestamps. The cost key is the matched `payment_session_id`, not the manifest.
 
+An attempt also records `timings`, where the call's time went before the runner answered, in
+milliseconds: `challenge_ms` (the unpaid requests, until their 402s), `signing_ms` (the signer) and
+`response_ms` (the request the runner answered, until its response headers). A step the call never
+reached is `null`, each step adds up its repeats, and `timings` is `null` when the attempt is from
+before this, or from a transport that doesn't measure. Each call also logs them as
+`runner.call_timings`.
+
 ### Behavior the contract fixes
 
 1. **Fail over when another runner can do what this one did not (D52).** Runners are tried in
-   selection order, at most `max_attempts` of them. A failed attempt decides what happens next
-   (`services/failover.py`):
+   selection order, at most `max_attempts` of them. On a paid job (the actor's credential has a signer
+   bearer, and the transport pays: `LPB_SIGNER_URL` is set), free runners (a price of `0`) and the runners
+   the signer takes a ceiling for come first, in the policy's order; the rest (no rate, or a currency or
+   unit the signer refuses) are the last resort, since a 402 from them is refused (D62). A free runner that
+   answers 402 is refused too, but it advertised that it would not ask. An unpaid job keeps the policy's
+   order. A failed attempt decides what happens
+   next (`services/failover.py`):
 
    | Attempt | Outcome | Next |
    | --- | --- | --- |
@@ -210,22 +306,26 @@ allowance exhausted (HTTP 402)") and `status_code` is the signer's status, when 
 signer's URL and its own text go to the engine log only, and `body` is never the signer's
 ([payments.md](payments.md#who-answers-what)).
 
+A job's `failure` is its **last** attempt's. A job that failed over keeps every attempt, and whether
+the same `operation_ref` runs again depends on all of them ([the closed list](#idempotency)), not on
+the last kind alone.
+
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
-| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings` |
-| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header |
-| `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help |
-| `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header |
-| `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying does not help |
-| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again ([idempotency](#idempotency)) |
-| `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry later |
-| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, or a refresh past its budget), the signer refused with another status, or its identity reply was malformed |
+| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
+| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header, with the same `operation_ref` |
+| `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
+| `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
+| `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
+| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
+| `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first. An operator checks the signer if it lasts |
+| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, or a refresh past its budget), the signer refused with another status, or its identity reply was malformed. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
 | `payment_unknown` | `signer_unknown` | maybe | 503, no `Retry-After` | The signer was asked and gave no validated answer while signing (a 5xx, a timeout, a dropped or malformed reply): it may have charged. The job is `uncertain` and the cost `pending` until usage settles it. Do not retry blindly: a repeat under the same `operation_ref` is 409, and a new one could pay twice |
-| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time |
-| `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner refused the request: fix the request |
-| `runner_error` (5xx) | | yes | 502 | The runner failed, or the engine did (`engine error: …`) |
-| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran |
-| `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | |
+| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time; it may still have run the work. Read the job: when `uncertain`, wait for its cost before running it again. A repeat under the same `operation_ref` is 409, so a new attempt needs a new reference |
+| `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner ran and refused the request; `failure.body` holds its words. Fix the request and send it with a new `operation_ref`. A paid attempt is `failed_after_payment`, never billable ([payments.md](payments.md#cost-classification)) |
+| `runner_error` (5xx) | | yes | 502 | The runner failed after it ran, or the engine did (`engine error: …`). Not run again automatically: try later with a new `operation_ref`. Every `runner_error` answers HTTP 502; the runner's own status is `failure.status_code`. A paid runner **500** ran and is `failed_after_payment`, never billable, and the job is `failed`. A paid runner **502 or 504** may still be running behind the orchestrator's proxy, so that attempt is `uncertain` until usage settles it (D52). Read `job.state`: when it is `uncertain`, wait for the cost before running it again |
+| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran; the next start resolves it `uncertain` when anything may have paid, else `failed`. Read the job: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): no attempt, or every attempt refused before the app ran with nothing paid, as after a restart mid-failover. Otherwise treat it as `timeout` |
+| `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | The caller left the stream before its end ([how a stream ends](#how-a-stream-ends)); the bytes it did not read are gone. Read the job for the outcome and cost. To get the result, run it again with a new `operation_ref` |
 
 `not_provisioned` and `allowance_exhausted` are both 402: `kind` tells them apart. A 403 from
 `POST /v1/jobs` is either the access policy (`AccessDenied`, no job in the body) or `not_authorized`
@@ -328,12 +428,72 @@ the REST streaming route answers 400 (D33).
 `open` must honour `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the
 payment evidence so far.
 
-## Results
+## Inputs and results in M3
 
-Immediate results are returned inline and **not retained**. The job records a `ResultRef`
-(`storage="inline"`, content type, size, sha256) so the result can be checked later.
+What a builder sends, what comes back, and what the engine keeps (D59). The engine moves bytes between
+the caller and a runner: it hosts no media and keeps no result in M3. Stored results are M4 (ISS-26).
+The REST path through this section is [guides/rest-builder.md](../guides/rest-builder.md).
+
+### Inputs
+
+- A JSON `payload` (an object), or a `raw_body` of up to 8 MiB with its `content_type`
+  ([opaque request bodies](#opaque-request-bodies-and-stream-headers)). **The whole request is
+  limited** over REST: a `/v1/` body over `LPB_HTTP_MAX_REQUEST_BYTES` (default 16 MiB, which fits an
+  8 MiB `raw_body` as base64) is refused with 413, `code: request_too_large` and `limit_bytes`, before
+  the engine reads it into memory or checks the credential, whether it declares its `Content-Length` or
+  streams without one. Routes outside `/v1/` (an operator's own, a persistent endpoint's proxy) are not
+  limited by the engine. Embedded callers pass a `JobRequest` and are not limited.
+- **A URL inside a payload is passed to the runner unchanged, and the runner fetches it.** The engine
+  does not fetch, host, validate or rewrite media. The URL must be reachable from the runner, and stay
+  so until the runner has read it (a signed URL's expiry included).
+- Neither is kept: the job records a fingerprint of the request for [idempotency](#idempotency), not
+  its body.
+
+### Results
+
+Immediate results are returned inline, **once**, and **not retained**. The job records a `ResultRef`
+(`storage="inline"`, `content_type`, `size_bytes`, and the `sha256` of the bytes returned), so a
+builder can check a copy it saved: hash the saved bytes and compare. A stream's `ResultRef` covers the
+bytes the caller received ([how a stream ends](#how-a-stream-ends)). Save the result when the job
+returns; the engine cannot give it again.
+
 `storage="stored"` (a retrievable `location`) is reserved for async results (M4). Until then,
-`GET /v1/jobs/{id}/result` answers 501.
+`GET /v1/jobs/{id}/result` checks the permission (403) and the owner (404 for another actor's job or a
+missing one), then answers 501 with `milestone: "M4"` and `ticket: "ISS-26"`.
+
+### Provider-hosted assets
+
+Some runners answer with a URL to a file the model provider hosts, not the file itself: the FLUX
+schnell runner returns `output.images[0].url`, a temporary fal URL. That URL belongs to the provider.
+It expires on the provider's schedule, and the engine cannot reissue it: the engine never fetched the
+file, and the `ResultRef` hashes the runner's answer (the JSON holding the URL), not the image. Once
+the URL has expired:
+
+- the job still reads `succeeded`, and its cost stands (the attempt is `delivered`);
+- fetching the URL returns the provider's own error, not the engine's;
+- nothing in the engine can reproduce the file.
+
+**Save the asset when the job returns, or ask the runner for inline output where it offers one.** For
+FLUX schnell, `sync_mode: true` in the payload returns the image as a data URI inside the answer, so
+the `ResultRef` covers it and it lasts as long as your copy. An application that shows such a URL
+should handle a failed load ("the provider no longer serves this file") instead of a broken image.
+
+### Job history
+
+`GET /v1/jobs` (`jobs.list_jobs` in-process) lists jobs **newest first**: an actor's own; for an admin
+or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
+(default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
+ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
+is 422. Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
+them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job, or a missing one, is
+404.
+
+A job records its `state`, `failure`, `result` (a `ResultRef`, on success), reported `usage`, its
+labels and its times. Each attempt records the runner and orchestrator it called, the allocation that
+paid, the sessions the signer signed, `payment_sent`, its `outcome`, the status code and its times
+([jobs and attempts](#jobs-and-attempts)). Neither records the request body or the result's bytes. The
+cost is read beside the job (`GET /v1/jobs/{id}/cost`). `LPB_RETENTION_JOBS_DAYS` purges `succeeded`
+and `failed` jobs; `uncertain` ones are kept ([persistence.md](persistence.md#retention)).
 
 ## Measured usage
 

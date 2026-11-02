@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
+from livepeer_builder.contracts.discovery import DISCOVERY_MAX_BYTES
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
@@ -47,6 +48,10 @@ class EngineSettings(Contract):
     signer_url: str | None = None
     discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
     discovery_interval_s: float = Field(default=15.0, gt=0)
+    discovery_max_bytes: int = Field(default=DISCOVERY_MAX_BYTES, gt=0)  # the largest inventory a poll reads
+    # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node discovery's
+    # default 5-minute refreshes. lpb discovery evicts a failing orchestrator sooner (30 s probes, 6 failures)
+    rate_max_age_s: float = Field(default=600.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)
 
     # admission (checked before any payment)
@@ -101,6 +106,8 @@ class EngineSettings(Contract):
     log_json: bool = True
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8080, ge=1, le=65535)
+    # A /v1/ body over this is refused with 413 before it is read (D59); fits an 8 MiB raw_body as base64
+    http_max_request_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
 
     @field_validator("auth", "jwt_algorithms", "jwt_token_types", mode="before")
     @classmethod
@@ -118,9 +125,36 @@ class EngineSettings(Contract):
         the signer's credential is the actor's payment key, sent as a header."""
         if value is None:
             return None
-        parts = urlsplit(value if "://" in value else f"https://{value}")  # the SDK's reading of host:port
-        if "@" in parts.netloc or parts.query or parts.fragment or "?" in value or "#" in value:
+        # A base URL never needs @, ? or #, wherever they sit: a scheme-relative //user:pw@host puts the
+        # userinfo in the path, where urlsplit does not look, and the SDK's error would quote it (#78).
+        if any(mark in value for mark in "@?#"):
             raise ValueError("signer_url must not carry userinfo, a query or a fragment")
+        parts = urlsplit(value if "://" in value else f"https://{value}")  # the SDK's reading of host:port
+        if not parts.hostname:
+            raise ValueError("signer_url needs a host, as http(s)://host[:port] or host:port")
+        return value
+
+    @field_validator("discovery_url")
+    @classmethod
+    def _http_discovery_url(cls, value: str | None) -> str | None:
+        # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
+        if value is None:
+            return None
+        value = value.strip()  # urlsplit ignores padding; httpx refuses a newline and sends a space as %20
+        try:
+            parts = urlsplit(value)
+            valid = (
+                parts.scheme in ("http", "https")
+                and bool(parts.hostname)
+                and not any(char.isspace() for char in value)
+            )
+        except ValueError:  # an unclosed IPv6 literal, for example
+            valid = False
+        if not valid:
+            raise ValueError(
+                f"LPB_DISCOVERY_URL must be an http:// or https:// URL with a host, such as "
+                f"http://discovery:8939/discovery; got {value!r}"
+            )
         return value
 
     @field_validator("auth")

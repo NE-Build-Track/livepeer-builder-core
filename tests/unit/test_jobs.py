@@ -14,6 +14,7 @@ from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
     Attempt,
+    CallTimings,
     Job,
     JobRequest,
     Money,
@@ -290,6 +291,74 @@ async def test_an_unknown_payment_never_pays_another_orchestrator(
     assert job.state == "uncertain" and len(job.attempts) == 1  # the signer may have charged
     assert job.failure is not None and not job.failure.payment_sent
     assert job.failure.kind == "payment_unknown" and job.attempts[0].outcome == "payment_unknown"  # stored
+
+
+def capped_and_uncapped() -> tuple[Runner, ...]:
+    """MostCapacityFirst alone would try the runner with no rate first: it has more free capacity."""
+    return (
+        runner(url="https://uncapped", orchestrator_url=ORCH_A, price=None, capacity_available=5),
+        runner(url="https://capped", orchestrator_url=ORCH_B, capacity_available=1),
+    )
+
+
+async def test_a_paid_job_tries_runners_it_can_cap_first(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """A runner with no usable ceiling is refused at its 402 (D62): first, it would fail over on every paid job."""
+    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    transport.steps = [ScriptedTransport.ok()]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    assert [url for url, _ in transport.calls] == ["https://capped"]
+
+
+async def test_a_paid_job_still_tries_a_runner_it_cannot_cap_last(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """It may serve without asking for payment; only a 402 from it is refused."""
+    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    transport.steps = [
+        RunnerCallError("refused", "busy", payment_sent=False, status_code=503),
+        ScriptedTransport.ok(),
+    ]
+    await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=2))
+    assert [url for url, _ in transport.calls] == ["https://capped", "https://uncapped"]
+
+
+async def test_a_paid_job_tries_a_free_runner_before_one_with_no_rate(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """A price of 0 is never asked to pay: it is the cheapest runner, not a last resort (#77 review)."""
+    runners = (
+        runner(url="https://unpriced", orchestrator_url=ORCH_A, price=None, capacity_available=5),
+        runner(url="https://free", orchestrator_url=ORCH_B, price="0", capacity_available=1),
+    )
+    engine = await provisioned(make_engine, admin, "alice", runners=runners)
+    transport.steps = [ScriptedTransport.ok()]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    assert [url for url, _ in transport.calls] == ["https://free"]
+
+
+async def test_a_job_keeps_the_selection_policy_s_order_when_the_transport_never_pays(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """With no LPB_SIGNER_URL a provisioned actor still has a token. A priced runner's 402 ends that unpaid
+    job, so the selection policy's order stays (#77 review)."""
+    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    transport.pays = False
+    transport.steps = [ScriptedTransport.ok()]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    assert [url for url, _ in transport.calls] == ["https://uncapped"]
+
+
+async def test_an_unpaid_job_keeps_the_selection_policy_s_order(
+    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await make_engine(
+        allocation_mode="per_application", runners=capped_and_uncapped()
+    )  # no key: unpaid
+    transport.steps = [ScriptedTransport.ok()]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    assert transport.calls == [("https://uncapped", None)]
 
 
 async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
@@ -734,3 +803,30 @@ async def test_usage_is_reported_once_by_the_owner(
     assert stored.usage is not None and stored.usage.quantities == {"tokens_out": 42}
     with pytest.raises(Exception, match="already reported"):
         await engine.jobs.report_usage(alice, result.job.id, {"tokens_out": 1})
+
+
+async def test_an_attempt_keeps_where_its_time_went(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(make_engine, admin, "alice")
+    timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=240)
+    transport.steps = [ScriptedTransport.ok().model_copy(update={"timings": timings})]
+    result = await engine.jobs.run(alice, JobRequest(app=APP, path="/echo", payload={"x": 1}))
+    stored = await engine.jobs.get(alice, result.job.id)
+    assert stored.attempts[0].timings == timings
+
+
+async def test_a_failed_attempt_keeps_where_its_time_went(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    engine = await provisioned(
+        make_engine, admin, "alice", runners=(runner(url="https://r1"), runner(url="https://r2"))
+    )
+    timings = CallTimings(challenge_ms=110, signing_ms=1700)
+    transport.steps = [
+        RunnerCallError("refused", "503", payment_sent=False, timings=timings),
+        ScriptedTransport.ok(),
+    ]
+    result = await engine.jobs.run(alice, JobRequest(app=APP))
+    assert result.job.attempts[0].timings == timings
+    assert result.job.attempts[1].timings is None, "this transport measured nothing for the second call"

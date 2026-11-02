@@ -98,7 +98,7 @@ The contract is livepeer-node's inventory format, the one a `v1.0.2` orchestrato
 [{"address": "https://orch.example.com:8935", "runners": [{"url": "...", "app": "...", "capacity": 4, "price_info": {...}}]}]
 ```
 
-The engine already parses it: `runners_from_entries`, through the SDK's `discover_runners(discovery_url=…)`. So `LPB_DISCOVERY_URL` can point at:
+The engine already parses it: `runners_from_entries`. `HttpDiscoverySource` GETs the body itself so a JSON-number `price_usd` stays a `Decimal` (livepeer-python-gateway [#88](https://github.com/livepeer/livepeer-python-gateway/issues/88); the SDK's `discover_runners` parses it as a float). This service does not re-encode a runner: it keeps the orchestrator's JSON text, so a number token is unchanged when the inventory is served again. So `LPB_DISCOVERY_URL` can point at:
 
 - this service;
 - a single orchestrator's `/discovery`;
@@ -211,6 +211,10 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     certificates. On-chain AI orchestrators mostly don't run livepeer-node's `/discovery` yet, which is
     why the rollout is static first.
   - **Static, Railway's list:** 28 orchestrators, 5 serving 89 runners; 19 untrusted, 4 failed.
+- 30 October: runner records are kept as the JSON text each orchestrator sent (`discovery/document.py`),
+  and a number `Decimal` cannot build fails that orchestrator's probe. Moved here from #77 (ISS-10) with
+  #84's fix, so the discovery service is reviewed on its own. See the decision log, "30 October, runner
+  records as received".
 
 ## Decision log
 
@@ -235,3 +239,28 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     (active, and registered for AI), and an operator can read the protocol registry with `controller`.
   - **Exposure:** the service is public on Railway (John, `00ed0f4`), so `/readyz` carries only stable
     reasons.
+- **30 October, runner records as received ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87), Mike's review).**
+  - **As received:** each runner object is kept as the JSON text the orchestrator sent and re-served
+    unchanged, because livepeer-node's `price_usd` has more digits than a float keeps. Only the envelope
+    (the list, each entry's `runners`) is parsed.
+  - **Unbuildable numbers:** a number `Decimal` cannot build fails that orchestrator's probe alone, as
+    `NaN` does. A float parser would keep it, and re-serving it would fail every consumer's refresh.
+  - **Order with #77:** the digits reach the engine only once ISS-10
+    ([#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77)) is in. Before that, the SDK
+    reads `price_usd` as a float. Merged back to back, this does not matter.
+  - **The limit is the platform's:** on 64-bit CPython, an adjusted exponent above `999999999999999999`
+    or an exponent below `-1999999999999999997`. 32-bit builds refuse sooner, and `_pydecimal` builds
+    both. This is stated in `utils.decimal_json_number`, not enforced as a bound of our own: a bound at
+    the 64-bit limits never triggers on CI, a tighter one would refuse numbers kept on purpose, and the
+    engine reads an unbuildable number per field (#77).
+  - **Typed entry:** `Probe.entry` and `Catalog.inventory()` are `InventoryEntry` (`address`,
+    `runners: tuple[RawJson, ...]`), not `dict[str, Any]`. A parsed runner is refused when the `Probe`
+    is built and flagged by mypy, so it can no longer make every `GET /discovery` a 500.
+  - **`Probes` retired:** the directory is the service's one port, so the prober is no longer
+    replaceable. `Catalog` takes a `Prober`, and `serve()` has no `prober=` argument.
+- **30 October, T26.** A leading BOM is accepted (`utf-8-sig`; `test_a_leading_bom_is_the_inventory_without_it`).
+  Each entry is walked once. `utils._not_json` and `utils.read_capped` are shared with the engine.
+  A `runners` value that is not a list still fails that probe. An empty success would replace the last
+  good inventory, and livepeer/node `Decode` fails the whole document for `runners: {}` (`wrong runner
+  list`). The engine skips one bad entry inside a combined document; a probe is one orchestrator, so the
+  others are already unaffected.

@@ -9,7 +9,7 @@ import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.static import StaticDiscoverySource
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, CallTimings, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import JobFailed, OperationExists, OperationInProgress, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport, StreamScript, runner
@@ -390,3 +390,16 @@ async def test_restart_resolves_an_open_stream_as_uncertain(
 
 def test_static_discovery_source_still_builds_runners_without_metadata() -> None:
     assert StaticDiscoverySource((runner(APP),)) is not None
+
+
+async def test_an_opened_stream_keeps_where_its_time_went(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    engine = await provisioned(make_engine, admin)
+    timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=240)
+    transport.opens = [StreamScript(events=list(CHUNKS), timings=timings)]
+    stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, path="/v1/chat/completions"))
+    await read_all(stream)
+    stored = await engine.jobs.get(alice, stream.job.id)
+    assert stored.attempts[0].timings == timings
+    assert stored.attempts[0].outcome == "succeeded", "finishing the stream didn't lose them"

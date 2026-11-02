@@ -42,8 +42,12 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | JWT bearer, chosen by `LPB_AUTH` (#49, ISS-33 in M4) | [completed/jwt-bearer.md](exec-plans/completed/jwt-bearer.md) | Mike (John reviews) |
 | Neon Postgres, with a database branch per pull request | [active/neon-preview-branches.md](exec-plans/active/neon-preview-branches.md) | John |
 | Actor collection and read-only admin (#52) | [active/admin-read-and-actors.md](exec-plans/active/admin-read-and-actors.md) | Mike (John reviews) |
+| ISS-10 Network rates and pricing assumptions | [active/iss-10-rates.md](exec-plans/active/iss-10-rates.md) | John (Mike reviews) |
 | ISS-11 + ISS-14 Repeat-safe commands (idempotency) | [active/iss-11-14-idempotency.md](exec-plans/active/iss-11-14-idempotency.md) | John (Mike reviews) |
 | ISS-12 Distinct payment failures | [active/iss-12-payment-failures.md](exec-plans/active/iss-12-payment-failures.md) | John (Mike reviews) |
+| ISS-15 Owned job history and basic results | [active/iss-15-history-results.md](exec-plans/active/iss-15-history-results.md) | John (Mike reviews) |
+| ISS-18 Cost reports (M3 part; events feed held) | [active/iss-18-cost-reports.md](exec-plans/active/iss-18-cost-reports.md) | John (Mike reviews) |
+| ISS-23 Verification of access, repeated commands and accounting | [active/iss-23-verification.md](exec-plans/active/iss-23-verification.md) | John (Mike reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.
 

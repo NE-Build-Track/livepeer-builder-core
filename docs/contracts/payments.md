@@ -179,7 +179,7 @@ Which commands take a reference:
 | --- | --- |
 | Provision, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
 | Issue access key, rotate access key | **required**: creates a live engine credential |
-| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice |
+| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeat after one finished answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
 
 ## Allowance, signer funding and spending guarantees
 
@@ -192,13 +192,57 @@ Three different things, often all called "funding":
 | **Spending guarantee** | A hard limit no job can exceed | Nobody in M3 | n/a: the allowance is a cap that [can overshoot](#allowance); hard limits are stretch scope |
 
 ## Units
-## Units
 
 `Money(amount: Decimal, currency: "USD" | "ETH")` everywhere. **USD grants are the default**
 (`LPB_DEFAULT_CURRENCY`). An allocation inherits its grant's currency. Reported cost carries
 `fee_eth` (always present, because signer events require it) and `fee_usd` (when every row is
 priced). Batteries amounts are exact decimal strings; the engine stores them as strings and sums
 them as `Decimal`.
+
+## Wholesale and retail
+
+Two prices exist, and the engine handles one of them.
+
+| | Wholesale (network) | Retail |
+| --- | --- | --- |
+| What it is | What the Livepeer network charged: tickets the signer signed for orchestrators | What an application charges its own users |
+| Who sets it | Orchestrators advertise rates; Batteries accounts the charges | The application |
+| Where the engine shows it | Before a job: `Offering.rate_low`/`rate_high` ([engine.md](engine.md#rates-iss-10)). After: `JobCost.fees` and `billable`, from Batteries accounting ([Cost classification](#cost-classification)) | Nowhere. The engine never computes, stores or applies a retail price, margin or invoice (core belief 1) |
+
+An application turns a delivered job's `billable` fees, or its own price list, into a retail charge in
+its own records. The engine's figures are inputs to that decision, not the decision.
+
+## Pricing assumptions
+
+What a rate means, and what it does not:
+
+1. **A rate is a price per unit, exactly as advertised.** It is not a quote for a job, and the engine
+   derives no other price from it: no currency conversion, no job total, no margin.
+2. **The unit decides the total.** A metered rate (`seconds`) costs the rate times the time the session
+   is funded, so a job's total is known only after it ends. A `fixed` rate costs one price per paid
+   request.
+3. **Failover can pay more than once.** A job may pay up to `LPB_MAX_PAID_ATTEMPTS` orchestrators (D52,
+   D55); the attempts it failed over from are `failed_after_payment`.
+4. **The ceiling is the advertised rate plus 1.2 %.** The engine asks the signer to pay at most the
+   runner's advertised wei rate times 1.012 (`_PRICE_PADDING` in `adapters/runner_price.py`), and the
+   signer refuses a higher price (481).
+5. **The engine never signs without a ceiling the signer takes.** A runner that asks for payment but
+   advertised no usable rate is refused before the signer is asked (`payment_refused`, nothing paid; the
+   job fails over). No usable rate is `rate is None` (none advertised, or an unreadable `price` /
+   `currency` / `unit`, or a `price` above `0` but below `1e-300`, or from `1e300`), a free rate (`0`),
+   or a rate in any currency and unit but `wei` per `seconds` or `fixed`. The currency and the unit are
+   checked when the runner asks for payment, not before: a runner that answers without a 402 is not
+   refused for them. Paid jobs try runners with a usable rate first ([engine.md](engine.md#behavior-the-contract-fixes)). A bad `price_usd` alone sets `Runner.rate_error` but keeps the wei
+   ceiling. The node signer checks no price at all when it gets no ceiling, and refuses (400) one that is
+   not a positive `wei` price in the payment type's unit.
+6. **Tickets are probabilistic.** The reported cost is the expected value at signing. A single job's
+   settled on-chain cost can differ; settlement is an operator-level figure.
+7. **`price_usd` is the advertiser's figure, not a conversion.** livepeer-node advertises the runner's
+   registered USD price per the same unit. It is shown for reading only: the wei `amount` is what is paid.
+   go-livepeer advertises no `price_usd`, so it is `null` for its runners.
+8. **A rate has an age.** Each served rate carries `observed_at` and `observed_by`; an offering is
+   `stale` when its snapshot or its oldest rate is too old (`LPB_RATE_MAX_AGE_S`). Staleness is
+   information, never a payment gate.
 
 ## Correlation
 
@@ -282,6 +326,41 @@ and stands for the job only while that version is current; a save never replaces
 from newer evidence. Reads compute an out-of-date job live, and the next sync stores it again, even
 when a sync stopped (a crash, an error) before it reached that job, or a concurrent sync saved an older
 classification. A state between two of sync's commits therefore still counts every row once.
+
+## Attribution
+
+A cost reaches a job, and from the job its attempts, through engine records only (D60, ISS-18):
+
+- **`JobCost`** (`GET /v1/jobs/{id}/cost`, `GET /v1/costs/projections`) names the job by `job_id` and
+  carries `fees`, `billable` and one `AttemptCost` per attempt that opened a payment session:
+  `attempt_number`, `cost_class` and that attempt's `fees`.
+- **The job** (`GET /v1/jobs/{id}`) says who and what: `application_id`, `actor_id`, `app`,
+  `capability`, `model`, and the app-reported `usage`.
+- **Its attempts** (`job_id`, `number`; `number` is the `attempt_number` above) say who was paid and
+  from what: `allocation_id` (the allocation whose key paid), `orchestrator_url` (the orchestrator the
+  tickets went to), `runner_url`, and the signed `sessions` (`manifest_id`, and `payment_session_id` once
+  cost sync [matched](#correlation) it).
+
+Units, on every field:
+
+| Field | Unit |
+| --- | --- |
+| `fee_eth` | ETH, an exact `Decimal` (a JSON string). Always present: signer events carry it |
+| `fee_usd` | USD, an exact `Decimal`. `null` when an applied row lacks a USD price; `0` when there are no rows |
+| `row_count` | Applied Batteries usage rows counted in the fees |
+| `MeasuredUsage.quantities` | The app's own units (`tokens`, `seconds`, ...), integers, per job; never summed across apps |
+| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)` |
+| `jobs_with_cost`, `jobs_pending` | Jobs: `observed` or `corrected`, and `pending` |
+
+**The summary** (`GET /v1/costs/summary`) totals the jobs in its window and scope (an actor's own; an
+admin's or auditor's whole application, or one actor with `?actor_id=`) by class (`by_class`), and the
+same attempt fees by runner app and class (`by_app`, D60): "what did each app cost, and how much of
+it is settled". `by_app[app][class]` keeps classes apart as `by_class` does, so a final fee and a
+`pending` one that can still grow are never added into one figure; for every class, the apps add up to
+its `by_class` total. An app appears once one of its jobs has a costed attempt, with only the classes
+its attempts have. There is no
+breakdown by orchestrator (an operator's view: each attempt's `orchestrator_url`, and
+[reconciliation](#cost-classification)) and no usage total, because usage units differ per capability.
 
 ## Allowance
 

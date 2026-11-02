@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     Allowance,
+    CallTimings,
     GrantPage,
     GrantRecord,
     JobRequest,
@@ -57,7 +58,7 @@ def runner(
         orchestrator_url=orchestrator_url,
         capacity=capacity_available,
         capacity_available=capacity_available,
-        rate=NetworkRate(amount=Decimal(price), currency="usd", unit="request") if price else None,
+        rate=NetworkRate(amount=Decimal(price), currency="wei", unit="fixed") if price else None,
         metadata=metadata,
     )
 
@@ -79,6 +80,7 @@ class ScriptedTransport:
 
     steps: list[Step] = field(default_factory=list)
     calls: list[tuple[str, str | None]] = field(default_factory=list)
+    pays: bool = True  # whether a credential pays the runner, as a transport with a signer does
 
     async def call(
         self,
@@ -129,6 +131,7 @@ class StreamScript:
     content_type: str = "text/event-stream"
     manifest_ids: tuple[str, ...] = ("manifest-1",)
     payment_sent: bool = True
+    timings: CallTimings | None = None
     open_delay_s: float = 0.0
     honors_deadline: bool = True
 
@@ -138,6 +141,10 @@ class ScriptedStream:
         self._script = script
         self.closed = False
         self.delivered = 0
+
+    @property
+    def timings(self) -> CallTimings | None:
+        return self._script.timings
 
     @property
     def status_code(self) -> int:

@@ -34,7 +34,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | --- | --- | --- |
 | ISS-08 Standalone credentials and ownership controls | M3 | `ApiKeyAuthenticator`, `KeyService` (issue, list, revoke) and `DefaultPolicy` from ISS-03; inspection, rotation, the 403/404 rule and the key audit log in progress ([plan](../exec-plans/active/iss-08-standalone-credentials.md), D44) |
 | ISS-09 Dynamic capability discovery | M3 | `DiscoveryService` (implemented); capability resolution is T3 |
-| ISS-10 Network rates and pricing assumptions | M3 | `Offering.rate_low/high` (implemented) |
+| ISS-10 Network rates and pricing assumptions | M3 | Rates as advertised with source and age (`ObservedRate`), missing and stale explicit, never signed for without a ceiling; [plan](../exec-plans/active/iss-10-rates.md) (in review, D62) |
 | ISS-11 Scoped allocation provisioning and management | M3 | `PaymentsService` (implemented) |
 | ISS-12 SDK payment authorization and remote signing | M3 | `SdkRunnerTransport` (implemented); funded proof on public orchestrators, 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | ISS-13 First funded payment configuration | M3 | `deploy/dev-stack` |
@@ -42,7 +42,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | ISS-15 Owned job history and basic results | M3 | `GET /v1/jobs`, `ResultRef` (implemented) |
 | ISS-16 Capture usage; correlate jobs with payment evidence | M3 | `report_usage`; `manifest_id` → `payment_session_id` correlation through the session log (implemented) |
 | ISS-17 Replayable network-cost projections | M3 | `CostService` projections and `corrected` (implemented) |
-| ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads (implemented); events feed **defined** ([events.md](../contracts/events.md)) |
+| ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads and the summary with `by_app` (implemented, [D60](../design-docs/m3-decisions.md)); events feed **defined and held** ([events.md](../contracts/events.md), [M3 decision, item 4](https://github.com/Cloud-SPE/Network-Engineering-SPE/blob/3c365a46550c2099e92b1df1adfb3756b4508c95/docs/decisions/2026-10-21-m3-reference-app-and-scope.md)): open as partial |
 | ISS-19 Representative jobs and acceptance matrix | M3 | Open |
 | ISS-20 REST for the first journey | M3 | `http/app.py` (minimal, implemented) |
 | ISS-21–25 Reference app, journey guide, funded seven-outcome proof | M3 | Out of this repository (reference app); evidence plans in `docs/exec-plans/` |

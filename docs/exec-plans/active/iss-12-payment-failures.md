@@ -56,8 +56,30 @@ From the ticket and the 21 October M3 plan:
 - [=] a repeat after `allowance_exhausted`, `not_authorized` or `signer_unavailable` runs again; after
   `signer_unknown` it is 409 (D57's list; proved by mutation)
 - [x] the failure table in `engine.md` lists every kind and reason (doc test)
+- [+] a `sign-orchestrator-info` 200 that is not JSON, or not an object → `payment` (no reason), not a
+  runner's `http`, and the same reference runs again (#79)
+- [+] a stream deadline during `sign-orchestrator-info` leaves the reference free: the repeat runs (#79;
+  proved by mutation)
 
 ## Progress
+
+- 2026-11-02: #79 (Cursor), merged with `releases/m3` after #78. Of its two fixes, the stream deadline
+  during `/sign-orchestrator-info` was already fixed by #78's `PaidRequest.identifying`; #79's
+  `runner_contacted` flag is dropped and only its repeat test is kept, with #78's message. The other
+  stood: a 200 there that is not JSON, or not an object, was read by `network_kind` as `http`, so the
+  job failed `runner_error`, off D57's re-run list, though nothing was signed and no runner asked. It is
+  now `payment` with no reason, as this plan already listed for a malformed identity reply. The fix is
+  confined to `PaidRequest._signer_identity`: #79 changed `classify`'s fallback for every call made
+  before the signer may have charged, and the identity call is the only one that reaches it.
+
+- 2026-10-30: Cursor's review of #78. (1) A stream's `first_byte_timeout_s` that expired during
+  `/sign-orchestrator-info` was `timeout` (504, a repeat 409): the deadline cancels the identity call, so
+  `PaidRequest.identifying` now says where it stopped and the stream maps it to `payment` /
+  `signer_unavailable` (D58 (4)); pinned with a loopback signer that hangs on identity. (2) A
+  scheme-relative `//user:pw@host` passed the startup check and the SDK's error quoted it: `@`, `?` and
+  `#` are refused anywhere, and a URL with no host is refused (D58 (7)).
+  (3) A deadline that cut off signing kept `signer_unknown` but was worded as a runner timeout; it now
+  reads "the signer gave no answer while signing; it may have charged" (D58 (5)).
 
 - 2026-10-29: Baseline at `a41beef`: 1489 passed, 49 skipped. Built test-first in one session. One
   existing assertion changed: `test_runner_call.py::test_unreachable_runner_or_signer_is_unpaid`
@@ -87,7 +109,3 @@ From the ticket and the 21 October M3 plan:
 - 2026-10-29: `ProviderError` keeps its `provider HTTP {status}: …` form for the fixed allowance
   message. Only `/v1/allowance` reaches the provider among builder-facing routes; admin routes keep the
   provider's text for operators.
-- 2026-10-30: A caller's first-byte deadline during `/sign-orchestrator-info` was stored as a runner
-  `timeout`, and a 200 that is not a JSON object was stored as `runner_error`. Neither had signed or
-  asked a runner, but both are off D57's re-run list, so the reference could not be used again. They
-  are `signer_unavailable` and `payment` (no reason) respectively.

@@ -1,6 +1,13 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
-from livepeer_builder.contracts import AttemptOutcome, Job, OperationRecord, PaymentReason, ProvisionedActor
+from livepeer_builder.contracts import (
+    AttemptOutcome,
+    CallTimings,
+    Job,
+    OperationRecord,
+    PaymentReason,
+    ProvisionedActor,
+)
 
 
 class EngineError(Exception):
@@ -119,10 +126,14 @@ class CursorMismatch(EngineError):
 
 
 class NotImplementedInMilestone(EngineError):
-    """A contract defined in M2 whose implementation belongs to a later milestone (501)."""
+    """A contract defined in M2 whose implementation belongs to a later milestone (501). A feature held
+    by a decision, with no milestone yet, has ``milestone`` ``"held"`` and names the decision."""
 
-    def __init__(self, feature: str, milestone: str, ticket: str) -> None:
-        super().__init__(f"{feature} is defined but not implemented until {milestone} ({ticket})")
+    def __init__(self, feature: str, milestone: str, ticket: str, *, held_by: str | None = None) -> None:
+        if held_by is None:
+            super().__init__(f"{feature} is defined but not implemented until {milestone} ({ticket})")
+        else:
+            super().__init__(f"{feature} is defined but held by {held_by}; see {ticket}")
         self.feature = feature
         self.milestone = milestone
         self.ticket = ticket
@@ -155,6 +166,7 @@ class RunnerCallError(EngineError):
         status_code: int | None = None,
         body: str | None = None,
         payment_unknown: bool = False,
+        timings: CallTimings | None = None,
         reason: PaymentReason | None = None,
     ) -> None:
         super().__init__(message)
@@ -164,4 +176,5 @@ class RunnerCallError(EngineError):
         self.status_code = status_code
         self.body = body
         self.payment_unknown = payment_unknown
+        self.timings = timings
         self.reason = reason

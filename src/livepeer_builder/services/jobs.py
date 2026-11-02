@@ -64,7 +64,7 @@ from livepeer_builder.protocols import (
     StreamingRunnerTransport,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
-from livepeer_builder.services.discovery import DiscoveryService
+from livepeer_builder.services.discovery import DiscoveryService, capped_first
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.failover import (
     Candidates,
@@ -73,6 +73,7 @@ from livepeer_builder.services.failover import (
     payment_unresolved,
     recover_interrupted,
     returned_failover,
+    stream_timings,
 )
 from livepeer_builder.services.operations import check_operation, claim_operation
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
@@ -271,6 +272,9 @@ class JobService:
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
         ordered = tuple(self._selection.order(candidates, request))
+        # paid: a runner with no usable ceiling is refused at its 402 (D62); with no signer, nothing pays
+        if credential.token is not None and getattr(self._transport, "pays", True):
+            ordered = capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
         return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
@@ -310,7 +314,12 @@ class JobService:
         """
         outcome = "payment_unknown" if error.payment_unknown else error.kind  # stored: recovery must see it
         attempts[-1] = with_evidence(attempts[-1], error.manifest_ids, error.payment_sent).model_copy(
-            update={"outcome": outcome, "status_code": error.status_code, "ended_at": self._clock.now()}
+            update={
+                "outcome": outcome,
+                "status_code": error.status_code,
+                "ended_at": self._clock.now(),
+                "timings": error.timings,
+            }
         )
         await self._store.finish_attempt(attempts[-1])
         paid = attempts[-1].payment_sent
@@ -350,6 +359,7 @@ class JobService:
                     "outcome": "succeeded",
                     "status_code": reply.status_code,
                     "ended_at": self._clock.now(),
+                    "timings": reply.timings,
                 }
             )
             await self._store.finish_attempt(attempts[-1])
@@ -404,7 +414,7 @@ class JobService:
                 continue
             # Payment evidence is recorded now, so a restart mid-stream resolves the job as uncertain.
             attempts[-1] = with_evidence(attempts[-1], opened.manifest_ids, opened.payment_sent).model_copy(
-                update={"status_code": opened.status_code}
+                update={"status_code": opened.status_code, "timings": stream_timings(opened)}
             )
             try:
                 await self._store.finish_attempt(attempts[-1])

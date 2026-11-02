@@ -670,24 +670,26 @@ classDiagram
     class ApprovedOnly {
         example: wraps any directory
     }
-    class Probes {
-        <<interface>>
-        +async probe_all(orchestrators) Probe[]
-    }
     class Prober {
+        +async probe_all(orchestrators) Probe[]
         16 at a time, 5 s, 1 MiB
         deployment trust store
         public_only: resolve, check, pin the address
     }
     class Probe {
         +orchestrator Orchestrator
-        +entry map?
+        +entry InventoryEntry?
         +failure untrusted_certificate, private_address or failed
+    }
+    class InventoryEntry {
+        +address str
+        +runners RawJson[]
+        each runner as the JSON text received
     }
     class Catalog {
         +async load_directory() None
         +async probe() None
-        +inventory() map[]
+        +inventory() InventoryEntry[]
         +status() CatalogStatus
         +async run(stop, directory_interval_s, probe_interval_s) None
     }
@@ -697,10 +699,10 @@ classDiagram
     OrchestratorDirectory ..> Orchestrator : returns
     OnChainDirectory --> EthCall
     EthCall <|.. JsonRpcChain
-    Probes <|.. Prober
     Prober ..> Probe : returns
+    Probe --> InventoryEntry
     Catalog --> OrchestratorDirectory
-    Catalog --> Probes
+    Catalog --> Prober
 ```
 
 ```mermaid
@@ -831,7 +833,7 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/jobs/{id}/cost` | `costs.for_job` | `JobCost` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
-| `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501` until M4 |
+| `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/admin/keys`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `POST /v1/admin/applications/{app}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
@@ -1072,7 +1074,7 @@ classDiagram
     direction LR
     class server_py {
         <<module>>
-        +async serve(settings, directory, prober) None
+        +async serve(settings, directory) None
         +create_app(catalog) Starlette
         +directory_from(settings) OrchestratorDirectory
     }

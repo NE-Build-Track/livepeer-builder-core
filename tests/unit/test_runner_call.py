@@ -13,13 +13,8 @@ from decimal import Decimal
 import livepeer_gateway.remote_signer as remote_signer
 import pytest
 
-from livepeer_builder.adapters.runner_call import (
-    PaidRequest,
-    PaymentEvents,
-    max_price,
-    payment_type,
-    stop_funding,
-)
+from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents, stop_funding
+from livepeer_builder.adapters.runner_price import max_price, payment_type
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import JobRequest, NetworkRate, Runner
 from livepeer_builder.errors import RunnerCallError

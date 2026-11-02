@@ -224,7 +224,7 @@ What a rate means, and what it does not:
 3. **Failover can pay more than once.** A job may pay up to `LPB_MAX_PAID_ATTEMPTS` orchestrators (D52,
    D55); the attempts it failed over from are `failed_after_payment`.
 4. **The ceiling is the advertised rate plus 1.2 %.** The engine asks the signer to pay at most the
-   runner's advertised wei rate times 1.012 (`_PRICE_PADDING` in `adapters/runner_call.py`), and the
+   runner's advertised wei rate times 1.012 (`_PRICE_PADDING` in `adapters/runner_price.py`), and the
    signer refuses a higher price (481).
 5. **The engine never signs without a ceiling the signer takes.** A runner that asks for payment but
    advertised no usable rate is refused before the signer is asked (`payment_refused`, nothing paid; the

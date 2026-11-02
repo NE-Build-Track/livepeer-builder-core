@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import EngineSettings, EngineSupply, testing
-from livepeer_builder.adapters.runner_call import max_price
+from livepeer_builder.adapters.runner_price import max_price
 from livepeer_builder.adapters.sdk import runners_from_entries
 from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import NetworkRate, ObservedRate, Offering, Runner

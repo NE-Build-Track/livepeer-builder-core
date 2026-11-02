@@ -2,7 +2,8 @@
 
 The SDK ships no type information, so mypy cannot hold it to the adapters. These tests check that the SDK
 functions the engine calls accept what it passes, and fail when the pinned SDK's own ``call_runner`` path
-changes: adapters/runner_call.py is the engine's copy of it, so every pin bump reviews that copy.
+changes: adapters/runner_call.py and adapters/runner_price.py are the engine's copy of it, so every pin bump
+reviews that copy.
 """
 
 import hashlib
@@ -19,7 +20,7 @@ from livepeer_gateway.remote_signer import (
     get_signer_info,
 )
 
-from livepeer_builder.adapters import runner_call
+from livepeer_builder.adapters import runner_call, runner_price
 
 COPIED_AT = "2017a80"
 # The first 16 hex digits of each function's source sha256 at COPIED_AT. When one fails: read the SDK
@@ -56,9 +57,10 @@ def test_the_copied_sdk_call_path_is_unchanged(name: str) -> None:
     )
 
 
-def test_the_copy_keeps_the_sdk_s_mit_notice() -> None:
+@pytest.mark.parametrize("module", [runner_call, runner_price], ids=lambda module: module.__name__)
+def test_the_copy_keeps_the_sdk_s_mit_notice(module: Any) -> None:
     """MIT asks every copy of a substantial portion to carry the copyright and permission notice."""
-    source = inspect.getsource(runner_call)
+    source = inspect.getsource(module)
     assert "Copyright (c) 2026 Livepeer Foundation" in source
     assert "The above copyright notice and this permission notice shall be included in all" in source
 
@@ -68,7 +70,7 @@ def test_the_copied_protocol_constants_match() -> None:
     # "hour", which no orchestrator advertises (T23). Every other entry, and any the SDK adds, must match.
     signer_refuses = {"hour"}
     paid = {u: t for u, t in live_runner._RUNNER_PAYMENT_TYPES_BY_UNIT.items() if u not in signer_refuses}
-    assert paid == runner_call.PAYMENT_TYPES_BY_UNIT
+    assert paid == runner_price.PAYMENT_TYPES_BY_UNIT
     assert runner_call.PAYER_ADDRESS_HEADER == live_runner._LIVE_RUNNER_PAYER_ADDRESS_HEADER
 
 

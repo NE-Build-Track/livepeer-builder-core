@@ -63,7 +63,7 @@ A failed finishing write leaves the job `running` for the next start (D34).
 | G6 | **Unpaid `timeout` and `unreachable` cannot be told apart from "never reached a runner"**, so neither is retryable under ISS-14 (its Q2) | `services/failover.py:18-19`; `network_kind` in `adapters/runner_call.py` |
 | G7 | **Reporting failures have no job-level signal.** Cost sync errors are only `EngineHealth.cost_sync_error`; `quarantined` usage rows and `ambiguous` matches (T13, T16) show only as `pending`/`uncertain` cost | `contracts/health.py`, `contracts/costs.py:17,54` |
 | G8 | **Async and persistent rows do not exist** | ISS-26 reserved; `services/reserved.py` `ReservedSessions` |
-| G9 | `finish_job` overwrites any state (`store/sql.py:260`); a late writer could reopen an ended job | No guard on `state` |
+| G9 | `finish_job` overwrites any state (`store/sql.py:260`); a late writer could reopen an ended job. A concrete case (found for ISS-46, at `1514212`): a cancel that lands after a `succeeded` finish has committed but before `run` returns reaches `_close_after_error`, which finishes the job again as `failed` or `uncertain` | No guard on `state` |
 
 ## Decision proposed
 
@@ -126,7 +126,8 @@ record get the same two words in the problem body.
 - **Uncertain:** never retried by the engine; usage that later confirms a payment (D54 (2)) changes the
   cost, **never the job state**. A test pins this ("success is not inferred from payment").
 - **Every transition is guarded** (G9): `finish_job` updates only `running` (and ISS-26's `queued`)
-  rows; a guarded miss is logged, not raised.
+  rows; a guarded miss is logged, not raised. ISS-46 writes `job.finished` in the same transaction, only
+  when the guarded update wins ([iss-46-events-feed.md](iss-46-events-feed.md)).
 
 ### Recovery checks existing work first
 

@@ -118,9 +118,13 @@ through the facade or REST:
   paying twice: the **repeat handling**.
 - **Reporting.** An invoice line carries the retail price (the fixture's own table) beside the network
   cost from `GET /v1/jobs/{id}/cost`, with its class; a `pending` cost stays pending, never zero.
-- **Event handling.** Consumes `GET /v1/events`, applies pages, de-duplicates by event `id`, saves the
-  cursor. While the feed is held, the same consumer polls `GET /v1/jobs?before=` (ISS-29) behind one
-  `EngineChanges` port of the fixture's own, so the switch is one adapter (Q4).
+- **Event handling.** Consumes `GET /v1/events` (embedded: `ActorApi.events`), applies pages,
+  de-duplicates by event `id`, and saves the cursor with the `epoch`. A 410 means resync: rebuild from
+  `GET /v1/jobs` and each job's `GET /v1/jobs/{id}/cost`, then continue from the scoped head
+  ([iss-46-events-feed.md](iss-46-events-feed.md#reading)). It accepts `job.finished` or
+  `cost.corrected` for a job it never saw created. Until ISS-46 lands, the same consumer polls
+  `GET /v1/jobs?before=` (ISS-29) behind one `EngineChanges` port of the fixture's own, so the switch
+  is one adapter (Q4).
 - **Additional endpoint.** `GET /v1/corp/invoice/{order}` added with `extend` on the engine's service,
   authenticated by `actor_dependency`; the MCP tool equivalent arrives with ISS-30.
 - **Never writes engine tables:** the fixture opens no engine database URL and imports nothing from

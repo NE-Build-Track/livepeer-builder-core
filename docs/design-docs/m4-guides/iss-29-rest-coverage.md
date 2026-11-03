@@ -88,7 +88,7 @@ model, the coverage table and the contract checks):
 | Async (ISS-26) | `POST /v1/jobs` with `mode="async"` | `202`, `Location: /v1/jobs/{id}`, `Livepeer-Job-Id`, body `Job` (`queued`); facade gains `jobs.submit` |
 | Async result | `GET /v1/jobs/{id}/result` | the stored body and content type; `409 code=job_not_finished` with the job and `Retry-After` while queued or running; `410 code=result_expired` after retention and for an immediate job (never retained) |
 | Persistent (ISS-27) | `POST /v1/sessions`, `GET /v1/sessions[/{id}]`, `POST /v1/sessions/{id}/close`, `ANY` and WebSocket on `/v1/sessions/{id}/app/{path}` | `201 Session`, `Session[]`/`Session`, `Session`, the runner's answer (as the ISS-27 guide proposes) |
-| Events (if the hold lifts) | `GET /v1/events` | `EventPage`; `410 code=cursor_expired` |
+| Events (ISS-46) | `GET /v1/events?after&limit&epoch` | `EventPage` with `epoch`; `after` ≥ 0 (422 otherwise); `410 code=cursor_expired` with `floor`, the caller's scoped head and `epoch` ([iss-46-events-feed.md](iss-46-events-feed.md#reading)) |
 
 The aliases proposed in #73 (`/v1/run/{app}`, `/v1/queue/{app}`, `wss` routes) translate into the same
 `JobRequest`/`SessionRequest` and add no behavior; they are in scope only if ISS-27 adopts #73.
@@ -233,6 +233,7 @@ Compatibility
 - **Q2.** `code` beside `error` (recommended) or RFC 9457 now?
 - **Q3.** Keyset paging on `(created_at, id)`, with the cursor carrying both (`before` plus `before_id`,
   recommended), or an opaque cursor? Either way a time-only `before` keeps D59's equal-time skip.
+  ISS-46's resync after a 410 rebuilds from `GET /v1/jobs`, so it is gap-free only once this lands.
 - **Q4.** `/v1/me` as a facade member (`whoami`, recommended so MCP gets it too) or REST only?
 - **Q5.** Rename `POST /v1/admin/grant/fund` to `POST /v1/admin/grants/{id}/fund` before the M5 release,
   keeping the old path as an alias until then?

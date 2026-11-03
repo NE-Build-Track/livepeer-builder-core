@@ -79,8 +79,10 @@ and would silently write no events.
 **Sequence order equals commit order.** This is the property a cursor depends on, and an identity column
 does not give it on PostgreSQL. Two transactions take 10 and 11; 11 commits first; a reader returns 11
 and moves its cursor to 11; then 10 commits, and that reader never sees it. So the store allocates the
-sequence by `UPDATE lpb_event_log SET next_sequence = next_sequence + 1 RETURNING ...` as the **last
-statement before commit**. The row lock is held until commit, so a second writer waits, and sequences
+sequence by `UPDATE lpb_event_log SET next_sequence = next_sequence + 1 RETURNING next_sequence - 1`,
+then inserts the event row with that value, the id before the increment, as its `sequence`. These are
+the **last statements before commit**. The first event is sequence 1, and the head (the highest
+sequence assigned) is always `next_sequence - 1`, which is 0 on an empty log. The row lock is held until commit, so a second writer waits, and sequences
 become visible in order. SQLite has one writer already. The cost is that event-writing transactions
 serialize on one row, for the length of a commit. The engine runs one process per database (T22) at
 job rates, not request rates, so this is small; revisit if the lock wait shows in `finish_job` latency
@@ -95,51 +97,52 @@ a retried write never emits twice:
 | `job.finished` | `job:{job_id}:finished` | The job reaches `succeeded`, `failed` or `uncertain` |
 | `usage.reported` | `job:{job_id}:usage` | `set_usage` stores the first report. It gains `WHERE usage IS NULL`; a second report updates nothing, emits nothing and answers `InvalidRequest` |
 | `cost.observed` | `cost:{job_id}:r{revision}` | The first stored projection with status `observed` |
-| `cost.corrected` | `cost:{job_id}:r{revision}` | A later projection whose fees or attempt classes differ from the stored one (Q8) |
+| `cost.corrected` | `cost:{job_id}:r{revision}` | A later final projection whose content differs from the last cost event (Q8) |
 
-**A cost event is a change in what the cost says, not a write.** The evidence version cannot key it,
-because the same version is rewritten (above), and neither can the update's row count. So
-`save_projection` reads the stored row, including its `revision` (a new column), and compares the two
-costs' **content**: status, the job's fees, and for each attempt its cost class and its fees. Money is
-compared as `Decimal` (the columns are text), and `updated_at` and `first_observed_at` are not content.
-Fees are compared per attempt as well as in total because `billable` comes from the `delivered`
-attempts: a rematch can move a fee between attempts and leave the total and the classes unchanged.
+**A cost event is a change in what a final cost says, not a write.** The evidence version cannot key it,
+because the same version is rewritten (above), and neither can the update's row count. A cost's
+**content** is its status, the job's fees, and each attempt's cost class and fees. Money is compared as
+`Decimal` (the columns are text); `updated_at` and `first_observed_at` are not content. Fees are compared
+per attempt as well as in total, because `billable` comes from the `delivered` attempts: a rematch can
+move a fee between attempts and leave the total and the classes unchanged.
 
-Every write below is conditional on the row this save read, so no save can write from a stale read:
+**The stored row is not always the last thing published.** `jobs_needing_projection` rewrites every ended
+`pending` projection on each sync, and its matched fees grow while a sibling attempt waits (`classify`,
+`services/costs.py:304`). A session recorded after the job was `observed` bumps its evidence
+(`record_payment_evidence`, `store/sql.py:194-202`), and the next compute is `pending` again. So a final
+save compares its content with the **last cost event**, `cost:{job_id}:r{revision}`, read by its unique id.
+It does not compare with the stored row, which may hold an interim `pending` compute.
 
-- **Unchanged:** the write sets only `updated_at` and `evidence_version`, `WHERE job_id = :id AND
-  revision = :read AND evidence_version <= :version`. It never writes fees, attempts, status or
-  revision. Otherwise a re-sync that read revision N, committing after a correction to N+1, would rewind
-  the row to N, and the next real change would reuse `r{N+1}`, an id already taken, so its event would be
-  skipped. `evidence_version` still has to move forward, or `projection_out_of_date` would select the
-  row on every sync. No event.
-- **Changed:** the write is a compare-and-set on the revision it read:
-  `UPDATE ... SET ..., revision = :read + 1 WHERE job_id = :id AND revision = :read AND
-  evidence_version <= :version`. One row updated: the event is written in the same transaction, with id
-  `cost:{job_id}:r{read + 1}`. The first such event for a job is `cost.observed`; every later one is
-  `cost.corrected`. A repair that fills in missing attempts is therefore a correction, never a frozen
-  first payload.
+`save_projection` reads the row, including `revision` (a new column, 0 until the first event). Every
+write is conditional on that read: `WHERE job_id = :id AND revision = :read AND evidence_version <=
+:version`. Then one of four branches, by the new projection:
+
+| New projection | Write | Event | `revision` | Stored `status` |
+| --- | --- | --- | --- | --- |
+| Not final: `pending` or `none` | Fees, attempts and status in place | None | Unchanged: a first insert stays 0, and a row at `r1` or later stays there | As computed (`pending` or `none`) |
+| First final: `observed`, `revision` 0 | The content, including the insert when no row exists | `cost.observed`, `cost:{job_id}:r1` | 1 | `observed` |
+| Later final, content differs from the last event | The content | `cost.corrected`, `cost:{job_id}:r{read + 1}` | `read + 1` | `corrected` |
+| Later final, content equals the last event | The content, so a row an interim `pending` save changed is restored | None | Unchanged | The last event's label |
+
+- **The label comes from the same rule as the event.** `_refresh_projection`'s own rule
+  (`services/costs.py:170-176`) flips the label only when the job's total fees differ, so it goes.
+  Otherwise a fee moved between attempts would emit `cost.corrected` with a payload whose `status` still
+  says `observed`, and a consumer that trusts `status` would keep the old `billable`.
+- **Not final is never labelled `corrected`,** so `jobs_needing_projection` keeps selecting a `pending`
+  row until it is final.
+- **No stale write.** Every branch writes only when the row still has the revision it read. A re-sync
+  that read revision N and commits after a correction to N+1 writes nothing, so it cannot rewind the row
+  and make the next change reuse an id that is already taken. Every branch also moves `evidence_version`
+  forward, or `projection_out_of_date` would select the row on every sync.
 - **No row yet:** the first save inserts with `ON CONFLICT (job_id) DO NOTHING` (SQLAlchemy's
   `on_conflict_do_nothing`, on both backends). Today's plain insert raises `IntegrityError` when two
   first saves race, and `sync_once` (`services/costs.py:134-137`) then stops before the remaining jobs.
-- **Zero rows written** (a lost compare-and-set, a conflicting insert, or newer evidence stored):
-  another save got there first. The background sync and an operator's `costs/sync` can run at once.
-  No event. The save reads again and compares again, and stops once newer evidence is stored.
-- **The event is written only when this transaction's insert or compare-and-set wins.** Two saves can
-  never both write `r1`.
-- `pending` and `none` projections are not events, and they leave `revision` at 0, including when a
-  `pending` insert races a first `observed` one. A job's first `observed` projection is always `r1`.
-
-**The label follows the same comparison.** `save_projection` writes `status` from the stored row and
-the comparison:
-- the first `observed` content is `observed`;
-- any later changed content is `corrected`;
-- unchanged content keeps the stored label.
-
-`_refresh_projection`'s own rule (`services/costs.py:170-176`) flips the label only when the job's total
-fees differ, so it goes. Otherwise a fee moved between attempts would emit `cost.corrected` with a
-payload whose `status` still says `observed`, and a consumer that trusts `status` would keep the old
-`billable`.
+- **Zero rows written** (a lost compare-and-set, a conflicting insert, or newer evidence stored): another
+  save got there first; the background sync and an operator's `costs/sync` can run at once. No event.
+  The save reads again and decides again, and stops once newer evidence is stored.
+- **The event is written only when this transaction's insert or compare-and-set wins,** so two saves can
+  never both write `r1`. If retention has deleted the last cost event, a final save treats its content as
+  changed and emits `cost.corrected`. That is a possible repeat of the same content, never a lost change.
 
 **Payloads are snapshots.** `job.*` and `usage.reported` carry the `Job` as stored after the change,
 attempts included, read back inside the transaction. `cost.*` carry the `JobCost`. `schema_version` is 1.
@@ -156,10 +159,11 @@ The feed holds no secret: requests are never stored, `Failure.body` carries no s
   `services/costs.py:199`). `events.md` says an admin reads every application; Q2 decides which rule
   the feed takes.
 - **Page:** `sequence > cursor`, in the caller's scope, in order, up to `limit`. `next_cursor` is the
-  last sequence returned. On an empty page it is the head (the highest committed sequence), so a quiet
-  tenant does not rescan everyone else's events.
-- **One snapshot.** The page and the head come from **one statement** (a CTE that reads
-  `lpb_event_log` and the page together). Under PostgreSQL's READ COMMITTED, two statements are two
+  last sequence returned. On an empty page it is the head, `next_sequence - 1` in the same snapshot
+  (0 on an empty log), so a quiet tenant does not rescan everyone else's events. It is never the raw
+  `next_sequence`: that is the id of the next event, and a cursor equal to it would skip that event.
+- **One snapshot.** The page and the head come from **one statement** (a CTE that projects
+  `next_sequence - 1` from `lpb_event_log` together with the page). Under PostgreSQL's READ COMMITTED, two statements are two
   snapshots: an event committed between them would be above the page but below the head, and
   `next_cursor` would skip it. Sequence order equals commit order, so within one snapshot no lower
   sequence can still be pending.
@@ -242,7 +246,7 @@ job or another tenant's delivery.
 | --- | --- |
 | `store/sql.py` | **Tidy first:** move the job and attempt writes into `store/jobs.py` (no behavior change); the file is at 464 of 500 lines |
 | `store/schema.py`, migration `0012` | `lpb_events`, `lpb_event_log`, `lpb_cost_projections.revision` (`lpb_event_subscriptions` in the push slice) |
-| `store/events.py` (new) | `append(conn, ...)` (sequence last, skip on existing id), `events_after(scope, cursor, limit)`, `floor_and_head()`, `purge_before(cutoff)` |
+| `store/events.py` (new) | `append(conn, ...)` (sequence last, skip on existing id), `last_cost_event(conn, job_id, revision)` (by id), `events_after(scope, cursor, limit)` (page and `next_sequence - 1` in one statement), `floor_and_head()`, `purge_before(cutoff)` |
 | `store/jobs.py`, `store/sql.py` | `create_job`, `finish_job` (reads the job back), `set_usage` (guarded on `usage IS NULL`, returns whether it stored), `save_projection` (compares content, compare-and-set on `revision`) append in their transaction |
 | `store/retention.py`, `config.py` | `LPB_RETENTION_EVENTS_DAYS`; `PurgeReport.events_deleted` |
 | `protocols/__init__.py` | `EventRepo` (`events_after`, `floor_and_head`); the `EventFeed` docstring loses "(M3)" |
@@ -287,6 +291,10 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] a stale re-sync committing after a correction: the row stays at r2, and the next change is r3
 [ ] an unchanged save with newer evidence advances evidence_version and is not re-selected next sync
 [ ] a fee moved between attempts, same total and classes: cost.corrected, and the payload's status is corrected
+[ ] fees growing while a sibling attempt is still pending: no event, revision stays 0, status stays pending
+[ ] a session recorded after the first observed (r1): the pending recompute keeps r1 and emits nothing;
+    the next final save emits cost.corrected r2 if it differs from r1, and restores the row with no event if not
+[ ] the last cost event deleted by retention: the next final save emits cost.corrected
 [ ] a corrected label kept on unchanged fees: nothing
 [ ] newer evidence with different fees: cost.corrected r2; a slower sync losing to newer evidence: nothing
 [ ] same evidence version, attempts filled in by the repair: cost.corrected with the new attempts
@@ -299,6 +307,7 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] PostgreSQL: an event committed while a page is read is never skipped by next_cursor (one snapshot)
 [ ] without events.read: 403 before any lookup
 [ ] paging: limit honoured; next_cursor is the last sequence; an empty page returns head
+[ ] an empty log: the poll returns next_cursor 0; one job finishes; polling from 0 returns job.created (sequence 1)
 [ ] retention: events older than the window go, floor rises; a job purge leaves events alone
 [ ] cursor below floor: 410 cursor_expired with floor and head; the resync recipe loses nothing
 [ ] FakeEngine: the same events, ids and scope as the real engine

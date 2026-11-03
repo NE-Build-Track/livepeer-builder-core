@@ -320,6 +320,82 @@
         "title": "CallTimings",
         "type": "object"
       },
+      "CapabilityProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "minLength": 1,
+            "title": "App",
+            "type": "string"
+          },
+          "content_type": {
+            "enum": [
+              "application/json",
+              "multipart/form-data"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "defaults": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Defaults",
+            "type": "object"
+          },
+          "deployment_revision": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Deployment Revision",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "method": {
+            "const": "POST",
+            "default": "POST",
+            "title": "Method",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "path": {
+            "pattern": "^/v1/[a-zA-Z0-9_/-]+$",
+            "title": "Path",
+            "type": "string"
+          },
+          "schema_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Schema Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "app",
+          "model",
+          "deployment_revision",
+          "path",
+          "content_type",
+          "input_schema",
+          "defaults",
+          "schema_digest"
+        ],
+        "title": "CapabilityProfile",
+        "type": "object"
+      },
       "CostSummary": {
         "additionalProperties": false,
         "description": "The costs of the jobs created in ``[start, end)``, in the caller's scope. ``by_app`` attributes\nthe same attempt fees to each job's runner app, kept by class as in ``by_class`` (D60), so a final fee\nand a ``pending`` one that can still grow are never one figure. For every class, the apps add up to\nits ``by_class`` total. An app appears once one of its jobs has a costed attempt, with only the classes\nits attempts have.",
@@ -1254,6 +1330,7 @@
         "title": "JobRequest",
         "type": "object"
       },
+      "JsonValue": {},
       "KnownActor": {
         "additionalProperties": false,
         "description": "One row of the operator's actor list (D46, D48): provisioned, signed in, or both.",
@@ -3295,6 +3372,61 @@
           }
         ],
         "summary": "Allowance"
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "capabilities_v1_capabilities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "App"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CapabilityProfile"
+                  },
+                  "title": "Response Capabilities V1 Capabilities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Capabilities"
       }
     },
     "/v1/costs/projections": {

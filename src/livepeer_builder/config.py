@@ -48,6 +48,7 @@ class EngineSettings(Contract):
     signer_url: str | None = None
     discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
     discovery_interval_s: float = Field(default=15.0, gt=0)
+    capability_openapi_file: str | None = None
     discovery_max_bytes: int = Field(default=DISCOVERY_MAX_BYTES, gt=0)  # the largest inventory a poll reads
     # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node discovery's
     # default 5-minute refreshes. lpb discovery evicts a failing orchestrator sooner (30 s probes, 6 failures)

@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from livepeer_builder import BuilderEngine, Decorate, EngineApi, EngineSettings, EngineSupply
 from livepeer_builder.http.app import actor_dependency, create_app
-from livepeer_builder.runtime import configure_logging
+from livepeer_builder.runtime import configure_logging, load_capability_openapi
 
 Extend = Callable[[FastAPI, EngineApi], None]
 """Adds routes or middleware to the app; receives the engine, so nothing is looked up."""
@@ -60,7 +60,11 @@ async def serve(
 
 
 def _app(engine: EngineApi, settings: EngineSettings, extend: Extend | None) -> FastAPI:
-    app = create_app(engine, max_request_bytes=settings.http_max_request_bytes)
+    app = create_app(
+        engine,
+        max_request_bytes=settings.http_max_request_bytes,
+        capability_profiles=load_capability_openapi(settings.capability_openapi_file),
+    )
     if extend is not None:
         extend(app, engine)
     return app

@@ -43,6 +43,7 @@ from livepeer_builder.contracts import (
     SessionRequest,
     SyncReport,
 )
+from livepeer_builder.contracts.capabilities import CapabilityProfile
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyProvisioned,
@@ -70,6 +71,7 @@ from livepeer_builder.http.bodies import (
     StatusBody,
     UsageBody,
 )
+from livepeer_builder.http.capabilities import attach_capabilities
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
 from livepeer_builder.http.streaming import stream_response
 
@@ -143,7 +145,11 @@ async def _authenticated(engine: EngineApi, request: Request) -> ActorContext:
 
 
 def create_app(
-    engine: EngineApi, *, manage_lifecycle: bool = True, max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
+    engine: EngineApi,
+    *,
+    manage_lifecycle: bool = True,
+    max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
+    capability_profiles: tuple[CapabilityProfile, ...] = (),
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -160,6 +166,7 @@ def create_app(
     install_request_limit(app, max_request_bytes)  # 413 before a body is held in memory (D59)
 
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
+    attach_capabilities(app, engine, capability_profiles, actor_dependency(engine))
 
     @app.get("/livez", include_in_schema=False)
     async def livez() -> dict[str, str]:

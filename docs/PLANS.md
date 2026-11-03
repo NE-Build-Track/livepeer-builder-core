@@ -33,6 +33,8 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 
 ## M3 (open)
 
+Capability schema integration: [request-schema plan](exec-plans/active/capability-request-schemas.md).
+
 | Ticket | Plan | Owners |
 | --- | --- | --- |
 | Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |

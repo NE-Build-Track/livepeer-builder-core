@@ -32,17 +32,17 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 | Ticket | Milestone | Prepared here |
 | --- | --- | --- |
-| ISS-08 Standalone credentials and ownership controls | M3 | `ApiKeyAuthenticator`, `KeyService`, `DefaultPolicy` (implemented) |
+| ISS-08 Standalone credentials and ownership controls | M3 | `ApiKeyAuthenticator`, `KeyService` (issue, list, revoke) and `DefaultPolicy` from ISS-03; inspection, rotation, the 403/404 rule and the key audit log in progress ([plan](../exec-plans/active/iss-08-standalone-credentials.md), D44) |
 | ISS-09 Dynamic capability discovery | M3 | `DiscoveryService` (implemented); capability resolution is T3 |
-| ISS-10 Network rates and pricing assumptions | M3 | `Offering.rate_low/high` (implemented) |
+| ISS-10 Network rates and pricing assumptions | M3 | Rates as advertised with source and age (`ObservedRate`), missing and stale explicit, never signed for without a ceiling; [plan](../exec-plans/active/iss-10-rates.md) (in review, D62) |
 | ISS-11 Scoped allocation provisioning and management | M3 | `PaymentsService` (implemented) |
 | ISS-12 SDK payment authorization and remote signing | M3 | `SdkRunnerTransport` (implemented); funded proof on public orchestrators, 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | ISS-13 First funded payment configuration | M3 | `deploy/dev-stack` |
 | ISS-14 Durable submission and immediate execution | M3 | `JobService.run` (implemented) |
 | ISS-15 Owned job history and basic results | M3 | `GET /v1/jobs`, `ResultRef` (implemented) |
-| ISS-16 Capture usage; correlate jobs with payment evidence | M3 | `report_usage`; `auth_id` correlation (implemented) |
+| ISS-16 Capture usage; correlate jobs with payment evidence | M3 | `report_usage`; `manifest_id` → `payment_session_id` correlation through the session log (implemented) |
 | ISS-17 Replayable network-cost projections | M3 | `CostService` projections and `corrected` (implemented) |
-| ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads (implemented); events feed **defined** ([events.md](../contracts/events.md)) |
+| ISS-18 Scoped usage, cost reports and integration events | M3 | Cost reads and the summary with `by_app` (implemented, [D60](../design-docs/m3-decisions.md)); events feed **defined and held** ([events.md](../contracts/events.md), [M3 decision, item 4](https://github.com/Cloud-SPE/Network-Engineering-SPE/blob/3c365a46550c2099e92b1df1adfb3756b4508c95/docs/decisions/2026-10-21-m3-reference-app-and-scope.md)): open as partial |
 | ISS-19 Representative jobs and acceptance matrix | M3 | Open |
 | ISS-20 REST for the first journey | M3 | `http/app.py` (minimal, implemented) |
 | ISS-21–25 Reference app, journey guide, funded seven-outcome proof | M3 | Out of this repository (reference app); evidence plans in `docs/exec-plans/` |
@@ -61,9 +61,9 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 
 | Ref | Interface | Status (19 October) |
 | --- | --- | --- |
-| H1 | Python gateway SDK | Pinned to [livepeer-python-gateway#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) `e6d243b`, fetched from NE-Build-Track (`on_payment_session` reports `manifest_id`; no signer-state decoding). **Open:** merge into `main`, then re-pin (T1). #70 and multipart deferred |
+| H1 | Python gateway SDK | Pinned (26 October) to livepeer/livepeer-python-gateway `main` `2017a80` (was `76a1a1c`): "Enforce TLS" ([#76](https://github.com/livepeer/livepeer-python-gateway/pull/76)), streamable runner bodies ([#80](https://github.com/livepeer/livepeer-python-gateway/pull/80)) and `on_payment_session` ([#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), reporting `manifest_id` with no signer-state decoding). The runner-side session stop ([#83](https://github.com/livepeer/livepeer-python-gateway/pull/83)) is unused. The NE `dev/bytestreaming` pin is dropped. **Open:** a PyPI release, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
-| H3 | Remote signer and orchestrator/Live Runner | NE-Build-Track/node `406b248` (v1.0.2) in the dev stack and on Railway. It includes `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
+| H3 | Remote signer and orchestrator/Live Runner | livepeer/node `406b248` (v1.0.2) in the dev stack and on Railway. It includes `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | H5 | Source access and permitted reuse | Done (ISS-01): simple-infra reviewed; nothing private reused |
 | H6 | Scope and final acceptance | Mike's review per ticket; procedure open for M5 |

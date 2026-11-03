@@ -4,6 +4,7 @@ Network cost is the expected value of tickets at signing (docs/contracts/payment
 settlement and not a retail price. Missing evidence is ``pending``, never zero.
 """
 
+from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -67,20 +68,48 @@ class AttemptCost(Contract):
 
 
 class JobCost(Contract):
+    """``fees`` is everything the job's attempts cost the allocation. ``billable`` is the part an
+    enterprise bills its user for: the ``delivered`` attempts only, so a job that failed, or the
+    attempts a job failed over from, are never billable (D52). Both are final once ``status`` is
+    ``observed`` or ``corrected``."""
+
     job_id: UUID
     status: CostStatus
     fees: Fees
     attempts: tuple[AttemptCost, ...]
     first_observed_at: datetime | None
     updated_at: datetime | None
+    billable: Fees = Field(default_factory=Fees)
+
+
+def add_fees(parts: Iterable[Fees]) -> Fees:
+    items = list(parts)
+    eth = sum((fees.fee_eth for fees in items), Decimal(0))
+    priced = [fees for fees in items if fees.row_count]
+    usd: Decimal | None = Decimal(0) if not priced else None
+    if priced and all(fees.fee_usd is not None for fees in priced):
+        usd = sum((fees.fee_usd or Decimal(0) for fees in priced), Decimal(0))
+    return Fees(fee_eth=eth, fee_usd=usd, row_count=sum(fees.row_count for fees in items))
+
+
+def billable_fees(attempts: Iterable[AttemptCost]) -> Fees:
+    """What the user is billed for: the ``delivered`` attempts' fees."""
+    return add_fees(attempt.fees for attempt in attempts if attempt.cost_class == "delivered")
 
 
 class CostSummary(Contract):
+    """The costs of the jobs created in ``[start, end)``, in the caller's scope. ``by_app`` attributes
+    the same attempt fees to each job's runner app, kept by class as in ``by_class`` (D60), so a final fee
+    and a ``pending`` one that can still grow are never one figure. For every class, the apps add up to
+    its ``by_class`` total. An app appears once one of its jobs has a costed attempt, with only the classes
+    its attempts have."""
+
     start: datetime
     end: datetime
     by_class: dict[CostClass, Fees]
     jobs_with_cost: int
     jobs_pending: int  # reported beside the totals, never folded into them
+    by_app: dict[str, dict[CostClass, Fees]] = Field(default_factory=dict)
 
 
 class Reconciliation(Contract):

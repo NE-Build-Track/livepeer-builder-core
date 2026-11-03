@@ -18,6 +18,13 @@ erDiagram
         datetime created_at
         datetime revoked_at
     }
+    lpb_actor_sightings {
+        string application_id PK
+        string actor_id PK
+        string name
+        datetime first_seen_at
+        datetime last_seen_at
+    }
     lpb_actors {
         string application_id PK
         string actor_id PK
@@ -29,6 +36,7 @@ erDiagram
         string status
         datetime created_at
         datetime updated_at
+        string label
     }
     lpb_attempts {
         string job_id PK
@@ -41,6 +49,9 @@ erDiagram
         integer status_code
         datetime started_at
         datetime ended_at
+        integer challenge_ms
+        integer signing_ms
+        integer response_ms
     }
     lpb_cost_cursor {
         integer id PK
@@ -56,6 +67,7 @@ erDiagram
         json attempts
         datetime first_observed_at
         datetime updated_at
+        integer evidence_version
     }
     lpb_jobs {
         string id PK
@@ -73,6 +85,22 @@ erDiagram
         json usage
         datetime created_at
         datetime completed_at
+        integer evidence_version
+        string retry_of
+        string superseded_by
+    }
+    lpb_operations {
+        string application_id PK
+        string actor_id PK
+        string operation_ref PK
+        string command
+        string fingerprint
+        string state
+        integer fencing_token
+        json context
+        json result
+        datetime started_at
+        datetime completed_at
     }
     lpb_payment_sessions {
         string job_id PK
@@ -81,6 +109,7 @@ erDiagram
         string manifest_id
         string payment_session_id
         string match_status
+        string payment_state
     }
     lpb_secrets {
         string ref PK
@@ -128,6 +157,16 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `created_at` | DATETIME | no |  |
 | `revoked_at` | DATETIME | yes |  |
 
+## `lpb_actor_sightings`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `application_id` | VARCHAR(200) | no | PK |
+| `actor_id` | VARCHAR(200) | no | PK |
+| `name` | VARCHAR(200) | no |  |
+| `first_seen_at` | DATETIME | no |  |
+| `last_seen_at` | DATETIME | no |  |
+
 ## `lpb_actors`
 
 | Column | Type | Null | Key |
@@ -142,6 +181,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `status` | VARCHAR(16) | no |  |
 | `created_at` | DATETIME | no |  |
 | `updated_at` | DATETIME | no |  |
+| `label` | VARCHAR(200) | no |  |
 
 ## `lpb_attempts`
 
@@ -157,6 +197,9 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `status_code` | INTEGER | yes |  |
 | `started_at` | DATETIME | no |  |
 | `ended_at` | DATETIME | yes |  |
+| `challenge_ms` | INTEGER | yes |  |
+| `signing_ms` | INTEGER | yes |  |
+| `response_ms` | INTEGER | yes |  |
 
 ## `lpb_cost_cursor`
 
@@ -178,6 +221,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `attempts` | JSON | no |  |
 | `first_observed_at` | DATETIME | yes |  |
 | `updated_at` | DATETIME | no |  |
+| `evidence_version` | INTEGER | no |  |
 
 ## `lpb_jobs`
 
@@ -198,12 +242,31 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `usage` | JSON | yes |  |
 | `created_at` | DATETIME | no |  |
 | `completed_at` | DATETIME | yes |  |
+| `evidence_version` | INTEGER | no |  |
+| `retry_of` | VARCHAR(36) | yes |  |
+| `superseded_by` | VARCHAR(36) | yes |  |
 
 Indexes:
 
 - `lpb_jobs_operation_ref` (application_id, actor_id, operation_ref) unique
 - `lpb_jobs_owner_created` (application_id, actor_id, created_at)
 - `lpb_jobs_state` (state)
+
+## `lpb_operations`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `application_id` | VARCHAR(200) | no | PK |
+| `actor_id` | VARCHAR(200) | no | PK |
+| `operation_ref` | VARCHAR(200) | no | PK |
+| `command` | VARCHAR(32) | no |  |
+| `fingerprint` | VARCHAR(64) | no |  |
+| `state` | VARCHAR(16) | no |  |
+| `fencing_token` | INTEGER | no |  |
+| `context` | JSON | no |  |
+| `result` | JSON | yes |  |
+| `started_at` | DATETIME | no |  |
+| `completed_at` | DATETIME | yes |  |
 
 ## `lpb_payment_sessions`
 
@@ -215,6 +278,7 @@ Indexes:
 | `manifest_id` | VARCHAR(200) | no |  |
 | `payment_session_id` | VARCHAR(200) | yes |  |
 | `match_status` | VARCHAR(16) | no |  |
+| `payment_state` | VARCHAR(16) | no |  |
 
 Indexes:
 

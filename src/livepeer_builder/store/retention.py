@@ -13,13 +13,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from livepeer_builder.contracts import Contract
+from livepeer_builder.contracts import PurgeReport
 from livepeer_builder.store import schema as t
-
-
-class PurgeReport(Contract):
-    jobs_deleted: int
-    usage_rows_deleted: int
 
 
 async def purge(

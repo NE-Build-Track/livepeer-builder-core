@@ -9,8 +9,8 @@ Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
   `allocations.fund`, `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`,
   `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.** `grants.fund` covers every
   grant. The engine sends the grant id on the request, or the grant of the caller's own allocation.
-- **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Required when
-  `LPB_BATTERIES_URL` is set.
+- **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Optional: without
+  it the engine starts with the grant desk off (`list_grants`/`create_grant` and their routes absent).
 
 | Engine call | Route | Notes |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
 | `revoke_key` | `POST /v1/api-keys/{id}/revoke` | |
 | `read_allocation` | `GET /v1/allocations/{id}` | `allocated_<cur>`, `spent_<cur>`, `available_<cur>`, where `<cur>` is the allocation's `usd`/`eth` |
-| usage feed | `GET /v1/usage?limit=&cursor=` | No grant filter. `{items, next_cursor}`. The cursor is opaque and bound to its filters; empty on the last page; 400 `invalid cursor` on a mismatch |
+| usage feed | `GET /v1/usage?limit=&cursor=` | Optional filters `grant_id`, `allocation_id`, `manifest_id` (exact IDs; a row must match every one; usage with no session appears only unfiltered). The engine sends none: cost sync reads every row (D28). `{items, next_cursor}`. The cursor is opaque and bound to its filters; empty on the last page; 400 `invalid cursor` on a mismatch |
 
 - **Idempotency:** `Idempotency-Key` on allocation create, API-key create, and grant and allocation
   fund. It is shared by every caller of a grant, which is why the engine namespaces its keys.

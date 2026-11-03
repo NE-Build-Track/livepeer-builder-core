@@ -1,6 +1,7 @@
-# One-time extract of address fields from
-# https://signer.pymthouse.com/discover-orchestrators on 2026-10-12.
-# Not refreshed automatically.
+# The discovery service's static directory on Railway (LPD_ORCHESTRATORS; docs/contracts/discovery.md).
+# A one-time extract of the address fields from https://signer.pymthouse.com/discover-orchestrators on
+# 2026-10-12; edit it to change who is discovered. Orchestrators whose TLS certificate the system trust
+# store rejects are left out at probe time, so self-signed entries here are harmless.
 https://ai.stronk.rocks:9994
 https://ai3.pon-eth.com:9191
 https://server.ai-bitbender.xyz:1112

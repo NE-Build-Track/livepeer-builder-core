@@ -1,188 +1,217 @@
-"""Python gateway SDK adapters: signer discovery and the paid runner call.
+"""Python gateway adapters: runner discovery and the Live Runner transport.
 
-The only module that imports ``livepeer_gateway`` (enforced by tests/structure). Payment evidence
-comes from the SDK's ``on_payment_session`` callback (livepeer-python-gateway#77, pinned in
-pyproject.toml; docs/references/sdk-gateway.md). The SDK calls it for every session the signer
-signs, just before the paid request goes out. The adapter derives ``manifest_ids`` and
-``payment_sent`` from those sessions, so the engine keeps owning failover and cost attribution.
-"""
+Discovery reads a ``/discovery`` inventory itself, not through the SDK's ``discover_runners``, which
+parses ``price_usd`` as a float (livepeer/livepeer-python-gateway#88). The paid runner call is the
+engine's own (``adapters/runner_call.py``, D53): it signs through the SDK's signer client and reports
+each payment session before the signer is asked, so cost attribution never depends on a callback that
+a lost signer reply would skip (docs/references/sdk-gateway.md)."""
 
+import asyncio
+import contextlib
 import json
+import logging
+import re
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
 
-import aiohttp
-from livepeer_gateway.discovery import discover_runners
-from livepeer_gateway.errors import (
-    LivepeerGatewayError,
-    LivepeerHTTPError,
-    PaymentError,
-    SignerRefreshRequired,
-    SkipPaymentCycle,
+import httpx
+
+from livepeer_builder.adapters.runner_call import (
+    PaidRequest,
+    PaymentEvents,
+    SdkRunnerStream,
+    json_object,
 )
-from livepeer_gateway.live_runner import LiveRunnerInstance, LiveRunnerPriceInfo, call_runner
-from livepeer_gateway.remote_signer import LivePaymentSession, RemoteSignerError
+from livepeer_builder.contracts import (
+    JobRequest,
+    NetworkRate,
+    Runner,
+    RunnerGPU,
+    RunnerReply,
+)
+from livepeer_builder.contracts.discovery import DISCOVERY_MAX_BYTES, PRICE_LIMIT, PRICE_RULE, is_price
+from livepeer_builder.protocols import OnSigned
+from livepeer_builder.utils import loads_json_numbers, read_capped
 
-from livepeer_builder.contracts import AttemptOutcome, JobRequest, NetworkRate, Runner, RunnerReply
-from livepeer_builder.errors import RunnerCallError
-
-_BODY_LIMIT = 4096
-_PAYMENT_ERRORS = (PaymentError, SignerRefreshRequired, SkipPaymentCycle, RemoteSignerError)
-# Signer statuses that are about the orchestrator's payment params, not the caller: another orchestrator
-# may succeed. 400 = incomplete/expired params; 481 = price ceiling.
-# Caller- or signer-side refusals (402 allowance, 403 forbidden, 502 webhook, 503 outbox) are not here.
-_ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES = frozenset({400, 481})
+_LOG = logging.getLogger(__name__)
+# RFC 3339 as Go writes it (time.RFC3339Nano); fromisoformat alone also takes ISO 8601's other forms
+_RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
 
-class SignerDiscoverySource:
-    """Reads the signer's discovery endpoint, or a discovery URL that overrides it."""
+class HttpDiscoverySource:
+    """Reads a ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
+    (``lpb discovery``, docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
+    credentials; the signer is not involved in discovery (#45). ``price_usd`` stays a ``Decimal``.
+
+    The whole request, body included, gets ``timeout_s`` (5 s, as the SDK's ``discover_runners`` had) and
+    at most ``max_bytes`` (16 MiB, ``LPB_DISCOVERY_MAX_BYTES``: a discovery service's combined inventory):
+    ``DiscoveryService`` refreshes serially, so a slow or huge source would otherwise freeze the snapshot. A
+    redirect is not followed, even by an injected client; it fails the refresh.
+    """
 
     def __init__(
         self,
+        discovery_url: str,
         *,
-        signer_url: str | None = None,
-        discovery_url: str | None = None,
-        signer_headers: dict[str, str] | None = None,
+        client: httpx.AsyncClient | None = None,
+        timeout_s: float = 5.0,
+        max_bytes: int = DISCOVERY_MAX_BYTES,
     ) -> None:
-        self._signer_url = signer_url
         self._discovery_url = discovery_url
-        self._signer_headers = signer_headers
+        self._client = client or httpx.AsyncClient(
+            timeout=timeout_s
+        )  # one per source: polls reuse its connection
+        self._owns_client = client is None
+        self._timeout_s = timeout_s
+        self._max_bytes = max_bytes
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
 
     async def fetch(self) -> tuple[Runner, ...]:
-        # The signer bearer goes to the signer only, never to a separate discovery URL.
-        entries = await discover_runners(
-            signer_url=self._signer_url,
-            signer_headers=self._signer_headers,
-            discovery_url=self._discovery_url,
-        )
+        try:
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
+            async with asyncio.timeout(self._timeout_s):
+                body = await self._body(self._client)
+        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
+            message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
+            raise TimeoutError(message) from error
+        entries = loads_json_numbers(body)
+        if not isinstance(entries, list):
+            raise ValueError("discovery response is not a JSON list")
         return tuple(runners_from_entries(entries))
 
-
-class _SignedSessions:
-    """Collects what the signer signed during one call (``on_payment_session``).
-
-    A reported session means the signer charged the allocation. It counts as payment sent even if
-    the SDK then finds the payment unusable and does not send it: that is conservative, so the
-    engine never fails over (or retries) work that may already be paid for.
-    """
-
-    def __init__(self) -> None:
-        self.signed = False
-        self.manifest_ids: list[str] = []
-
-    def __call__(self, session: LivePaymentSession) -> None:
-        self.signed = True
-        if session.manifest_id:
-            self.manifest_ids.append(session.manifest_id)
+    async def _body(self, client: httpx.AsyncClient) -> bytes:
+        request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
+        response = await client.send(request, stream=True, follow_redirects=False)
+        async with contextlib.aclosing(response):
+            response.raise_for_status()
+            return await read_capped(response.aiter_bytes(), self._max_bytes)
 
 
 class SdkRunnerTransport:
-    """``call_runner`` with the actor's credential as the signer bearer. Unpaid when there is none."""
+    """The Live Runner call with the actor's credential as the signer bearer. Unpaid when there is none.
+
+    ``on_signed`` gets each session the signer signed, before the paid request goes out (D42). A recorder
+    that implements ``remember`` is told the manifest, from ``LivePaymentSession.manifest_id``, before
+    ``get_payment`` (D53).
+    """
 
     def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
 
-    async def call(self, runner: Runner, request: JobRequest, credential: str | None) -> RunnerReply:
-        paid = credential is not None and self._signer_url is not None
-        instance = LiveRunnerInstance(
-            url=runner.url,
+    @property
+    def pays(self) -> bool:
+        """A credential pays the runner only through a signer; with none, every call is unpaid."""
+        return self._signer_url is not None
+
+    def _request(
+        self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents
+    ) -> PaidRequest:
+        signer_url = self._signer_url if credential is not None else None
+        return PaidRequest(
+            runner.url.rstrip("/") + request.path,
+            method=request.method,
+            # Runners expect a JSON object; an empty body for ``None`` is not the contract yet (T15).
+            body=request.raw_body
+            if request.raw_body is not None
+            else json.dumps({} if request.payload is None else request.payload).encode(),
+            content_type=request.content_type or "application/json",
+            headers=request.headers,
+            return_http_errors=request.return_http_errors,
             app=runner.app,
-            runner_id=runner.runner_id or "",
-            mode=runner.mode or "",
-            orchestrator_url=runner.orchestrator_url or "",
-            raw={},
-            price_info=_price_info(runner.rate),
+            rate=runner.rate,
+            signer_url=signer_url,
+            signer_headers={"Authorization": f"Bearer {credential}"} if signer_url is not None else None,
+            retries=self._retries,
+            events=events,
+            orchestrator_url=runner.orchestrator_url,
         )
-        url = runner.url.rstrip("/") + request.path
-        sessions = _SignedSessions()
-        try:
-            result = await call_runner(
-                url,
-                runner=instance,
-                payload=request.payload,
-                method=request.method,
-                signer_url=self._signer_url if paid else None,
-                signer_headers={"Authorization": f"Bearer {credential}"} if paid else None,
-                timeout=request.timeout_s,
-                max_payment_challenge_retries=self._retries,
-                on_payment_session=sessions if paid else None,
-            )
-        except LivepeerGatewayError as error:
-            raise call_error(
-                error, url, payment_sent=sessions.signed, manifest_ids=tuple(sessions.manifest_ids)
-            ) from error
-        except (aiohttp.ClientError, OSError) as error:
-            raise RunnerCallError(
-                network_kind(error),
-                str(error),
-                payment_sent=sessions.signed,
-                manifest_ids=tuple(sessions.manifest_ids),
-            ) from error
-        content = result.content if result.content is not None else json.dumps(result.data).encode()
+
+    async def call(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+    ) -> RunnerReply:
+        events = PaymentEvents(on_signed)
+        paid = self._request(runner, request, credential, events)
+        status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
-            status_code=200,
-            content=content,
-            content_type=result.content_type or "application/json",
-            data=result.data if result.content is None else None,
-            manifest_ids=tuple(sessions.manifest_ids),
-            payment_sent=sessions.signed or bool(result.session_id),
+            status_code=status,
+            content=body,
+            content_type=content_type or "application/json",
+            data=json_object(body, content_type),
+            manifest_ids=events.ids,
+            payment_sent=events.signed,
+            timings=events.timer.timings,
         )
 
+    async def open(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+    ) -> SdkRunnerStream:
+        """The paid request, answered: the 402 is paid before the first byte, so payment is known here.
 
-def call_error(
-    error: LivepeerGatewayError,
-    runner_url: str,
-    *,
-    payment_sent: bool,
-    manifest_ids: tuple[str, ...] = (),
-) -> RunnerCallError:
-    """Map an SDK error to an attempt outcome, with the payment evidence the callback collected."""
-    kind: AttemptOutcome
-    status: int | None = None
-    body: str | None = None
-    if isinstance(error, LivepeerHTTPError) and error.url == runner_url:
-        status = error.status_code
-        body = error.body[:_BODY_LIMIT] if error.body else None
-        kind = "refused" if status == 503 else "http"
-    elif isinstance(error, LivepeerHTTPError):
-        # An HTTP error from any other URL came from the signer.
-        orchestrator_specific = error.status_code in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES
-        kind = "payment_refused" if orchestrator_specific and not payment_sent else "payment"
-        status = error.status_code
-    elif isinstance(error, _PAYMENT_ERRORS):
-        kind = "payment"
-    else:
-        kind = network_kind(error)
-    return RunnerCallError(
-        kind,
-        str(error),
-        payment_sent=payment_sent,
-        manifest_ids=manifest_ids,
-        status_code=status,
-        body=body,
-    )
+        Waiting for the runner's response headers is bounded by ``first_byte_timeout_s`` (D35). A timeout
+        keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
+        validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
+        """
+        events = PaymentEvents(on_signed)
+        paid = self._request(runner, request, credential, events)
+        try:
+            async with asyncio.timeout(request.first_byte_timeout_s):
+                return await paid.open(connect_timeout_s=request.timeout_s)
+        except TimeoutError as error:  # the deadline; the call's own timeouts are already RunnerCallError
+            if paid.identifying:  # the signer never answered: nothing signed, no runner asked (D58 (4))
+                message = f"the signer did not identify itself within {request.first_byte_timeout_s:g}s"
+                raise events.error("payment", message, reason="signer_unavailable") from error
+            if events.unknown:  # cut off while signing: the signer is the one that did not answer (D58 (5))
+                raise events.error(
+                    "timeout", "the signer gave no answer while signing; it may have charged"
+                ) from error
+            message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
+            raise events.error("timeout", message) from error
 
 
-def network_kind(error: BaseException) -> AttemptOutcome:
-    current: BaseException | None = error
-    while current is not None:
-        if isinstance(current, TimeoutError):
-            return "timeout"
-        if isinstance(current, (ConnectionError, OSError, aiohttp.ClientConnectionError)):
-            return "unreachable"
-        current = current.__cause__
-    return "http"
-
-
-def runners_from_entries(entries: list[dict[str, Any]]) -> list[Runner]:
+def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
+    """Every runner that parses. A malformed entry or runner record is skipped, never the inventory: one bad
+    orchestrator must not stale discovery for the rest (livepeer/node's Decode does the same)."""
     runners: list[Runner] = []
+    skipped_entries = skipped_runners = 0
     for entry in entries:
+        if not isinstance(entry, dict):
+            skipped_entries += 1
+            continue
+        records = entry.get("runners")
+        if records is None:  # null is a Go nil slice: no runners, nothing wrong
+            continue
+        if not isinstance(records, list):
+            skipped_entries += 1
+            continue
         orchestrator_url = _text(entry.get("address"))
-        for raw in entry.get("runners") or ():
+        for raw in records:
             runner = _runner_from_raw(raw, orchestrator_url)
-            if runner is not None:
+            if runner is None:
+                skipped_runners += 1
+            else:
                 runners.append(runner)
+    if skipped_entries or skipped_runners:
+        _LOG.warning(
+            "discovery inventory had malformed records",
+            extra={
+                "event": "discovery.inventory_skipped",
+                "entries": skipped_entries,
+                "runners": skipped_runners,
+            },
+        )
     return runners
 
 
@@ -195,6 +224,10 @@ def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None
     capacity = raw.get("capacity") if isinstance(raw.get("capacity"), int) else None
     sessions = raw.get("session_ids")
     available = capacity - len(sessions) if capacity is not None and isinstance(sessions, list) else None
+    reported = raw.get("capacity_available")
+    if isinstance(reported, int) and not isinstance(reported, bool):
+        available = reported  # the node reports it directly; session_ids is the older form
+    rate, rate_error = _rate(raw.get("price_info"))
     return Runner(
         url=url,
         app=app,
@@ -203,30 +236,76 @@ def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None
         orchestrator_url=orchestrator_url,
         capacity=capacity,
         capacity_available=available,
-        rate=_rate(raw.get("price_info")),
+        rate=rate,
+        rate_error=rate_error,
+        observed_at=_stamp(raw.get("observed_at")),
+        version=_text(raw.get("version")),
+        metadata=_text(raw.get("metadata")),
+        gpu=_gpu(raw.get("gpu")),
     )
 
 
-def _rate(value: object) -> NetworkRate | None:
+def _gpu(value: object) -> RunnerGPU | None:
     if not isinstance(value, dict):
         return None
-    try:
-        amount = Decimal(str(value.get("price")))
-    except InvalidOperation:
-        return None
-    if not amount.is_finite() or amount < 0:
-        return None
+    vram = value.get("vram_mb")
+    gpu = RunnerGPU(
+        id=_text(value.get("id")),
+        name=_text(value.get("name")),
+        vram_mb=vram if isinstance(vram, int) and vram > 0 else None,
+    )
+    return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
+
+
+def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
+    """The rate exactly as advertised, or why the advertised ``price_info`` is not one. No defaults."""
+    if value is None:
+        return None, None  # off-chain: livepeer-node advertises no price
+    if not isinstance(value, dict):
+        return None, "price_info is not an object"
+    amount = _decimal(value.get("price"))
+    if amount is None or not is_price(amount):
+        return None, PRICE_RULE
+    currency = _text(value.get("currency"))
+    if currency is None:
+        return None, "price_info has no currency"
+    unit = _text(value.get("unit"))
+    if unit is None:
+        return None, "price_info has no unit"
+    price_usd = _decimal(value.get("price_usd"))
+    error = None
+    if price_usd is None and value.get("price_usd") is not None:
+        error = "price_usd is not a nonnegative number"
     return NetworkRate(
         amount=amount,
-        currency=str(value.get("currency") or "usd").lower(),
-        unit=str(value.get("unit") or "hour").lower(),
-    )
+        currency=currency,
+        unit=unit,
+        price_usd=price_usd,
+    ), error
 
 
-def _price_info(rate: NetworkRate | None) -> LiveRunnerPriceInfo | None:
-    if rate is None:
+def _stamp(value: object) -> datetime | None:
+    """An RFC 3339 time in UTC (Go's nanoseconds truncate to microseconds), or None.
+
+    A time with no offset is not RFC 3339. A time that parses but cannot be converted to UTC (``0001-01-01``
+    with a positive offset, ``9999-12-31`` with a negative one) is unreadable too: ``astimezone`` raises
+    ``OverflowError``, and that must not fail the rest of the inventory.
+    """
+    if not isinstance(value, str) or not _RFC3339.fullmatch(value):
         return None
-    return LiveRunnerPriceInfo(price=str(rate.amount), currency=rate.currency, unit=rate.unit)
+    try:
+        return datetime.fromisoformat(value).astimezone(UTC)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _decimal(value: object) -> Decimal | None:
+    """A finite, nonnegative decimal below ``PRICE_LIMIT``, or None."""
+    try:
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return amount if amount.is_finite() and 0 <= amount < PRICE_LIMIT else None
 
 
 def _text(value: object) -> str | None:

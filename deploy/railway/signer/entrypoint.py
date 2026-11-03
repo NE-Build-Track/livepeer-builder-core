@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Write the livepeer/node signer config and start livepeer-signer.
 
-Orchestrators is a one-time snapshot in /etc/orchestrators.txt. The process
-does not refresh that list.
+The signer only signs payments: discovery is the discovery service (D43), so
+the config has no Orchestrators list.
 """
 
 import json
@@ -23,7 +23,6 @@ DEFAULT_MAX_HOURLY_PRICE = "1000000"
 DEFAULT_MAX_FIXED_PRICE = "1000000"
 DEFAULT_MAX_BATCH_EV = "100000000000000"
 DEFAULT_MAX_TICKET_EV = "3000000000000"
-ORCHESTRATORS_FILE = Path("/etc/orchestrators.txt")
 
 
 def env_or(name: str, default: str) -> str:
@@ -49,18 +48,6 @@ def http_url(name: str, value: str) -> str:
     return value
 
 
-def orchestrators() -> list[str]:
-    urls: list[str] = []
-    for line in ORCHESTRATORS_FILE.read_text(encoding="utf-8").splitlines():
-        value = line.strip()
-        if not value or value.startswith("#"):
-            continue
-        urls.append(http_url(str(ORCHESTRATORS_FILE), value))
-    if not urls:
-        sys.exit(f"{ORCHESTRATORS_FILE} has no orchestrator URLs")
-    return urls
-
-
 def write_secret(path: Path, contents: str) -> None:
     if contents.endswith("\n") or contents.endswith("\r"):
         sys.exit(f"{path.name} must not end with a newline")
@@ -74,7 +61,6 @@ def main() -> None:
     if ACCOUNT.fullmatch(account) is None:
         sys.exit("SIGNER_ACCOUNT must be an 0x Ethereum address")
     rpc_url = http_url("SIGNER_RPC_URL", env_or("SIGNER_RPC_URL", DEFAULT_RPC_URL))
-    sources = orchestrators()
     hourly = env_or("SIGNER_MAX_HOURLY_PRICE", DEFAULT_MAX_HOURLY_PRICE)
     fixed = env_or("SIGNER_MAX_FIXED_PRICE", DEFAULT_MAX_FIXED_PRICE)
     ticket_ev = env_or("SIGNER_MAX_TICKET_EV", DEFAULT_MAX_TICKET_EV)
@@ -117,7 +103,6 @@ def main() -> None:
     write_secret(secrets / "kafka-username", "producer")
     write_secret(secrets / "kafka-password", producer)
 
-    orch_lines = ["Orchestrators = [", *(f'  "{url}",' for url in sources), "]"]
     config_path = Path("/etc/signer.toml")
     config_path.write_text(
         "\n".join(
@@ -135,8 +120,6 @@ def main() -> None:
                 f'MaxBatchEV = "{batch_ev}"',
                 'AuthWebhookFile = "/run/secrets/webhook-url"',
                 'AuthWebhookHeadersFile = "/run/secrets/webhook-headers"',
-                *orch_lines,
-                "DiscoveryGrants = []",
                 "",
                 "[Kafka]",
                 f'Broker = "kafka://{batteries_host}:9092"',
@@ -151,7 +134,7 @@ def main() -> None:
         encoding="utf-8",
     )
     os.chmod(config_path, 0o600)
-    print(f"signer account {account} orchestrators {len(sources)}", flush=True)  # noqa: T201
+    print(f"signer account {account}", flush=True)  # noqa: T201
     # The outbox path is absolute. Migrate that file, not the default
     # events.sqlite under the data dir. Pre-deploy has no volume, so this runs
     # in the start container before livepeer-signer opens the outbox.

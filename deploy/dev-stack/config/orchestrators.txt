@@ -1,0 +1,8 @@
+# The discovery service's static directory (LPD_ORCHESTRATORS): orchestrator base URLs, one per line.
+# Orchestrators whose TLS certificate the system trust store does not accept are left out at probe
+# time (docs/contracts/discovery.md#probing-and-caching), so a self-signed one listed here is harmless.
+https://hky.eliteencoder.net:8936
+https://ai1.eliteencoder.net:8936
+https://orch-us-central.xodeapp.xyz:18935
+https://us-central-metrics.speedybird.xyz:28935
+https://orch-eu-central.open-pool.com:443

@@ -1,0 +1,136 @@
+name: Preview
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-engine
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy preview engine
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Branch lifetime
+        id: expiry
+        run: echo "at=$(date -u -d '+14 days' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the Neon branch
+        id: branch
+        uses: neondatabase/create-branch-action@v6.4.0
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: preview/pr-${{ github.event.pull_request.number }}
+          parent_branch: main
+          database: builder
+          role: builder
+          suspend_timeout: 300
+          expires_at: ${{ steps.expiry.outputs.at }}
+
+      - name: Mask the connection string
+        run: |
+          echo "::add-mask::${{ steps.branch.outputs.db_url }}"
+          echo "::add-mask::${{ steps.branch.outputs.db_url_pooled }}"
+          echo "::add-mask::${{ steps.branch.outputs.password }}"
+
+      - name: Keep the preview branch small and short-lived
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          BRANCH_ID: ${{ steps.branch.outputs.branch_id }}
+          EXPIRES_AT: ${{ steps.expiry.outputs.at }}
+          DB_URL: ${{ steps.branch.outputs.db_url }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          host = urlparse(os.environ["DB_URL"]).hostname or ""
+          if "-pooler" in host:
+              raise SystemExit("preview database URL must use the direct Neon host")
+          print(f"direct host {host}")
+          PY
+          api=https://console.neon.tech/api/v2
+          auth="Authorization: Bearer ${NEON_API_KEY}"
+          neon_curl() {
+            local out="$1"; shift
+            local i status
+            for i in $(seq 1 30); do
+              status=$(curl -sS -o "$out" -w "%{http_code}" -H "$auth" "$@" || true)
+              if [ "$status" = "200" ]; then
+                return 0
+              fi
+              if [ "$status" != "423" ] && [ "$status" != "409" ]; then
+                echo "Neon HTTP ${status}" >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "Neon still locked after retries" >&2
+            return 1
+          }
+          neon_curl /tmp/neon-branch.json -X PATCH \
+            -H "Content-Type: application/json" \
+            -d "{\"branch\":{\"expires_at\":\"${EXPIRES_AT}\"}}" \
+            "$api/projects/${NEON_PROJECT_ID}/branches/${BRANCH_ID}"
+          python3 -c 'import json; b=json.load(open("/tmp/neon-branch.json"))["branch"]; print(b["name"], b.get("expires_at"))'
+          neon_curl /tmp/neon-endpoints.json \
+            "$api/projects/${NEON_PROJECT_ID}/endpoints"
+          endpoint=$(python3 -c 'import json,os; eps=json.load(open("/tmp/neon-endpoints.json"))["endpoints"]; print(next(e["id"] for e in eps if e["branch_id"]==os.environ["BRANCH_ID"] and e["type"]=="read_write"))')
+          neon_curl /tmp/neon-endpoint.json -X PATCH \
+            -H "Content-Type: application/json" \
+            -d '{"endpoint":{"autoscaling_limit_min_cu":0.25,"autoscaling_limit_max_cu":1,"suspend_timeout_seconds":300}}' \
+            "$api/projects/${NEON_PROJECT_ID}/endpoints/${endpoint}"
+          python3 -c 'import json; e=json.load(open("/tmp/neon-endpoint.json"))["endpoint"]; print(e["id"], e["autoscaling_limit_max_cu"], e["suspend_timeout_seconds"])'
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Point the preview engine at this branch
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          DB_URL: ${{ steps.branch.outputs.db_url }}
+        run: printf '%s' "$DB_URL" | railway variable set LPB_DATABASE_URL --stdin --skip-deploys --service engine
+
+      - name: Deploy the engine
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          railway up \
+            --service engine \
+            --ci \
+            -m "preview pr-${PR} ${SHA}"
+
+  cleanup:
+    name: Delete the Neon branch
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      - name: Delete preview/pr-${{ github.event.pull_request.number }}
+        uses: neondatabase/delete-branch-action@v3.2.1
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: preview/pr-${{ github.event.pull_request.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}

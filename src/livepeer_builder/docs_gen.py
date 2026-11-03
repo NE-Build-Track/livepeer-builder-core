@@ -9,9 +9,13 @@ from livepeer_builder.store.schema import metadata
 
 async def render_openapi() -> str:
     from livepeer_builder.http import create_app
+    from livepeer_builder.runtime.assembly import EngineSupply
+    from livepeer_builder.testing import FakeAllocationManager
 
+    # Every optional capability on (API keys by default; the grant desk needs a grants manager),
+    # so the committed spec documents the whole API. A deployment without one lacks those routes.
     settings = EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False)
-    engine = await BuilderEngine.from_settings(settings)
+    engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:
         schema = create_app(engine, manage_lifecycle=False).openapi()
     finally:

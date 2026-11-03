@@ -13,9 +13,11 @@ RUN chmod 0755 /usr/local/bin/entrypoint.py \
     && chown lpb:lpb /data
 USER lpb
 WORKDIR /data
+# LPB_DISCOVERY_URL: the discovery service on Railway's private network (D43); override per environment.
 ENV LPB_AUTO_MIGRATE=false \
     LPB_HTTP_HOST=0.0.0.0 \
     LPB_HTTP_PORT=8080 \
-    LPB_ALLOCATION_MODE=per_actor
+    LPB_ALLOCATION_MODE=per_actor \
+    LPB_DISCOVERY_URL=http://discovery.railway.internal:8939/discovery
 EXPOSE 8080
 ENTRYPOINT ["python3", "-u", "/usr/local/bin/entrypoint.py"]

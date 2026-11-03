@@ -29,7 +29,7 @@ def output(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
 
 def test_migrate_and_revision(db: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert run("migrate") == 0
-    assert output(capsys) == {"revision": "0004"}
+    assert output(capsys) == {"revision": "0011"}
     assert run("revision") == 0
     assert output(capsys)["up_to_date"] is True
 
@@ -42,7 +42,7 @@ def test_revision_reports_a_database_that_is_behind(db: Path, capsys: pytest.Cap
 
     asyncio.run(at_first_revision())
     assert run("revision") == 2
-    assert output(capsys) == {"database": "0001", "package_head": "0004", "up_to_date": False}
+    assert output(capsys) == {"database": "0001", "package_head": "0011", "up_to_date": False}
 
 
 def test_backup_verify_and_restore(db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -75,7 +75,7 @@ def test_gen_secret_key_smoke_and_purge(db: Path, capsys: pytest.CaptureFixture[
     assert len(capsys.readouterr().out.strip()) == 44  # a Fernet key
     assert run("smoke") == 0
     smoke = output(capsys)
-    assert smoke["ok"] is True and smoke["schema_revision"] == "0004"
+    assert smoke["ok"] is True and smoke["schema_revision"] == "0011"
     assert run("purge") == 0
     assert output(capsys) == {"jobs_deleted": 0, "usage_rows_deleted": 0}
 
@@ -107,6 +107,30 @@ def test_serve_runs_the_rest_app(db: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(uvicorn.Server, "serve", fake_serve)
     assert run("serve") == 0
     assert served and type(served[0]).__name__ == "FastAPI"
+
+
+def test_discovery_runs_the_discovery_service_from_lpd_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    import uvicorn
+
+    served: list[object] = []
+
+    async def fake_serve(self: uvicorn.Server) -> None:
+        served.append((self.config.app, self.config.port))
+
+    monkeypatch.setattr(uvicorn.Server, "serve", fake_serve)
+    monkeypatch.setenv("LPD_ORCHESTRATORS", "https://a.example")
+    monkeypatch.setenv("LPD_HTTP_PORT", "18939")
+    assert run("discovery") == 0
+    assert served and type(served[0][0]).__name__ == "Starlette" and served[0][1] == 18939
+
+
+def test_discovery_refuses_settings_it_cannot_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("LPD_ORCHESTRATORS", raising=False)
+    monkeypatch.setenv("LPD_DIRECTORY", "static")
+    assert run("discovery") == 2
+    assert "LPD_ORCHESTRATORS" in capsys.readouterr().err
 
 
 def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:

@@ -31,6 +31,7 @@ the SDK's `run_payments()`, and ISS-27 and ISS-28 read its result instead of own
 | 9 | [iss-34-reference-app-coverage.md](iss-34-reference-app-coverage.md) | Mike | ISS-22, ISS-28, ISS-29 | The console adds async, sessions, failure and "result unavailable" views; one committed browser smoke test | Q1–Q4 |
 | 10 | [iss-35-isolation-recovery-replay.md](iss-35-isolation-recovery-replay.md) | John | ISS-06, ISS-23, ISS-28–32 | Isolation sweep, crash recovery, accounting replay (`lpb costs verify`), migration and restore | Q1–Q3 |
 | 11 | [iss-36-funded-matrix.md](iss-36-funded-matrix.md) | Mike | ISS-19, ISS-25, ISS-31–35 | Seven matrix rows, one evidence record per row, a spend cap, the ISS-25 runbook | Q1–Q4 |
+| 12 | [iss-46-events-feed.md](iss-46-events-feed.md) | John | ISS-18 | One append-only `lpb_events` table written in the change's own transaction; sequence order equals commit order; the pull feed is the acceptance, push a later slice | Q1–Q8 |
 
 ## Findings to raise in review
 
@@ -48,5 +49,6 @@ Found while writing these guides and checked against the code; each is handled i
   and purging a job moves its delivered fees to `unattributed`. ISS-35.
 - **Nothing reads `Livepeer-Actor`**, so a service credential with `actors.assert` does nothing yet. ISS-32.
 - **The console decides state by matching error text** ("no allocation"). ISS-29's `code` field.
-- **The events feed is held** (M3 decision, item 4), and since D60 `ReservedEventFeed` says so (`milestone: "held"`); ISS-26, ISS-29
-  and ISS-32 depend on that hold being lifted.
+- **The events feed moved to M4 as ISS-46** (2 November; ISS-18 closed for M3 on its cost reports). Until it lands,
+  `ReservedEventFeed` still answers 501 naming ISS-18 (D60). ISS-26, ISS-29 and ISS-32 each have a row that waits for it.
+  ISS-46 guide, added 2 November against `1514212`.

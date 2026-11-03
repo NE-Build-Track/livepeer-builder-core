@@ -72,7 +72,9 @@ Push delivery (#86's CloudEvents worker) is a consumer of the same table, in its
 `lpb_events` (migration `0012`): `sequence` (integer, primary key), `id` (unique), `type`,
 `schema_version`, `occurred_at`, `application_id`, `actor_id`, `job_id`, `operation_ref`, `payload` (JSON).
 Indexes on `(application_id, sequence)` and `(application_id, actor_id, sequence)`. A one-row
-`lpb_event_log` holds `next_sequence` and `floor` (the highest sequence retention has deleted).
+`lpb_event_log` holds `next_sequence` and `floor` (the highest sequence retention has deleted). The
+migration inserts that row (`next_sequence` 1, `floor` 0): an `UPDATE` of a missing row matches nothing
+and would silently write no events.
 
 **Sequence order equals commit order.** This is the property a cursor depends on, and an identity column
 does not give it on PostgreSQL. Two transactions take 10 and 11; 11 commits first; a reader returns 11
@@ -103,20 +105,41 @@ compared as `Decimal` (the columns are text), and `updated_at` and `first_observ
 Fees are compared per attempt as well as in total because `billable` comes from the `delivered`
 attempts: a rematch can move a fee between attempts and leave the total and the classes unchanged.
 
-- **Unchanged:** the row may still be rewritten (`updated_at`), but `revision` stays and no event is
-  written. This covers a re-sync, and `_refresh_projection` keeping the `corrected` label on unchanged
-  fees (`costs.py:172`).
+Every write below is conditional on the row this save read, so no save can write from a stale read:
+
+- **Unchanged:** the write sets only `updated_at` and `evidence_version`, `WHERE job_id = :id AND
+  revision = :read AND evidence_version <= :version`. It never writes fees, attempts, status or
+  revision. Otherwise a re-sync that read revision N, committing after a correction to N+1, would rewind
+  the row to N, and the next real change would reuse `r{N+1}`, an id already taken, so its event would be
+  skipped. `evidence_version` still has to move forward, or `projection_out_of_date` would select the
+  row on every sync. No event.
 - **Changed:** the write is a compare-and-set on the revision it read:
   `UPDATE ... SET ..., revision = :read + 1 WHERE job_id = :id AND revision = :read AND
   evidence_version <= :version`. One row updated: the event is written in the same transaction, with id
   `cost:{job_id}:r{read + 1}`. The first such event for a job is `cost.observed`; every later one is
   `cost.corrected`. A repair that fills in missing attempts is therefore a correction, never a frozen
   first payload.
-- **Zero rows updated:** another save got there first (the background sync and an operator's
-  `costs/sync` can run at once), or newer evidence is stored. No event. The save reads again and
-  compares again; it stops once newer evidence is stored. Two saves can never both write `r1`.
-- `pending` and `none` projections are not events, and they leave `revision` at 0. A job's first
-  `observed` projection is always `r1`, whether or not a `pending` row came first.
+- **No row yet:** the first save inserts with `ON CONFLICT (job_id) DO NOTHING` (SQLAlchemy's
+  `on_conflict_do_nothing`, on both backends). Today's plain insert raises `IntegrityError` when two
+  first saves race, and `sync_once` (`services/costs.py:134-137`) then stops before the remaining jobs.
+- **Zero rows written** (a lost compare-and-set, a conflicting insert, or newer evidence stored):
+  another save got there first. The background sync and an operator's `costs/sync` can run at once.
+  No event. The save reads again and compares again, and stops once newer evidence is stored.
+- **The event is written only when this transaction's insert or compare-and-set wins.** Two saves can
+  never both write `r1`.
+- `pending` and `none` projections are not events, and they leave `revision` at 0, including when a
+  `pending` insert races a first `observed` one. A job's first `observed` projection is always `r1`.
+
+**The label follows the same comparison.** `save_projection` writes `status` from the stored row and
+the comparison:
+- the first `observed` content is `observed`;
+- any later changed content is `corrected`;
+- unchanged content keeps the stored label.
+
+`_refresh_projection`'s own rule (`services/costs.py:170-176`) flips the label only when the job's total
+fees differ, so it goes. Otherwise a fee moved between attempts would emit `cost.corrected` with a
+payload whose `status` still says `observed`, and a consumer that trusts `status` would keep the old
+`billable`.
 
 **Payloads are snapshots.** `job.*` and `usage.reported` carry the `Job` as stored after the change,
 attempts included, read back inside the transaction. `cost.*` carry the `JobCost`. `schema_version` is 1.
@@ -189,7 +212,14 @@ job or another tenant's delivery.
       `fec0::/10`, and shared CGNAT space, which holds a cloud metadata address (`100.100.100.200`).
       Python's `is_global` alone accepts `64:ff9b::a9fe:a9fe`, which is `169.254.169.254`;
     - refuses the target if any address fails, rather than dialing the ones that pass;
-    - connects to the address it checked (pinned), not to the name again;
+    - connects to the address it checked (pinned), with the TLS identity of the name, as `Prober`
+      does (`discovery/probe.py:149-167`). The URL carries the literal address, `Host` is the
+      original authority, and `sni_hostname` is the name, so the certificate is verified against the
+      name. Verification is never turned off;
+    - tries each passed address in order, with a short connect budget on all but the last (`_fetch`,
+      `probe.py:132-147`), so a dead AAAA record does not pause a subscription whose A record works.
+      An untrusted certificate is an answer, not a dead address. The worker should share discovery's
+      pinned-connect code rather than copy it;
     - does not follow redirects: a 3xx is a failed delivery. Following them would need the same check
       on every hop.
 
@@ -253,7 +283,10 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] two concurrent usage reports: one stored, one InvalidRequest, one event (fixes today's overwrite)
 [ ] first observed projection: cost.observed r1, also after a pending row (r0); a re-sync: nothing
 [ ] two concurrent saves of one change: one writes r1 and its event, the other re-reads and writes nothing
-[ ] a fee moved between attempts, same total and classes: cost.corrected
+[ ] two first saves of one job: one inserts, the other conflicts, re-reads, and sync_once goes on to the next job
+[ ] a stale re-sync committing after a correction: the row stays at r2, and the next change is r3
+[ ] an unchanged save with newer evidence advances evidence_version and is not re-selected next sync
+[ ] a fee moved between attempts, same total and classes: cost.corrected, and the payload's status is corrected
 [ ] a corrected label kept on unchanged fees: nothing
 [ ] newer evidence with different fees: cost.corrected r2; a slower sync losing to newer evidence: nothing
 [ ] same evidence version, attempts filled in by the repair: cost.corrected with the new attempts
@@ -334,9 +367,10 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
   (recommended), or add `job.started` (a `schema_version` question, not a breaking one)?
 - **Q7.** No backfill for jobs that existed before the migration (recommended), or synthesize their
   events once?
-- **Q8.** Does a change in attempt cost classes with the same fees count as `cost.corrected`?
-  Recommended: yes, and `_refresh_projection` labels it `corrected` too, so the projection and the
-  event agree. Today it marks `corrected` only when the fees change.
+- **Q8.** Does any change in content with the same job total count as `cost.corrected`, such as an
+  attempt's class changing or a fee moving between attempts? Recommended: yes, with the label written
+  by `save_projection` from the same comparison, so the projection and the event agree. Today the label
+  changes only when the total changes.
 
 ## Delivery slices
 

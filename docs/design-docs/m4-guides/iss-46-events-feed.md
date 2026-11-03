@@ -50,7 +50,16 @@ four store methods, so emitting there covers the services, streams and restart r
   same transaction.
 - The events contract says an actor with `events.read` reads **its whole application's** events. D44
   says an ordinary actor reads only its own records (`services/ownership.py:23`: only admin and auditor
-  see every actor). An end-user JWT given `events.read` would see every other user's jobs. See Q2.
+  see every actor). An end-user JWT given `events.read` would see every other user's jobs. The contract
+  also says an admin reads every application, while `jobs.list` and `costs.recent` keep an admin inside
+  its own `application_id`. See Q2.
+- `report_usage` checks "already reported" on the job it read, then `set_usage` updates unconditionally.
+  Two concurrent reports both pass, and the second overwrites the first. The usage event needs the
+  guard anyway (below), and it fixes this.
+- `save_projection` can rewrite a job's cost without a new evidence version. It overwrites an equal
+  version (`<=`), and `jobs_needing_projection` (`store/matching.py:68`) re-projects `pending` rows,
+  rows with no attempts and rows stored before the job ended, all at the same version. Both SQLite and
+  PostgreSQL report a matched row as updated even when no value changed.
 
 ## Decision proposed
 
@@ -75,19 +84,30 @@ serialize on one row, for the length of a commit. The engine runs one process pe
 job rates, not request rates, so this is small; revisit if the lock wait shows in `finish_job` latency
 (Q3).
 
-**Stable ids, written once.** The id is deterministic, and the insert skips a row whose id exists:
+**Stable ids, written once.** The id is deterministic, and the insert skips a row whose id exists, so
+a retried write never emits twice:
 
 | Type | `id` | Written when |
 | --- | --- | --- |
 | `job.created` | `job:{job_id}:created` | The job row is inserted |
 | `job.finished` | `job:{job_id}:finished` | The job reaches `succeeded`, `failed` or `uncertain` |
-| `usage.reported` | `job:{job_id}:usage` | `set_usage` stores the report (once per job) |
-| `cost.observed` | `cost:{job_id}:v{evidence_version}` | The first stored projection with status `observed` |
-| `cost.corrected` | `cost:{job_id}:v{evidence_version}` | A later projection whose fees or attempt classes differ from the stored one (Q8) |
+| `usage.reported` | `job:{job_id}:usage` | `set_usage` stores the first report. It gains `WHERE usage IS NULL`; a second report updates nothing, emits nothing and answers `InvalidRequest` |
+| `cost.observed` | `cost:{job_id}:r{revision}` | The first stored projection with status `observed` |
+| `cost.corrected` | `cost:{job_id}:r{revision}` | A later projection whose fees or attempt classes differ from the stored one (Q8) |
 
-`save_projection` emits only when its write changed the row: the guarded update or the insert. A
-projection rewritten with the same content emits nothing, and a slower sync that loses to newer
-evidence emits nothing. `pending` and `none` projections are not events.
+**A cost event is a change in what the cost says, not a write.** The evidence version cannot key it,
+because the same version is rewritten (above), and neither can the update's row count. So
+`save_projection` reads the stored row in its transaction and compares status, fees and each attempt's
+cost class with the new one:
+
+- **Unchanged:** the row may still be rewritten (`updated_at`), but no event is written. This covers a
+  re-sync, and `_refresh_projection` keeping the `corrected` label on unchanged fees (`costs.py:172`).
+- **Changed:** `lpb_cost_projections.revision` (new column, starting at 0) goes up by one, and the event
+  is written with the new revision in its id. The first `observed` revision is `cost.observed`; every
+  later one is `cost.corrected`. A repair that fills in missing attempts is therefore a correction,
+  never a frozen first payload.
+- **Not written:** a slower sync that loses to newer evidence (the guarded update matches nothing).
+- `pending` and `none` projections are not events.
 
 **Payloads are snapshots.** `job.*` and `usage.reported` carry the `Job` as stored after the change,
 attempts included, read back inside the transaction. `cost.*` carry the `JobCost`. `schema_version` is 1.
@@ -98,9 +118,11 @@ The feed holds no secret: requests are never stored, `Failure.body` carries no s
 
 - `StoreEventFeed.after(actor, cursor, limit)` replaces `ReservedEventFeed`. The permission is checked
   first (D44): `events.read`, or 403.
-- **Scope** (Q2, recommended): an ordinary actor reads its own actor's events. An auditor reads its whole
-  application, and an admin reads every application. This is the rule `jobs.list` and `costs.recent`
-  already follow.
+- **Scope** (Q2, recommended): an ordinary actor reads its own actor's events. An auditor or an admin
+  reads every actor's events in its own application. That is the rule `jobs.list` and `costs.recent`
+  follow: both query `actor.application_id` for every credential (`services/jobs.py:205`,
+  `services/costs.py:199`). `events.md` says an admin reads every application; Q2 decides which rule
+  the feed takes.
 - **Page:** `sequence > cursor`, in the caller's scope, in order, up to `limit`. `next_cursor` is the
   last sequence returned. On an empty page it is the highest sequence committed when the query ran, so
   a quiet tenant does not rescan everyone else's events. That is safe only because sequence order equals
@@ -120,8 +142,14 @@ Q4 asks whether event retention must be at least job retention.
 
 ### Failure isolation
 
-The event row commits with the change or not at all, so a lost event cannot happen and a phantom one
-cannot either. A failure in the feed's read path never affects a job. Push delivery (Q1) runs in its own
+A job or usage event commits with its change or not at all, so it cannot be lost and cannot be a
+phantom. A cost event is different. `apply_usage` and `match_sessions` commit new usage and raise the
+evidence version in their own transactions, and the event waits for the `save_projection` that
+follows. A crash between them **delays** the event; it does not lose it. Every sync re-projects every
+out-of-date job (`jobs_needing_projection` includes `projection_out_of_date()` for all jobs, not only
+the touched ones), and that save emits. Until then, `GET /v1/jobs/{id}/cost` computes the new fee live,
+so it can be ahead of the feed by one sync interval. A failure in the feed's read path never affects a
+job. Push delivery (Q1) runs in its own
 task, with its own cursor per subscription. A failing collector raises lag in health; it never blocks a
 job or another tenant's delivery.
 
@@ -131,13 +159,25 @@ job or another tenant's delivery.
 
 - `lpb_event_subscriptions` per `application_id`: `target_url`, `event_types`, `auth_secret_ref`
   (a `SecretRef`, never the secret), `cursor_sequence`, and backoff state.
-- A worker reads each subscription's events through the same scoped query, posts structured-mode
+- A subscription delivers every actor's events in its `application_id`: the auditor-scope read, never
+  another application's.
+- A worker reads each subscription's events through that query, posts structured-mode
   CloudEvents v1.0, advances the cursor on 2xx, and honours `Retry-After`. Delivery is at least once,
   in `sequence` order per subscription. It signs with `Livepeer-Signature` (HMAC over the timestamp
   and body) and sends a bearer token from `SecretStore`.
 - **Added to #86:**
-  - **Target URLs:** HTTPS only, and DNS-resolved to a public address unless `LPB_EVENTS_ALLOW_PRIVATE`
-    is set. Without this the engine can be made to call internal services (SSRF).
+  - **Target URLs (SSRF):** a tenant-supplied URL must not reach internal services. Checking the
+    name once at registration is not enough: it can resolve elsewhere at delivery (DNS rebinding), and
+    an HTTPS answer can redirect to `http://169.254.169.254/`. So the worker:
+    - requires HTTPS;
+    - resolves at each delivery and refuses loopback, private, link-local, unique-local and metadata
+      ranges (IPv4 and IPv6);
+    - connects to the address it checked (pinned), not to the name again;
+    - does not follow redirects: a 3xx is a failed delivery. Following them would need the same check
+      on every hop.
+
+    Private targets for local compose are allowed per subscription by an admin, never by a
+    process-wide switch.
   - **Behind the floor:** a subscription whose cursor falls behind `floor` is `paused` and alerts. It
     never skips ahead silently.
   - **Repeated failure:** `paused` after N attempts, with the error kept on the subscription.
@@ -153,9 +193,9 @@ job or another tenant's delivery.
 | File | Change |
 | --- | --- |
 | `store/sql.py` | **Tidy first:** move the job and attempt writes into `store/jobs.py` (no behavior change); the file is at 464 of 500 lines |
-| `store/schema.py`, migration `0012` | `lpb_events`, `lpb_event_log` (`lpb_event_subscriptions` in the push slice) |
+| `store/schema.py`, migration `0012` | `lpb_events`, `lpb_event_log`, `lpb_cost_projections.revision` (`lpb_event_subscriptions` in the push slice) |
 | `store/events.py` (new) | `append(conn, ...)` (sequence last, skip on existing id), `events_after(scope, cursor, limit)`, `floor_and_head()`, `purge_before(cutoff)` |
-| `store/jobs.py`, `store/sql.py` | `create_job`, `finish_job` (reads the job back), `set_usage`, `save_projection` append in their transaction |
+| `store/jobs.py`, `store/sql.py` | `create_job`, `finish_job` (reads the job back), `set_usage` (guarded on `usage IS NULL`), `save_projection` (compares, raises `revision`) append in their transaction |
 | `store/retention.py`, `config.py` | `LPB_RETENTION_EVENTS_DAYS`; `PurgeReport.events_deleted` |
 | `protocols/__init__.py` | `EventRepo` (`events_after`, `floor_and_head`); the `EventFeed` docstring loses "(M3)" |
 | `contracts/reserved.py` → `contracts/events.py` | Move `EngineEvent` and `EventPage` out of "reserved", keeping the exports; `EventPage` unchanged |
@@ -191,20 +231,25 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] a stream that ends in its pump task writes job.finished; so does recover_interrupted
 [ ] a D57 re-dispatch: job.created for the new job; nothing new for the superseded one
 [ ] report_usage writes usage.reported once; a refused second report writes nothing
-[ ] first observed projection: cost.observed; a re-sync with the same content: nothing
-[ ] newer evidence with different fees: cost.corrected; a slower sync losing to newer evidence: nothing
+[ ] two concurrent usage reports: one stored, one InvalidRequest, one event (fixes today's overwrite)
+[ ] first observed projection: cost.observed r1; a re-sync with the same content: nothing
+[ ] a corrected label kept on unchanged fees: nothing
+[ ] newer evidence with different fees: cost.corrected r2; a slower sync losing to newer evidence: nothing
+[ ] same evidence version, attempts filled in by the repair: cost.corrected with the new attempts
+[ ] crash after apply_usage, before save_projection: the next sync emits the cost event
 [ ] pending and none projections write no event
 [ ] a failed write after the append rolls the event back with the change (both backends)
 [ ] PostgreSQL: a later transaction cannot commit an earlier-visible sequence (two connections)
 [ ] the same id twice writes one row
-[ ] scope: an actor sees only its own events; an auditor its application; an admin all   [?] Q2
+[ ] scope: an actor sees only its own events; an auditor and an admin their application   [?] Q2
 [ ] without events.read: 403 before any lookup
 [ ] paging: limit honoured; next_cursor is the last sequence; an empty page returns head
 [ ] retention: events older than the window go, floor rises; a job purge leaves events alone
 [ ] cursor below floor: 410 cursor_expired with floor and head; the resync recipe loses nothing
 [ ] FakeEngine: the same events, ids and scope as the real engine
 [ ] push slice: delivered in order, cursor moves on 2xx only, Retry-After honoured, HMAC verifies  [?] Q1
-[ ] push slice: private or non-HTTPS target refused; behind floor pauses; one tenant's failure delays no other
+[ ] push slice: non-HTTPS, private-resolving, rebinding and redirecting targets refused (pinned address)
+[ ] push slice: behind floor pauses; one tenant's failure delays no other
 ```
 
 **Definition of done.**
@@ -248,8 +293,10 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 
 - **Q1.** M4 delivers the pull feed as its acceptance (recommended), with push as a separate slice that
   may follow. Or both pull and push in M4?
-- **Q2.** An ordinary actor reads only its own events (recommended, D44), or its whole application as
-  `events.md` says today?
+- **Q2.** Scope. (a) An ordinary actor reads only its own events (recommended, D44), or its whole
+  application, as `events.md` says? (b) An admin reads its own application, as the job and cost lists
+  do (recommended), or every application, as `events.md` says? An operator-wide view would then be an
+  explicit `application_id` filter on an admin read, as `GET /v1/admin/actors` has, not the default.
 - **Q3.** Allocate sequences with the counter row (recommended), or with a PostgreSQL advisory lock taken
   at the same point?
 - **Q4.** Must `LPB_RETENTION_EVENTS_DAYS` be at least `LPB_RETENTION_JOBS_DAYS`, enforced at startup
@@ -261,7 +308,8 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 - **Q7.** No backfill for jobs that existed before the migration (recommended), or synthesize their
   events once?
 - **Q8.** Does a change in attempt cost classes with the same fees count as `cost.corrected`?
-  Recommended: yes. Today `_refresh_projection` marks `corrected` only when the fees change.
+  Recommended: yes, and `_refresh_projection` labels it `corrected` too, so the projection and the
+  event agree. Today it marks `corrected` only when the fees change.
 
 ## Delivery slices
 

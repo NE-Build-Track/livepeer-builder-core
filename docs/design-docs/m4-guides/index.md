@@ -4,7 +4,8 @@ One guide per M4 tracker (M4: reuse and reliability): the architecture, the code
 the upstream check and the open questions. Each is a proposal until it is locked in review with Mike and
 John; locked rules move into a decision record. Written 29 October 2026 and verified against
 builder-core `releases/m3` at `d3df806`, livepeer/node `406b248` (our pin) and `a4b68ed`, the SDK at
-`2017a80`, and Clearinghouse Batteries `ca09e47`.
+`2017a80`, and Clearinghouse Batteries `ca09e47`. The ISS-46 guide was added on 2 November and verified
+against `releases/m3` at `1514212`.
 
 **No M4 guide needs an upstream change.** ISS-27 vendors two SDK functions (the reserve-response parser
 and `stop_runner_session`), fingerprinted as D53 did. Per-actor allocations under a separately operated
@@ -51,4 +52,3 @@ Found while writing these guides and checked against the code; each is handled i
 - **The console decides state by matching error text** ("no allocation"). ISS-29's `code` field.
 - **The events feed moved to M4 as ISS-46** (2 November; ISS-18 closed for M3 on its cost reports). Until it lands,
   `ReservedEventFeed` still answers 501 naming ISS-18 (D60). ISS-26, ISS-29 and ISS-32 each have a row that waits for it.
-  ISS-46 guide, added 2 November against `1514212`.

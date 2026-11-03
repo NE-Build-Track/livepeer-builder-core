@@ -12,8 +12,8 @@ closed for M3 on 2 November.\
 ## Done when
 
 - The engine serves a versioned feed of job, usage and cost events, with stable ids and replay and
-  de-duplication semantics, scoped per application. A tenant application can read its own usage this
-  way without a Batteries management credential.
+  de-duplication semantics. A tenant application reads its own application's events, and never
+  another's, without a Batteries management credential. Within the application, who reads what is Q2.
 - A reporting or delivery failure leaves a job's state and its result as they were. Network cost,
   settlement and retail billing stay distinguishable.
 - **Depends on** ISS-18 (cost reports, [iss-18-cost-reports.md](../m3-guides/iss-18-cost-reports.md)).
@@ -97,17 +97,26 @@ a retried write never emits twice:
 
 **A cost event is a change in what the cost says, not a write.** The evidence version cannot key it,
 because the same version is rewritten (above), and neither can the update's row count. So
-`save_projection` reads the stored row in its transaction and compares status, fees and each attempt's
-cost class with the new one:
+`save_projection` reads the stored row, including its `revision` (a new column), and compares the two
+costs' **content**: status, the job's fees, and for each attempt its cost class and its fees. Money is
+compared as `Decimal` (the columns are text), and `updated_at` and `first_observed_at` are not content.
+Fees are compared per attempt as well as in total because `billable` comes from the `delivered`
+attempts: a rematch can move a fee between attempts and leave the total and the classes unchanged.
 
-- **Unchanged:** the row may still be rewritten (`updated_at`), but no event is written. This covers a
-  re-sync, and `_refresh_projection` keeping the `corrected` label on unchanged fees (`costs.py:172`).
-- **Changed:** `lpb_cost_projections.revision` (new column, starting at 0) goes up by one, and the event
-  is written with the new revision in its id. The first `observed` revision is `cost.observed`; every
-  later one is `cost.corrected`. A repair that fills in missing attempts is therefore a correction,
-  never a frozen first payload.
-- **Not written:** a slower sync that loses to newer evidence (the guarded update matches nothing).
-- `pending` and `none` projections are not events.
+- **Unchanged:** the row may still be rewritten (`updated_at`), but `revision` stays and no event is
+  written. This covers a re-sync, and `_refresh_projection` keeping the `corrected` label on unchanged
+  fees (`costs.py:172`).
+- **Changed:** the write is a compare-and-set on the revision it read:
+  `UPDATE ... SET ..., revision = :read + 1 WHERE job_id = :id AND revision = :read AND
+  evidence_version <= :version`. One row updated: the event is written in the same transaction, with id
+  `cost:{job_id}:r{read + 1}`. The first such event for a job is `cost.observed`; every later one is
+  `cost.corrected`. A repair that fills in missing attempts is therefore a correction, never a frozen
+  first payload.
+- **Zero rows updated:** another save got there first (the background sync and an operator's
+  `costs/sync` can run at once), or newer evidence is stored. No event. The save reads again and
+  compares again; it stops once newer evidence is stored. Two saves can never both write `r1`.
+- `pending` and `none` projections are not events, and they leave `revision` at 0. A job's first
+  `observed` projection is always `r1`, whether or not a `pending` row came first.
 
 **Payloads are snapshots.** `job.*` and `usage.reported` carry the `Job` as stored after the change,
 attempts included, read back inside the transaction. `cost.*` carry the `JobCost`. `schema_version` is 1.
@@ -124,9 +133,13 @@ The feed holds no secret: requests are never stored, `Failure.body` carries no s
   `services/costs.py:199`). `events.md` says an admin reads every application; Q2 decides which rule
   the feed takes.
 - **Page:** `sequence > cursor`, in the caller's scope, in order, up to `limit`. `next_cursor` is the
-  last sequence returned. On an empty page it is the highest sequence committed when the query ran, so
-  a quiet tenant does not rescan everyone else's events. That is safe only because sequence order equals
-  commit order.
+  last sequence returned. On an empty page it is the head (the highest committed sequence), so a quiet
+  tenant does not rescan everyone else's events.
+- **One snapshot.** The page and the head come from **one statement** (a CTE that reads
+  `lpb_event_log` and the page together). Under PostgreSQL's READ COMMITTED, two statements are two
+  snapshots: an event committed between them would be above the page but below the head, and
+  `next_cursor` would skip it. Sequence order equals commit order, so within one snapshot no lower
+  sequence can still be pending.
 - **Expired cursor:** `cursor < floor` raises `CursorExpired` → **410** with `code: "cursor_expired"`,
   `floor` and `head`. The contract's resync then works without a gap: read `head`, resync from
   `GET /v1/jobs` and `/v1/costs`, and continue from `head`. Events applied twice are dropped by `id`.
@@ -170,14 +183,19 @@ job or another tenant's delivery.
     name once at registration is not enough: it can resolve elsewhere at delivery (DNS rebinding), and
     an HTTPS answer can redirect to `http://169.254.169.254/`. So the worker:
     - requires HTTPS;
-    - resolves at each delivery and refuses loopback, private, link-local, unique-local and metadata
-      ranges (IPv4 and IPv6);
+    - resolves at each delivery and judges **every** address returned with discovery's
+      `public_address` (`discovery/probe.py:47`). It already refuses what a list of ranges misses:
+      IPv4 carried in IPv6 (mapped, NAT64 `64:ff9b::/96`, 6to4, IPv4-compatible), site-local
+      `fec0::/10`, and shared CGNAT space, which holds a cloud metadata address (`100.100.100.200`).
+      Python's `is_global` alone accepts `64:ff9b::a9fe:a9fe`, which is `169.254.169.254`;
+    - refuses the target if any address fails, rather than dialing the ones that pass;
     - connects to the address it checked (pinned), not to the name again;
     - does not follow redirects: a 3xx is a failed delivery. Following them would need the same check
       on every hop.
 
-    Private targets for local compose are allowed per subscription by an admin, never by a
-    process-wide switch.
+    **Private targets** (a collector inside a local compose stack) are allowed only by the operator's
+    deployment config, as an exact list (`LPB_EVENTS_PRIVATE_TARGETS`, scheme, host and port). They
+    can never be set through the API, by an admin credential or anyone else.
   - **Behind the floor:** a subscription whose cursor falls behind `floor` is `paused` and alerts. It
     never skips ahead silently.
   - **Repeated failure:** `paused` after N attempts, with the error kept on the subscription.
@@ -195,11 +213,12 @@ job or another tenant's delivery.
 | `store/sql.py` | **Tidy first:** move the job and attempt writes into `store/jobs.py` (no behavior change); the file is at 464 of 500 lines |
 | `store/schema.py`, migration `0012` | `lpb_events`, `lpb_event_log`, `lpb_cost_projections.revision` (`lpb_event_subscriptions` in the push slice) |
 | `store/events.py` (new) | `append(conn, ...)` (sequence last, skip on existing id), `events_after(scope, cursor, limit)`, `floor_and_head()`, `purge_before(cutoff)` |
-| `store/jobs.py`, `store/sql.py` | `create_job`, `finish_job` (reads the job back), `set_usage` (guarded on `usage IS NULL`), `save_projection` (compares, raises `revision`) append in their transaction |
+| `store/jobs.py`, `store/sql.py` | `create_job`, `finish_job` (reads the job back), `set_usage` (guarded on `usage IS NULL`, returns whether it stored), `save_projection` (compares content, compare-and-set on `revision`) append in their transaction |
 | `store/retention.py`, `config.py` | `LPB_RETENTION_EVENTS_DAYS`; `PurgeReport.events_deleted` |
 | `protocols/__init__.py` | `EventRepo` (`events_after`, `floor_and_head`); the `EventFeed` docstring loses "(M3)" |
 | `contracts/reserved.py` → `contracts/events.py` | Move `EngineEvent` and `EventPage` out of "reserved", keeping the exports; `EventPage` unchanged |
 | `services/events.py` (new) | `StoreEventFeed(store, policy)`; `services/reserved.py` keeps only sessions |
+| `services/jobs.py` | `report_usage`: `set_usage` now returns whether it stored the report, and `report_usage` raises `InvalidRequest` when it did not, instead of returning the caller's copy |
 | `errors.py`, `http/app.py` | `CursorExpired` → 410 with `floor` and `head` |
 | `runtime/assembly.py` | Build `StoreEventFeed` by default |
 | `testing/fake_engine.py` | `events`, recording the same events with the same ids from the jobs it runs |
@@ -232,7 +251,9 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] a D57 re-dispatch: job.created for the new job; nothing new for the superseded one
 [ ] report_usage writes usage.reported once; a refused second report writes nothing
 [ ] two concurrent usage reports: one stored, one InvalidRequest, one event (fixes today's overwrite)
-[ ] first observed projection: cost.observed r1; a re-sync with the same content: nothing
+[ ] first observed projection: cost.observed r1, also after a pending row (r0); a re-sync: nothing
+[ ] two concurrent saves of one change: one writes r1 and its event, the other re-reads and writes nothing
+[ ] a fee moved between attempts, same total and classes: cost.corrected
 [ ] a corrected label kept on unchanged fees: nothing
 [ ] newer evidence with different fees: cost.corrected r2; a slower sync losing to newer evidence: nothing
 [ ] same evidence version, attempts filled in by the repair: cost.corrected with the new attempts
@@ -242,6 +263,7 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] PostgreSQL: a later transaction cannot commit an earlier-visible sequence (two connections)
 [ ] the same id twice writes one row
 [ ] scope: an actor sees only its own events; an auditor and an admin their application   [?] Q2
+[ ] PostgreSQL: an event committed while a page is read is never skipped by next_cursor (one snapshot)
 [ ] without events.read: 403 before any lookup
 [ ] paging: limit honoured; next_cursor is the last sequence; an empty page returns head
 [ ] retention: events older than the window go, floor rises; a job purge leaves events alone
@@ -249,6 +271,8 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] FakeEngine: the same events, ids and scope as the real engine
 [ ] push slice: delivered in order, cursor moves on 2xx only, Retry-After honoured, HMAC verifies  [?] Q1
 [ ] push slice: non-HTTPS, private-resolving, rebinding and redirecting targets refused (pinned address)
+[ ] push slice: NAT64, IPv4-compatible, site-local and CGNAT targets refused; one bad address refuses the name
+[ ] push slice: a private target works only when listed in LPB_EVENTS_PRIVATE_TARGETS; no API sets it
 [ ] push slice: behind floor pauses; one tenant's failure delays no other
 ```
 
@@ -295,8 +319,11 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
   may follow. Or both pull and push in M4?
 - **Q2.** Scope. (a) An ordinary actor reads only its own events (recommended, D44), or its whole
   application, as `events.md` says? (b) An admin reads its own application, as the job and cost lists
-  do (recommended), or every application, as `events.md` says? An operator-wide view would then be an
-  explicit `application_id` filter on an admin read, as `GET /v1/admin/actors` has, not the default.
+  do (recommended), or every application, as `events.md` says? An operator-wide view would then need
+  its own parameter, whose absence keeps the admin in its own application. That is the reverse of
+  `GET /v1/admin/actors`, where an admin's default is every application and `application_id` narrows
+  it (`services/payments.py:203`). The admin credential may act on any application (`DefaultPolicy`),
+  so this default has to come from the feed's own query, as it does in `list_jobs`.
 - **Q3.** Allocate sequences with the counter row (recommended), or with a PostgreSQL advisory lock taken
   at the same point?
 - **Q4.** Must `LPB_RETENTION_EVENTS_DAYS` be at least `LPB_RETENTION_JOBS_DAYS`, enforced at startup

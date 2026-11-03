@@ -120,7 +120,7 @@ through the facade or REST:
   cost from `GET /v1/jobs/{id}/cost`, with its class; a `pending` cost stays pending, never zero.
 - **Event handling.** Consumes `GET /v1/events` (embedded: `ActorApi.events`), applies pages,
   de-duplicates by event `id`, and saves the cursor with the `epoch`. A 410 means resync: rebuild from
-  `GET /v1/jobs` and each job's `GET /v1/jobs/{id}/cost`, then continue from the scoped head
+  `GET /v1/jobs` and each job's `GET /v1/jobs/{id}/cost`, then continue from the 410's `resume_after`
   ([iss-46-events-feed.md](iss-46-events-feed.md#reading)). It accepts `job.finished` or
   `cost.corrected` for a job it never saw created. Until ISS-46 lands, the same consumer polls
   `GET /v1/jobs?before=` (ISS-29) behind one `EngineChanges` port of the fixture's own, so the switch

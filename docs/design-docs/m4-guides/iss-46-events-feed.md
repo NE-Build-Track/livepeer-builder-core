@@ -39,7 +39,7 @@ four store methods, so emitting there covers the services, streams and restart r
 
 | Event | Store method | Callers |
 | --- | --- | --- |
-| `job.created` | `create_job` (`store/sql.py:115`) | `services/operations.py:79,81`, including a D57 re-dispatch (`retry_of`), which supersedes the failed job in the same transaction |
+| `job.created` | `create_job` (`store/sql.py:115`) | `services/operations.py:79,81`, including a D57 re-dispatch (`retry_of`), which supersedes the failed job in the same transaction. The `Job` contract has no `retry_of` or `superseded_by`, so the payload cannot name the failed job, and the failed job gets no event; a consumer links the two by their shared `operation_ref`. `GET /v1/jobs` has the same gap |
 | `job.finished` | `finish_job` (`store/sql.py:215`) | `JobService._finish` (`services/jobs.py:460`); streams ending in their pump task (`services/streams.py:395,416`); `recover_interrupted` (`services/failover.py:78`) |
 | `usage.reported` | `set_usage` (`store/sql.py:232`) | `report_usage` only (`services/jobs.py:230`); usage is always `app_reported` today |
 | `cost.observed`, `cost.corrected` | `save_projection` (`store/sql.py:322`) | `CostService._refresh_projection` (`services/costs.py:183`). The service picks `observed` or `corrected` (`costs.py:170-176`), but the store's guarded update can still write nothing when a newer evidence version is already stored |
@@ -170,8 +170,14 @@ loses a change.
   `on_conflict_do_nothing`, on both backends). Today's plain insert raises `IntegrityError` when two
   first saves race, and `sync_once` (`services/costs.py:134-137`) then stops before the remaining jobs.
 - **Zero rows written** (a lost compare-and-set, a conflicting insert, or newer evidence stored): another
-  save got there first; the background sync and an operator's `costs/sync` can run at once. No event.
-  The save reads again and decides again, and stops once newer evidence is stored.
+  save got there first; the background sync and an operator's `costs/sync` can run at once. No event,
+  and **no second attempt with the same `JobCost`.** Two saves can stamp the same evidence version and
+  still hold different fees, because `job_for_projection` reads the version before `_compute` reads
+  usage (`services/costs.py:160,166`): a usage commit between the two saves' usage reads is seen by
+  one and not the other. Retrying the loser would append a `cost.corrected` that puts the older fees
+  back. Stopping is safe: whenever the losing compute was the newer one, the stored row's evidence
+  version is behind the job's, so the next `sync_once` selects the job and computes again. The save
+  returns the row now stored.
 - **The event is written only when this transaction's insert or compare-and-set wins,** so two saves can
   never both write `r1`.
 
@@ -193,20 +199,25 @@ The feed holds no secret: requests are never stored, `Failure.body` carries no s
   last sequence returned. **On an empty page it is the cursor, unchanged.** The scoped indexes mean
   the next poll reads only the caller's own events, never anyone else's, so there is no reason to hand
   out the global head. That would also let every tenant watch the whole engine's event volume.
-  The cost: a tenant with no events of its own for longer than the retention window keeps an old
-  cursor, gets one 410 when the floor passes it, and resyncs although it missed nothing. That is
-  bounded by the window, and only when event retention is on; Q4's answer sets how often.
+  The cost: a tenant with no events of its own keeps its cursor, so each purge that raises the floor
+  past it is one 410, and the tenant resyncs although it missed nothing. That is at most once per purge
+  run, and only when event retention is on. A floor kept per scope (the highest deleted sequence per
+  actor) would remove it; Q4 asks whether M4 needs that.
 - **One statement.** The floor check and the page come from one statement (a CTE over
   `lpb_event_floor`, `lpb_event_log` and the page, returning the floor, the epoch and the scoped head
   even when the page is empty). Under PostgreSQL's READ COMMITTED, two statements are two snapshots: a
   purge committing between a floor check and the page would delete events the page then skips, with no
   410. Sequence order equals commit order, so within one snapshot no lower sequence is still pending.
 - **Expired cursor:** `cursor < floor` raises `CursorExpired` → **410** with `code: "cursor_expired"`,
-  `floor` and the caller's **scoped head**: the highest sequence in the caller's scope, from the same
-  statement. A cursor above the global head (`next_sequence - 1`) is also 410: it can only come from
-  before a restore. `after` must be ≥ 0 (the route allows negatives today, `http/app.py:261`).
-- **Resync** without a gap: note the scoped head, rebuild state from the jobs list (`GET /v1/jobs`, paged)
-  and each job's cost (`GET /v1/jobs/{id}/cost`), then continue from the scoped head. Events applied twice
+  `floor` and **`resume_after`**: `max(scoped head, floor)`, where the scoped head is the highest
+  sequence in the caller's scope (0 when it has none), from the same statement. The scoped head alone
+  is not enough: retention deletes a prefix, so a tenant whose events are all gone has a scoped head
+  below `floor`, and polling from it would be 410 forever. Polling from `resume_after` is never
+  expired, and skips none of the caller's events: everything above it is either beyond `floor` or
+  someone else's. A cursor above the global head (`next_sequence - 1`) is also 410: it can only come
+  from before a restore. `after` must be ≥ 0 (the route allows negatives today, `http/app.py:261`).
+- **Resync** without a gap: note `resume_after`, rebuild state from the jobs list (`GET /v1/jobs`, paged)
+  and each job's cost (`GET /v1/jobs/{id}/cost`), then continue from `resume_after`. Events applied twice
   are dropped by `id`. There is no `/v1/costs` route, and `/v1/costs/projections` is capped at 25 with no
   paging (`http/app.py:241-243`), so neither can rebuild a tenant's costs. Job paging is not gap-free
   yet: `before` is a strict `created_at <` with no tiebreaker (`store/sql.py:164`), so jobs sharing a
@@ -328,7 +339,7 @@ collector raises lag in health; it never blocks a job or another tenant's delive
 | `contracts/reserved.py` → `contracts/events.py` | Move `EngineEvent` and `EventPage` out of "reserved", keeping the exports; `EventPage` unchanged |
 | `services/events.py` (new) | `StoreEventFeed(store, policy)`; `services/reserved.py` keeps only sessions |
 | `services/jobs.py` | `report_usage`: `set_usage` now returns whether it stored the report, and `report_usage` raises `InvalidRequest` when it did not, instead of returning the caller's copy. `_finish` reads `finish_job`'s answer |
-| `errors.py`, `http/app.py`, `contracts/events.py` | `CursorExpired` → 410 with `floor`, scoped head and `epoch`; `EventPage.epoch`; `after` ≥ 0; `?epoch=` |
+| `errors.py`, `http/app.py`, `contracts/events.py` | `CursorExpired` → 410 with `floor`, `resume_after` and `epoch`; `EventPage.epoch`; `after` ≥ 0; `?epoch=` |
 | `runtime/assembly.py` | Build `StoreEventFeed` by default |
 | `testing/fake_engine.py` | `events`: `job.*` and `usage.reported` with the engine's ids and scope. It has no cost sync, so cost events come only from a test hook (`record_cost(job_cost)`). Its `report_usage` today neither stores the usage nor refuses a second report (`fake_engine.py:315-322`); it must do both |
 | `services/event_push.py` (push slice) | `EventPushWorker`: subscriptions, signing, backoff, health |
@@ -365,8 +376,10 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] report_usage writes usage.reported once; a refused second report writes nothing
 [ ] two concurrent usage reports: one stored, one InvalidRequest, one event (fixes today's overwrite)
 [ ] first observed projection: cost.observed r1, also after a pending row (r0); a re-sync: nothing
-[ ] two concurrent saves of one change: one writes r1 and its event, the other re-reads and writes nothing
-[ ] two first saves of one job: one inserts, the other conflicts, re-reads, and sync_once goes on to the next job
+[ ] two concurrent saves of one change: one writes r1 and its event, the other writes nothing and returns the stored row
+[ ] two first saves of one job: one inserts, the other conflicts and writes nothing, and sync_once goes on to the next job
+[ ] two saves of one evidence version with different fees (usage committed between their reads): the loser
+    writes no event and no row; the next sync computes the newer fees as cost.corrected
 [ ] a stale re-sync committing after a correction: the row stays at r2, and the next change is r3
 [ ] an unchanged save with newer evidence advances evidence_version and is not re-selected next sync
 [ ] a fee moved between attempts, same total and classes: cost.corrected, and the payload's status is corrected
@@ -394,7 +407,8 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] retention with only LPB_RETENTION_EVENTS_DAYS set: the loop runs and purges
 [ ] a purge committing between two reads cannot skip events: floor and page come from one statement
 [ ] a purge never blocks an event writer (PostgreSQL: purge held open, finish_job still commits)
-[ ] cursor below floor: 410 cursor_expired with floor and the scoped head; after < 0: 422
+[ ] cursor below floor: 410 cursor_expired with floor and resume_after; after < 0: 422
+[ ] floor raised past every event of the caller's: resume_after is floor; polling it is an empty page, not 410
 [ ] cursor above the global head: 410; after a restore, an old epoch: 410; the resync then matches the store
 [ ] resync: every job and its cost rebuilt from /v1/jobs and /v1/jobs/{id}/cost (after ISS-29's keyset paging)
 [ ] FakeEngine: job and usage events, ids and scope match the engine; a second usage report is refused; cost events via the hook
@@ -458,7 +472,9 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 - **Q3.** Allocate sequences with the counter row (recommended), or with a PostgreSQL advisory lock taken
   at the same point?
 - **Q4.** Must `LPB_RETENTION_EVENTS_DAYS` be at least `LPB_RETENTION_JOBS_DAYS`, enforced at startup
-  like `operation_stale_s`? Recommended: yes.
+  like `operation_stale_s`? Recommended: yes. And does M4 keep the floor per scope, so a tenant with no
+  events of its own is never sent a 410 it does not need? Recommended: no, a global floor for M4; the
+  repeat is one resync per purge run, and only with event retention on.
 - **Q5.** A `cost.corrected` payload is the new `JobCost` only (recommended; consumers keep the previous
   one), or the `JobCost` plus the previous fees, as #86 proposes for append-only meters?
 - **Q6.** ISS-26's async jobs: `job.created` at submit and `job.finished` at the end, with no new type

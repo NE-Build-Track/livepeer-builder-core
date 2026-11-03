@@ -175,9 +175,11 @@ loses a change.
   still hold different fees, because `job_for_projection` reads the version before `_compute` reads
   usage (`services/costs.py:160,166`): a usage commit between the two saves' usage reads is seen by
   one and not the other. Retrying the loser would append a `cost.corrected` that puts the older fees
-  back. Stopping is safe: whenever the losing compute was the newer one, the stored row's evidence
-  version is behind the job's, so the next `sync_once` selects the job and computes again. The save
-  returns the row now stored.
+  back. Stopping is safe: both saves stamp the version read before the usage commit, which bumped
+  `jobs.evidence_version` in its own transaction, so whichever save wins, the stored row is behind and
+  the next `sync_once` computes again from the newer usage. That emits `cost.corrected` only if the
+  winner held the older fees; if it held the newer ones, the content equals the baseline and the sync
+  only advances `evidence_version`. The save returns the row now stored.
 - **The event is written only when this transaction's insert or compare-and-set wins,** so two saves can
   never both write `r1`.
 
@@ -213,12 +215,16 @@ The feed holds no secret: requests are never stored, `Failure.body` carries no s
   sequence in the caller's scope (0 when it has none), from the same statement. The scoped head alone
   is not enough: retention deletes a prefix, so a tenant whose events are all gone has a scoped head
   below `floor`, and polling from it would be 410 forever. Polling from `resume_after` is never
-  expired, and skips none of the caller's events: everything above it is either beyond `floor` or
-  someone else's. A cursor above the global head (`next_sequence - 1`) is also 410: it can only come
+  expired, but it does not return the caller's events at or below it, including any still above
+  `floor` (events at 150 and 180 with `floor` 100 resume at 180). The resync below is what covers
+  them, so a consumer must never just advance to `resume_after` without it. A cursor above the global head (`next_sequence - 1`) is also 410: it can only come
   from before a restore. `after` must be ≥ 0 (the route allows negatives today, `http/app.py:261`).
 - **Resync** without a gap: note `resume_after`, rebuild state from the jobs list (`GET /v1/jobs`, paged)
   and each job's cost (`GET /v1/jobs/{id}/cost`), then continue from `resume_after`. Events applied twice
-  are dropped by `id`. There is no `/v1/costs` route, and `/v1/costs/projections` is capped at 25 with no
+  are dropped by `id`. An event that commits while the rebuild runs is above `resume_after` and is
+  applied on top of a rebuild that may already include it. That converges because payloads are
+  snapshots: a consumer replaces the job's or cost's state with each payload, never adds it to a total,
+  and the later events that follow it in order replace it again. There is no `/v1/costs` route, and `/v1/costs/projections` is capped at 25 with no
   paging (`http/app.py:241-243`), so neither can rebuild a tenant's costs. Job paging is not gap-free
   yet: `before` is a strict `created_at <` with no tiebreaker (`store/sql.py:164`), so jobs sharing a
   timestamp at a page boundary are skipped. The resync is only complete once ISS-29's `(created_at, id)`
@@ -378,8 +384,11 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] first observed projection: cost.observed r1, also after a pending row (r0); a re-sync: nothing
 [ ] two concurrent saves of one change: one writes r1 and its event, the other writes nothing and returns the stored row
 [ ] two first saves of one job: one inserts, the other conflicts and writes nothing, and sync_once goes on to the next job
-[ ] two saves of one evidence version with different fees (usage committed between their reads): the loser
-    writes no event and no row; the next sync computes the newer fees as cost.corrected
+[ ] two saves of one evidence version with different fees (usage committed between their reads), the
+    order fixed by the test, not a race: the loser writes no event and no row. Older fees win: the next
+    sync writes cost.corrected with the newer fees. Newer fees win: the next sync writes no event and
+    only advances evidence_version
+[ ] floor 100, caller events at 150 and 180: resume_after is 180; the resync's rebuild holds both
 [ ] a stale re-sync committing after a correction: the row stays at r2, and the next change is r3
 [ ] an unchanged save with newer evidence advances evidence_version and is not re-selected next sync
 [ ] a fee moved between attempts, same total and classes: cost.corrected, and the payload's status is corrected

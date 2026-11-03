@@ -1,5 +1,13 @@
 # Reliability
 
+Optional schema discovery: set `LPB_CAPABILITY_OPENAPI_FILE` to an operator-reviewed
+OpenAPI 3.1 file. Each operation carries `x-livepeer` with `app`, `model`,
+`deployment_revision` and its public `path`; its request schema fixes `model` with
+`const`. The server validates the artifact at startup and resolves only non-recursive
+local component references. Authenticated `GET /v1/capabilities` returns matching
+discovered deployments, schemas and declared defaults. It does no network schema
+fetching, starts no jobs and moves no money. Without a file it returns an empty list.
+
 ## Configuration
 
 Settings come from `LPB_<FIELD>` environment variables (`EngineSettings.from_env`). Defaults favor

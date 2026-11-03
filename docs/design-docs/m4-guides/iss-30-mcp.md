@@ -16,7 +16,7 @@ rules become decisions (D57 onward).\
   OAuth or API-key path is imposed on enterprises; **MCP progress is not inference streaming**.
 
 **Depends on:** ISS-29 (REST coverage and the shared-behavior contract checks), which itself follows ISS-18,
-ISS-20 and ISS-28. External: none.
+ISS-20 and ISS-28 (and ISS-46 for events). External: none.
 
 ## Current state (verified)
 

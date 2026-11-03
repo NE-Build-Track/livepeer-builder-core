@@ -29,6 +29,9 @@ and correct path from Core instead of assuming every offering accepts a chat pay
   offering changes. All 217 console tests pass.
 - 2026-11-02: Production engine discovers all five registered model applications;
   paid submission awaits an existing `lpk_` credential location.
+- 2026-11-03: Covered the catalog rejections (version, body, model, refs, depth,
+  duplicates, path segments, file size) and unreadable runner metadata so the
+  diff-coverage gate can pass.
 
 ## Decision log
 

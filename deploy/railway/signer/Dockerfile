@@ -33,5 +33,5 @@ RUN apt-get update \
 COPY --from=build /out/livepeer-signer /usr/local/bin/livepeer-signer
 COPY entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod 0755 /usr/local/bin/entrypoint.py
-EXPOSE 8937
+EXPOSE 8937 8939
 ENTRYPOINT ["python3", "-u", "/usr/local/bin/entrypoint.py"]

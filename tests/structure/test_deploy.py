@@ -31,3 +31,18 @@ def test_railway_builder_engine_can_fund_grants() -> None:
         "The Railway builder-engine allow list drifted from "
         "deploy/dev-stack/config/init-secrets.py. Update both together."
     )
+
+
+def test_console_reader_is_optional_and_read_only() -> None:
+    text = ENTRYPOINT.read_text()
+    assert "CONSOLE_READER_TOKEN" in text, (
+        "The console reader is optional: omit the credential when CONSOLE_READER_TOKEN is unset "
+        "so production keeps today's file."
+    )
+    start = text.index("READER_ALLOW = [")
+    body = text[start : text.index("]", start)]
+    names = re.findall(r'"([^"]+)"', body)
+    assert names and all(name.endswith(".read") for name in names), (
+        "The Railway console reader may only hold *.read permissions. "
+        "Do not give it grants.*, create, fund, or revoke."
+    )

@@ -30,7 +30,15 @@ grant stays `403 Forbidden` until this Batteries image is what production is run
 
 Each Railway environment already has these services and their variables. The five Batteries tokens
 stay `OPERATOR_TOKEN`, `ENGINE_TOKEN`, `WEBHOOK_TOKEN`, `KAFKA_READER_TOKEN`, and
-`KAFKA_PRODUCER_TOKEN`.
+`KAFKA_PRODUCER_TOKEN`. `CONSOLE_READER_TOKEN` is optional. When it is set, the file also contains
+`console-reader`, whose allow list is read permissions only. When it is unset, that credential is
+absent, so production does not need the variable.
+
+The signer binds metrics to `[::1]:8938` and refuses any other address. `signer/entrypoint.py` relays
+that port to `[::]:8939` inside the same container, so a private caller can read `/readyz` and
+`/metrics` there. The relay is not a public domain. Its port is bound before the signer starts, so a busy
+port fails startup; if the relay stops later, it stops the signer, so Railway restarts the container rather
+than keep a signer whose `/readyz` and `/metrics` refuse every connection.
 
 ## Environments
 

@@ -42,7 +42,9 @@ services:
       context: ../..
       dockerfile: deploy/railway/discovery/Dockerfile
     environment:
-      LPD_HTTP_HOST: 0.0.0.0
+      # Compose's bridge is IPv4. Railway leaves this unset and the image listens on [::]:8939.
+      LIVEPEER_ONCHAIN_DISCOVERY_LISTEN: 0.0.0.0:8939
+      LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL: ${LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL:-}
 
   engine:
     build:

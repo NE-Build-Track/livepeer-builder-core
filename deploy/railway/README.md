@@ -57,7 +57,10 @@ cannot select it. Required reviewers on `production` gate that deploy.
 ## Upload
 
 The engine and discovery jobs run `railway up --service <name> --ci` with the repository root as the
-Docker context. Uploading only their directories would leave the Python package out of the image.
+Docker context. The engine image installs this package from that root. The discovery image's
+Dockerfile is addressed from the same root and installs
+[livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520`; it does not
+install this package.
 
 Batteries and the signer upload their own directories with `--path-as-root`, so their Railway
 service settings use Dockerfile path `Dockerfile`. Batteries keeps its healthcheck on `/readyz`
@@ -95,9 +98,18 @@ named `discovery`, created once by the project owner, with:
 | Restart policy | always, 10 retries |
 | Public networking | a Railway domain on port `8939` (`GET /discovery`, `/healthz`, `/readyz`). The engine still uses the private URL. `/readyz` carries only stable error reasons, never a provider's text |
 
-It runs the static directory, [discovery/orchestrators.txt](discovery/orchestrators.txt). To use the
-chain instead, set `LPD_DIRECTORY=onchain` and `LPD_ARBITRUM_RPC_URL` (a provider URL; it often carries
-a key, so keep it a sealed variable). Orchestrators with untrusted TLS are left out either way.
+The image runs `livepeer-onchain-discovery` from
+[NE-Build-Track/livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520`.
+It listens on `[::]:8939`, probes [discovery/orchestrators.txt](discovery/orchestrators.txt) every 30
+seconds, and reloads the Arbitrum AI Service Registry every hour. `lpb discovery` is deprecated on
+Railway. This repository's command and the dev stack still run it until that process is removed.
+
+Set `LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL` on the `discovery` service in each environment that deploys
+it. The value is a provider URL and often carries a key, so it stays a sealed Railway variable. The
+process exits before listening when the variable is empty, and it never prints the value. Collectors
+from livepeer/node v1.0.3 onward drop a runner that omits `observed_at` or sets it more than 30
+seconds ahead ([livepeer/node#51](https://github.com/livepeer/node/issues/51)), so a v1.0.2
+orchestrator in the static file or on chain does not appear in `GET /discovery`.
 
 ## Engine database
 

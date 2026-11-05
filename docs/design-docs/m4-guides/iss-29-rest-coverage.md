@@ -12,7 +12,7 @@ rules become decisions (numbered then).\
   persistent), durable status and results, shared errors and ownership rules.
 - Contract checks show that **every REST operation uses shared behavior** and that the initial (M3)
   journey stays compatible. Closes the rest of I1 after ISS-20.
-- **Depends on** ISS-18 (events feed, held), ISS-20 (M3 REST journey), ISS-28 (failure classification),
+- **Depends on** ISS-18 (cost reports; its events feed moved to ISS-46), ISS-20 (M3 REST journey), ISS-28 (failure classification),
   and so transitively on ISS-26 (async) and ISS-27 (persistent).
 
 ## Current state (verified)
@@ -32,7 +32,7 @@ rules become decisions (numbered then).\
 | Results | `GET /v1/jobs/{id}/result` | **501** after permission and ownership (`jobs.py:195-197`) | stored results (ISS-26) |
 | Persistent (ISS-27) | `POST /v1/sessions` | **501** (`ReservedSessions`, `services/reserved.py`) | no close or read route, though `SessionManager.close` exists (`protocols/__init__.py:383-386`); no proxy route for `Session.proxy_path`; the 501 runs before any permission check |
 | Usage, cost | `POST /v1/jobs/{id}/usage`, `GET /v1/jobs/{id}/cost`, `GET /v1/costs/projections` (max 25), `GET /v1/costs/summary`, `GET /v1/allowance` | built | projections have no paging (console gap G3); `by_app` from the ISS-18 guide; admin reads scoped to the key's application (G9) |
-| Events (ISS-18) | `GET /v1/events?after&limit` | **501**: `assemble` falls back to `ReservedEventFeed` (`runtime/assembly.py:258`) | held by the 21 October M3 decision (item 4); no error type for the contract's **410** on an expired cursor (`errors.py` has none) |
+| Events (ISS-46) | `GET /v1/events?after&limit` | **501**: `assemble` falls back to `ReservedEventFeed` (`runtime/assembly.py:261`) | held by the 21 October M3 decision (item 4), now M4 as ISS-46 ([iss-46-events-feed.md](iss-46-events-feed.md)); no error type for the contract's **410** on an expired cursor (`errors.py` has none) |
 | Credentials | `/v1/admin/keys` (issue, list, get, rotate, revoke; only when `engine.keys`) | built | `operation_ref` on issue and rotate (idempotency guide) |
 | Allocations, grants | provision, read, fund, status, revoke, rotate-key; grants list and create (only with a grant desk); `POST /v1/admin/grant/fund` | built | `operation_ref` on provision and create grant; route naming (`grant/fund` has no id, `interfaces-and-http-servers.md` question 3); the created grant comes back incomplete (G12) |
 | Admin reads | `GET /v1/admin/actors`, `GET /v1/admin/reconciliation`, `POST /v1/admin/costs/sync` | built | no application-wide reconciliation in `per_actor` (G10) |
@@ -88,7 +88,7 @@ model, the coverage table and the contract checks):
 | Async (ISS-26) | `POST /v1/jobs` with `mode="async"` | `202`, `Location: /v1/jobs/{id}`, `Livepeer-Job-Id`, body `Job` (`queued`); facade gains `jobs.submit` |
 | Async result | `GET /v1/jobs/{id}/result` | the stored body and content type; `409 code=job_not_finished` with the job and `Retry-After` while queued or running; `410 code=result_expired` after retention and for an immediate job (never retained) |
 | Persistent (ISS-27) | `POST /v1/sessions`, `GET /v1/sessions[/{id}]`, `POST /v1/sessions/{id}/close`, `ANY` and WebSocket on `/v1/sessions/{id}/app/{path}` | `201 Session`, `Session[]`/`Session`, `Session`, the runner's answer (as the ISS-27 guide proposes) |
-| Events (if the hold lifts) | `GET /v1/events` | `EventPage`; `410 code=cursor_expired` |
+| Events (ISS-46) | `GET /v1/events?after&limit&epoch` | `EventPage` with `epoch`; `after` ≥ 0 (422 otherwise); `410 code=cursor_expired` with `floor`, `resume_after` and `epoch` ([iss-46-events-feed.md](iss-46-events-feed.md#reading)) |
 
 The aliases proposed in #73 (`/v1/run/{app}`, `/v1/queue/{app}`, `wss` routes) translate into the same
 `JobRequest`/`SessionRequest` and add no behavior; they are in scope only if ISS-27 adopts #73.
@@ -228,11 +228,12 @@ Compatibility
 
 ## Open questions to lock
 
-- **Q1.** Does ISS-29 wait for the events hold to lift, or close with `/v1/events` documented as held
-  (recommended: close with the hold recorded, as the ISS-18 guide does)?
+- **Q1.** Does ISS-29 wait for ISS-46's feed, or close with `/v1/events` documented as not yet built
+  (recommended: close with that recorded, as ISS-18 did)? Both land in M4, so the order is set at planning.
 - **Q2.** `code` beside `error` (recommended) or RFC 9457 now?
 - **Q3.** Keyset paging on `(created_at, id)`, with the cursor carrying both (`before` plus `before_id`,
   recommended), or an opaque cursor? Either way a time-only `before` keeps D59's equal-time skip.
+  ISS-46's resync after a 410 rebuilds from `GET /v1/jobs`, so it is gap-free only once this lands.
 - **Q4.** `/v1/me` as a facade member (`whoami`, recommended so MCP gets it too) or REST only?
 - **Q5.** Rename `POST /v1/admin/grant/fund` to `POST /v1/admin/grants/{id}/fund` before the M5 release,
   keeping the old path as an alias until then?

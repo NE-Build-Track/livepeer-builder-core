@@ -44,7 +44,11 @@ The base is strong; ISS-23 maps it by category. What exists for this ticket:
 A projection is a deterministic function of the engine's records and Batteries' rows, **except three
 path-dependent fields**: `status = corrected` (set when fees differ from the previous projection,
 `services/costs.py:165-183`), `first_observed_at` and `updated_at` (from the clock). A rebuild therefore
-yields `observed` where history said `corrected`. Equivalence must be defined on the rest.
+yields `observed` where history said `corrected`. Equivalence must be defined on the rest. **ISS-46
+changes the label rule** ([iss-46-events-feed.md](iss-46-events-feed.md)): `save_projection` sets
+`corrected` when the content (job fees, each attempt's class and fees) differs from the last cost event,
+and adds `lpb_cost_projections.revision`. Both stay path-dependent, so equivalence ignores `status` and
+`revision` as well as the timestamps.
 
 ### Candidate defects found by reading (to pin with a test first, not yet reproduced)
 
@@ -174,6 +178,7 @@ Restore
 [ ] backup during a sync, restore, start: reads equal
 [ ] restore then sync applies newer rows once
 [ ] wrong LPB_SECRET_KEY: the first paid job fails clearly, nothing is signed
+[ ] restore writes a new event epoch; a cursor with the old epoch gets 410 (ISS-46 Q9)
 Observed (recorded once)
 [ ] engine killed mid paid job; Batteries down during sync; lpb costs verify clean afterwards
 ```
@@ -200,10 +205,11 @@ decision.
 ## Open questions to lock
 
 - **Q1.** Ship `lpb costs verify` (recommended) or keep rebuild as a test only?
-- **Q2.** Keep `corrected` path-dependent (recommended; the events feed will carry history), or store
-  the first observed fees so a rebuild can reproduce it?
+- **Q2.** Keep `corrected` path-dependent (recommended; the events feed carries history: ISS-46's cost
+  events, one per `revision`), or store the first observed fees so a rebuild can reproduce it?
 - **Q3.** R1/R2: forbid usage retention shorter than job retention and re-check only within an attempt
-  window (T16's exit), or document the effect?
+  window (T16's exit), or document the effect? ISS-46's Q4 asks the same of event retention; answer them
+  together.
 
 ## Delivery slices
 

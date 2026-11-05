@@ -50,7 +50,7 @@ Status block still says "planned … no code has changed", which is stale):
 | E3 | **No single versioned candidate.** Only `v0.1.0` (19 October) is tagged; `d3df806` is `v0.1.0-147`. Consumers pin four different commits: ChatLPT `2134e29` (`pyproject.toml`), inference-gateway `0d0b532`, the console's images `d3df806`, the enterprise desk's recorded pin `93c8910` (`src/lib/pins.ts`, M2) | `git describe`; consumer files |
 | E4 | **The trusted-backend authenticator is not built.** A `service` credential with `actors.assert` can be issued (`services/keys.py:157`), but nothing honors `Livepeer-Actor` (not found in `src/`). Defined in [access.md](../../contracts/access.md#service-mode), tech debt T7 | `grep` |
 | E5 | **No mock-commerce or reporting fixture.** Not found in `src/`, `tests/` or `docs/` | `grep -i commerce` |
-| E6 | **Event handling has no feed.** `GET /v1/events` answers 501; the feed is held (ISS-18) | `runtime/assembly.py:258` |
+| E6 | **Event handling has no feed.** `GET /v1/events` answers 501; the feed is ISS-46 ([iss-46-events-feed.md](iss-46-events-feed.md)) | `runtime/assembly.py:261` |
 | E7 | **No "tool" extension point.** MCP (ISS-30) has no code; `extend` covers REST routes only. The [ISS-30 guide](iss-30-mcp.md) mounts `create_mcp_app(engine)` beside `http/` but defines no hook for an enterprise's own tool | `http/server.py` |
 | E8 | **A host app cannot mount part of the REST service.** Every route is a closure in `create_app`; error handlers are private (`_install_error_handlers`) | #25, John's 28 October comment |
 | E9 | **The enterprise desk hands users engine keys.** It signs users in with `lpk_` actor keys and can issue them at signup (`enterprise-ui/README.md`), the "extra user-facing engine key" the criterion rules out | consumer README |
@@ -118,9 +118,13 @@ through the facade or REST:
   paying twice: the **repeat handling**.
 - **Reporting.** An invoice line carries the retail price (the fixture's own table) beside the network
   cost from `GET /v1/jobs/{id}/cost`, with its class; a `pending` cost stays pending, never zero.
-- **Event handling.** Consumes `GET /v1/events`, applies pages, de-duplicates by event `id`, saves the
-  cursor. While the feed is held, the same consumer polls `GET /v1/jobs?before=` (ISS-29) behind one
-  `EngineChanges` port of the fixture's own, so the switch is one adapter (Q4).
+- **Event handling.** Consumes `GET /v1/events` (embedded: `ActorApi.events`), applies pages,
+  de-duplicates by event `id`, and saves the cursor with the `epoch`. A 410 means resync: rebuild from
+  `GET /v1/jobs` and each job's `GET /v1/jobs/{id}/cost`, then continue from the 410's `resume_after`
+  ([iss-46-events-feed.md](iss-46-events-feed.md#reading)). It accepts `job.finished` or
+  `cost.corrected` for a job it never saw created. Until ISS-46 lands, the same consumer polls
+  `GET /v1/jobs?before=` (ISS-29) behind one `EngineChanges` port of the fixture's own, so the switch
+  is one adapter (Q4).
 - **Additional endpoint.** `GET /v1/corp/invoice/{order}` added with `extend` on the engine's service,
   authenticated by `actor_dependency`; the MCP tool equivalent arrives with ISS-30.
 - **Never writes engine tables:** the fixture opens no engine database URL and imports nothing from
@@ -180,7 +184,7 @@ Commerce fixture
 [ ] an invoice line shows retail price and observed network cost side by side
 [ ] a pending cost stays pending on the invoice, never 0
 [ ] events applied twice change nothing (dedupe by id); the cursor survives a restart
-[?] events from /v1/events rather than polling                 (Q4, the ISS-18 hold)
+[?] events from /v1/events rather than polling                 (Q4, ISS-46)
 [ ] the fixture opens no engine database and imports nothing from livepeer_builder.store
 [ ] the extra endpoint answers 401 without a credential and 200 with one
 [?] the extra MCP tool goes through the same authenticator     (ISS-30)
@@ -224,7 +228,7 @@ new `examples` job green on the tagged candidate, and every consumer's pin recor
 - **Q1.** Examples in `examples/` installed from the wheel (recommended) or kept as repository tests?
 - **Q2.** Build the trusted-backend authenticator in ISS-32 (recommended: E9 needs it) or leave it defined?
 - **Q3.** Candidate as a `v0.2.0rcN` tag (recommended) or a commit SHA?
-- **Q4.** Does the fixture wait for the events feed, or poll behind its own port until the hold lifts
+- **Q4.** Does the fixture wait for the events feed, or poll behind its own port until ISS-46 lands
   (recommended)?
 - **Q5.** Router factories from #25 in ISS-32 (recommended: mounting part of the service is service
   consumption) or later?

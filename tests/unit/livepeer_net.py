@@ -47,7 +47,8 @@ class Net:
     challenge_body: bytes | None = None  # replaces the 402's payment contract
     renewal_status: int = 200  # 404 says the orchestrator released the session
     sign: list[SignStep] = field(default_factory=list)
-    # /sign-orchestrator-info: "ok", an HTTP status, "drop", "malformed" (no signature), or seconds to hang
+    # /sign-orchestrator-info: "ok", an HTTP status, "drop", "malformed" (no signature), "garbage" (not
+    # JSON), "array" (JSON that is not an object), or seconds to hang
     info: list[int | float | str] = field(default_factory=list)
     replies: list[Reply] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
@@ -91,6 +92,10 @@ class Net:
             return web.Response(status=step, text="UPSTREAM-INFO: signer auth webhook failed")
         if step == "malformed":
             return web.json_response({"address": "0x" + "ab" * 20})
+        if step == "garbage":
+            return web.Response(text="not-json", content_type="text/plain")
+        if step == "array":
+            return web.Response(text="[]", content_type="application/json")
         return web.json_response({"address": "0x" + "ab" * 20, "signature": "0xsig"})
 
     async def _generate(self, request: web.Request) -> web.StreamResponse:

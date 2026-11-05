@@ -295,7 +295,11 @@ class PaidRequest:
         except LivepeerGatewayError as error:
             self._log_signer_error(None, error)
             if not unavailable_before_signing(error):
-                raise
+                kind, message, status, reason = classify(error, unknown=False)
+                # A 200 that is no identity (not JSON, not an object) is the signer's: no runner was asked,
+                # so it is not a runner's ``http``, and the reference may run again (D57)
+                kind = "payment" if kind == "http" else kind
+                raise self._events.error(kind, message, status_code=status, reason=reason) from error
             status = error.status_code if isinstance(error, LivepeerHTTPError) else None
             message = signer_message(error, "signer_unavailable", unknown=False)
             raise self._events.error(

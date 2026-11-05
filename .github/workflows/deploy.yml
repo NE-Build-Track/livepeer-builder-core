@@ -106,7 +106,8 @@ jobs:
           message="${TARGET} ${REF_NAME} ${SERVICE} ${SHA}"
           case "$SERVICE" in
             engine|discovery)
-              # Both build from the repository root (the Python package must be in the context).
+              # Both upload the repository root. The engine image installs this
+              # package; the discovery Dockerfile is addressed from that root.
               # No path argument. `railway up .` treats "." as a subdirectory
               # prefix and exits with "prefix not found" before uploading.
               railway up \

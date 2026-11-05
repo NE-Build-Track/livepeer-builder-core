@@ -111,8 +111,8 @@ async def read_capped(chunks: AsyncIterable[bytes], limit: int) -> bytes:
 def decimal_json_number(token: str) -> Decimal:
     """A JSON number token as :class:`Decimal`.
 
-    A number ``Decimal`` cannot build raises ``InvalidOperation``, here a ``ValueError``. ``lpb discovery``
-    refuses that inventory, so the token is never re-served for every engine's refresh to fail on.
+    A number ``Decimal`` cannot build raises ``InvalidOperation``, here a ``ValueError``. Re-serving
+    that token would fail every engine refresh that parses it, so the caller refuses the inventory.
 
     The limit is the platform's, not ours. On 64-bit CPython (libmpdec) a number is refused when its
     adjusted exponent is above ``MAX_EMAX`` (999999999999999999) or its exponent is below ``MIN_ETINY``

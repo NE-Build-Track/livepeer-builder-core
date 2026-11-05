@@ -39,17 +39,20 @@ services:
       clearinghouse:
         condition: service_healthy
 
-  discovery:  # the engine image, running `lpb discovery` with the static directory
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/engine:local
-    command: [lpb, discovery]
+  discovery:  # livepeer-onchain-discovery; the same image contract as Railway
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/discovery:local
+    build:
+      context: ../..
+      dockerfile: deploy/railway/discovery/Dockerfile
+    user: "0:0"  # dev only: secrets/rpc-url is mode 0600, and the image user cannot read it
     environment:
-      LPD_ORCHESTRATORS: /etc/lpd/orchestrators.txt
-      LPD_HTTP_HOST: 0.0.0.0
-      LPD_LOG_JSON: "true"
+      LIVEPEER_ONCHAIN_DISCOVERY_LISTEN: 0.0.0.0:8939
+      LIVEPEER_ONCHAIN_DISCOVERY_NODES: /etc/lpd/orchestrators.txt
+      LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL_FILE: /run/secrets/rpc-url
     volumes:
       - ./config/orchestrators.txt:/etc/lpd/orchestrators.txt:ro
+      - ./secrets/rpc-url:/run/secrets/rpc-url:ro
     ports: ["127.0.0.1:8939:8939"]
-    depends_on: [engine]  # shares the engine's image, which `docker compose build` builds there
 
   engine:
     build:

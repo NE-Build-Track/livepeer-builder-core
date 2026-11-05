@@ -267,7 +267,7 @@ def test_a_clean_inventory_logs_no_skip(caplog: pytest.LogCaptureFixture) -> Non
 
 
 async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: FixedClock) -> None:
-    """Never followed, as lpb discovery's prober and livepeer/node do: the last good snapshot stays."""
+    """Never followed, as livepeer/node's collector does: the last good snapshot stays."""
     seen: list[str] = []
     answers = [httpx.Response(200, content=json.dumps([GOOD_ENTRY]).encode()),
                httpx.Response(301, headers={"Location": "http://elsewhere/discovery"})]  # fmt: skip

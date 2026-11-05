@@ -5,7 +5,7 @@
 - **Owner:** Mike.
 - **Ticket:** [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45), part of ISS-09 ([Network-Engineering-SPE#22](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/22)).
 - **Branch:** `tasks/mz/discovery-service`, off `releases/m3` at `629f1ab`.
-- **Progress:** design agreed 26 October; in progress.
+- **Progress:** the process has left this repository. Railway and the dev stack run `livepeer-onchain-discovery` (`737e520`). The engine still reads `LPB_DISCOVERY_URL`.
 - **Overlap:** it covers the problem in #27 and #30. PR #34 (`LPB_ORCHESTRATOR_LIST`) is being handled separately.
 - **Decision:** D43.
 
@@ -258,6 +258,7 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     is built and flagged by mypy, so it can no longer make every `GET /discovery` a 500.
   - **`Probes` retired:** the directory is the service's one port, so the prober is no longer
     replaceable. `Catalog` takes a `Prober`, and `serve()` has no `prober=` argument.
+- **5 November, the process moves out.** `lpb discovery` and `src/livepeer_builder/discovery/` are removed. The engine's `HttpDiscoverySource` is unchanged. Railway's `discovery` service and the dev stack run [livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520` (`livepeer-onchain-discovery`). The service name and `GET /discovery` stay, so `LPB_DISCOVERY_URL` does not change. The collector drops a runner with no `observed_at`, or one more than 30 seconds ahead ([livepeer/node#51](https://github.com/livepeer/node/issues/51)). ChatLPT and the console still run `lpb discovery` from a pinned engine image until those pins move.
 - **30 October, T26.** A leading BOM is accepted (`utf-8-sig`; `test_a_leading_bom_is_the_inventory_without_it`).
   Each entry is walked once. `utils._not_json` and `utils.read_capped` are shared with the engine.
   A `runners` value that is not a list still fails that probe. An empty success would replace the last

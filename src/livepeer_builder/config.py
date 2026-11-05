@@ -49,8 +49,9 @@ class EngineSettings(Contract):
     discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
     discovery_interval_s: float = Field(default=15.0, gt=0)
     discovery_max_bytes: int = Field(default=DISCOVERY_MAX_BYTES, gt=0)  # the largest inventory a poll reads
-    # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node discovery's
-    # default 5-minute refreshes. lpb discovery evicts a failing orchestrator sooner (30 s probes, 6 failures)
+    # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node
+    # discovery's default 5-minute refreshes. The on-chain discovery service probes every 30 s and
+    # evicts after 6 failed probes.
     rate_max_age_s: float = Field(default=600.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)
 

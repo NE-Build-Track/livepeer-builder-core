@@ -23,7 +23,7 @@ In the order the work should land. Each row lists the questions to lock.
 | 5 | [iss-15-history-and-results.md](iss-15-history-and-results.md) | ISS-15 | How inputs and results are accessed in M3; expired provider assets; history paging | Q1–Q3 |
 | 6 | [iss-18-cost-reports.md](iss-18-cost-reports.md) | ISS-18 (partial) | Criteria check; `by_app` on the summary; the held feed recorded everywhere | Q1–Q2 |
 | 7 | [iss-23-verification.md](iss-23-verification.md) | ISS-23 | A traceability spec with a doc guard; gap tests; one live probe | Q1–Q3 |
-| 8 | [discovery-node-v1.0.4.md](discovery-node-v1.0.4.md) | ISS-09 follow-up (D43 review) | livepeer/node's standalone discovery and `--nodes`; keep `lpb discovery`, refuse aggregators as sources, stamp `observed_at` | Q1–Q4 |
+| 8 | [discovery-node-v1.0.4.md](discovery-node-v1.0.4.md) | ISS-09 follow-up (D43 review) | **Superseded:** Railway and the dev stack run `livepeer-onchain-discovery`. The guide's recommendation to keep `lpb discovery` is the record of that review | Q1–Q4 |
 
 ISS-13, ISS-20 and ISS-24 are the console's (Mike) and need review, not engine guides. ISS-25 (the funded
 run) depends on 1 and 4 landing first; its dry run is due 13 November. Until the SDK pin includes #87, its

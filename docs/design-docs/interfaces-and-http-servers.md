@@ -1,9 +1,9 @@
 # Interfaces and the HTTP servers
 
-Class and sequence diagrams of the engine's interfaces and of the two HTTP servers built on them:
-the REST service (`lpb serve`, `http/`) and the discovery service (`lpb discovery`, `discovery/`).
+Class and sequence diagrams of the engine's interfaces and of the REST service (`lpb serve`, `http/`).
 Every box and message is a real class, method, route or setting, so each diagram leads to the code.
-The diagrams describe the code with the discovery service (#45, D43) in place.
+The discovery inventory is served by `livepeer-onchain-discovery`
+([contract](../contracts/discovery.md)), which is not a package in this repository.
 
 This document is for reviewing the shapes. Other documents cover the rest:
 - the flows between components (authentication, provisioning, a paid job with failover, cost sync,
@@ -1063,86 +1063,6 @@ asyncio.run(serve(EngineSettings.from_env(), supply=..., decorate=..., extend=ex
 ```
 
 A runnable version is in [extending-the-engine.md](extending-the-engine.md#service-mode).
-
-## The discovery service's HTTP server (`discovery/server.py`)
-
-A separate process with its own settings (`LPD_*`). It shares nothing with the engine, imports only
-`utils` from the package, and uses Starlette directly.
-
-```mermaid
-classDiagram
-    direction LR
-    class server_py {
-        <<module>>
-        +async serve(settings, directory) None
-        +create_app(catalog) Starlette
-        +directory_from(settings) OrchestratorDirectory
-    }
-    class DiscoverySettings {
-        +directory static or onchain
-        +orchestrators str?
-        +arbitrum_rpc_url SecretStr?
-        +controller, service_registry
-        +directory_interval_s, directory_timeout_s
-        +probe_interval_s, probe_timeout_s
-        +max_failed_refreshes
-        +http_host, http_port
-        +from_env(env)$ DiscoverySettings
-    }
-    class Starlette {
-        GET /discovery
-        GET /healthz
-        GET /readyz
-    }
-    class Catalog
-    class CatalogStatus {
-        +ready bool
-        +orchestrators int
-        +serving int
-        +directory_loaded_at datetime?
-        +probed_at datetime?
-        +directory_error str?
-    }
-    class OrchestratorDirectory {
-        <<interface>>
-    }
-    class Prober
-    server_py ..> DiscoverySettings
-    server_py ..> Starlette : builds
-    server_py ..> OrchestratorDirectory : directory_from, unless given
-    server_py --> Catalog : creates
-    Catalog --> OrchestratorDirectory
-    Catalog --> Prober
-    Catalog ..> CatalogStatus : status()
-    Starlette ..> Catalog : inventory(), status()
-```
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Op as Operator
-    participant CLI as cli._discovery
-    participant S as discovery.server.serve
-    participant Cat as Catalog
-    participant U as uvicorn.Server
-    actor E as Engine (HttpDiscoverySource)
-    Op->>CLI: lpb discovery
-    CLI->>CLI: DiscoverySettings.from_env(), configure_logging
-    CLI->>S: serve(settings)
-    S->>Cat: Catalog(directory_from(settings), Prober(timeout_s))
-    S->>Cat: task lpd-refresh = run(stop, intervals)
-    S->>U: serve(create_app(catalog)) on LPD_HTTP_HOST, LPD_HTTP_PORT
-    E->>U: GET /discovery
-    U-->>E: 200 Catalog.inventory() (empty until the first probe pass)
-    Op->>U: GET /readyz
-    U-->>Op: 200 once a directory loaded and a probe pass finished, else 503
-    Op->>U: SIGTERM
-    U-->>S: returns
-    S->>Cat: stop.set(), cancel lpd-refresh, wait for it
-```
-
-To change who is discovered, call `serve(settings, directory=YourDirectory())`. To replace the service
-entirely, serve the same `GET /discovery` format from anything and point `LPB_DISCOVERY_URL` at it.
 
 ## Questions for the review
 

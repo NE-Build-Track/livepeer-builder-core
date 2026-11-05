@@ -101,8 +101,8 @@ named `discovery`, created once by the project owner, with:
 The image runs `livepeer-onchain-discovery` from
 [NE-Build-Track/livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520`.
 It listens on `[::]:8939`, probes [discovery/orchestrators.txt](discovery/orchestrators.txt) every 30
-seconds, and reloads the Arbitrum AI Service Registry every hour. `lpb discovery` is deprecated on
-Railway. This repository's command and the dev stack still run it until that process is removed.
+seconds, and reloads the Arbitrum AI Service Registry every hour. This repository no longer
+ships `lpb discovery`. The dev stack runs this same image.
 
 Set `LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL` on the `discovery` service in each environment that deploys
 it. The value is a provider URL and often carries a key, so it stays a sealed Railway variable. The

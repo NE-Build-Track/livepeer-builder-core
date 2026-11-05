@@ -64,7 +64,7 @@ M4. M5 runs from 21 to 31 December 2026.
 | Both payment configurations | `payments.md` (allocation modes; Mode B "deferred to M4") | No setup guide. `per_application` needs `LPB_SHARED_ALLOCATION_ID` set by hand (T5). The second configuration is ISS-31's output |
 | Enterprise auth replacement | `extending-the-engine.md`; `access.md` (JWT bearer and the appendix); console `deploy/keycloak/README.md` | No guide. #51 (public and confidential OIDC clients) is open. `QUALITY_SCORE.md` still grades Access B with "JWT and trusted backend are C (M4)", although JWT bearer is built (T7, D45) |
 | Jobs and reporting | `engine.md`, `payments.md#cost-classification` | Contract prose only, with no task path ("run a job, read result and cost, reconcile"). Async and persistent modes arrive with ISS-26 and ISS-27 |
-| Configuration | `RELIABILITY.md#configuration`; `discovery.md#settings` (`LPD_*`) | Unguarded (above) |
+| Configuration | `RELIABILITY.md#configuration`; `discovery.md#who-is-probed` (`LIVEPEER_ONCHAIN_DISCOVERY_*`) | Unguarded (above) |
 | Upgrades | `persistence.md#migrations` (`lpb migrate`, `lpb revision`, drift test) | No procedure (stop, back up, migrate, start, verify), no release notes, no statement on downgrades |
 | Retention | `persistence.md#retention` | Adequate |
 | Backup and restore | `RELIABILITY.md#backup-and-restore`; drill in `tests/store/test_durability.py` | Adequate for SQLite. PostgreSQL gets one line (`pg_dump`), and PostgreSQL is stretch scope |

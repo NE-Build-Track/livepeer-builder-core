@@ -1,141 +1,48 @@
-# Discovery service contract
+# Discovery
 
 - **Ticket:** [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45), part of ISS-09.
 - **Plan:** [discovery-service](../exec-plans/active/discovery-service.md).
-- **Code:** `discovery/`.
-- **Status:** implemented. It runs as its own process with `lpb discovery`, from the `[server]` extra.
+- **Code:** [NE-Build-Track/livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520`, process `livepeer-onchain-discovery`. This repository no longer ships the process.
+- **Status:** the engine reads a `GET /discovery` inventory. The process that builds it is the on-chain discovery service.
 
-The discovery service answers which runners exist. It finds eligible orchestrators through an
-`OrchestratorDirectory`, reads each one's inventory, and serves the merged result in livepeer-node's
-format. The engine reads it through `LPB_DISCOVERY_URL`
-([engine.md#discovery](engine.md#discovery)), and nothing in the engine depends on the service.
+The engine does not walk the chain and does not probe orchestrators. It polls `LPB_DISCOVERY_URL`
+([engine.md#discovery](engine.md#discovery)). That URL is the on-chain discovery service, livepeer-node's
+own discovery, or one orchestrator. Nothing in the engine imports the discovery process.
 
 ## HTTP
 
+The service answers livepeer-node's inventory. Railway and the dev stack run
+`livepeer-onchain-discovery` and keep the service name `discovery`, so the engine's URL stays
+`http://discovery:8939/discovery` (on Railway, `http://discovery.railway.internal:8939/discovery`).
+
 | Route | Answer |
 | --- | --- |
-| `GET /discovery` | `200` with livepeer-node's inventory: `[{"address": "<orchestrator base URL>", "runners": [...]}]`, one entry per orchestrator that is serving, in directory order. `address` is the URL that was probed, never one an orchestrator claims for itself. Runner records are passed through as the orchestrator advertised them |
-| `GET /readyz` | `200` once a directory has loaded, a probe pass has finished, and the refresh loop is still running; otherwise `503`, so a stopped refresh, which would serve a frozen inventory, gets the process restarted. The body is `ready`, `refreshing`, `orchestrators` (in the directory), `serving` (with an inventory), `directory_loaded_at`, `probed_at`, and `directory_error`: the last failed directory load as a stable reason (the error's type, and its message only when this service wrote it), or `null`. The endpoint is unauthenticated, so it never carries another system's error text |
+| `GET /discovery` | `200` with a JSON array. A metadata entry `{"nodes": [...]}` has no `address` and the engine skips it. Each other entry is `{"address": "<orchestrator base URL>", "runners": [...]}`. Runner records are passed through |
+| `GET /readyz` | `200` once a directory has loaded, a probe pass has finished, and the loops are running; otherwise `503`. The body is `ready`, `refreshing`, `orchestrators`, `serving`, `directory_loaded_at`, `probed_at`, and `directory_error`. `directory_error` is a stable reason this process wrote, never a provider's text or the RPC URL |
 | `GET /healthz` | `200` while the process runs |
 
-This format is what a livepeer-node `v1.0.2` orchestrator serves at `/discovery`. So
-`LPB_DISCOVERY_URL` can point at this service, at a single orchestrator, or at livepeer-node's own
-standalone discovery service (added in `v1.0.3`).
+There is no app filtering. The engine filters per request.
 
-There is no app filtering: consumers filter. The engine filters per request, and ChatLPT through its
-discovery wrapper.
+## Who is probed
 
-## Directories
+The process unions two sources:
 
-`OrchestratorDirectory.orchestrators()` returns the eligible `Orchestrator`s (a base URL, plus an
-optional Ethereum address). It raises when it cannot answer. Everything after the directory is
-shared: probing, TLS, caching and serving.
+- **Chain.** With `LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL` set, it walks the Arbitrum bonded pool through the protocol `Controller` (`0xD8E8328501E9645d16Cf49539efC04f734606ee4` unless overridden) and reads service URIs from the AI Service Registry (`0x04C0b249740175999E5BF5c9ac1dA92431EF34C5`). `LIVEPEER_ONCHAIN_DISCOVERY_SERVICE_REGISTRY=controller` reads the Controller's protocol `ServiceRegistry` instead. An orchestrator is eligible when it is active this round and its URI is an `https` base URL. A URI ending in `/.well-known/livepeer-registry.json` is skipped. One reverting orchestrator is skipped. A transient RPC failure is retried, then the whole load fails and the previous directory is kept.
+- **File.** `LIVEPEER_ONCHAIN_DISCOVERY_NODES` is a file of base URLs, one per line, `#` starting a comment, or a comma-separated list. Railway bakes in `deploy/railway/discovery/orchestrators.txt`. The dev stack mounts `deploy/dev-stack/config/orchestrators.txt`.
 
-| Directory | Who is eligible | Setting |
-| --- | --- | --- |
-| `StaticDirectory` | A configured list | `LPD_DIRECTORY=static`, `LPD_ORCHESTRATORS` (comma-separated base URLs, or a file with one per line; `#` starts a comment) |
-| `OnChainDirectory` | Orchestrators in the `BondingManager` transcoder pool on Arbitrum that are active in the current round (`isActiveTranscoder`) and registered in a service registry (non-empty `getServiceURI`): the AI Service Registry unless overridden | `LPD_DIRECTORY=onchain`, `LPD_ARBITRUM_RPC_URL` |
+The RPC URL is required. The process exits before listening when it is empty, and it never prints the value. A mode-0600 file may be named with `LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL_FILE`; the entrypoint reads it into the variable. The dev stack does that and runs the container as root so the file is readable. Railway sets the variable and runs as uid `10001`.
 
-**Which contracts.** The on-chain directory looks up the `BondingManager` in the protocol's `Controller`
-(`getContract`) on every load, so a protocol upgrade is followed.
-- **The registry it reads** is `LPD_SERVICE_REGISTRY`, which defaults to the AI Service Registry.
-- **Why that is an override:** the AI Service Registry was deployed beside the Controller and never
-  registered in it (`getContract(keccak256("AIServiceRegistry"))` is zero on Arbitrum). The Controller's
-  own `ServiceRegistry` is the protocol's registry for transcoding.
-- **To read it instead,** set `LPD_SERVICE_REGISTRY=controller`.
+Settings use the prefix `LIVEPEER_ONCHAIN_DISCOVERY_`. The listen address is `[::]:8939` on Railway and `0.0.0.0:8939` on the dev stack. Probes run every 30 seconds in both deploys. A source keeps its last inventory until 6 consecutive failed probes, then it is evicted. A failed directory load keeps the previous directory. The chain directory reloads every hour.
 
-**A registration is not operator input.** Anyone with enough stake can register any URI, so the directory
-treats each one as untrusted:
-- the URI must be an `https` base URL;
-- the orchestrator is marked `public_only` for the prober (see [Probing](#probing-and-caching));
-- an orchestrator whose own record cannot be read (a revert, a URI that is not UTF-8) is skipped and
-  logged as `discovery.orchestrator_unreadable`, and the rest are returned. A result that is not
-  well-formed ABI (`0x`, a short buffer, an offset or length past the end) is the RPC answering wrongly,
-  so it is treated like an RPC failure below, never as "not registered";
-- a failure of the RPC itself (HTTP 429 or 5xx, a JSON-RPC limit or internal error, the network) is
-  retried after 0.5 s and 2 s. If it persists, the whole load fails and the previous complete directory is
-  kept, rather than one that is quietly smaller until the next reload;
-- the pool walk reads no further than the pool's reported size and never more than 1000 (logged as
-  `discovery.pool_truncated`), so a bad linked list or a bad size cannot stall it.
+## Known limit
 
-It leaves out three kinds of orchestrator:
-- **Unregistered:** active but with no URI in the registry it reads.
-- **Unusable URI:** a URI that isn't an https base URL. It is logged as `discovery.service_uri_invalid`.
-- **Network-modules manifest:** a URI ending in `/.well-known/livepeer-registry.json`. That is the
-  Cloud-SPE `livepeer-network-modules` protocol, which this engine cannot pay. It is logged as
-  `discovery.registry_manifest_skipped`.
+The collector drops a runner with no `observed_at`, or one more than 30 seconds in the future
+([livepeer/node#51](https://github.com/livepeer/node/issues/51)). Orchestrators that still speak the
+v1.0.2 inventory do not appear. The engine is looser: a runner that reaches it with no stamp is kept,
+stamped with the poll time. A runner the collector already dropped never reaches the engine.
 
-To change who is discovered, write a directory and run `serve(settings, directory=...)`: an approved
-list, your own fleet, a configuration database. To change everything, serve the same `GET /discovery`
-format from any system and point `LPB_DISCOVERY_URL` at it.
+## Replacing it
 
-## Probing and caching
-
-**Probes.** Each orchestrator's `GET <base URL>/discovery` is read every `LPD_PROBE_INTERVAL_S`:
-- at most 16 at a time, with an `LPD_PROBE_TIMEOUT_S` timeout and a 1 MiB limit, and no redirects;
-- TLS is verified against the deployment's trust store: the system roots, as OpenSSL loads them, which
-  `SSL_CERT_FILE` and `SSL_CERT_DIR` extend. A deployment that pins orchestrator certificates for its
-  engine (inference-gateway's `runner-trust`) mounts the same pins and sets the same variable here;
-- an orchestrator whose certificate that store does not accept is left out, logged as
-  `discovery.orchestrator_excluded` with `reason="untrusted_certificate"`. The engine calls runners
-  over verified TLS with the same kind of store, so it could never use one;
-- **a URL the operator did not write** (`public_only`, from the chain) is resolved once and contacted
-  only if every address is public: not private, loopback, link-local, site-local, shared (CGNAT),
-  reserved, multicast or IPv4-compatible. An IPv4 address carried in IPv6 (mapped, NAT64 `64:ff9b::/96`,
-  6to4) is judged as that IPv4 address. The checked addresses are tried in order, with TLS still verified
-  against the name, and no other address is ever dialled. So a registration cannot reach the service's
-  own network or a metadata endpoint, nor rebind between the check and the connection. A dead first
-  address does not fail an orchestrator whose next one works, whether it refuses or stays silent: each
-  address but the last has 1 s to connect (TLS included) before the next is tried. Otherwise
-  `reason="private_address"`;
-- an inventory whose `runners` is not a list (a number, a string, an object) is a failed probe, never
-  an empty inventory that replaces the last good one. `null` means no runners. An object key that is
-  not a string (`[{1:2}]`) is not JSON either, so that probe fails instead of reading an empty inventory;
-- `NaN` or `Infinity` anywhere in an inventory is not JSON, so the probe fails. A number `Decimal`
-  cannot construct fails the same way: a float parser would keep the token, and re-serving it would
-  fail every engine's discovery refresh. The limit is the platform's `decimal`. On 64-bit CPython that
-  is an adjusted exponent above `999999999999999999` (`1e1000000000000000000` is refused) or an
-  exponent below `-1999999999999999997` (`1e-1000000000000000000` is kept). Other numbers with a
-  fraction are kept as the orchestrator sent them and re-served with those digits. An engine keeps
-  those digits once ISS-10 ([#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77)) is
-  in; before that, the SDK reads `price_usd` as a float;
-- any other failure, of any kind, is `reason="failed"` for that orchestrator alone: it never ends the
-  pass;
-- an empty inventory counts as a success.
-
-**Retention.** A failed probe keeps the orchestrator's last inventory until `LPD_MAX_FAILED_REFRESHES`
-consecutive failures, then evicts it. `0` evicts on the first failure. A success resets the count.
-
-**Directory reloads.** The directory reloads every `LPD_DIRECTORY_INTERVAL_S`, and on every probe tick
-until it has loaded once:
-- a load that takes longer than `LPD_DIRECTORY_TIMEOUT_S` is abandoned, so probing goes on;
-- a failed load keeps the previous directory and sets `directory_error` (its full text is logged as
-  `discovery.directory_failed`);
-- an orchestrator that leaves the directory drops out at once, and comes back only after it answers again.
-
-**The loop survives its own errors.** A pass that fails is logged as `discovery.refresh_failed` and
-the next tick runs. If the loop ever stops, `discovery.refresh_stopped` is logged and `/readyz` fails.
-
-**Logs.** The service's logging keeps `httpx` at WARNING: its per-request INFO line carries the URL,
-and `LPD_ARBITRUM_RPC_URL` usually carries the provider's key. A JSON-RPC error is reported by its code,
-never with the provider's text.
-
-The cache is not persisted.
-
-## Settings
-
-The prefix is `LPD_`, so these never collide with the engine's `LPB_*` settings.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `LPD_DIRECTORY` | `static` | `static` or `onchain` |
-| `LPD_ORCHESTRATORS` | unset | Static: base URLs or a file. Required for `static` |
-| `LPD_ARBITRUM_RPC_URL` | unset | On-chain: JSON-RPC endpoint, often carrying the provider key. Required for `onchain`; never logged |
-| `LPD_CONTROLLER` | `0xD8E8328501E9645d16Cf49539efC04f734606ee4` | The protocol's `Controller` on Arbitrum mainnet; the `BondingManager` (and, with `controller` below, the `ServiceRegistry`) is looked up in it |
-| `LPD_SERVICE_REGISTRY` | `0x04C0b249740175999E5BF5c9ac1dA92431EF34C5` | The registry read for service URIs: the AI Service Registry, an override of the Controller's. `controller` reads the Controller's protocol `ServiceRegistry` |
-| `LPD_DIRECTORY_INTERVAL_S` | `3600` | Directory reload. The active set changes per round |
-| `LPD_DIRECTORY_TIMEOUT_S` | `300` | The most one directory load may take before it is abandoned |
-| `LPD_PROBE_INTERVAL_S`, `LPD_PROBE_TIMEOUT_S` | `30`, `5` | Inventory refresh and the time allowed for each probe |
-| `LPD_MAX_FAILED_REFRESHES` | `6` | Consecutive failed probes before eviction |
-| `LPD_HTTP_HOST`, `LPD_HTTP_PORT` | `127.0.0.1`, `8939` | Listener. `8939` is livepeer-node discovery's port |
-| `LPD_LOG_JSON` | `true` | JSON-lines logs |
+Serve the same `GET /discovery` document from another process and point `LPB_DISCOVERY_URL` at it.
+To change who the engine calls in-process, supply another `DiscoverySource`
+([extending the engine](../design-docs/extending-the-engine.md)).

@@ -8,7 +8,7 @@ payment side, the discovery service and the engine:
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
 | `signer` | livepeer/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It only signs payments |
-| `discovery` | This repository's discovery service (`lpb discovery`, the engine image) on `127.0.0.1:8939`, with the static directory `config/orchestrators.txt` ([contract](../../docs/contracts/discovery.md)) |
+| `discovery` | `livepeer-onchain-discovery` ([contract](../../docs/contracts/discovery.md)) on `127.0.0.1:8939`. It probes `config/orchestrators.txt` and the Arbitrum AI Service Registry. The RPC URL is `secrets/rpc-url` |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from the discovery service (`LPB_DISCOVERY_URL`) |
 
 Upstream sources are built from the M2 baseline commits
@@ -82,7 +82,7 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
 
 - **`secrets/` and `.env` are git-ignored.** Keep the RPC URL and keys only there.
 - **Image registry:** `IMAGE_REGISTRY` in `.env` prefixes the images this stack builds
-  (`<registry>/livepeer-builder-dev/{clearinghouse,node,engine}`). This environment uses
+  (`<registry>/livepeer-builder-dev/{clearinghouse,node,engine,discovery}`). This environment uses
   `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
   image is an explicit `docker compose push <service>`. Base images (`python`, Go) still come from
   Docker Hub.

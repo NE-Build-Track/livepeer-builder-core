@@ -31,6 +31,12 @@ def test_railway_discovery_image_runs_the_pinned_onchain_service() -> None:
     assert '[ -z "${LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL:-}" ]' in entrypoint, (
         "deploy/railway/discovery/entrypoint.sh must exit when LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL is empty."
     )
+    assert (
+        'LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL=$(cat "$LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL_FILE")' in entrypoint
+    ), (
+        "The entrypoint must read LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL_FILE into the variable "
+        "without printing it, for a mode-0600 secret file."
+    )
     assert 'echo "$LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL"' not in entrypoint, (
         "The entrypoint must not print LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL."
     )

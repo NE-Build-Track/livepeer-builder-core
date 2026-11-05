@@ -46,7 +46,7 @@ invents nothing:
 | complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
 | not an object, a bad price (not finite, negative, above `0` but below `1e-300`, or `1e300` or more), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` or `"price must be 0, or from 1e-300 to below 1e300"` |
 | complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
-| a `price` or `price_usd` number whose exponent `Decimal` cannot build (past `10**18` either way, for example `1e` and twenty 9s), or an integer longer than the runtime digit limit (4300 digits by default) | as for a bad `price` (`None`) or a bad `price_usd` (the rate, without it) | the same reasons. Only that field is unreadable, never the document: a cache that passes the token through (livepeer-node's discovery) does not stop every other orchestrator from updating. `lpb discovery` refuses such an orchestrator instead ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87)) |
+| a `price` or `price_usd` number whose exponent `Decimal` cannot build (past `10**18` either way, for example `1e` and twenty 9s), or an integer longer than the runtime digit limit (4300 digits by default) | as for a bad `price` (`None`) or a bad `price_usd` (the rate, without it) | the same reasons. Only that field is unreadable, never the document: a cache that passes the token through (livepeer-node's discovery) does not stop every other orchestrator from updating. The retired `lpb discovery` process refused such an orchestrator instead ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87)) |
 
 The floor for a positive price is `1e-300`, inside the normal float range. Below it, `1E-400` and
 `1E-999999` pad to the float `0.0`, and near the bottom of the range the 1.2% pad can land under the
@@ -74,7 +74,7 @@ payment (a 402): a runner priced in `hour` that answers without asking serves a 
 **Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
 [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
 `v1.0.4`). The stamp is the orchestrator's **response time**. Read directly from an orchestrator it is
-about the engine's poll time. Read through a cache (`lpb discovery`, livepeer-node's `livepeer discovery`)
+about the engine's poll time. Read through a cache (`livepeer-onchain-discovery`, livepeer-node's `livepeer discovery`)
 it is when that cache last read the orchestrator, which is the age the catalog needs. Each served rate
 says which clock it used:
 

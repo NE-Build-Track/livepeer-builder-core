@@ -41,7 +41,7 @@ _RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:
 
 class HttpDiscoverySource:
     """Reads a ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
-    (``lpb discovery``, docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
+    (docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
     credentials; the signer is not involved in discovery (#45). ``price_usd`` stays a ``Decimal``.
 
     The whole request, body included, gets ``timeout_s`` (5 s, as the SDK's ``discover_runners`` had) and

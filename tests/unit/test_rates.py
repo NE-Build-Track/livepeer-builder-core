@@ -175,8 +175,8 @@ def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
 def test_a_stamp_outside_the_utc_range_is_unreadable_and_keeps_the_inventory() -> None:
     """``astimezone(UTC)`` raises OverflowError at the ends of the datetime range.
 
-    One such stamp on one runner must not fail the refresh for every other runner. ``lpb discovery``
-    re-serves the text: the probe only checks that it is a JSON string.
+    One such stamp on one runner must not fail the refresh for every other runner. A cache that
+    re-serves the text only checks that it is a JSON string.
     """
     entries = [{"address": "https://o", "runners": [
         {"url": "https://o/apps/good/app", "app": "a/b", "observed_at": "2026-10-30T00:00:00Z"},

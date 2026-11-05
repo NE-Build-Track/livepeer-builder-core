@@ -21,7 +21,6 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | `AuditedVaultSecretStore`: HashiCorp Vault, AWS/GCP secret manager, HSM | supply `secret_store=` |
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | supply `selection=` |
 | `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`) / `StaticDiscoverySource` | `ApprovedOrchestratorsOnly`: an allow-list wrapper. Or an in-process registry or cached catalog | decorate (wrap `parts.discovery_source`) or supply `discovery_source=` |
-| `OrchestratorDirectory` (discovery service, its own process) | `OnChainDirectory` (the bonded active set, registered for AI) / `StaticDirectory` (a list) | `ApprovedOnly`: any directory narrowed to approved hosts. Or a configuration database, a private fleet | `serve(settings, directory=...)`; see [Discovery](#discovery-write-an-orchestrator-directory) |
 | `RunnerTransport` | `SdkRunnerTransport` (Live Runner via the SDK) | Another network transport, or a recording proxy for audit | supply or decorate `transport=` |
 | `StreamingRunnerTransport` (optional `open` beside `call`) | `SdkRunnerTransport` | The same transport, streaming. Without `open`, `jobs.streaming` is `None` and the REST streaming route answers 400 (D33) | supply `transport=` |
 | `AllocationManager` / `UsageSource` | `BatteriesClient` / `BatteriesUsageSource` | Another payment provider, or a hosted operator's API (Mode B) | supply `allocation_manager=` / `usage_source=` |
@@ -246,46 +245,16 @@ asyncio.run(
 )
 ```
 
-## Discovery: write an orchestrator directory
+## Discovery
 
-Which runners exist is decided by the discovery service, a separate process (`lpb discovery`,
-[contract](../contracts/discovery.md)) that engines read through `LPB_DISCOVERY_URL`. Its one port is
-`OrchestratorDirectory`, which answers which orchestrators are eligible. Probing each orchestrator's
-`/discovery`, excluding untrusted TLS, caching and serving are shared, so a directory is all you write.
+Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` points at a `GET /discovery`
+inventory ([contract](../contracts/discovery.md)): `livepeer-onchain-discovery`, livepeer-node's own
+discovery, or one orchestrator. The on-chain directory and the probe loop live in
+[livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery), not in this package.
 
-The service ships two directories, and each is a complete example:
-
-| Directory | Who is eligible | Reads |
-| --- | --- | --- |
-| `StaticDirectory` | A list you configure (`LPD_ORCHESTRATORS`) | Nothing: the list is the answer |
-| `OnChainDirectory` | Orchestrators active in the current round and registered in the AI Service Registry (`LPD_SERVICE_REGISTRY`; `controller` for the protocol's) | Arbitrum through `LPD_ARBITRUM_RPC_URL` (plain `eth_call`): the `Controller`, then the `BondingManager` and the registry |
-
-Your own directory follows the same shape. This one narrows whichever directory is configured to the
-hosts your organization approved, so you can use the protocol's answer and still vet who you pay:
-
-<!-- example: tests/discovery/test_directory_example.py#approved-directory -->
-```python
-class ApprovedOnly:
-    """Any directory (on-chain, static, your own) narrowed to the hosts your organization approved."""
-
-    def __init__(self, inner: OrchestratorDirectory, approved_hosts: set[str]) -> None:
-        self._inner = inner
-        self._approved = approved_hosts
-
-    async def orchestrators(self) -> tuple[Orchestrator, ...]:
-        found = await self._inner.orchestrators()
-        return tuple(o for o in found if urlsplit(o.url).hostname in self._approved)
-
-
-async def run_discovery(settings: DiscoverySettings) -> None:
-    """``lpb discovery``, with the configured directory (LPD_DIRECTORY) narrowed to approved hosts."""
-    directory = ApprovedOnly(directory_from(settings), {"ai1.eliteencoder.net", "hky.eliteencoder.net"})
-    await serve(settings, directory=directory)
-```
-
-A directory raises when it cannot answer; the service then keeps the last directory it had. To replace
-discovery entirely, serve livepeer-node's `GET /discovery` inventory from any system and point
-`LPB_DISCOVERY_URL` at it.
+To change who the engine calls without replacing that process, supply or decorate a `DiscoverySource`.
+Raising from it keeps the last good snapshot. To replace the inventory entirely, serve the same
+document from another process and point `LPB_DISCOVERY_URL` at it.
 
 ## Rules every implementation must keep
 

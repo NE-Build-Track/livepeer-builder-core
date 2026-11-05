@@ -10,6 +10,6 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [payments.md](payments.md): allocation modes, provisioning, units, cost classification | ISS-04 | Implemented; Mode B defined as a gap (M4) |
 | [events.md](events.md): versioned event feed | ISS-02 | Defined; held in M3 (D60) |
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
-| [discovery.md](discovery.md): the discovery service, orchestrator directories (static, on-chain), `GET /discovery` | ISS-09, #45 | Implemented (its own process, `lpb discovery`) |
+| [discovery.md](discovery.md): `GET /discovery` from `livepeer-onchain-discovery` | ISS-09, #45 | The engine reads it. The process lives in [livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) |
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).

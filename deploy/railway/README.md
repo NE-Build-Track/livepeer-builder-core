@@ -48,7 +48,7 @@ when the environment secret is missing.
 | a pull request | `preview` | preview project token |
 
 A push to `main` or `releases/*` deploys Batteries, the signer, the discovery service and the engine.
-A pull request deploys the engine only, so it does not restart Batteries, the signer, or discovery.
+A pull request deploys the engine and the discovery service. It does not restart Batteries or the signer.
 **Deploy** can also be run by hand for one service or all four, on the selected branch. A manual run
 on any other branch deploys the engine only.
 Limit the `production` environment's deployment branches to `main` and `releases/*` so a branch job

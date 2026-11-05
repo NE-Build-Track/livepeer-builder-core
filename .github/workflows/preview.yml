@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy preview engine
+    name: Deploy preview engine and discovery
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     environment: preview
@@ -121,6 +121,17 @@ jobs:
             --service engine \
             --ci \
             -m "preview pr-${PR} ${SHA}"
+
+      - name: Deploy discovery
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          railway up \
+            --service discovery \
+            --ci \
+            -m "preview pr-${PR} discovery ${SHA}"
 
   cleanup:
     name: Delete the Neon branch

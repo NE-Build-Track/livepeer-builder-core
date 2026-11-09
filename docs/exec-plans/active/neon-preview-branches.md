@@ -23,9 +23,10 @@ that data, migrates it, and the branch is deleted when the PR closes.
   at cutover. `GET /livez` on the production engine returns 200, and later usage rows are on Neon.
 - [x] The engine URL is the direct Neon host. The entrypoint maps `sslmode` to asyncpg's `ssl` and
   drops `channel_binding`. Preview deploys run migrations. Tests cover both.
-- [x] `.github/workflows/preview.yml` creates `preview/pr-<number>` from `main` on open, synchronize,
-  and reopen, and deletes it when the PR closes. Pushes of other branches no longer deploy the
-  preview engine.
+- [x] A preview database is a Neon branch of production `main`. Since 9 November that branch is
+  created and deleted by hand from
+  [NE-Build-Track/deployments](https://github.com/NE-Build-Track/deployments). This repository has
+  no preview workflow. Production stays on Neon `main`.
 - [x] `NEON_API_KEY` and `NEON_PROJECT_ID` are set on the GitHub `preview` environment. PR #60
   created `preview/pr-60` from `main`.
 - [x] Railway Postgres is still provisioned in production and preview.

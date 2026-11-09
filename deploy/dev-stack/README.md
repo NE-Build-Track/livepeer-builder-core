@@ -18,8 +18,12 @@ Upstream sources are built from the M2 baseline commits
 
 - A **payer keystore** whose account has a funded TicketBroker deposit and reserve on Arbitrum One.
 - An **Arbitrum One RPC URL**. It may contain an API key; it lives only in `secrets/rpc-url`.
-- The orchestrators to use, listed in `config/discovery.toml`. Discovery does not probe them. The
-  engine still refuses a runner whose TLS certificate the system trust store rejects.
+- The orchestrators to use, listed in `config/discovery.toml`. Discovery collects each listed URL:
+  it GETs `<base>/discovery` at startup and every `RefreshInterval`, and it verifies TLS with the
+  system trust store. A runner without `observed_at`, or one stamped more than 30 seconds ahead, is
+  dropped, and a TLS failure never enters the catalog. `/readyz` on the metrics port is ready when
+  the process listens; it does not report an empty inventory. The engine still refuses an untrusted
+  certificate when it calls a runner.
 
 ## Start
 

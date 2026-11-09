@@ -2,7 +2,7 @@
 
 A library that installs handlers or calls ``basicConfig`` takes a decision away from every application
 that embeds it. Only ``runtime/logging.py`` touches the root logger, and only the shipped applications
-(the CLI, the stock server and the Railway entrypoint) call ``configure_logging``.
+(the CLI and the stock server) call ``configure_logging``.
 """
 
 import ast
@@ -10,12 +10,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "livepeer_builder"
-FILES = [*sorted(SRC.rglob("*.py")), ROOT / "deploy" / "railway" / "engine" / "entrypoint.py"]
+FILES = [*sorted(SRC.rglob("*.py"))]
 SETS_UP_LOGGING = {SRC / "runtime" / "logging.py"}
 APPLICATIONS = {
     SRC / "cli.py",
     SRC / "http" / "server.py",
-    ROOT / "deploy" / "railway" / "engine" / "entrypoint.py",
 }
 
 
@@ -78,6 +77,6 @@ def test_only_the_applications_call_configure_logging() -> None:
         for line in configure_logging_calls(ast.parse(path.read_text(), filename=str(path)))
     ]
     assert not found, (
-        f"configure_logging is called from library code: {found}. Only the CLI, http/server.py's serve() "
-        "and the Railway entrypoint configure logging; an embedding application configures its own."
+        f"configure_logging is called from library code: {found}. Only the CLI and http/server.py's serve() "
+        "configure logging; an embedding application configures its own."
     )

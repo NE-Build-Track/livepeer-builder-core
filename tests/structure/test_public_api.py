@@ -7,7 +7,7 @@ of a returned model, must be exported from ``livepeer_builder``; so must every `
 consumer implements (``Authenticator``, ``EventFeed``, …) live in the public ``livepeer_builder.protocols``
 module instead. When a consumer has to import from any other submodule, the public API is incomplete.
 
-The CLI, the stock server and the Railway entrypoint are applications built on the package, so they
+The CLI and the stock server are applications built on the package, so they
 import only the public API: the root, and the ``__all__`` of ``api``, ``protocols``, ``runtime``,
 ``http``, ``store`` and ``testing``. What they need, another application needs too.
 """
@@ -40,7 +40,6 @@ PUBLIC_MODULES = (
 APPLICATIONS = (
     ROOT / "src" / "livepeer_builder" / "cli.py",
     ROOT / "src" / "livepeer_builder" / "http" / "server.py",
-    ROOT / "deploy" / "railway" / "engine" / "entrypoint.py",
 )
 # (application, private module) -> why the application may import it
 PRIVATE_ALLOWED = {

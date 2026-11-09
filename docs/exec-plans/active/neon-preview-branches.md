@@ -54,3 +54,8 @@ that data, migrates it, and the branch is deleted when the PR closes.
   session. Preview computes suspend after 5 minutes and cap at 1 CU.
 - 27 October — Railway Postgres stays in place after the cutover so production can be pointed back
   at it.
+- 9 November — Mike, [PR #95](https://github.com/NE-Build-Track/livepeer-builder-core/pull/95)
+  review: the Neon preview workflow moves to the private repository
+  [NE-Build-Track/deployments](https://github.com/NE-Build-Track/deployments). This repository
+  no longer deploys. Production stays on Neon `main`. Preview branches are created by hand from
+  that repository.

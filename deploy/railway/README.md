@@ -100,16 +100,22 @@ named `discovery`, created once by the project owner, with:
 
 The image runs `livepeer-onchain-discovery` from
 [NE-Build-Track/livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520`.
-It listens on `[::]:8939`, probes [discovery/orchestrators.txt](discovery/orchestrators.txt) every 30
-seconds, and reloads the Arbitrum AI Service Registry every hour. `lpb discovery` is deprecated on
-Railway. This repository's command and the dev stack still run it until that process is removed.
+`GET /discovery` is livepeer/node's
+[discovery JSON Schema](https://github.com/livepeer/node/blob/main/docs/discovery.schema.json).
+The listen address `[::]:8939`, the 30-second probe of
+[discovery/orchestrators.txt](discovery/orchestrators.txt), the hourly Arbitrum AI Service Registry
+reload, and `LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL` are deploy settings of this image. `lpb discovery`
+is deprecated on Railway. This repository's command and the dev stack still run it until that
+process is removed.
 
 Set `LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL` on the `discovery` service in each environment that deploys
 it. The value is a provider URL and often carries a key, so it stays a sealed Railway variable. The
-process exits before listening when the variable is empty, and it never prints the value. Collectors
-from livepeer/node v1.0.3 onward drop a runner that omits `observed_at` or sets it more than 30
-seconds ahead ([livepeer/node#51](https://github.com/livepeer/node/issues/51)), so a v1.0.2
-orchestrator in the static file or on chain does not appear in `GET /discovery`.
+process exits before listening when the variable is empty, and it never prints the value. The schema
+requires `observed_at` on every runner. Collectors from livepeer/node v1.0.3 onward drop a runner
+that omits it or sets it more than 30 seconds ahead
+([livepeer/node#51](https://github.com/livepeer/node/issues/51)), so a v1.0.2 orchestrator in the
+static file or on chain does not appear in `GET /discovery`. `https://hky.eliteencoder.net:8936`
+is one of those: its `blueclaw/chat/qwen3.8-27b` runner has no `observed_at`.
 
 ## Engine database
 

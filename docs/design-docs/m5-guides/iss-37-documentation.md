@@ -37,7 +37,7 @@ M4. M5 runs from 21 to 31 December 2026.
 | Operations | `docs/RELIABILITY.md` (configuration table, `lpb` commands, backup and restore, failure behavior), `docs/SECURITY.md` (secrets, trust boundaries), `docs/QUALITY_SCORE.md` |
 | Extension | `docs/design-docs/extending-the-engine.md`; `docs/generated/interfaces.md` |
 | Generated | `docs/generated/`: `openapi.json`, `db-schema.md`, `interfaces.md`, `contracts.md`, written by `lpb gen-docs` (`src/livepeer_builder/docs_gen.py`, `docs_diagrams.py`). CI runs `lpb gen-docs --check` |
-| Deploy | `deploy/dev-stack/README.md` (payer prerequisites), `deploy/railway/README.md` |
+| Deploy | `deploy/dev-stack/README.md` (payer prerequisites). Railway deployment is the private repository NE-Build-Track/deployments, not this one |
 | References | `docs/references/`: pins, licenses, wire formats, runtime evidence |
 | Reference app (console) | `README.md`, `docs/guides/m3-journey.md` (the ISS-24 guide), `deploy/README.md`, `deploy/keycloak/README.md`, `docs/references/payment-stack.md` |
 
@@ -64,7 +64,7 @@ M4. M5 runs from 21 to 31 December 2026.
 | Both payment configurations | `payments.md` (allocation modes; Mode B "deferred to M4") | No setup guide. `per_application` needs `LPB_SHARED_ALLOCATION_ID` set by hand (T5). The second configuration is ISS-31's output |
 | Enterprise auth replacement | `extending-the-engine.md`; `access.md` (JWT bearer and the appendix); console `deploy/keycloak/README.md` | No guide. #51 (public and confidential OIDC clients) is open. `QUALITY_SCORE.md` still grades Access B with "JWT and trusted backend are C (M4)", although JWT bearer is built (T7, D45) |
 | Jobs and reporting | `engine.md`, `payments.md#cost-classification` | Contract prose only, with no task path ("run a job, read result and cost, reconcile"). Async and persistent modes arrive with ISS-26 and ISS-27 |
-| Configuration | `RELIABILITY.md#configuration`; `discovery.md#who-is-probed` (`LIVEPEER_ONCHAIN_DISCOVERY_*`) | Unguarded (above) |
+| Configuration | `RELIABILITY.md#configuration`; `discovery.md` (the dev stack's `discovery.toml`) | Unguarded (above) |
 | Upgrades | `persistence.md#migrations` (`lpb migrate`, `lpb revision`, drift test) | No procedure (stop, back up, migrate, start, verify), no release notes, no statement on downgrades |
 | Retention | `persistence.md#retention` | Adequate |
 | Backup and restore | `RELIABILITY.md#backup-and-restore`; drill in `tests/store/test_durability.py` | Adequate for SQLite. PostgreSQL gets one line (`pg_dump`), and PostgreSQL is stretch scope |
@@ -200,7 +200,7 @@ The docs at the release candidate tag pass the same checks.
 
 | Upstream | Needed? | Why |
 | --- | --- | --- |
-| livepeer/node | No | The docs describe the signer at the pinned `406b248` and link node's own docs by commit |
+| livepeer/node | No | The docs describe the signer at the pinned `f45d83f` and link node's own docs by commit |
 | livepeer-python-gateway | No | Install docs must say that the SDK is a git direct reference until a PyPI release exists (T1), so `git` is a prerequisite. That is a documentation fact, not a change |
 | clearinghouse-batteries | No | Operators build it from source at `ca09e47` (no published images, T8). Its licensing is ISS-38's concern |
 

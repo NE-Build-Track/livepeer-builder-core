@@ -1,8 +1,8 @@
 # livepeer-builder dev stack. Optional; not part of CI. See README.md.
 #
 # Batteries (embedded Kafka) + livepeer/node remote signer + the discovery service + the engine.
-# Orchestrators are assumed to exist on the network: the discovery service lists the ones in
-# config/orchestrators.txt (docs/contracts/discovery.md), and the signer only signs payments.
+# Orchestrators are assumed to exist on the network: discovery is livepeer/node's
+# livepeer-discovery in static mode (config/discovery.toml), and the signer only signs payments.
 # Upstream sources are pinned to the M2 baseline commits (docs/references/upstream-baseline.md).
 name: livepeer-builder-dev
 
@@ -23,9 +23,9 @@ services:
       retries: 12
 
   signer:
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:406b248
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:f45d83f
     build:
-      context: https://github.com/livepeer/node.git#406b248f6cb8728e6e7eba1809901f589060bc6b
+      context: https://github.com/livepeer/node.git#f45d83fd68f73d195dffe8b45f6cac296d023c49
       dockerfile: docker/Dockerfile
     user: "0:0"  # dev only: lets the container read bind-mounted secrets regardless of host uid
     network_mode: service:clearinghouse  # Kafka and the webhook listen on this namespace's loopback
@@ -39,19 +39,15 @@ services:
       clearinghouse:
         condition: service_healthy
 
-  discovery:  # livepeer-onchain-discovery; the same image contract as Railway
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/discovery:local
+  discovery:  # livepeer/node's stock discovery, static mode. Same image as the signer.
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:f45d83f
     build:
-      context: ../..
-      dockerfile: deploy/railway/discovery/Dockerfile
-    user: "0:0"  # dev only: secrets/rpc-url is mode 0600, and the image user cannot read it
-    environment:
-      LIVEPEER_ONCHAIN_DISCOVERY_LISTEN: 0.0.0.0:8939
-      LIVEPEER_ONCHAIN_DISCOVERY_NODES: /etc/lpd/orchestrators.txt
-      LIVEPEER_ONCHAIN_DISCOVERY_RPC_URL_FILE: /run/secrets/rpc-url
+      context: https://github.com/livepeer/node.git#f45d83fd68f73d195dffe8b45f6cac296d023c49
+      dockerfile: docker/Dockerfile
+    entrypoint: ["/usr/local/bin/livepeer-discovery"]
+    command: [--config, /etc/livepeer/discovery.toml]
     volumes:
-      - ./config/orchestrators.txt:/etc/lpd/orchestrators.txt:ro
-      - ./secrets/rpc-url:/run/secrets/rpc-url:ro
+      - ./config/discovery.toml:/etc/livepeer/discovery.toml:ro
     ports: ["127.0.0.1:8939:8939"]
 
   engine:

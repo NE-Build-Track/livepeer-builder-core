@@ -35,7 +35,7 @@ flowchart LR
         Runner["Live Runners<br/>(runner apps)"]
         Chain[("Arbitrum One<br/>TicketBroker, BondingManager,<br/>AIServiceRegistry")]
     end
-    DiscSvc["Discovery service<br/>(livepeer-onchain-discovery)"]
+    DiscSvc["Discovery service<br/>(GET /discovery)"]
     User --> App
     App -->|"imported (in-process)"| Core
     App -->|"or REST + engine key / JWT"| API --> Core

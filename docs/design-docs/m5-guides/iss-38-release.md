@@ -49,12 +49,12 @@ permitted reuse).
 | --- | --- |
 | Wheel and sdist | `uv build` in CI job `build-install`; uploaded as artifact `livepeer-builder-dist` (14 days). **Nothing is published** (ISS-07). No GitHub releases exist. `livepeer-builder` is not on PyPI (404) |
 | Dependencies | `uv.lock` (frozen in CI). The SDK is a **direct reference**, `livepeer-gateway @ git+…@2017a80` (`allow-direct-references = true`, T1). PyPI refuses uploads whose metadata has direct references, so PyPI is blocked until an SDK release. Installing the wheel needs `git` |
-| Engine image | `deploy/dev-stack/engine/Dockerfile` and `deploy/railway/engine/Dockerfile`; discovery image `deploy/railway/discovery/Dockerfile`. All run `pip install ".[server…]"` from the source tree: **not from the wheel and not from `uv.lock`**, so dependency versions float at build time. Base `python:3.12.7-slim` by tag, not digest |
+| Engine image | `deploy/dev-stack/engine/Dockerfile` runs `pip install ".[server…]"` from the source tree: **not from the wheel and not from `uv.lock`**, so dependency versions float at build time. Base `python:3.12.7-slim` by tag, not digest. The Railway images are in NE-Build-Track/deployments |
 | Image checks | CI job `container`: non-root, `lpb smoke`, `/readyz`, unauthenticated `POST /v1/jobs` → 401 |
 | Install check | CI job `build-install`: wheel into a clean venv, `lpb smoke`, `lpb revision`; `test_packaging.py` checks that the migrations ship |
-| Other CI | `checks` (ruff, format, mypy strict, `check_docs`, `gen-docs --check`, tests with coverage gates), `postgres`, `railway-compose` |
-| Actions | Pinned by major tag (`actions/checkout@v4`, `astral-sh/setup-uv@v5`, `actions/upload-artifact@v4`), not by SHA. `deploy.yml` runs `npm install -g @railway/cli` unpinned |
-| Deploys | `deploy.yml` deploys **production** on every push to `main` or `releases/**`. `preview.yml` deploys a preview per PR on a Neon branch |
+| Other CI | `checks` (ruff, format, mypy strict, `check_docs`, `gen-docs --check`, tests with coverage gates), `postgres` |
+| Actions | Pinned by major tag (`actions/checkout@v4`, `astral-sh/setup-uv@v5`, `actions/upload-artifact@v4`), not by SHA |
+| Deploys | This repository does not deploy. Railway deploys are `workflow_dispatch` in NE-Build-Track/deployments |
 | Registry | `IMAGE_REGISTRY=registry.livepeer.tools` in `deploy/dev-stack/.env.example` only prefixes local tags; builds never push. No GHCR packages |
 | Release notes | No `CHANGELOG` and no release workflow. Decisions and `m2-traceability.md` partly serve |
 
@@ -144,8 +144,8 @@ The workflow is manual (`workflow_dispatch`, input: tag). Each gate must pass be
 | 7. Human | Mike reviews the draft, then publishes it or leaves it as a draft. Visibility, transfer and operation are separate decisions |
 
 The branch flow finishes M3 through PR #32 as drafted (`releases/m3` → `releases/final` → `main`, then tag
-`v0.2.0`). M5 cuts `releases/v1.0` from `main`. Because a push to `main` deploys production (`deploy.yml`),
-the procedure states that merging the release PR deploys Railway, unless Q3 changes that.
+`v0.2.0`). M5 cuts `releases/v1.0` from `main`. A push to this repository does not deploy. Railway
+deploys are dispatched from NE-Build-Track/deployments.
 
 ### 4. Consumers converge on the release
 
@@ -158,9 +158,9 @@ wheel by version. The console's `pins.test.ts` may assert that the engine pin eq
 | --- | --- |
 | `.github/workflows/release.yml` (new) | Gates 1–6 |
 | `.github/workflows/ci.yml` | `on: workflow_call`; actions pinned by SHA |
-| `.github/workflows/deploy.yml` | Pin the Railway CLI version; maybe deploy from tags instead of pushes (Q3) |
+| NE-Build-Track/deployments workflows | Pin the Railway CLI version; maybe deploy from tags instead of a manual dispatch (Q3) |
 | `deploy/image/Dockerfile` (new) | Wheel-based, lock-constrained, digest-pinned base |
-| `deploy/*/engine/Dockerfile`, `deploy/railway/discovery/Dockerfile` | Build `FROM` the release image, or are deleted |
+| `deploy/dev-stack/engine/Dockerfile` and the Dockerfiles in NE-Build-Track/deployments | Build `FROM` the release image, or are deleted |
 | `scripts/release_check.py` (new) | Version, tag, wheel contents, checksums |
 | `tests/store/test_packaging.py` | Inspect the wheel named by the build, not `sorted(...)[-1]` |
 | `tests/structure/test_release.py` (new) | Workflow and Dockerfile invariants, like `test_deploy.py` |
@@ -210,7 +210,7 @@ by someone other than its author (it feeds ISS-37's fresh-reviewer check).
 | Upstream | Needed? | Why |
 | --- | --- | --- |
 | livepeer-python-gateway | **Only for PyPI** | The direct reference blocks a PyPI upload (T1). A GitHub release wheel installs fine with `git` present. Vendoring the whole SDK to remove the reference is possible but large; D53 vendored one function. Recommendation: no PyPI in the Build Track unless Livepeer releases the SDK |
-| livepeer/node | No | Not redistributed. Operators build `406b248`, or use node's published images if a tag matches the pin (T8) |
+| livepeer/node | No | Not redistributed. Operators build `f45d83f`, or use node's published images if a tag matches the pin (T8) |
 | clearinghouse-batteries | No change; a reuse constraint | It has no license, so we do not publish its image. Operators build it from source at `ca09e47`; the reuse record says so |
 
 ## Consumer impact

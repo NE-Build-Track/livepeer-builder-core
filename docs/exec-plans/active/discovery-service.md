@@ -5,7 +5,7 @@
 - **Owner:** Mike.
 - **Ticket:** [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45), part of ISS-09 ([Network-Engineering-SPE#22](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/22)).
 - **Branch:** `tasks/mz/discovery-service`, off `releases/m3` at `629f1ab`.
-- **Progress:** the process has left this repository. Railway and the dev stack run `livepeer-onchain-discovery` (`737e520`). The engine still reads `LPB_DISCOVERY_URL`.
+- **Progress:** `lpb discovery` has left this repository. The dev stack runs livepeer/node `livepeer-discovery` at `f45d83f` in static mode. The engine still reads `LPB_DISCOVERY_URL`.
 - **Overlap:** it covers the problem in #27 and #30. PR #34 (`LPB_ORCHESTRATOR_LIST`) is being handled separately.
 - **Decision:** D43.
 
@@ -39,12 +39,11 @@ Today the engine reads the remote signer's `GET /discover-orchestrators`. In liv
   - `ARCHITECTURE.md` and the diagrams;
   - D43;
   - generated docs.
-- [ ] Deploy (all in the branch except the last item, which waits for the owner):
-  - the dev stack and Railway run the discovery service on the static list;
-  - the engine's `LPB_DISCOVERY_URL` points at it;
-  - the signer configs lose `Orchestrators` and pinned certificates;
-  - the deploy workflow learns the `discovery` service;
-  - the Railway service itself is created by the owner.
+- [x] Deploy, revised 9 November (Mike, PR #95 review):
+  - the dev stack runs livepeer/node `livepeer-discovery` at `f45d83f` in static mode (`config/discovery.toml`);
+  - the engine's `LPB_DISCOVERY_URL` still points at `GET /discovery`;
+  - the signer configs have no `Orchestrators` list and no pinned certificates;
+  - Railway deployment, including any discovery image, is NE-Build-Track/deployments. This repository does not deploy.
 - [x] ChatLPT, the console and inference-gateway are pinned to the branch. Their stacks run the discovery service on the static list, and their live tests pass (re-pin to the merge on `releases/m3`).
 
 ## Design
@@ -230,7 +229,7 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
   which honours `SSL_CERT_FILE` / `SSL_CERT_DIR`, so such a deployment mounts the same pins in the
   discovery container and those orchestrators stay discoverable. "Untrusted" means untrusted by the
   deployment's store. Pinned by `test_the_default_trust_store_is_the_deployments_so_pinned_certificates_count`.
-- **26 October, Railway list.** Railway's signer list moves to the discovery service unchanged (`deploy/railway/discovery/orchestrators.txt`). The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry.
+- **26 October, Railway list.** Railway's signer list moved to the discovery service unchanged. The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry. **9 November:** that file now lives in [NE-Build-Track/deployments](https://github.com/NE-Build-Track/deployments). The dev stack no longer uses it. It runs livepeer/node `livepeer-discovery` from `deploy/dev-stack/config/discovery.toml`.
 - **26 October, PR #46 review (Mike).**
   - **Fixes:** all five of Cursor's threads.
   - **Registry:** the on-chain contracts come through the protocol's `Controller`, and
@@ -258,7 +257,7 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     is built and flagged by mypy, so it can no longer make every `GET /discovery` a 500.
   - **`Probes` retired:** the directory is the service's one port, so the prober is no longer
     replaceable. `Catalog` takes a `Prober`, and `serve()` has no `prober=` argument.
-- **5 November, the process moves out.** `lpb discovery` and `src/livepeer_builder/discovery/` are removed. The engine's `HttpDiscoverySource` is unchanged. Railway's `discovery` service and the dev stack run [livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery) `737e520` (`livepeer-onchain-discovery`). The service name and `GET /discovery` stay, so `LPB_DISCOVERY_URL` does not change. The collector drops a runner with no `observed_at`, or one more than 30 seconds ahead ([livepeer/node#51](https://github.com/livepeer/node/issues/51)). ChatLPT and the console still run `lpb discovery` from a pinned engine image until those pins move.
+- **5 November, the process moves out.** `lpb discovery` and `src/livepeer_builder/discovery/` are removed. The engine's `HttpDiscoverySource` is unchanged. The service name and `GET /discovery` stay, so `LPB_DISCOVERY_URL` does not change. **9 November:** the dev stack runs livepeer/node's static discovery, from #95, and this repository does not deploy. ChatLPT and the console still run `lpb discovery` from a pinned engine image until those pins move.
 - **30 October, T26.** A leading BOM is accepted (`utf-8-sig`; `test_a_leading_bom_is_the_inventory_without_it`).
   Each entry is walked once. `utils._not_json` and `utils.read_capped` are shared with the engine.
   A `runners` value that is not a list still fails that probe. An empty success would replace the last

@@ -2,8 +2,8 @@
 
 Class and sequence diagrams of the engine's interfaces and of the REST service (`lpb serve`, `http/`).
 Every box and message is a real class, method, route or setting, so each diagram leads to the code.
-The discovery inventory is served by `livepeer-onchain-discovery`
-([contract](../contracts/discovery.md)), which is not a package in this repository.
+The discovery inventory is not served by a package in this repository
+([contract](../contracts/discovery.md)).
 
 This document is for reviewing the shapes. Other documents cover the rest:
 - the flows between components (authentication, provisioning, a paid job with failover, cost sync,

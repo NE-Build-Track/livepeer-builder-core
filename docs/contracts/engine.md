@@ -74,7 +74,7 @@ payment (a 402): a runner priced in `hour` that answers without asking serves a 
 **Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
 [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
 `v1.0.4`). The stamp is the orchestrator's **response time**. Read directly from an orchestrator it is
-about the engine's poll time. Read through a cache (`livepeer-onchain-discovery`, livepeer-node's `livepeer discovery`)
+about the engine's poll time. Read through a cache (livepeer-node's `livepeer discovery`, or another process)
 it is when that cache last read the orchestrator, which is the age the catalog needs. Each served rate
 says which clock it used:
 

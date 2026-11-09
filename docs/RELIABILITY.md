@@ -86,7 +86,7 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
-| The discovery service loses an orchestrator | Its last inventory is served until 6 consecutive failed probes, then evicted. A failed directory load keeps the previous directory ([contract](contracts/discovery.md#who-is-probed)) |
+| The discovery service loses an orchestrator | The dev stack's collector drops a source that fails TLS or whose runners do not decode. The engine keeps its last good snapshot ([contract](contracts/discovery.md)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |

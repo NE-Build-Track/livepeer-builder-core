@@ -1,4 +1,4 @@
-"""The stock server's composition root: ``lpb serve``, the Railway entrypoint and your own entrypoint.
+"""The stock server's composition root: ``lpb serve`` and your own entrypoint.
 
 Customize the service the way you customize the embedded engine, with the same two stages
 (docs/design-docs/extending-the-engine.md): ``supply`` parts, ``decorate`` defaults, and ``extend``

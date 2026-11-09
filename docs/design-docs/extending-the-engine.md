@@ -248,9 +248,8 @@ asyncio.run(
 ## Discovery
 
 Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` points at a `GET /discovery`
-inventory ([contract](../contracts/discovery.md)): `livepeer-onchain-discovery`, livepeer-node's own
-discovery, or one orchestrator. The on-chain directory and the probe loop live in
-[livepeer-discovery](https://github.com/NE-Build-Track/livepeer-discovery), not in this package.
+inventory ([contract](../contracts/discovery.md)): livepeer-node's own discovery, or one
+orchestrator. This package does not ship that process.
 
 To change who the engine calls without replacing that process, supply or decorate a `DiscoverySource`.
 Raising from it keeps the last good snapshot. To replace the inventory entirely, serve the same

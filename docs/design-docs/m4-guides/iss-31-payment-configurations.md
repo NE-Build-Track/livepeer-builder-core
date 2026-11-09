@@ -221,7 +221,7 @@ above updated.
 - **Ship a tenant proxy in builder-core.** Rejected for M4: it is the operator's product, not the
   engine's, and would imply a hosted service.
 - **Railway as the separate operator.** Possible (Batteries and signer already deploy there), but their
-  ports are on Railway's private network today (`deploy/railway/README.md`) and it shares the payer.
+  ports are on Railway's private network today (NE-Build-Track/deployments) and it shares the payer.
 
 ## Open questions to lock
 

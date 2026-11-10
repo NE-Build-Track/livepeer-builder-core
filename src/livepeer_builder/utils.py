@@ -2,10 +2,9 @@
 
 import asyncio
 import hashlib
-import json
 from collections.abc import Coroutine
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 _SHIELDED: set["asyncio.Task[Any]"] = set()  # strong references, so a shielded task is never collected
@@ -54,45 +53,3 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
     _SHIELDED.add(task)
     task.add_done_callback(_SHIELDED.discard)
     return task
-
-
-class _UnreadableNumber:
-    """A JSON number :class:`Decimal` cannot build. Not a number to any reader of it."""
-
-    def __repr__(self) -> str:
-        return "UNREADABLE_NUMBER"
-
-
-UNREADABLE_NUMBER = _UnreadableNumber()
-
-
-def loads_json_numbers(raw: str | bytes | bytearray) -> Any:
-    """``json.loads`` with a fractional number as :class:`Decimal`, not a float.
-
-    livepeer-node's ``price_usd`` has more digits than a float keeps. Integers stay ``int``. A number
-    ``Decimal`` cannot build (an exponent past ``10**18``), or an integer past the runtime digit limit, is
-    ``UNREADABLE_NUMBER``, so only the field that holds it is unreadable, not the document: livepeer-node's
-    discovery cache passes the token through as received. ``NaN`` and ``Infinity`` are not JSON and raise
-    ``ValueError``, as an unparseable body does.
-    """
-    return json.loads(raw, parse_float=_lenient_number, parse_int=_lenient_int, parse_constant=_not_json)
-
-
-def _lenient_number(token: str) -> Decimal | _UnreadableNumber:
-    try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
-        return Decimal(token)
-    except InvalidOperation:  # an exponent past 10**18: Decimal cannot build it
-        return UNREADABLE_NUMBER
-
-
-def _lenient_int(token: str) -> int | _UnreadableNumber:
-    """An integer token, or ``UNREADABLE_NUMBER`` past the runtime digit limit
-    (``sys.get_int_max_str_digits``, 4300 by default), where ``int`` raises and would fail every runner."""
-    try:
-        return int(token)
-    except ValueError:
-        return UNREADABLE_NUMBER
-
-
-def _not_json(token: str) -> Any:
-    raise ValueError(f"{token} is not a JSON number")

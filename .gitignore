@@ -226,5 +226,6 @@ __marimo__/
 *.db.bak
 deploy/dev-stack/secrets/
 deploy/dev-stack/.env
+deploy/dev-stack/config/pinned-certs/
 coverage.json
 .idea/

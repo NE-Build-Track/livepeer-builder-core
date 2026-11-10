@@ -1,9 +1,10 @@
 """Read a livepeer/node ``GET /discovery`` document at the vendored schema pin (D63).
 
 The schema is ``docs/discovery.schema.json`` at ``f45d83fd68f73d195dffe8b45f6cac296d023c49``.
-Formats are asserted, as ``compiler.AssertFormat()`` does in ``discovery/schema_test.go``. A record
-that fails is skipped. A body that is not a JSON array fails the refresh. No other rule is applied:
-there is no size cap, no stamp-age filter and no de-duplication.
+Formats and integers are judged as ``discovery/schema_test.go`` judges them there
+(``discovery_formats``, held to node's own verdicts). A record that fails is skipped. A body that is
+not a JSON array fails the refresh. No other rule is applied: there is no size cap, no stamp-age filter
+and no de-duplication.
 """
 
 import json
@@ -15,22 +16,19 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from importlib.resources import files
 from typing import Any, cast
-from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 from jsonschema.protocols import Validator
 from jsonschema.validators import extend
 
+from livepeer_builder.adapters.discovery_formats import int64_value, is_date_time, is_integer_token, is_uri
 from livepeer_builder.contracts.discovery import DISCOVERY_CONTRACT, PriceInfo, Runner, RunnerGPU
 
 _LOG = logging.getLogger(__name__)
 _SCHEMA = json.loads(files("livepeer_builder.contracts").joinpath("discovery.schema.json").read_text())
 _PIN = json.loads(files("livepeer_builder.contracts").joinpath("discovery.schema.pin.json").read_text())
 _DEFS = _SCHEMA["$defs"]
-# RFC 3339, the date-time format node asserts: a numeric offset, or Z, and a capital T.
-_DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
-_INTEGER = re.compile(r"-?(0|[1-9]\d*)$")
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 
 
@@ -74,38 +72,16 @@ def _is_integer(checker: object, instance: object) -> bool:
         return False
     if isinstance(instance, int):
         return True
-    return isinstance(instance, JsonNumber) and _INTEGER.fullmatch(instance.token) is not None
+    return isinstance(instance, JsonNumber) and is_integer_token(instance.token)
 
 
 _Checker = Draft202012Validator.TYPE_CHECKER.redefine("number", _is_number).redefine("integer", _is_integer)
 _Validator = extend(Draft202012Validator, type_checker=_Checker)
 
 
-def _date_time(value: object) -> bool:
-    if not isinstance(value, str) or _DATE_TIME.fullmatch(value) is None:
-        return False
-    text = _FRACTION.sub(r"\1", value[:-1] + "+00:00" if value.endswith("Z") else value)
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return False
-    return parsed.utcoffset() is not None
-
-
-def _uri(value: object) -> bool:
-    """A URI with a scheme and a host. The schema's patterns decide credentials, query and fragment."""
-    if not isinstance(value, str):
-        return False
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return False
-    return bool(parts.scheme and parts.hostname)
-
-
 _FORMATS = FormatChecker()
-_FORMATS.checks("date-time")(_date_time)
-_FORMATS.checks("uri")(_uri)
+_FORMATS.checks("date-time")(is_date_time)
+_FORMATS.checks("uri")(is_uri)
 
 
 def _validator(schema: Mapping[str, Any]) -> Validator:
@@ -227,12 +203,10 @@ def _decimal(value: object) -> Decimal | None:
 
 
 def _integer(value: object) -> int | None:
-    if isinstance(value, JsonNumber) and _INTEGER.fullmatch(value.token):
-        try:
-            return int(value.token)
-        except ValueError:
-            return None
-    if isinstance(value, int) and not isinstance(value, bool):
+    """A schema integer as a signed 64-bit value. A larger one leaves the field absent; the runner stays."""
+    if isinstance(value, JsonNumber):
+        return int64_value(value.token)
+    if isinstance(value, int) and not isinstance(value, bool) and -(1 << 63) <= value < 1 << 63:
         return value
     return None
 
@@ -242,10 +216,13 @@ def _string(value: object) -> str | None:
 
 
 def _stamp(value: object) -> datetime | None:
-    """The RFC 3339 stamp in UTC. Nanoseconds truncate to microseconds. An unconvertible stamp is None."""
+    """The RFC 3339 stamp in UTC. Nanoseconds truncate to microseconds. A stamp the schema allows and
+    Python cannot hold (a leap second, year 0) is None, and the catalog uses the poll time (D62 (3))."""
     if not isinstance(value, str):
         return None
-    text = _FRACTION.sub(r"\1", value[:-1] + "+00:00" if value.endswith("Z") else value)
+    text = value[:10] + "T" + value[11:] if value[10:11] in ("t", "T") else value
+    text = text[:-1] + "+00:00" if text[-1:] in ("z", "Z") else text
+    text = _FRACTION.sub(r"\1", text)
     try:
         stamp = datetime.fromisoformat(text)
     except ValueError:

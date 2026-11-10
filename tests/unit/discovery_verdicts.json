@@ -1,0 +1,1355 @@
+{
+  "validator": "github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 with AssertFormat, go1.27.3",
+  "cases": [
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22t18:05:00z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22t18:05:00z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22t18:05:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22t18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.123+01:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.123+01:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.5z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.5z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.0+01:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.0+01:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T23:59:60Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T23:59:60Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:60Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:60Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T23:59:60+00:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T23:59:60+00:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T00:59:60+01:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T00:59:60+01:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T22:59:60-01:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T22:59:60-01:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T23:59:61Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T23:59:61Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-02-30T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-02-30T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-02-29T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-02-29T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2024-02-29T00:00:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2024-02-29T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2100-02-29T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2100-02-29T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2000-02-29T00:00:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2000-02-29T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"0000-02-29T00:00:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"0000-02-29T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"0000-01-01T00:00:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"0000-01-01T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"9999-12-31T23:59:59+14:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"9999-12-31T23:59:59+14:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-13-01T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-13-01T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-00-10T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-00-10T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-00T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-00T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-32T00:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-32T00:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-1-022T18:05:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-1-022T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"+026-10-22T18:05:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"+026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00+24:00\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00+24:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00+23:59\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00+23:59\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00-00:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00-00:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00+00:60\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00+00:60\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00+0100\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00+0100\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00+01:00x\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00+01:00x\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.123456789Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.123456789Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.1234567891234Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.1234567891234Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00,5Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00,5Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.1\\u00e9\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.1\\u00e9\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22 18:05:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22 18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22X18:05:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22X18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00Zjunk\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Zjunk\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T24:00:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T24:00:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:60:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:60:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T+1:05:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T+1:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T-0:05:00Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T-0:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T-1:05:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T-1:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00++1:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00++1:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00+-1:00\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00+-1:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"\\uff12026-10-22T18:05:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"\\uff12026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00\\u0662Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00\\u0662Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:0\\u0665:00Z\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:0\\u0665:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":1}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "null",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":null}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "true",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":true}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"http://orch.example\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"http://orch.example\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"HTTPS://orch.example/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"HTTPS://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"hTtPs://orch.example/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"hTtPs://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app?\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app?\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app?x=1#f\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app?x=1#f\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https:/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https:/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://:8080/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://:8080/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https:///app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https:///app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example:99999/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example:99999/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example:0/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example:0/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example:/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example:/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example:abc/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example:abc/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example:1:2/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example:1:2/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1]:8935/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1]:8935/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[1.2.3.4]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[1.2.3.4]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::ffff:1.2.3.4]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::ffff:1.2.3.4]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[fe80::1%25eth0]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[fe80::1%25eth0]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1]x/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1]x/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://a[::1]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://a[::1]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::g]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::g]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1%41]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1%41]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch example/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/a b\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/a b\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://ex%41mple.com/\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://ex%41mple.com/\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://ex%C3%A9.com/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://ex%C3%A9.com/\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://ex%25mple.com/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://ex%25mple.com/\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://\\u4f8b\\u3048.jp/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://\\u4f8b\\u3048.jp/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://user@orch.example/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://user@orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://user:pw@orch.example/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://user:pw@orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://us er@orch.example/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://us er@orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://us%zzer@orch.example/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://us%zzer@orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://\\u00fcser@orch.example/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://\\u00fcser@orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://u%41:p%42@orch.example/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://u%41:p%42@orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app?x=%zz\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app?x=%zz\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app#%zz\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app#%zz\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app#a\\nb\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app#a\\nb\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app?a\\nb\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app?a\\nb\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/%zz\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/%zz\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/%4\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/%4\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example\\\\app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example\\\\app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app\\n\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\\n\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app\\t\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\\t\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example/app\\u007f\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\\u007f\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://-bad-.example/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://-bad-.example/\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch..example/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch..example/\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://256.256.256.256/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://256.256.256.256/\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://orch.example]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://a]b/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://a]b/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://a{b}/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://a{b}/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://a|b/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://a|b/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://a^b/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://a^b/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"ftp://orch.example/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"ftp://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"//orch.example/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"//orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https:\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https:\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":1,\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "null",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":null,\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"HTTPS://orch.example\"",
+      "valid": true,
+      "document": "[{\"address\":\"HTTPS://orch.example\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example?x\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example?x\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://u@orch.example\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://u@orch.example\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example:8935/path\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example:8935/path\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://[::1]:8935\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://[::1]:8935\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example/a b\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/a b\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://\\u4f8b.jp\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://\\u4f8b.jp\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"ftp://orch.example\"",
+      "valid": false,
+      "document": "[{\"address\":\"ftp://orch.example\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example#f\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example#f\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example:abc\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example:abc\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example/%zz\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/%zz\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://[::1\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://[::1\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch.example/path/\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/path/\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"\"",
+      "valid": false,
+      "document": "[{\"address\":\"\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "address",
+      "value": "\"https://orch example\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch example\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "app",
+      "value": "\"\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "app",
+      "value": "\" \"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\" \",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "app",
+      "value": "\"a\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"a\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "app",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":1,\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "app",
+      "value": "null",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":null,\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "-1",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":-1}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1.0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1.0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e2",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e2}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1E2",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1E2}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1E+2",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1E+2}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "2.0e0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":2.0e0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1.5",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1.5}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "-0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":-0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "-0.0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":-0.0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "0.0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":0.0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "10e-1",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":10e-1}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e-1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e-1}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "100e-2",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":100e-2}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "10000000000000000000000",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":10000000000000000000000}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "9223372036854775808",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":9223372036854775808}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e400",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e400}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e1000000",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e1000000}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e1000001",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e1000001}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1.0e1000001",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1.0e1000001}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e999999999999",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e999999999999}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "true",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":true}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "\"1\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":\"1\"}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "null",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":null}]}]"
+    },
+    {
+      "field": "capacity_used",
+      "value": "3",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity_used\":3}]}]"
+    },
+    {
+      "field": "capacity_used",
+      "value": "3.0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity_used\":3.0}]}]"
+    },
+    {
+      "field": "capacity_used",
+      "value": "-3",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity_used\":-3}]}]"
+    },
+    {
+      "field": "capacity_available",
+      "value": "2",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity_available\":2}]}]"
+    },
+    {
+      "field": "capacity_available",
+      "value": "2e0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity_available\":2e0}]}]"
+    },
+    {
+      "field": "capacity_available",
+      "value": "2.5",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity_available\":2.5}]}]"
+    },
+    {
+      "field": "gpu.vram_mb",
+      "value": "24576",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"gpu\":{\"vram_mb\":24576}}]}]"
+    },
+    {
+      "field": "gpu.vram_mb",
+      "value": "24576.0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"gpu\":{\"vram_mb\":24576.0}}]}]"
+    },
+    {
+      "field": "gpu.vram_mb",
+      "value": "\"24576\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"gpu\":{\"vram_mb\":\"24576\"}}]}]"
+    },
+    {
+      "field": "gpu.vram_mb",
+      "value": "-1",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"gpu\":{\"vram_mb\":-1}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "1",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":1}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":0}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "1e400",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":1e400}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "-0.0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":-0.0}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "1E+2",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":1E+2}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "1.0e-400",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":1.0e-400}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "123456789012345678901234567890",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":123456789012345678901234567890}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "\"1\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":\"1\"}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "null",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":null}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "1e1000001",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":1e1000001}}]}]"
+    },
+    {
+      "field": "price_info.price",
+      "value": "1e999999999999",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price\":1e999999999999}}]}]"
+    },
+    {
+      "field": "price_info.price_usd",
+      "value": "0.123456789012345678901234567890123456",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price_usd\":0.123456789012345678901234567890123456}}]}]"
+    },
+    {
+      "field": "price_info.price_usd",
+      "value": "\"0.1\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price_usd\":\"0.1\"}}]}]"
+    },
+    {
+      "field": "price_info.price_usd",
+      "value": "1e999999999999",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"price_usd\":1e999999999999}}]}]"
+    },
+    {
+      "field": "price_info.currency",
+      "value": "\"wei\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"currency\":\"wei\"}}]}]"
+    },
+    {
+      "field": "price_info.currency",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"currency\":1}}]}]"
+    },
+    {
+      "field": "price_info.unit",
+      "value": "\"seconds\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"unit\":\"seconds\"}}]}]"
+    },
+    {
+      "field": "price_info.unit",
+      "value": "false",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"price_info\":{\"unit\":false}}]}]"
+    },
+    {
+      "field": "metadata",
+      "value": "\"x\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"metadata\":\"x\"}]}]"
+    },
+    {
+      "field": "metadata",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"metadata\":1}]}]"
+    },
+    {
+      "field": "metadata",
+      "value": "null",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"metadata\":null}]}]"
+    },
+    {
+      "field": "metadata",
+      "value": "{}",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"metadata\":{}}]}]"
+    },
+    {
+      "field": "metadata",
+      "value": "\"\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"metadata\":\"\"}]}]"
+    },
+    {
+      "field": "mode",
+      "value": "\"single-shot\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"mode\":\"single-shot\"}]}]"
+    },
+    {
+      "field": "mode",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"mode\":1}]}]"
+    },
+    {
+      "field": "version",
+      "value": "\"1.0\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"version\":\"1.0\"}]}]"
+    },
+    {
+      "field": "version",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"version\":1}]}]"
+    },
+    {
+      "field": "gpu.name",
+      "value": "\"RTX 4090\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"gpu\":{\"name\":\"RTX 4090\"}}]}]"
+    },
+    {
+      "field": "gpu.name",
+      "value": "1",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"gpu\":{\"name\":1}}]}]"
+    },
+    {
+      "field": "extension",
+      "value": "{\"count\":9007199254740993}",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"extension\":{\"count\":9007199254740993}}]}]"
+    },
+    {
+      "field": "extension",
+      "value": "1e999999999999",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"extension\":1e999999999999}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "1e99999999999999999999",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":1e99999999999999999999}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "-1e400",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":-1e400}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "0e1000001",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":0e1000001}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "0.000e-1000000",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":0.000e-1000000}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "5e-0",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":5e-0}]}]"
+    },
+    {
+      "field": "capacity",
+      "value": "12.300e1",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\",\"capacity\":12.300e1}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[1:2:3:4:5:6:7:8]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[1:2:3:4:5:6:7:8]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[1:2:3:4:5:6:7::]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[1:2:3:4:5:6:7::]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1.2.3.4]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1.2.3.4]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::ffff:01.2.3.4]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::ffff:01.2.3.4]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::FFFF:1.2.3.4]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::FFFF:1.2.3.4]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[1::2::3]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[1::2::3]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[12345::]/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[12345::]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::]/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::]/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1]:/app\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1]:/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "url",
+      "value": "\"https://[::1]:80:80/app\"",
+      "valid": false,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://[::1]:80:80/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00Z\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T18:05:00.1+01:00\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T18:05:00.1+01:00\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T00:00:60-23:59\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T00:00:60-23:59\"}]}]"
+    },
+    {
+      "field": "observed_at",
+      "value": "\"2026-10-22T23:59:60.999Z\"",
+      "valid": true,
+      "document": "[{\"address\":\"https://orch.example/deployment\",\"runners\":[{\"url\":\"https://orch.example/app\",\"app\":\"example\",\"observed_at\":\"2026-10-22T23:59:60.999Z\"}]}]"
+    }
+  ]
+}

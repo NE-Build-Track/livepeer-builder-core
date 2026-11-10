@@ -69,9 +69,7 @@ Configuration, backup/restore and retention are covered in
 
 See [AGENTS.md](AGENTS.md) for the repository map and commands, and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the layers. To run a real node stack locally, see
-[deploy/dev-stack](deploy/dev-stack/README.md). Railway deployment lives in the private repository
-[NE-Build-Track/deployments](https://github.com/NE-Build-Track/deployments). A push to this
-repository deploys nothing.
+[deploy/dev-stack](deploy/dev-stack/README.md). This repository does not deploy.
 
 ## License
 

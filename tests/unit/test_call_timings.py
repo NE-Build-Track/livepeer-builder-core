@@ -101,7 +101,7 @@ async def test_a_call_that_keeps_being_challenged_adds_up_each_step(net: Net) ->
 
 async def test_each_call_logs_its_timings(net: Net, caplog: pytest.LogCaptureFixture) -> None:
     net.sign = [SIGNER_SECONDS]
-    with caplog.at_level(logging.INFO, logger="livepeer_builder.adapters.runner_call"):
+    with caplog.at_level(logging.INFO, logger="livepeer_builder.adapters.call_timer"):
         await SdkRunnerTransport(net.url).call(net.runner(), _request(), "lpg_k", on_signed=_signed)
     events = [record for record in caplog.records if getattr(record, "event", "") == "runner.call_timings"]
     assert len(events) == 1

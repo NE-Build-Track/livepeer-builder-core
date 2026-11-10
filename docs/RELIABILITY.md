@@ -47,6 +47,10 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 
 ## Operations
 
+Every command but `gen-secret-key`, `verify` and `gen-docs` loads the settings, so it needs
+`LPB_DISCOVERY_URL` set, as the engine does; the URL is not called by a command that does not start the
+engine.
+
 | Command | When |
 | --- | --- |
 | `lpb migrate` / `lpb revision` | Before starting a new version; `revision` exits 2 when behind |

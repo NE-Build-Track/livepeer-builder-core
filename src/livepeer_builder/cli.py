@@ -10,7 +10,7 @@ lpb bootstrap-admin    issue the first admin key (one time; printed once)
 lpb gen-secret-key     print a new LPB_SECRET_KEY
 lpb smoke              import, migrate, start, health-check, stop (CI install check)
 lpb serve              run the REST service (needs the [server] extra)
-lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md)
+lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
 """
 
 import argparse

@@ -6,10 +6,10 @@ Update this file in the same change that moves a grade.
 | Domain / layer | Grade | Evidence | Gap |
 | --- | --- | --- | --- |
 | Contracts | A | Frozen models; structural money/float check | — |
-| Access | B | `test_access.py` (policy, keys, chain, bootstrap) | JWT and trusted backend are C (M4) |
+| Access | B | `test_access.py` (policy, keys, chain, bootstrap) | Trusted backend is C (M4) |
 | Discovery | B | `test_adapters.py`, unit jobs tests | Capability resolution (T3) |
-| Jobs (immediate) | A | `test_jobs.py`: failover, uncertain, write ordering, recovery, admission, idempotency | Idempotency finalized by John (T2) |
-| Jobs (streaming) | B | `test_streaming.py`, `test_stream_lifecycle.py`, `test_stream_deadlines.py`, `test_stream_http.py`; the `FakeEngine` contract (`test_fake_engine_contract.py`) | SDK first-read bound (T14) |
+| Jobs (immediate) | A | `test_jobs.py`: failover, uncertain, write ordering, recovery, admission, idempotency | |
+| Jobs (streaming) | B | `test_streaming.py`, `test_stream_lifecycle.py`, `test_stream_deadlines.py`, `test_stream_http.py`; the `FakeEngine` contract (`test_fake_engine_contract.py`) | |
 | Jobs (async), sessions | C | Contracts and 501 tests | M4 |
 | Payments | A | `test_payments.py`: explicit provisioning, idempotency, custody, rotation | Mode B (M4) |
 | Costs | A | `test_costs.py`: classification, corrected, reconciliation, cursor | — |

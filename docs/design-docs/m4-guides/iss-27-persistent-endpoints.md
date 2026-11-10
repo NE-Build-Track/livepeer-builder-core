@@ -1,7 +1,7 @@
 # ISS-27: Persistent application endpoints (sessions)
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
-rules become decisions (D57 onward).\
+rules become decisions, numbered when they are locked.\
 **Tracker:** ISS-27 ([Network-Engineering-SPE#41](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/41)).
 Design input: John's [builder-core#73](https://github.com/NE-Build-Track/livepeer-builder-core/issues/73)
 (media outputs and realtime sessions), and the media work plan

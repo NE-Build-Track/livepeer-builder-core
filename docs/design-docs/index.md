@@ -3,7 +3,7 @@
 | Document | Status | Verified against code |
 | --- | --- | --- |
 | [core-beliefs.md](core-beliefs.md) | Accepted | Partly enforced by `tests/structure/` |
-| [m3-decisions.md](m3-decisions.md) | Decisions after the M2 close-out: streaming, abandoned streams, runner metadata, the stream lifecycle fixes (D34–D39) | yes |
+| [m3-decisions.md](m3-decisions.md) | Decisions after the M2 close-out: streaming, abandoned streams, runner metadata, the stream lifecycle fixes, paid failover, repeat-safe commands, payment failures, rates and discovery (D29–D63) | yes |
 | [m3-guides/](m3-guides/index.md) | One implementation guide per remaining M3 engine change (architecture, code areas, test plan, open questions) | Proposals, verified against `releases/m3` `d3df806` |
 | [m4-guides/](m4-guides/index.md) | One implementation guide per M4 tracker (ISS-26 to ISS-36, and ISS-46) | Proposals, verified against `releases/m3` `d3df806` (ISS-46 against `1514212`) |
 | [m5-guides/](m5-guides/index.md) | One implementation guide per M5 tracker (ISS-37 to ISS-39) | Proposals, verified against `releases/m3` `d3df806` |
@@ -12,7 +12,7 @@
 | [m2-review-2026-10-12.md](m2-review-2026-10-12.md) | Record of the 12 October review: findings, prototype defects and their guards | Yes |
 | [extending-the-engine.md](extending-the-engine.md) | How enterprises replace the defaults through the interfaces: class diagrams, wiring, rules, runnable examples | Yes. Examples run in `tests/unit/test_extension_examples.py` and `test_service_mode_example.py` |
 | [architecture-diagrams.md](architecture-diagrams.md) | Context, components, integration modes, key sequences, state machines (Mermaid) | Yes. Names match the code; the ER diagram is generated |
-| [interfaces-and-http-servers.md](interfaces-and-http-servers.md) | Class and sequence diagrams of the interfaces (the facade, the ports, composition, discovery reading) and of the REST service, with questions for review | Yes, against the discovery-service branch (`dfdd647`) |
+| [interfaces-and-http-servers.md](interfaces-and-http-servers.md) | Class and sequence diagrams of the interfaces (the facade, the ports, composition, discovery reading) and of the REST service, with questions for review | Against the discovery-service branch (`dfdd647`); discovery reading, the error table and the route table re-checked at `releases/m3`, 10 November |
 | [builder-layer-proposal.md](builder-layer-proposal.md) | The 1 October proposal: each idea and its disposition here | Yes |
 | [di-review-2026-10-23.md](di-review-2026-10-23.md) | Dependency-injection review of the package and reference server: container verdict, findings, fixes | Yes, at `6c5c689`; two read-only probes |
 | [di-consumers-and-plan-2026-10-23.md](di-consumers-and-plan-2026-10-23.md) | The DI findings checked against ChatLPT, the builder console and the Build Track plan; proposed change order | Yes, at the consumers' pin `ad6bba9` |

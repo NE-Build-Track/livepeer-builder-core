@@ -308,7 +308,7 @@ classDiagram
     }
     class HttpDiscoverySource {
         GET LPB_DISCOVERY_URL
-        schema validation
+        reads the fields it stores
     }
     class MostCapacityFirst
     class SdkRunnerTransport {
@@ -627,8 +627,8 @@ and then hands the open `RunnerStream` to a `JobStream` ([the streamed request](
 ## Discovery: the engine side
 
 The engine reads runners through one port, `DiscoverySource`. `default_parts` always installs
-`HttpDiscoverySource`, which `GET`s `LPB_DISCOVERY_URL` and validates each record against the vendored
-schema ([contract](../contracts/discovery.md)). `DiscoveryService` keeps the last good snapshot,
+`HttpDiscoverySource`, which `GET`s `LPB_DISCOVERY_URL`, reads the fields the engine stores and skips a
+record it cannot use ([contract](../contracts/discovery.md); D63 (3): no vendored schema). `DiscoveryService` keeps the last good snapshot,
 builds offerings, and hands candidates to selection. An enterprise filter wraps that source through
 `decorate`. Tests use `FakeDiscoveryService`, which serves a node-format document to the same reader.
 
@@ -637,7 +637,7 @@ classDiagram
     direction LR
     class HttpDiscoverySource {
         GET LPB_DISCOVERY_URL
-        validate each record
+        read each record
     }
     class DiscoveryService {
         +snapshot DiscoverySnapshot
@@ -672,7 +672,7 @@ sequenceDiagram
         DS->>H: fetch()
         H->>Svc: GET (no credentials, no redirects)
         Svc-->>H: JSON array, or an error
-        Note over H: keep each schema-valid runner, skip the rest
+        Note over H: keep each runner it can read and call, skip the rest
         H-->>DS: Runner[] (a failed refresh keeps the last snapshot)
     end
     DS->>DS: offerings and candidates from the snapshot
@@ -767,7 +767,8 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
-| `POST, GET /v1/admin/keys`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
+| `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
+| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `ProvisionedActor[]`, `ProvisionedActor` (D46) |
 | `POST /v1/admin/applications/{app}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
 | `POST /v1/admin/grant/fund` | `payments.fund_grant` | `204` |
@@ -799,6 +800,10 @@ classDiagram
     }
     class NotProvisioned {
         402
+    }
+    class AlreadyProvisioned {
+        409 + actor
+        code already_provisioned
     }
     class OperationExists {
         409 + Livepeer-Job-Id + job
@@ -836,6 +841,7 @@ classDiagram
     EngineError <|-- NotFound
     EngineError <|-- InvalidRequest
     EngineError <|-- NotProvisioned
+    EngineError <|-- AlreadyProvisioned
     EngineError <|-- OperationExists
     OperationExists <|-- OperationInProgress
     EngineError <|-- OperationConflict
@@ -851,13 +857,16 @@ classDiagram
 | `no_offering` | 404 | |
 | `not_provisioned` | 402 | |
 | `no_capacity`, `refused`, `unreachable` | 503 | 5 |
-| `payment` | 503 | 10 |
+| `payment`, reason `not_authorized` | 403 | |
+| `payment`, reason `allowance_exhausted` | 402 | |
+| `payment`, any other reason or none | 503 | 10 |
 | `payment_unknown` | 503 | |
 | `timeout` | 504 | |
 | `runner_rejected` | the runner's own status, else 422 | |
 | `runner_error`, `interrupted`, anything else | 502 | |
 
-A request body that fails validation never reaches the engine: FastAPI answers `422`.
+A request body that fails validation never reaches the engine: FastAPI answers `422`. A `/v1/` body over
+`LPB_HTTP_MAX_REQUEST_BYTES` is `413` with code `request_too_large` (D59), before it is held in memory.
 
 ### Startup and shutdown
 

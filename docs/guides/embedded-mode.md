@@ -16,7 +16,7 @@ pip install livepeer-builder
 The `[server]` extra (FastAPI, uvicorn) is only for `lpb serve`. Embed does not need it. The
 `[postgres]` extra is only if `LPB_DATABASE_URL` is PostgreSQL.
 
-You still need the usual `LPB_*` settings: database, signer, Batteries tokens, and a secret key.
+You still need the usual `LPB_*` settings: database, discovery URL, signer, Batteries tokens, and a secret key.
 See [RELIABILITY.md](../RELIABILITY.md#configuration).
 
 ## The loop
@@ -195,8 +195,8 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
 
 Your process is the process that holds the engine. There is no separate `lpb serve`. You still:
 
-- Set `LPB_DATABASE_URL`, `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and
-  `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
+- Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it),
+  `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
   `EngineSettings`. `LPB_BATTERIES_OPERATOR_TOKEN` only turns on the grant desk
   (`engine.payments.grants`); an application that never lists or creates grants leaves it unset.
 - Run `lpb migrate`, or leave `LPB_AUTO_MIGRATE=true`.

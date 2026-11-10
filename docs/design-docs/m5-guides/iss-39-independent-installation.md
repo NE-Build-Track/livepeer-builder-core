@@ -185,7 +185,7 @@ names one release tag, and every link resolves.
 
 | Upstream | Needed? | Why |
 | --- | --- | --- |
-| livepeer/node | No | The reviewer runs or reaches the signer at the pinned `406b248` |
+| livepeer/node | No | The reviewer runs or reaches the signer at the pinned `f45d83f` |
 | livepeer-python-gateway | No | The SDK still installs as a git direct reference (T1). The bundle lists it as a remaining external dependency |
 | clearinghouse-batteries | No | It is built from source at `ca09e47`. Its missing license is a reuse fact recorded by ISS-38 and listed among the external dependencies |
 

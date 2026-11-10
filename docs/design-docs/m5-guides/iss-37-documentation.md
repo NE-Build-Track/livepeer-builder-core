@@ -108,8 +108,8 @@ The docs ship with the code: same repository, same tag, and the sdist includes `
 (`pyproject.toml`, `[tool.hatch.build.targets.sdist]`). Version-matching therefore means **the docs at
 tag `vX` describe the code at tag `vX`**. Tests enforce what can drift:
 
-1. **Completeness guards** (`tests/structure/test_doc_coverage.py`, new). Every `EngineSettings` and
-   `DiscoverySettings` field has a configuration row. Every `lpb` subcommand (`cli._parser()`) has a row in
+1. **Completeness guards** (`tests/structure/test_doc_coverage.py`, new). Every `EngineSettings`
+   field has a configuration row. Every `lpb` subcommand (`cli._parser()`) has a row in
    the operations table. Every `"event": "<name>"` literal in `src/` has a row in the event catalog, and
    every catalog row names a real event.
 2. **Tested examples:** the `<!-- example: -->` mechanism extends to every Python block in `docs/guides/`.
@@ -174,7 +174,6 @@ today because no catalog exists, and it forces the catalog's table format.
 Guards
 [ ] every "event" literal in src/ has a catalog row; every row names a real event
 [ ] every EngineSettings field has a configuration row          [=] holds today; prove it fails by deleting a row
-[ ] every DiscoverySettings field has a configuration row
 [ ] every lpb subcommand has a row in the operations table
 [ ] SDK, node and Batteries commits named in docs equal pyproject and deploy compose files
 [ ] a guide linking a PR or a branch of this repository fails check_docs

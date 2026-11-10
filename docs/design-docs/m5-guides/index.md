@@ -24,15 +24,14 @@ days), so the reviewer, the payment handoff and the sign-off procedure should be
 
 - **This repository does not deploy.** A push to `main` or `releases/**` used to run `deploy.yml`.
   ISS-38.
-- **Images ignore the lock file:** engine and discovery images run `pip install .`, so dependencies
-  float at build time; the base image is pinned by tag, not digest. ISS-38.
+- **The engine image ignores the lock file:** it runs `pip install .`, so dependencies float at
+  build time; the base image is pinned by tag, not digest. ISS-38.
 - **A build from a shallow clone reports `0.0.1.dev1+g…`**, which is what the console's engine shows.
   ISS-38.
 - **PR #32 merges `releases/m3` into `releases/final`**, still a draft with an empty body. ISS-38.
 - **Clearinghouse Batteries has no licence** (at `ca09e47` and its main), nor does the prototype the engine
   started from (D4): do not publish a Batteries image; record the reuse answer (H5). ISS-38.
-- **The README's install steps fail** (`pip install livepeer-builder` is not on PyPI; "Run the service"
-  never sets `LPB_DISCOVERY_URL`). ISS-37.
+- **The README's install steps fail** (`pip install livepeer-builder` is not on PyPI). ISS-37.
 - **Three consumers pin three engine commits** (console `d3df806`, ChatLPT `2134e29`, inference-gateway
   `0d0b532`). ISS-37, ISS-38.
 - **No final-acceptance procedure exists:** M2 has no acceptance decision record, and sign-off is listed as

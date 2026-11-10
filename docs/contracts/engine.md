@@ -383,9 +383,9 @@ cannot know.
 | The runner closes the stream normally | `succeeded` (a `ResultRef` for the bytes received) | `succeeded` |
 | The caller calls `complete()` (D38) | `succeeded` (a `ResultRef` for the bytes the caller read, not the engine's read-ahead) | `succeeded` |
 | The runner fails mid-stream (reset, 5xx trailer) | `http` or `unreachable`, `payment_sent` as known | `uncertain` when paid, else `failed` |
-| A deadline above runs out | `timeout`, or `payment_unknown` when it runs out while signing | `uncertain` when paid or `payment_unknown`, else `failed` |
+| A deadline above runs out | `timeout`; `payment` / `signer_unavailable` when the first-byte deadline runs out during signer identity, before any runner is asked (nothing was signed, D58 (4)); `payment_unknown` when it runs out while signing | `uncertain` when paid or `payment_unknown`, else `failed` |
 | The caller calls `aclose()`, leaves `async with` before the end, or stops iterating (`break`, `return`, an error in the loop) | `abandoned`, at once | `uncertain` when paid, else `failed` (D30, D40) |
-| The caller is cancelled, or calls `disconnected()` because its HTTP client went away | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S` (the `ResultRef` then includes what it sent in that window), else `abandoned` | as above (D38) |
+| The caller is cancelled, or calls `disconnected()` because its HTTP client went away | `succeeded` if the runner ends the stream within `LPB_STREAM_SETTLE_S` (the `ResultRef` then includes what it sent in that window); `http` or `unreachable` if the runner fails inside that window; else `abandoned` | `succeeded`; for a runner failure or `abandoned`, `uncertain` when paid, else `failed` (D38) |
 | `engine.stop()` while the stream is open | `abandoned` after `LPB_STREAM_DRAIN_TIMEOUT_S`; ends already being written finish first (D36) | `uncertain` when paid, else `failed` |
 | The engine dies mid-stream | `recover_interrupted()` as today | `uncertain` |
 
@@ -420,7 +420,8 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
 transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and
 the REST streaming route answers 400 (D33).
 `open` must honour `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` with the
-payment evidence so far.
+payment evidence so far; a deadline during signer identity, before the runner is asked, is `payment` /
+`signer_unavailable` instead.
 
 ## Inputs and results in M3
 

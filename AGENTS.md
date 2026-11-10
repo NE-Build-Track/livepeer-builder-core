@@ -21,7 +21,7 @@ application. Delivery track: Cloud SPE Build Track, milestone **M3** (target 20 
 | Milestones, tickets, and status for each M2 ticket | [docs/product-specs/milestones.md](docs/product-specs/milestones.md), [m2-traceability.md](docs/product-specs/m2-traceability.md) |
 | The rules every change follows | [docs/design-docs/core-beliefs.md](docs/design-docs/core-beliefs.md) |
 | What a public contract promises | [docs/contracts/index.md](docs/contracts/index.md) |
-| Why something was decided | [docs/design-docs/m2-decisions.md](docs/design-docs/m2-decisions.md) |
+| Why something was decided | [docs/design-docs/m2-decisions.md](docs/design-docs/m2-decisions.md), [m3-decisions.md](docs/design-docs/m3-decisions.md) |
 | What to work on, and its acceptance | [docs/exec-plans/active/](docs/exec-plans/active/) and [docs/PLANS.md](docs/PLANS.md) |
 | Known gaps and shortcuts | [docs/exec-plans/tech-debt-tracker.md](docs/exec-plans/tech-debt-tracker.md) |
 | Upstream repos, pins, wire formats, glossary | [docs/references/index.md](docs/references/index.md) |
@@ -42,7 +42,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy                              # strict
 uv run python scripts/check_docs.py      # links, anchors, indexes, exec-plan shape
 uv run lpb gen-docs                      # regenerate docs/generated after schema/API changes
-uv run lpb smoke                         # import, migrate, start, health, stop
+LPB_DISCOVERY_URL=http://127.0.0.1:9/discovery uv run lpb smoke   # import, migrate, start, health, stop
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these plus a clean-install check of the built wheel.
@@ -58,7 +58,7 @@ src/livepeer_builder/
   config.py    EngineSettings from LPB_* environment variables
   services/    business rules: policy, keys, discovery, jobs, payments, costs, reserved features
   store/       SQLAlchemy Core + packaged Alembic migrations, backup, retention
-  adapters/    SDK, Batteries, auth, secrets, clock, static discovery: implementations of the protocols
+  adapters/    SDK, Batteries, auth, secrets, clock, the /discovery reader: implementations of the protocols
   runtime/     BuilderEngine wiring and structured logging
   http/        FastAPI REST service ([server] extra)
   testing/     fakes shipped for builders' own tests
@@ -83,6 +83,6 @@ deploy/dev-stack/   optional payment stack (Batteries + node signer + node's sta
 
 ## Escalate to a human when
 
-- a change would alter an accepted decision in `docs/design-docs/m2-decisions.md`;
+- a change would alter an accepted decision in `docs/design-docs/m2-decisions.md` or `m3-decisions.md`;
 - an upstream repository (SDK, node, Batteries) needs a change;
 - money could move: provisioning, funding, revocation semantics.

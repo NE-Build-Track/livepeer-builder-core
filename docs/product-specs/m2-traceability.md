@@ -25,7 +25,7 @@ change that moves a ticket.
 | Extension boundaries | `protocols/` | `tests/structure/test_layers.py` | [ARCHITECTURE.md#providers](../../ARCHITECTURE.md#providers) |
 | Async, persistent, events (**defined**) | `contracts/reserved.py`, `services/reserved.py` → 501 | `test_reserved_execution_modes_fail_loudly`, `test_failures_and_reserved_routes` | [engine.md](../contracts/engine.md#persistent-sessions), [events.md](../contracts/events.md) |
 | Deployment, performance and recovery assumptions | — | — | [engine.md](../contracts/engine.md#deployment-performance-and-recovery-assumptions) |
-| Failover when the signer refuses one orchestrator (D26) | `adapters/sdk.py::call_error`, `services/jobs.py` | `test_signer_refusal_for_one_orchestrator_fails_over`, `test_caller_side_payment_refusal_does_not_fail_over`, `test_sdk_errors_keep_payment_evidence` | [engine.md](../contracts/engine.md#behavior-the-contract-fixes) |
+| Failover when the signer refuses one orchestrator (D26) | `adapters/runner_call.py::signer_error`, `services/jobs.py` | `test_signer_refusal_for_one_orchestrator_fails_over`, `test_caller_side_payment_refusal_does_not_fail_over`, `test_a_cancelled_paid_call_keeps_its_evidence` | [engine.md](../contracts/engine.md#behavior-the-contract-fixes) |
 | **Carried forward** | Final idempotency semantics (John's PR, D11 / T2) → M3 | | |
 
 ## ISS-03: Access (accepted 13 October)

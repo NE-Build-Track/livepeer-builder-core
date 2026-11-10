@@ -53,7 +53,7 @@ The detailed status per ticket is in [m2-traceability.md](m2-traceability.md).
 | ISS-30 The same journey through MCP | M4 | Not started; MCP auth defined in [access.md](../contracts/access.md#modes) |
 | ISS-31 Both payment configurations | M4 | Mode A implemented; Mode B defined as a gap |
 | ISS-32 Embedding, service consumption, enterprise extensions | M4 | Protocols and both integration modes |
-| ISS-33 Replace the reference app's access flow | M4 | `Authenticator` / `AccessPolicy` protocols; JWT bearer defined |
+| ISS-33 Replace the reference app's access flow | M4 | `Authenticator` / `AccessPolicy` protocols; JWT bearer implemented (D45, #49) |
 | ISS-34–36 Reference-app coverage, isolation and replay, funded matrix | M4 | Store and cost tests are the foundation |
 | ISS-37–39 Docs, release artifacts, independent installation | M5 | `docs/`, CI dev builds, `lpb smoke` |
 

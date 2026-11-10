@@ -1,7 +1,7 @@
 # ISS-30: The same authorized journey through MCP
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
-rules become decisions (D57 onward).\
+rules become decisions, numbered when they are locked.\
 **Tracker:** ISS-30 ([Network-Engineering-SPE#44](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/44)).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
 **Verified against:** builder-core `releases/m3` at `d3df806`; livepeer/console (`livepeer-console`) at
@@ -96,7 +96,7 @@ is then by construction; tests prove it.
 | Tool | Facade call | Permission (checked by the service) |
 | --- | --- | --- |
 | `list_offerings(app?)` | `discovery.offerings(app=…)` | none in REST (D51); MCP is authenticated at the transport |
-| `get_rates(app)` | `discovery.runners(actor, app)` → per-runner `rate` (ISS-10 adds source and age) | `discover` |
+| `get_rates(app)` | `discovery.runners(actor, app)` → per-runner `price_info`, read with `payable_rate` (source and age: D62) | `discover` |
 | `run_job(…JobRequest fields)` | `jobs.run(actor, JobRequest)`; `mode="async"` stays 501 until ISS-26 | `jobs.run` |
 | `get_job(job_id)`, `list_jobs(limit, before)` | `jobs.get`, `jobs.list_jobs` | `jobs.read` |
 | `get_job_result(job_id)` | `jobs.result` (501 today: results are not retained) | `jobs.read` |

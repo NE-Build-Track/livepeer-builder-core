@@ -12,7 +12,7 @@ from livepeer_builder import EngineSettings, EngineSupply, testing
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_price import max_price
 from livepeer_builder.contracts import NetworkRate, ObservedRate, Offering, PriceInfo, Runner
-from livepeer_builder.contracts.discovery import payable_rate
+from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.testing import FixedClock, make_engine

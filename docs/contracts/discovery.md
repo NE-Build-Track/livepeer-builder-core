@@ -46,7 +46,7 @@ Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/
 
 | Rule | Where |
 | --- | --- |
-| Whether a price can be paid: the float bounds, a positive price, wei per `seconds` or `fixed`, and the ceiling | the payment layer (`payable_rate`, then the signer). The engine never signs without a ceiling |
+| Whether a price can be paid: the float bounds, a positive price, wei per `seconds` or `fixed`, and the ceiling | the payment layer: `payable_rate` and the price rules in `contracts/payments.py`, then `max_price` and the signer. The engine never signs without a ceiling |
 | Rate age and `stale` | the catalog (D62 (3), `LPB_RATE_MAX_AGE_S`) |
 | Which apps an enterprise will call | a `decorate` wrapper around `HttpDiscoverySource` |
 

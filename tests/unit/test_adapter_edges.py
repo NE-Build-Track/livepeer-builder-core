@@ -24,7 +24,7 @@ from livepeer_builder.adapters.runner_call import network_kind
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.contracts import Money, SecretRef
-from livepeer_builder.contracts.discovery import payable_rate
+from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,

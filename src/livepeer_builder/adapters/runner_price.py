@@ -34,8 +34,8 @@ from decimal import Decimal
 from typing import Any
 
 from livepeer_builder.contracts import NetworkRate
+from livepeer_builder.contracts.payments import PAYMENT_TYPES_BY_UNIT, signable
 from livepeer_builder.errors import RunnerCallError
-from livepeer_builder.utils import PAYMENT_TYPES_BY_UNIT, signable
 
 _PRICE_PADDING = Decimal("1.012")  # the signer refuses a ceiling below the price it is asked to pay
 

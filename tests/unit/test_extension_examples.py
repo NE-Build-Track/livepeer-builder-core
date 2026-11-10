@@ -27,7 +27,7 @@ from livepeer_builder.contracts import (
     Runner,
     SecretRef,
 )
-from livepeer_builder.contracts.discovery import payable_rate
+from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.errors import AccessDenied, NotAuthenticated, NotFound
 from livepeer_builder.protocols import AccessPolicy, DiscoverySource
 from livepeer_builder.services.policy import DefaultPolicy

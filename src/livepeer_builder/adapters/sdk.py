@@ -20,7 +20,7 @@ from livepeer_builder.adapters.runner_call import (
     json_object,
 )
 from livepeer_builder.contracts import JobRequest, Runner, RunnerReply
-from livepeer_builder.contracts.discovery import payable_rate
+from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.protocols import OnSigned
 
 

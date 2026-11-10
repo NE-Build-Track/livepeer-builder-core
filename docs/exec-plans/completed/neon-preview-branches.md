@@ -5,6 +5,9 @@
 - **Owner:** John.
 - **Ticket:** none. Operator cutover of the builder-engine database.
 - **Branch:** `feat/neon-migration`.
+- **Outcome:** closed 9 November. Deployment, including the Neon preview branches, left this
+  repository with #95; this repository does not deploy. The items below record what was built here
+  before then.
 - **Progress:** production is on Neon. PR #60 created `preview/pr-60`; the first preview job
   failed with HTTP 423 while the compute was still locked.
 
@@ -23,9 +26,7 @@ that data, migrates it, and the branch is deleted when the PR closes.
   at cutover. `GET /livez` on the production engine returns 200, and later usage rows are on Neon.
 - [x] The engine URL is the direct Neon host. The entrypoint maps `sslmode` to asyncpg's `ssl` and
   drops `channel_binding`. Preview deploys run migrations. Tests cover both.
-- [x] A preview database is a Neon branch of production `main`. Since 9 November that branch is
-  created and deleted by hand from
-  [NE-Build-Track/deployments](https://github.com/NE-Build-Track/deployments). This repository has
+- [x] A preview database is a Neon branch of production `main`. Since 9 November this repository has
   no preview workflow. Production stays on Neon `main`.
 - [x] `NEON_API_KEY` and `NEON_PROJECT_ID` are set on the GitHub `preview` environment. PR #60
   created `preview/pr-60` from `main`.

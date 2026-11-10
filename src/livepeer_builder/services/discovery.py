@@ -15,9 +15,9 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
-from livepeer_builder.contracts.discovery import ObservedBy, payable_rate
+from livepeer_builder.contracts.discovery import ObservedBy
+from livepeer_builder.contracts.payments import is_payable, payable_rate, signable
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
-from livepeer_builder.utils import is_payable, signable
 
 _LOG = logging.getLogger(__name__)
 # livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).

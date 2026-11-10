@@ -20,13 +20,13 @@ DISTRIBUTIONS = {
     "cryptography": "cryptography",
     "fastapi": "fastapi",
     "httpx": "httpx",
-    "jsonschema": "jsonschema",
     "jwt": "pyjwt",
     "livepeer_gateway": "livepeer-gateway",
     "pydantic": "pydantic",
     "sqlalchemy": "sqlalchemy",
     "starlette": "starlette",
     "uvicorn": "uvicorn",
+    "yarl": "yarl",
 }
 # Package directory -> the extra its imports may also come from.
 EXTRAS = {"http": "server"}

@@ -7,7 +7,7 @@ payment side, node's discovery and the engine:
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | livepeer/node `f45d83f` remote signer (main, 10 commits after v1.0.6). It only signs payments. Railway deploys the same commit from NE-Build-Track/deployments |
+| `signer` | livepeer/node `f45d83f` remote signer (main, 10 commits after v1.0.6). It only signs payments |
 | `discovery` | livepeer/node's `livepeer-discovery` from that same commit, static mode, on `127.0.0.1:8939`. The list is `config/discovery.toml`. The engine still only reads `GET /discovery` ([contract](../../docs/contracts/discovery.md)) |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from discovery (`LPB_DISCOVERY_URL`) |
 

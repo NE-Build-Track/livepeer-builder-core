@@ -1,37 +1,32 @@
-"""Read a livepeer/node ``GET /discovery`` document at the vendored schema pin (D63).
+"""Read a livepeer/node ``GET /discovery`` document into the runners the engine stores (D63).
 
-The schema is ``docs/discovery.schema.json`` at ``f45d83fd68f73d195dffe8b45f6cac296d023c49``.
-Formats are asserted, as ``compiler.AssertFormat()`` does in ``discovery/schema_test.go``. A record
-that fails is skipped. A body that is not a JSON array fails the refresh. No other rule is applied:
-there is no size cap, no stamp-age filter and no de-duplication.
+A body that is not a JSON array fails the refresh. Each other failure skips that entry or that runner.
+There is no size cap, no stamp-age filter and no de-duplication. Numbers stay their JSON tokens, never
+binary floats.
 """
 
 import json
 import logging
 import re
-from collections import Counter
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from importlib.resources import files
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlsplit
 
-from jsonschema import Draft202012Validator, FormatChecker
-from jsonschema.exceptions import ValidationError
-from jsonschema.protocols import Validator
-from jsonschema.validators import extend
+import yarl
 
-from livepeer_builder.contracts.discovery import DISCOVERY_CONTRACT, PriceInfo, Runner, RunnerGPU
+from livepeer_builder.contracts.discovery import PriceInfo, Runner, RunnerGPU
 
 _LOG = logging.getLogger(__name__)
-_SCHEMA = json.loads(files("livepeer_builder.contracts").joinpath("discovery.schema.json").read_text())
-_PIN = json.loads(files("livepeer_builder.contracts").joinpath("discovery.schema.pin.json").read_text())
-_DEFS = _SCHEMA["$defs"]
-# RFC 3339, the date-time format node asserts: a numeric offset, or Z, and a capital T.
-_DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
-_INTEGER = re.compile(r"-?(0|[1-9]\d*)$")
 _FRACTION = re.compile(r"(\.\d{6})\d+")
+# RFC 3339 date-time: ``T`` and ``Z`` in either case, seconds required, ``Z`` or an offset of 00-23 hours
+# and 00-59 minutes. fromisoformat rejects bad clock fields itself, but carries offset minutes past 59.
+_RFC3339 = re.compile(
+    r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)", re.ASCII
+)
+_INT64 = 1 << 63
+_HTTP = frozenset({"http", "https"})
+_UNSENDABLE = re.compile(r"[\x00-\x20\x7f]")  # whitespace and control characters
 
 
 class JsonNumber:
@@ -40,86 +35,49 @@ class JsonNumber:
     def __init__(self, token: str) -> None:
         self.token = token
 
-    def __repr__(self) -> str:
-        return self.token
+
+def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
+    """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
+
+    An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
+    entry (``nodes``, and no ``address``) yields nothing. A runner needs a non-empty ``app``, a ``url``
+    the engine can call, and an ``observed_at`` the clock can convert to UTC. One bad record does not drop
+    the rest. ``[]`` is an empty inventory. A number ``Decimal`` cannot hold is still a number: the
+    runner is kept, and ``payable_rate`` reports that its price cannot be paid.
+    """
+    entries = _loads(raw)
+    if not isinstance(entries, list):
+        raise ValueError("discovery response is not a JSON list")
+    runners: list[Runner] = []
+    skipped_entries = 0
+    skipped_runners = 0
+    for entry in entries:
+        if _metadata(entry):
+            continue
+        parsed = _entry(entry)
+        if parsed is None:
+            skipped_entries += 1
+            continue
+        address, records = parsed
+        for record in records:
+            runner = _runner(record, address)
+            if runner is None:
+                skipped_runners += 1
+            else:
+                runners.append(runner)
+    if skipped_entries or skipped_runners:
+        _LOG.warning(
+            "discovery inventory had malformed records",
+            extra={
+                "event": "discovery.inventory_skipped",
+                "entries": skipped_entries,
+                "runners": skipped_runners,
+            },
+        )
+    return tuple(runners)
 
 
-def discovery_contract() -> str:
-    """The pin ``/readyz`` reports, for example ``livepeer/node@f45d83f``."""
-    return DISCOVERY_CONTRACT
-
-
-def schema_pin() -> Mapping[str, str]:
-    """The vendored pin: repository, path, commit and sha256."""
-    return cast(Mapping[str, str], _PIN)
-
-
-def schema_document() -> Any:
-    """The vendored schema document."""
-    return _SCHEMA
-
-
-def _is_number(checker: object, instance: object) -> bool:
-    del checker
-    if isinstance(instance, bool):
-        return False
-    if isinstance(instance, int | float):
-        return True
-    return isinstance(instance, JsonNumber)
-
-
-def _is_integer(checker: object, instance: object) -> bool:
-    del checker
-    if isinstance(instance, (bool, float)):
-        return False
-    if isinstance(instance, int):
-        return True
-    return isinstance(instance, JsonNumber) and _INTEGER.fullmatch(instance.token) is not None
-
-
-_Checker = Draft202012Validator.TYPE_CHECKER.redefine("number", _is_number).redefine("integer", _is_integer)
-_Validator = extend(Draft202012Validator, type_checker=_Checker)
-
-
-def _date_time(value: object) -> bool:
-    if not isinstance(value, str) or _DATE_TIME.fullmatch(value) is None:
-        return False
-    text = _FRACTION.sub(r"\1", value[:-1] + "+00:00" if value.endswith("Z") else value)
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return False
-    return parsed.utcoffset() is not None
-
-
-def _uri(value: object) -> bool:
-    """A URI with a scheme and a host. The schema's patterns decide credentials, query and fragment."""
-    if not isinstance(value, str):
-        return False
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return False
-    return bool(parts.scheme and parts.hostname)
-
-
-_FORMATS = FormatChecker()
-_FORMATS.checks("date-time")(_date_time)
-_FORMATS.checks("uri")(_uri)
-
-
-def _validator(schema: Mapping[str, Any]) -> Validator:
-    document = {"$schema": _SCHEMA["$schema"], "$defs": _DEFS, **schema}
-    return _Validator(document, format_checker=_FORMATS)
-
-
-_DOCUMENT = _Validator(_SCHEMA, format_checker=_FORMATS)
-_ENTRY = _validator({"oneOf": _SCHEMA["items"]["oneOf"]})
-_ADDRESS = _validator({"$ref": "#/$defs/baseURL"})
-_RUNNER = _validator({"$ref": "#/$defs/runner"})
-
-
-def loads_inventory(raw: str | bytes | bytearray) -> Any:
+def _loads(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with every number kept as its token. ``NaN`` and ``Infinity`` are not JSON."""
     return json.loads(raw, parse_int=JsonNumber, parse_float=JsonNumber, parse_constant=_not_json)
 
@@ -128,78 +86,70 @@ def _not_json(token: str) -> Any:
     raise ValueError(f"{token} is not a JSON number")
 
 
-def document_is_valid(raw: str | bytes | bytearray) -> bool:
-    """Whether the schema accepts the whole document. A non-array, or invalid JSON, does not."""
-    try:
-        value = loads_inventory(raw)
-    except ValueError:
-        return False
-    return bool(_DOCUMENT.is_valid(value))
-
-
-def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
-    """Runners the schema accepts. A body that is not a JSON array raises ``ValueError``.
-
-    Each other failure skips that entry or that runner and is counted by reason. ``[]`` is an empty
-    inventory. A number ``Decimal`` cannot hold is still a number: the runner is kept, and
-    ``payable_rate`` reports that its price cannot be paid.
-    """
-    entries = loads_inventory(raw)
-    if not isinstance(entries, list):
-        raise ValueError("discovery response is not a JSON list")
-    runners: list[Runner] = []
-    reasons: Counter[str] = Counter()
-    for entry in entries:
-        if _ENTRY.is_valid(entry) and _metadata(entry):
-            continue
-        if (
-            isinstance(entry, dict)
-            and _ADDRESS.is_valid(entry.get("address"))
-            and isinstance(entry.get("runners"), list)
-        ):
-            for record in entry["runners"]:
-                if _RUNNER.is_valid(record):
-                    runners.append(_runner(record, entry["address"]))
-                else:
-                    reasons[_reason(_RUNNER, record)] += 1
-            continue
-        reasons[_reason(_ENTRY, entry)] += 1
-    if reasons:
-        _LOG.warning(
-            "discovery inventory had malformed records",
-            extra={"event": "discovery.inventory_skipped", "reasons": dict(reasons)},
-        )
-    return tuple(runners)
-
-
 def _metadata(entry: object) -> bool:
     return isinstance(entry, dict) and "nodes" in entry and "address" not in entry
 
 
-def _reason(validator: Validator, instance: object) -> str:
-    error = next(validator.iter_errors(instance), None)
-    if error is None:
-        return "invalid"
-    keyword = error.validator if isinstance(error, ValidationError) else "invalid"
-    return str(keyword)
+def _entry(entry: object) -> tuple[str, list[Any]] | None:
+    if not isinstance(entry, dict):
+        return None
+    address = _http_url(entry.get("address"))
+    records = entry.get("runners")
+    if address is None or not isinstance(records, list):
+        return None
+    return address, records
 
 
-def _runner(raw: Mapping[str, Any], address: str) -> Runner:
+def _runner(raw: object, address: str) -> Runner | None:
+    if not isinstance(raw, dict):
+        return None
+    url = _http_url(raw.get("url"))
+    app = raw.get("app")
+    if url is None or not isinstance(app, str) or not app:
+        return None
+    observed_at = _stamp(raw.get("observed_at"))
+    if observed_at is None:
+        return None
     gpu = raw.get("gpu")
     return Runner(
-        url=raw["url"],
-        app=raw["app"],
+        url=url,
+        app=app,
         mode=_string(raw.get("mode")),
         orchestrator_url=address,
         capacity=_integer(raw.get("capacity")),
         capacity_used=_integer(raw.get("capacity_used")),
-        capacity_available=_integer(raw.get("capacity_available")),
+        capacity_available=_available(raw),
         price_info=_price_info(raw.get("price_info")),
-        observed_at=_stamp(raw.get("observed_at")),
+        observed_at=observed_at,
         version=_string(raw.get("version")),
         metadata=_string(raw.get("metadata")),
         gpu=_gpu(gpu) if isinstance(gpu, dict) else None,
     )
+
+
+def _http_url(value: object) -> str | None:
+    """An ``http`` or ``https`` URL the engine can call, kept as written; otherwise None.
+
+    aiohttp, which makes every runner call, reads the URL with yarl. yarl must connect to the host
+    ``urlsplit`` names, the one the payment-origin check compares, on a port from 1 to 65535. yarl folds
+    a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
+    The URL holds no whitespace or control character, which aiohttp cannot send. It has no userinfo,
+    query or fragment: the engine appends each request's path to a runner URL, the address becomes
+    ``orchestrator_url`` for the payment-origin check, and error text quotes both.
+    """
+    if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
+        return None
+    try:
+        parts = urlsplit(value)
+        host, _ = parts.hostname, parts.port  # .port raises for a port that is not a number
+        dialed = yarl.URL(value)
+    except ValueError:
+        return None
+    if parts.scheme not in _HTTP or not host or "@" in parts.netloc or "?" in value or "#" in value:
+        return None
+    if dialed.raw_host != host or not 1 <= (dialed.port or 0) <= 65535:
+        return None
+    return value
 
 
 def _price_info(value: object) -> PriceInfo | None:
@@ -215,26 +165,34 @@ def _price_info(value: object) -> PriceInfo | None:
 
 def _decimal(value: object) -> Decimal | None:
     """The exact token, or None when ``Decimal`` cannot hold it. Never a binary float."""
-    if isinstance(value, JsonNumber):
-        try:
-            amount = Decimal(value.token)
-        except InvalidOperation:
-            return None
-        return amount if amount.is_finite() else None
-    if isinstance(value, int) and not isinstance(value, bool):
-        return Decimal(value)
-    return None
+    if not isinstance(value, JsonNumber):
+        return None
+    try:
+        return Decimal(value.token)
+    except InvalidOperation:
+        return None
 
 
 def _integer(value: object) -> int | None:
-    if isinstance(value, JsonNumber) and _INTEGER.fullmatch(value.token):
-        try:
-            return int(value.token)
-        except ValueError:
-            return None
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return None
+    """A JSON number with a whole value that fits 64 bits, as node accepts it (``3``, ``3.0``, ``3e0``)."""
+    if not isinstance(value, JsonNumber):
+        return None
+    try:
+        number = Decimal(value.token)
+    except InvalidOperation:
+        return None
+    if not number.is_finite() or number != number.to_integral_value() or not -_INT64 <= number < _INT64:
+        return None
+    return int(number)
+
+
+def _available(raw: dict[str, Any]) -> int | None:
+    """Free slots. Missing means unknown, which selection treats as one free slot. A value that is present
+    and not an integer is 0, not unknown: a runner that reports its capacity badly is not chosen."""
+    if "capacity_available" not in raw:
+        return None
+    available = _integer(raw["capacity_available"])
+    return 0 if available is None else available
 
 
 def _string(value: object) -> str | None:
@@ -242,10 +200,12 @@ def _string(value: object) -> str | None:
 
 
 def _stamp(value: object) -> datetime | None:
-    """The RFC 3339 stamp in UTC. Nanoseconds truncate to microseconds. An unconvertible stamp is None."""
-    if not isinstance(value, str):
+    """The RFC 3339 stamp in UTC, or None. Nanoseconds truncate to microseconds. A stamp RFC 3339 allows
+    and the clock cannot hold, such as a leap second, is None too."""
+    if not isinstance(value, str) or _RFC3339.fullmatch(value) is None:
         return None
-    text = _FRACTION.sub(r"\1", value[:-1] + "+00:00" if value.endswith("Z") else value)
+    text = value[:10] + "T" + value[11:]
+    text = _FRACTION.sub(r"\1", text[:-1] + "+00:00" if text[-1] in "zZ" else text)
     try:
         stamp = datetime.fromisoformat(text)
     except ValueError:
@@ -258,7 +218,7 @@ def _stamp(value: object) -> datetime | None:
         return None
 
 
-def _gpu(value: Mapping[str, Any]) -> RunnerGPU:
+def _gpu(value: dict[str, Any]) -> RunnerGPU:
     return RunnerGPU(
         id=_string(value.get("id")),
         name=_string(value.get("name")),

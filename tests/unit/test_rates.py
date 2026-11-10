@@ -12,7 +12,7 @@ from livepeer_builder import EngineSettings, EngineSupply, testing
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_price import max_price
 from livepeer_builder.contracts import NetworkRate, ObservedRate, Offering, PriceInfo, Runner
-from livepeer_builder.contracts.discovery import payable_rate
+from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.testing import FixedClock, make_engine
@@ -74,7 +74,7 @@ async def catalog(clock: FixedClock, *runners: Runner) -> list[Offering]:
 
 
 def test_no_price_info_is_kept_and_cannot_be_paid() -> None:
-    """Off-chain registrations advertise no price (livepeer-node omits price_info). A null is not an object."""
+    """Off-chain registrations advertise no price. A null ``price_info`` is absent, and the runner stays."""
     body = json.dumps(
         [
             {
@@ -91,13 +91,18 @@ def test_no_price_info_is_kept_and_cannot_be_paid() -> None:
             }
         ]
     )
-    (kept,) = read_inventory(body)
-    assert kept.url.endswith("/r1/app") and kept.price_info is None and payable_rate(kept.price_info) is None
+    first, second = read_inventory(body)
+    assert first.url.endswith("/r1/app") and first.price_info is None
+    assert second.url.endswith("/r2/app") and second.price_info is None
+    assert payable_rate(first.price_info) is None and payable_rate(second.price_info) is None
 
 
-def test_a_price_the_schema_rejects_is_skipped() -> None:
-    """A price string is not a JSON number. The runner is not kept, and the refresh does not fail."""
-    assert read_inventory(_document(price="1", currency="wei", unit="seconds")) == ()
+def test_a_price_string_is_absent_and_the_runner_stays() -> None:
+    """A price string is not a JSON number. The runner stays, and that price cannot be paid."""
+    (runner,) = read_inventory(_document(price="1", currency="wei", unit="seconds"))
+    assert runner.price_info is not None and runner.price_info.price is None
+    assert (runner.price_info.currency, runner.price_info.unit) == ("wei", "seconds")
+    assert payable_rate(runner.price_info) is None
 
 
 def test_a_price_of_0_is_a_free_rate() -> None:
@@ -182,7 +187,10 @@ def test_a_per_pixel_unit_is_kept_as_advertised_and_has_no_ceiling() -> None:
 
 
 def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
-    """A schema-valid RFC 3339 stamp is kept in UTC. One the schema rejects is skipped, not stored as None."""
+    """An RFC 3339 stamp with an offset is kept in UTC.
+
+    A missing stamp, or one the clock cannot convert, is skipped.
+    """
     stamps = [
         "2026-10-29T02:05:55.123456789Z",
         "2026-10-29T04:05:55+02:00",
@@ -200,7 +208,8 @@ def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
                         "observed_at": stamp,
                     }
                     for i, stamp in enumerate(stamps)
-                ],
+                ]
+                + [{"url": "https://orch.example/apps/unstamped/app", "app": "a/b"}],
             }
         ]
     )
@@ -210,11 +219,10 @@ def test_the_orchestrators_observed_at_is_read_in_utc() -> None:
     ]
 
 
-def test_a_stamp_outside_the_utc_range_is_unreadable_and_keeps_the_inventory() -> None:
+def test_a_stamp_outside_the_utc_range_is_skipped_and_keeps_the_inventory() -> None:
     """``astimezone(UTC)`` raises OverflowError at the ends of the datetime range.
 
-    One such stamp on one runner must not fail the refresh for every other runner. A cache that
-    re-serves the text only checks that it is a JSON string.
+    One such stamp skips that runner. The rest of the document stays.
     """
     body = json.dumps(
         [
@@ -240,10 +248,9 @@ def test_a_stamp_outside_the_utc_range_is_unreadable_and_keeps_the_inventory() -
             }
         ]
     )
-    good, low, high = read_inventory(body)
+    (good,) = read_inventory(body)
+    assert good.url.endswith("/good/app")
     assert good.observed_at == datetime(2026, 10, 30, tzinfo=UTC)
-    assert low.observed_at is None and high.observed_at is None
-    assert (low.url, high.url) == ("https://orch.example/apps/low/app", "https://orch.example/apps/high/app")
 
 
 # -- the catalog: provenance and age ---------------------------------------------------------------------

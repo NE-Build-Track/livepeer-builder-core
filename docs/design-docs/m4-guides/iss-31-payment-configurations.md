@@ -220,8 +220,8 @@ above updated.
   every tenant's grant.
 - **Ship a tenant proxy in builder-core.** Rejected for M4: it is the operator's product, not the
   engine's, and would imply a hosted service.
-- **Railway as the separate operator.** Possible (Batteries and signer already deploy there), but their
-  ports are on Railway's private network today (NE-Build-Track/deployments) and it shares the payer.
+- **The hosted deployment as the separate operator.** Possible (Batteries and signer already run there),
+  but their ports are on a private network today and it shares the payer.
 
 ## Open questions to lock
 

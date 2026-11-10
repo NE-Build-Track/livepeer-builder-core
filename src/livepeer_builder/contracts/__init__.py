@@ -29,7 +29,6 @@ from livepeer_builder.contracts.costs import (
 )
 from livepeer_builder.contracts.discovery import (
     DiscoverySnapshot,
-    NetworkRate,
     ObservedRate,
     Offering,
     PriceInfo,
@@ -72,6 +71,7 @@ from livepeer_builder.contracts.payments import (
     GrantPage,
     GrantRecord,
     KnownActor,
+    NetworkRate,
     NewAllocationKey,
     PaymentCredential,
     ProvisionedActor,

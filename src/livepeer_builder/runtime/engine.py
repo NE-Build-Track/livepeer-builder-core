@@ -12,7 +12,6 @@ from importlib.metadata import PackageNotFoundError, version
 
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import EngineHealth, PurgeReport
-from livepeer_builder.contracts.discovery import DISCOVERY_CONTRACT
 from livepeer_builder.runtime.assembly import Decorate, EngineServices, EngineSupply, build
 from livepeer_builder.utils import run_shielded
 
@@ -129,7 +128,6 @@ class BuilderEngine:
             discovery_fresh=self.discovery.is_fresh(),
             discovery_observed_at=snapshot.observed_at,
             discovery_error=snapshot.last_error,
-            discovery_contract=DISCOVERY_CONTRACT,
             cost_sync_at=self.costs.last_synced_at,
             cost_sync_error=self.costs.last_error,
             running_jobs=self.admission.running,

@@ -496,11 +496,6 @@
             ],
             "title": "Cost Sync Error"
           },
-          "discovery_contract": {
-            "default": "livepeer/node@f45d83f",
-            "title": "Discovery Contract",
-            "type": "string"
-          },
           "discovery_error": {
             "anyOf": [
               {
@@ -1880,7 +1875,7 @@
       },
       "Runner": {
         "additionalProperties": false,
-        "description": "One runner from the discovery schema. ``address`` is kept as ``orchestrator_url``.",
+        "description": "One runner a discovery document advertises. ``address`` is kept as ``orchestrator_url``.",
         "properties": {
           "app": {
             "title": "App",
@@ -2009,7 +2004,7 @@
       },
       "RunnerGPU": {
         "additionalProperties": false,
-        "description": "The GPU a runner reports, as the discovery schema's ``gpu`` object echoes it.",
+        "description": "The GPU a runner reports. The engine stores ``id``, ``name`` and ``vram_mb`` and ignores the rest.",
         "properties": {
           "id": {
             "anyOf": [

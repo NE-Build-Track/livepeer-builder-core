@@ -23,7 +23,7 @@ days), so the reviewer, the payment handoff and the sign-off procedure should be
 ## Findings to raise in review
 
 - **This repository does not deploy.** A push to `main` or `releases/**` used to run `deploy.yml`.
-  Railway deploys are `workflow_dispatch` in NE-Build-Track/deployments. ISS-38.
+  ISS-38.
 - **Images ignore the lock file:** engine and discovery images run `pip install .`, so dependencies
   float at build time; the base image is pinned by tag, not digest. ISS-38.
 - **A build from a shallow clone reports `0.0.1.dev1+g…`**, which is what the console's engine shows.

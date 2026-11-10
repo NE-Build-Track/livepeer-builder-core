@@ -78,7 +78,7 @@ age the catalog needs. Each served rate says which clock it used:
 | absent, unreadable, or more than 30 s ahead | the poll time | `engine` |
 
 The 30 s bound is livepeer/node's own (`ClockSkew` in `discovery/shared/inventory.go`). The HTTP reader
-is not looser than the schema: a runner with no `observed_at` fails validation and does not appear.
+skips a runner with no `observed_at`, or one whose stamp it cannot convert to UTC.
 The poll-time row is for a stamp the catalog cannot use, including one a custom source handed over.
 
 **Offering status.**
@@ -102,7 +102,7 @@ section when go-livepeer is retired (D2).
 | go-livepeer `/discovery` | What the engine does |
 | --- | --- |
 | `price` always wei, `currency` always `wei`, **no `price_usd`** (the field exists from `v0.9.3`, but only go-livepeer's remote signer fills it, with its own wei-to-USD conversion) | `price_usd` is `None`. go-livepeer keeps the registered USD price internally; no upstream change is planned (go-livepeer is deprecated) |
-| no `observed_at` | the schema rejects the runner, so `HttpDiscoverySource` does not keep it |
+| no `observed_at` | the reader skips the runner, so `HttpDiscoverySource` does not keep it |
 | an on-chain runner listed with **no `price_info`** while its price feed is not ready | `price_info` is absent. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
 | wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
 

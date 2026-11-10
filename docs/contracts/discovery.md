@@ -15,11 +15,13 @@ The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in sta
 
 ## How a document is read
 
-The reader takes the fields it stores. An entry is read when `address` is an `http` or `https` URL with a host and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is an `http` or `https` URL with a host, `app` is a non-empty string, and `observed_at` converts to UTC. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
+The reader takes the fields it stores. An entry is read when `address` is a URL the engine can call and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is a URL the engine can call, `app` is a non-empty string, and `observed_at` converts to UTC.
+
+A URL the engine can call is `http` or `https`, has a host and, if any, a numeric port in range, and holds no whitespace or control character, which the HTTP client cannot send. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, the address becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
 
 There is no size limit, no stamp-age filter, and no de-duplication. A price string, a non-integer capacity, or any other optional field of the wrong type is absent, and the runner stays.
 
-Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), never as binary floats. A token `Decimal` cannot hold still counts as a number: the runner is kept, that field is absent, and the payment layer reports that the price cannot be paid. An integer field (`capacity`, `capacity_used`, `capacity_available`, `gpu.vram_mb`) holds a signed 64-bit value; a larger integer still passes the schema, so the runner is kept and that field is absent.
+Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), never as binary floats. A token `Decimal` cannot hold still counts as a number: the runner is kept, that field is absent, and the payment layer reports that the price cannot be paid.
 
 ## Schema fields and `Runner`
 
@@ -51,6 +53,8 @@ Any process that serves this contract can sit behind `LPB_DISCOVERY_URL`. One or
 That process GETs each listed orchestrator at startup and every `RefreshInterval` (30s in the dev stack; the process default is 5 minutes) and verifies TLS with the system trust store. A failed refresh keeps the last successful snapshot until `MaxFailedRefreshes` consecutive failures. The default is 6, and the dev stack does not override it. A TLS failure, a non-200, or a document `Decode` rejects counts as one failure. A source that has never succeeded stays out of the inventory. A runner with no `observed_at`, or one more than 30 seconds ahead, is skipped inside `Decode`. That skip does not drop the source when another runner in the same document is valid.
 
 ## Testing
+
+The reader is tested against the node commit [upstream-baseline.md](../references/upstream-baseline.md) pins, without a copy of node's schema. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery --dump` for ai1 and xodeapp, and every runner in it must read with its exact price. Node's own `discovery/schema_test.go` cases for the fields the engine needs are kept by name in `tests/unit/test_discovery_reader.py`. When the pin moves, capture the document again with that commit's `livepeer-discovery --dump`.
 
 `FakeDiscoveryService` (`livepeer_builder.testing`, test-only) serves a node-format document, including `observed_at` by default, through an in-memory HTTP client into the real `HttpDiscoverySource`. `make_engine(runners=…)` keeps that signature and is built on it, so a test runs the same reader as production.
 

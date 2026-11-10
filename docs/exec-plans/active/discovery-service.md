@@ -39,12 +39,11 @@ Today the engine reads the remote signer's `GET /discover-orchestrators`. In liv
   - `ARCHITECTURE.md` and the diagrams;
   - D43;
   - generated docs.
-- [ ] Deploy (all in the branch except the last item, which waits for the owner):
-  - the dev stack and Railway run the discovery service on the static list;
-  - the engine's `LPB_DISCOVERY_URL` points at it;
-  - the signer configs lose `Orchestrators` and pinned certificates;
-  - the deploy workflow learns the `discovery` service;
-  - the Railway service itself is created by the owner.
+- [x] Deploy, revised 9 November (Mike, PR #95 review):
+  - the dev stack runs livepeer/node `livepeer-discovery` at `f45d83f` in static mode (`config/discovery.toml`);
+  - the engine's `LPB_DISCOVERY_URL` still points at `GET /discovery`;
+  - the signer configs have no `Orchestrators` list and no pinned certificates;
+  - this repository does not deploy.
 - [x] ChatLPT, the console and inference-gateway are pinned to the branch. Their stacks run the discovery service on the static list, and their live tests pass (re-pin to the merge on `releases/m3`).
 
 ## Design
@@ -230,7 +229,7 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
   which honours `SSL_CERT_FILE` / `SSL_CERT_DIR`, so such a deployment mounts the same pins in the
   discovery container and those orchestrators stay discoverable. "Untrusted" means untrusted by the
   deployment's store. Pinned by `test_the_default_trust_store_is_the_deployments_so_pinned_certificates_count`.
-- **26 October, Railway list.** Railway's signer list moves to the discovery service unchanged (`deploy/railway/discovery/orchestrators.txt`). The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry.
+- **26 October, Railway list.** Railway's signer list moved to the discovery service unchanged. The `signer.pymthouse.com` URL in it appears only in a comment naming where the list was extracted from; it is not an entry. **9 November:** that file now lives in [NE-Build-Track/deployments](https://github.com/NE-Build-Track/deployments). The dev stack no longer uses it. It runs livepeer/node `livepeer-discovery` from `deploy/dev-stack/config/discovery.toml`.
 - **26 October, PR #46 review (Mike).**
   - **Fixes:** all five of Cursor's threads.
   - **Registry:** the on-chain contracts come through the protocol's `Controller`, and

@@ -37,7 +37,7 @@ M4. M5 runs from 21 to 31 December 2026.
 | Operations | `docs/RELIABILITY.md` (configuration table, `lpb` commands, backup and restore, failure behavior), `docs/SECURITY.md` (secrets, trust boundaries), `docs/QUALITY_SCORE.md` |
 | Extension | `docs/design-docs/extending-the-engine.md`; `docs/generated/interfaces.md` |
 | Generated | `docs/generated/`: `openapi.json`, `db-schema.md`, `interfaces.md`, `contracts.md`, written by `lpb gen-docs` (`src/livepeer_builder/docs_gen.py`, `docs_diagrams.py`). CI runs `lpb gen-docs --check` |
-| Deploy | `deploy/dev-stack/README.md` (payer prerequisites), `deploy/railway/README.md` |
+| Deploy | `deploy/dev-stack/README.md` (payer prerequisites). This repository does not deploy |
 | References | `docs/references/`: pins, licenses, wire formats, runtime evidence |
 | Reference app (console) | `README.md`, `docs/guides/m3-journey.md` (the ISS-24 guide), `deploy/README.md`, `deploy/keycloak/README.md`, `docs/references/payment-stack.md` |
 
@@ -200,7 +200,7 @@ The docs at the release candidate tag pass the same checks.
 
 | Upstream | Needed? | Why |
 | --- | --- | --- |
-| livepeer/node | No | The docs describe the signer at the pinned `406b248` and link node's own docs by commit |
+| livepeer/node | No | The docs describe the signer at the pinned `f45d83f` and link node's own docs by commit |
 | livepeer-python-gateway | No | Install docs must say that the SDK is a git direct reference until a PyPI release exists (T1), so `git` is a prerequisite. That is a documentation fact, not a change |
 | clearinghouse-batteries | No | Operators build it from source at `ca09e47` (no published images, T8). Its licensing is ISS-38's concern |
 

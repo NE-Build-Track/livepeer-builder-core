@@ -1,5 +1,5 @@
 # livepeer/node signer (on-chain: needs a funded broadcaster deposit and reserve on Arbitrum One).
-Listen = "0.0.0.0:8937"
+Listen = "unsafe@0.0.0.0:8937"
 MetricsListen = "127.0.0.1:8938"
 RPCURLFile = "/run/secrets/rpc-url"
 KeystoreFile = "/run/secrets/keystore.json"
@@ -8,7 +8,7 @@ MaxHourlyPrice = "100"
 MaxFixedPrice = "1"
 AuthWebhookFile = "/run/secrets/webhook-url"
 AuthWebhookHeadersFile = "/run/secrets/webhook-headers"
-# The signer only signs payments. Discovery is the discovery service (config/orchestrators.txt, D43);
+# The signer only signs payments. Discovery is livepeer-discovery (config/discovery.toml, D43);
 # an Orchestrators list here was never a payment control, so there is none.
 
 [Kafka]

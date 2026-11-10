@@ -2,14 +2,14 @@
 
 An optional local stack for driving the engine against real Livepeer payment components. It is not
 part of CI. **Orchestrators and runners are assumed to exist on the network**, so the stack runs the
-payment side, the discovery service and the engine:
+payment side, node's discovery and the engine:
 
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | livepeer/node `406b248` (v1.0.2) remote signer, the same commit Railway deploys. It only signs payments |
-| `discovery` | This repository's discovery service (`lpb discovery`, the engine image) on `127.0.0.1:8939`, with the static directory `config/orchestrators.txt` ([contract](../../docs/contracts/discovery.md)) |
-| `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from the discovery service (`LPB_DISCOVERY_URL`) |
+| `signer` | livepeer/node `f45d83f` remote signer (main, 10 commits after v1.0.6). It only signs payments |
+| `discovery` | livepeer/node's `livepeer-discovery` from that same commit, static mode, on `127.0.0.1:8939`. The list is `config/discovery.toml`. The engine still only reads `GET /discovery` ([contract](../../docs/contracts/discovery.md)) |
+| `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from discovery (`LPB_DISCOVERY_URL`) |
 
 Upstream sources are built from the M2 baseline commits
 ([upstream-baseline](../../docs/references/upstream-baseline.md)), so the first build takes a while.
@@ -18,8 +18,12 @@ Upstream sources are built from the M2 baseline commits
 
 - A **payer keystore** whose account has a funded TicketBroker deposit and reserve on Arbitrum One.
 - An **Arbitrum One RPC URL**. It may contain an API key; it lives only in `secrets/rpc-url`.
-- The orchestrators to use, listed in `config/orchestrators.txt`. Ones whose TLS certificate the system
-  trust store rejects are left out by the discovery service, because the engine could not call them.
+- The orchestrators to use, listed in `config/discovery.toml`. Discovery collects each listed URL:
+  it GETs `<base>/discovery` at startup and every `RefreshInterval`, and it verifies TLS with the
+  system trust store. A runner without `observed_at`, or one stamped more than 30 seconds ahead, is
+  dropped, and a TLS failure never enters the catalog. `/readyz` on the metrics port is ready when
+  the process listens; it does not report an empty inventory. The engine still refuses an untrusted
+  certificate when it calls a runner.
 
 ## Start
 
@@ -34,12 +38,13 @@ cp .env.example .env && chmod 600 .env     # fill LPB_BATTERIES_TOKEN (secrets/e
                                            # LPB_BATTERIES_OPERATOR_TOKEN (secrets/grant-desk-token;
                                            #   optional, turns on the grant desk),
                                            # LPB_SECRET_KEY
-docker compose up -d --build engine discovery
+docker compose up -d --build engine
+docker compose up -d discovery
 ```
 
 Check the signer: `docker compose exec clearinghouse curl -s http://127.0.0.1:8938/readyz` (it checks
-chain funds and price policy). Check discovery: `curl -s http://127.0.0.1:8939/readyz` (orchestrators
-listed and serving) and `curl -s http://127.0.0.1:8939/discovery` (the runners the engine sees).
+chain funds and price policy). Check discovery: `curl -s http://127.0.0.1:8939/discovery` (the runners
+the engine sees). Readiness is on the metrics port, `127.0.0.1:8940/readyz`, which is not published.
 
 ## Use
 
@@ -91,8 +96,8 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   namespace and every payment fails `signer_unavailable`. Recreate it: `docker compose up -d
   --force-recreate --no-build signer` (seen live on 30 October,
   [evidence](../../docs/references/evidence/2026-10-30-m3-live-suite.md)).
-- **The signer container runs as root** (`user: "0:0"`) so bind-mounted secrets stay readable;
-  clearinghouse runs as its image's default user. This is dev only.
+- **The signer container runs as root** (`user: "0:0"`) so bind-mounted secrets stay readable.
+  Discovery and clearinghouse run as their images' own users. This is dev only.
 - **The engine image runs as `lpb` (uid 10001)**, and `/.dockerignore` keeps `secrets/`, `.env`,
   `.venv` and caches out of the build context. An `engine-data` volume created by an older, root-run
   image needs its ownership fixed once:
@@ -103,10 +108,13 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
   `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine's grant desk can
   list or create grants.
-  The Railway Batteries image writes the same `builder-engine` list. `tests/structure/test_deploy.py`
-  fails when the two lists drift.
+  Any deployment gives the engine the same permissions, which `config/init-secrets.py` writes:
+  - `builder-engine` (`LPB_BATTERIES_TOKEN`): `grants.fund`, `allocations.create`, `allocations.fund`,
+    `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`, `api_keys.read`,
+    `api_keys.revoke` and `usage.read`;
+  - `grant-desk` (`LPB_BATTERIES_OPERATOR_TOKEN`, optional): `grants.read` and `grants.create`.
 - **No pinned certificates.** The signer no longer discovers, so it needs no orchestrator certificates
-  (T12 closed by D43). The discovery service verifies TLS against the system trust store and leaves out
-  orchestrators that are not trusted, which the engine could not call anyway.
+  (T12 closed by D43). `config/pinned-certs/` is gone. The engine still verifies runner TLS against
+  the system trust store.
 - **Docker network error:** if Docker reports "all predefined address pools have been fully
   subnetted", run `docker network prune`.

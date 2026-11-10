@@ -17,8 +17,11 @@ from livepeer_builder.contracts.discovery import PriceInfo, Runner, RunnerGPU
 
 _LOG = logging.getLogger(__name__)
 _FRACTION = re.compile(r"(\.\d{6})\d+")
-# RFC 3339 date-time: ``T`` and ``Z`` in either case, seconds required, a numeric offset or ``Z``.
-_RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})", re.ASCII)
+# RFC 3339 date-time: ``T`` and ``Z`` in either case, seconds required, ``Z`` or an offset of 00-23 hours
+# and 00-59 minutes. fromisoformat rejects bad clock fields itself, but carries offset minutes past 59.
+_RFC3339 = re.compile(
+    r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)", re.ASCII
+)
 _INT64 = 1 << 63
 _HTTP = frozenset({"http", "https"})
 _UNSENDABLE = re.compile(r"[\x00-\x20\x7f]")  # whitespace and control characters

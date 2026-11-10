@@ -174,6 +174,11 @@ def test_a_lowercase_rfc_3339_stamp_is_read() -> None:
         "20261022T180500Z",
         "2026-10-22T18:05:00",
         "2026-10-22T23:59:60Z",
+        "2026-10-22T18:05:00+00:60",
+        "2026-10-22T18:05:00+00:99",
+        "2026-10-22T18:05:00+24:00",
+        "2026-10-22T24:00:00Z",
+        "2026-10-22T18:60:00Z",
     ],
 )
 def test_a_stamp_that_is_not_rfc_3339_or_does_not_convert_skips_the_runner(stamp: str) -> None:

@@ -366,6 +366,30 @@ def test_a_discovery_url_without_an_http_scheme_and_host_is_refused_at_startup(u
         EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:secret@discovery.example/discovery",
+        "https://token@discovery.example/discovery",
+        "//user:secret@discovery.example/discovery",
+        "https://discovery.example/discovery?token=secret",
+        "https://discovery.example/discovery#secret",
+    ],
+)
+def test_a_discovery_url_with_userinfo_a_query_or_a_fragment_is_refused_at_startup(url: str) -> None:
+    """A refresh error quotes the URL, /readyz serves it unauthenticated, and httpx would send the userinfo as
+    Basic auth. The refusal names no part of the URL (D58, as for signer_url)."""
+    with pytest.raises(ValidationError) as refused:
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
+    assert "must not carry userinfo, a query or a fragment" in str(refused.value)
+    assert "secret" not in str(refused.value) and "token" not in str(refused.value)
+
+
+def test_a_plain_discovery_url_is_kept() -> None:
+    url = "https://discovery.example:8939/path/discovery"
+    assert EngineSettings.from_env({"LPB_DISCOVERY_URL": url}).discovery_url == url
+
+
 @pytest.mark.parametrize("padded", ["http://discovery:8939/discovery\n", " http://discovery:8939/discovery "])
 def test_a_padded_discovery_url_is_read_without_its_padding(padded: str) -> None:
     """urlsplit ignores the padding; httpx refuses the newline and sends the space as /discovery%20 (#77 review)."""

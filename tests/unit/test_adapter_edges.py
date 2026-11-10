@@ -368,8 +368,8 @@ def test_a_price_string_is_absent_and_a_negative_price_is_kept_unpayable() -> No
 
 
 def test_a_non_http_url_is_skipped_and_a_non_integer_capacity_is_absent() -> None:
-    """``1.0`` is a JSON number and not an integer capacity. The runner stays, with that field absent."""
-    kept = {**GOOD_ENTRY["runners"][0], "capacity": 1.0}
+    """``1.5`` is a JSON number and not an integer capacity. The runner stays, with that field absent."""
+    kept = {**GOOD_ENTRY["runners"][0], "capacity": 1.5}
     body = json.dumps(
         [
             {"address": "ftp://orch.example", "runners": [GOOD_ENTRY["runners"][0]]},

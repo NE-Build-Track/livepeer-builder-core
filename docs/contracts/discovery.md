@@ -15,11 +15,11 @@ The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in sta
 
 ## How a document is read
 
-The reader takes the fields it stores. An entry is read when `address` is a URL the engine can call and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is a URL the engine can call, `app` is a non-empty string, and `observed_at` converts to UTC.
+The reader takes the fields it stores. An entry is read when `address` is a URL the engine can call and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is a URL the engine can call, `app` is a non-empty string, and `observed_at` is an RFC 3339 timestamp that converts to UTC.
 
 A URL the engine can call is `http` or `https`, has a host and, if any, a numeric port in range, and holds no whitespace or control character, which the HTTP client cannot send. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, the address becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
 
-There is no size limit, no stamp-age filter, and no de-duplication. A price string, a non-integer capacity, or any other optional field of the wrong type is absent, and the runner stays.
+There is no size limit, no stamp-age filter, and no de-duplication. An integer field reads any whole JSON number node accepts (`3`, `3.0`, `3e0`) that fits 64 bits. A price string, a fractional capacity, or any other optional field of the wrong type is absent, and the runner stays. `capacity_available` is the exception: a missing one is unknown, which selection treats as one free slot, but a value that is present and not an integer reads as 0, so that runner is not chosen.
 
 Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), never as binary floats. A token `Decimal` cannot hold still counts as a number: the runner is kept, that field is absent, and the payment layer reports that the price cannot be paid.
 
@@ -60,4 +60,4 @@ The reader is tested against the node commit [upstream-baseline.md](../reference
 
 ## `observed_at`
 
-The reader keeps a runner when `observed_at` is an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp it can convert to UTC. Nanoseconds truncate to microseconds. A runner that omits the stamp, or whose stamp does not convert, does not appear. That includes orchestrators on livepeer/node `v1.0.2`. The catalog still treats a stamp it cannot use, from a source other than this reader, as the poll time (D62 (3)).
+The reader keeps a runner when `observed_at` is an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp, `T` and `Z` in either case, that it can convert to UTC. Nanoseconds truncate to microseconds. A runner that omits the stamp, uses another date format, or has a stamp the clock cannot hold (a leap second) does not appear. That includes orchestrators on livepeer/node `v1.0.2`. The catalog still treats a stamp it cannot use, from a source other than this reader, as the poll time (D62 (3)).

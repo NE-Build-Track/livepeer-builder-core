@@ -17,7 +17,9 @@ from livepeer_builder.contracts.discovery import PriceInfo, Runner, RunnerGPU
 
 _LOG = logging.getLogger(__name__)
 _FRACTION = re.compile(r"(\.\d{6})\d+")
-_INTEGER = re.compile(r"-?(0|[1-9]\d*)$")
+# RFC 3339 date-time: ``T`` and ``Z`` in either case, seconds required, a numeric offset or ``Z``.
+_RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})", re.ASCII)
+_INT64 = 1 << 63
 _HTTP = frozenset({"http", "https"})
 _UNSENDABLE = re.compile(r"[\x00-\x20\x7f]")  # whitespace and control characters
 
@@ -111,7 +113,7 @@ def _runner(raw: object, address: str) -> Runner | None:
         orchestrator_url=address,
         capacity=_integer(raw.get("capacity")),
         capacity_used=_integer(raw.get("capacity_used")),
-        capacity_available=_integer(raw.get("capacity_available")),
+        capacity_available=_available(raw),
         price_info=_price_info(raw.get("price_info")),
         observed_at=observed_at,
         version=_string(raw.get("version")),
@@ -162,13 +164,25 @@ def _decimal(value: object) -> Decimal | None:
 
 
 def _integer(value: object) -> int | None:
-    """A canonical integer token that fits ``int``. ``1.0`` and ``1e2`` are not capacities."""
-    if not isinstance(value, JsonNumber) or _INTEGER.fullmatch(value.token) is None:
+    """A JSON number with a whole value that fits 64 bits, as node accepts it (``3``, ``3.0``, ``3e0``)."""
+    if not isinstance(value, JsonNumber):
         return None
     try:
-        return int(value.token)
-    except ValueError:
+        number = Decimal(value.token)
+    except InvalidOperation:
         return None
+    if not number.is_finite() or number != number.to_integral_value() or not -_INT64 <= number < _INT64:
+        return None
+    return int(number)
+
+
+def _available(raw: dict[str, Any]) -> int | None:
+    """Free slots. Missing means unknown, which selection treats as one free slot. A value that is present
+    and not an integer is 0, not unknown: a runner that reports its capacity badly is not chosen."""
+    if "capacity_available" not in raw:
+        return None
+    available = _integer(raw["capacity_available"])
+    return 0 if available is None else available
 
 
 def _string(value: object) -> str | None:
@@ -176,10 +190,12 @@ def _string(value: object) -> str | None:
 
 
 def _stamp(value: object) -> datetime | None:
-    """The RFC 3339 stamp in UTC. Nanoseconds truncate to microseconds."""
-    if not isinstance(value, str):
+    """The RFC 3339 stamp in UTC, or None. Nanoseconds truncate to microseconds. A stamp RFC 3339 allows
+    and the clock cannot hold, such as a leap second, is None too."""
+    if not isinstance(value, str) or _RFC3339.fullmatch(value) is None:
         return None
-    text = _FRACTION.sub(r"\1", value[:-1] + "+00:00" if value.endswith("Z") else value)
+    text = value[:10] + "T" + value[11:]
+    text = _FRACTION.sub(r"\1", text[:-1] + "+00:00" if text[-1] in "zZ" else text)
     try:
         stamp = datetime.fromisoformat(text)
     except ValueError:

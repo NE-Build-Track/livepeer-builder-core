@@ -116,3 +116,65 @@ def test_one_bad_runner_does_not_drop_the_rest() -> None:
     body = _envelope(_RUNNER + "," + _RUNNER.replace('"app":"example"', '"app":""'))
     (runner,) = read_inventory(body)
     assert runner.app == "example"
+
+
+def _with(field: str, token: str) -> str:
+    return _envelope(_RUNNER.removesuffix("}") + f',"{field}":{token}}}')
+
+
+@pytest.mark.parametrize(
+    ("token", "value"),
+    [
+        ("3", 3),
+        ("3.0", 3),
+        ("3e0", 3),
+        ("1e2", 100),
+        ("-0.0", 0),
+        ("1.5", None),
+        ("1e400", None),
+        ('"3"', None),
+    ],
+)
+def test_a_capacity_is_read_as_the_integer_node_accepts(token: str, value: int | None) -> None:
+    (runner,) = read_inventory(_with("capacity", token))
+    assert runner.capacity == value
+
+
+@pytest.mark.parametrize("token", ["0", "0.0", "0e0", "-0.0", "false", '"2"', "1.5", "null"])
+def test_a_runner_reporting_no_or_a_bad_free_capacity_is_busy(token: str) -> None:
+    """Missing means unknown, which selection treats as one free slot. A present value that is not an
+    integer must not fall back to that default, or a full runner writing ``0.0`` would be chosen."""
+    (runner,) = read_inventory(_with("capacity_available", token))
+    assert runner.capacity_available == 0
+
+
+def test_a_missing_free_capacity_stays_unknown() -> None:
+    (runner,) = read_inventory(_envelope(_RUNNER))
+    assert runner.capacity_available is None
+
+
+def test_a_lowercase_rfc_3339_stamp_is_read() -> None:
+    (runner,) = read_inventory(
+        _envelope(_RUNNER.replace("2026-10-22T18:05:00.123+01:00", "2026-10-22t18:05:00.5z"))
+    )
+    assert (
+        runner.observed_at is not None
+        and runner.observed_at.isoformat() == "2026-10-22T18:05:00.500000+00:00"
+    )
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "2026-10-22 18:05:00Z",
+        "2026-10-22T18:05:00+00",
+        "2026-10-22T18:05:00+0000",
+        "2026-10-22T18:05Z",
+        "2026-W43-3T18:05:00Z",
+        "20261022T180500Z",
+        "2026-10-22T18:05:00",
+        "2026-10-22T23:59:60Z",
+    ],
+)
+def test_a_stamp_that_is_not_rfc_3339_or_does_not_convert_skips_the_runner(stamp: str) -> None:
+    assert read_inventory(_envelope(_RUNNER.replace("2026-10-22T18:05:00.123+01:00", stamp))) == ()

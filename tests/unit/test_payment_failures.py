@@ -333,6 +333,53 @@ async def test_a_repeat_after_a_signer_that_may_have_charged_is_operation_exists
     assert net.log.count("signer info") <= 1 and len(net.signer_requests) == 1  # nothing asked again
 
 
+async def test_a_first_byte_deadline_during_signer_identity_leaves_the_reference_free(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net
+) -> None:
+    """The caller's deadline can land in ``/sign-orchestrator-info``, which signs nothing and asks no
+    runner: ``signer_unavailable`` (D58 (4)), so the same reference runs once the signer answers. A
+    runner ``timeout`` would burn it (D57): an unpaid timeout may have run."""
+    engine, _ = await paid_engine(make_engine, admin, net)
+    net.info = [30.0]
+    request = JobRequest(app=APP, operation_ref="op-slow-info", first_byte_timeout_s=0.2)
+    streaming = engine.jobs.streaming
+    assert streaming is not None
+    with pytest.raises(JobFailed) as failed:
+        await streaming.stream(alice, request)
+    job = await engine.jobs.get(alice, failed.value.job.id)
+    assert job.failure is not None
+    assert (job.state, job.failure.kind, job.failure.reason) == ("failed", "payment", "signer_unavailable")
+    assert job.failure.message == "the signer did not identify itself within 0.2s"
+    assert [(a.outcome, a.payment_sent, a.sessions) for a in job.attempts] == [("payment", False, ())]
+    assert not any(entry.startswith(("request", "challenge")) for entry in net.log)
+    net.info = []  # the signer answers; the hung identity call is not this request
+    result = await engine.jobs.run(alice, JobRequest(app=APP, operation_ref="op-slow-info"))
+    assert result.job.state == "succeeded" and result.job.id != job.id
+
+
+@pytest.mark.parametrize("step", ["garbage", "array"])
+async def test_a_signer_identity_that_is_not_an_identity_is_payment_and_can_be_retried(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, net: Net, step: str
+) -> None:
+    """A ``/sign-orchestrator-info`` 200 that is not JSON, or not an object, signed nothing and asked no
+    runner. It is ``payment`` (no reason), not a runner's ``http``, so the same reference runs again
+    once the signer is well (D57, D58 (8))."""
+    engine, _ = await paid_engine(make_engine, admin, net)
+    net.info = [step, step]
+    request = JobRequest(app=APP, operation_ref=f"op-{step}")
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, request)
+    job = failed.value.job
+    assert job.failure is not None
+    assert (job.state, job.failure.kind, job.failure.reason) == ("failed", "payment", None)
+    assert job.failure.message == "the signer's answer was not valid"
+    assert [(a.outcome, a.payment_sent) for a in job.attempts] == [("payment", False)]
+    assert not any(entry.startswith(("request", "challenge")) for entry in net.log)  # no runner asked
+    net.info = []
+    result = await engine.jobs.run(alice, request)
+    assert result.job.state == "succeeded" and result.job.id != job.id
+
+
 def test_a_transport_s_reason_that_does_not_fit_its_kind_is_dropped() -> None:
     """A custom transport's mistake must not turn a runner failure into an engine error."""
     mismatched = RunnerCallError("unreachable", "down", payment_sent=False, reason="not_authorized")

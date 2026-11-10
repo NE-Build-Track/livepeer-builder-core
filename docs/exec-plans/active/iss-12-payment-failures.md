@@ -56,8 +56,21 @@ From the ticket and the 21 October M3 plan:
 - [=] a repeat after `allowance_exhausted`, `not_authorized` or `signer_unavailable` runs again; after
   `signer_unknown` it is 409 (D57's list; proved by mutation)
 - [x] the failure table in `engine.md` lists every kind and reason (doc test)
+- [+] a `sign-orchestrator-info` 200 that is not JSON, or not an object → `payment` (no reason), not a
+  runner's `http`, and the same reference runs again (#79)
+- [+] a stream deadline during `sign-orchestrator-info` leaves the reference free: the repeat runs (#79;
+  proved by mutation)
 
 ## Progress
+
+- 2026-11-02: #79 (Cursor), merged with `releases/m3` after #78. Of its two fixes, the stream deadline
+  during `/sign-orchestrator-info` was already fixed by #78's `PaidRequest.identifying`; #79's
+  `runner_contacted` flag is dropped and only its repeat test is kept, with #78's message. The other
+  stood: a 200 there that is not JSON, or not an object, was read by `network_kind` as `http`, so the
+  job failed `runner_error`, off D57's re-run list, though nothing was signed and no runner asked. It is
+  now `payment` with no reason, as this plan already listed for a malformed identity reply. The fix is
+  confined to `PaidRequest._signer_identity`: #79 changed `classify`'s fallback for every call made
+  before the signer may have charged, and the identity call is the only one that reaches it.
 
 - 2026-10-30: Cursor's review of #78. (1) A stream's `first_byte_timeout_s` that expired during
   `/sign-orchestrator-info` was `timeout` (504, a repeat 409): the deadline cancels the identity call, so

@@ -49,7 +49,7 @@ ALICE = ActorContext(
 )
 ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
 BOB = ALICE.model_copy(update={"actor_id": "bob"})
-RUNNERS = (runner(APP, url="https://r1"), runner(OTHER, url="https://r2"))
+RUNNERS = (runner(APP, url="https://orch.example/r1"), runner(OTHER, url="https://orch.example/r2"))
 
 Side = Callable[..., AbstractAsyncContextManager[ActorApi]]
 # A runner error as the engine's transport raises it (attempt outcome, paid), and as FakeEngine scripts it.
@@ -256,7 +256,7 @@ async def test_cost_of_an_unknown_job_is_not_found(side: Side) -> None:
 
 async def test_candidates_are_filtered_by_app(side: Side) -> None:
     async with side() as engine:
-        assert [r.url for r in engine.discovery.candidates(APP)] == ["https://r1"]
+        assert [r.url for r in engine.discovery.candidates(APP)] == ["https://orch.example/r1"]
 
 
 async def test_streaming_is_absent_without_a_streaming_transport(side: Side) -> None:
@@ -288,7 +288,10 @@ async def test_run_returns_the_parsed_body_as_data(side: Side) -> None:
 async def test_a_run_records_the_attempt_on_the_runner_it_used(side: Side) -> None:
     async with side() as engine:
         attempt = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job.attempts[-1]
-    assert (attempt.runner_url, attempt.orchestrator_url) == ("https://r1", "https://orch.example")
+    assert (attempt.runner_url, attempt.orchestrator_url) == (
+        "https://orch.example/r1",
+        "https://orch.example",
+    )
     assert attempt.outcome == "succeeded" and attempt.payment_sent and attempt.status_code == 200
 
 

@@ -111,8 +111,8 @@ async def test_the_paid_attempt_cap_returns_the_answer_it_stopped_at() -> None:
 async def test_a_paid_answer_comes_back_when_only_its_orchestrator_is_left() -> None:
     """A paid failover never pays the same orchestrator again (D52), so its second runner is no option."""
     same = [
-        RUNNERS[0],
-        runner("chat", "https://runner-a2.example", orchestrator_url="https://orch-a.example"),
+        runner("chat", "https://orch-a.example/runner-a", orchestrator_url="https://orch-a.example"),
+        runner("chat", "https://orch-a.example/runner-a2", orchestrator_url="https://orch-a.example"),
     ]
     transport = ScriptedStreamTransport(opens=[answer(503, b"busy"), answer(200, b"ok")])
     stream, body = await returned(transport, runners=same)

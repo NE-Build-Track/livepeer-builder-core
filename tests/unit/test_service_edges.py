@@ -309,7 +309,9 @@ async def test_failure_to_close_a_job_is_logged(
 async def test_payment_refused_after_signing_is_a_payment_failure(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await make_engine(runners=(runner(url="https://r1"), runner(url="https://r2")))
+    engine = await make_engine(
+        runners=(runner(url="https://orch.example/r1"), runner(url="https://orch.example/r2"))
+    )
     await engine.payments.provision(admin, provision())
     transport.steps = [
         RunnerCallError("payment_refused", "late refusal", payment_sent=True, manifest_ids=("m1",))

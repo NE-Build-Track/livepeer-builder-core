@@ -94,10 +94,11 @@ ORCH_A, ORCH_B = "https://orch-a.example", "https://orch-b.example"
 
 
 def two_orchestrators() -> tuple[Runner, ...]:
+    # The reader keeps address only when it shares the runner URL's origin.
     return (
-        runner(url="https://a1", orchestrator_url=ORCH_A),
-        runner(url="https://a2", orchestrator_url=ORCH_A),
-        runner(url="https://b1", orchestrator_url=ORCH_B),
+        runner(url=f"{ORCH_A}/a1", orchestrator_url=ORCH_A),
+        runner(url=f"{ORCH_A}/a2", orchestrator_url=ORCH_A),
+        runner(url=f"{ORCH_B}/b1", orchestrator_url=ORCH_B),
     )
 
 
@@ -112,7 +113,7 @@ async def test_a_paid_failure_that_did_not_run_fails_over_to_another_orchestrato
     ]
     result = await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=2))
     assert result.job.state == "succeeded"
-    assert [url for url, _ in transport.calls] == ["https://a1", "https://b1"]  # a2: same orchestrator
+    assert [url for url, _ in transport.calls] == [f"{ORCH_A}/a1", f"{ORCH_B}/b1"]  # a2: same orchestrator
     stored = await engine.jobs.get(alice, result.job.id)
     assert [(a.outcome, a.payment_sent, a.orchestrator_url) for a in stored.attempts] == [
         ("http", True, ORCH_A),

@@ -191,9 +191,9 @@ async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore
     supply = enterprise_supply()
     vault = supply.secret_store
     listed = [
-        priced("https://expensive", "0.50"),
-        priced("https://cheap", "0.10"),
-        priced("https://unapproved", "0.01", orchestrator="https://rogue.example"),
+        priced("https://orch.example/expensive", "0.50"),
+        priced("https://orch.example/cheap", "0.10"),
+        priced("https://rogue.example/unapproved", "0.01", orchestrator="https://rogue.example"),
     ]
     install, client = serve(listed)
 
@@ -260,7 +260,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     transport.steps = [ScriptedTransport.ok()]
     result = await engine.jobs.run(alice, JobRequest(app="example/echo"))
     assert (
-        transport.calls[0][0] == "https://cheap"
+        transport.calls[0][0] == "https://orch.example/cheap"
     )  # price-aware routing; the unapproved runner never appears
     assert ("get", "vault:lpg/acme/alice") in vault.audit
 
@@ -286,4 +286,4 @@ async def test_offerings_respect_the_allow_list(enterprise_engine) -> None:  # t
     engine, _, _ = enterprise_engine
     alice = await engine.authenticator.authenticate(sso("alice"))
     runners = engine.discovery.runners(alice, "example/echo")
-    assert {r.url for r in runners} == {"https://expensive", "https://cheap"}
+    assert {r.url for r in runners} == {"https://orch.example/expensive", "https://orch.example/cheap"}

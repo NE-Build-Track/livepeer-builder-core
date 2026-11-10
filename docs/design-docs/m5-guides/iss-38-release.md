@@ -49,12 +49,12 @@ permitted reuse).
 | --- | --- |
 | Wheel and sdist | `uv build` in CI job `build-install`; uploaded as artifact `livepeer-builder-dist` (14 days). **Nothing is published** (ISS-07). No GitHub releases exist. `livepeer-builder` is not on PyPI (404) |
 | Dependencies | `uv.lock` (frozen in CI). The SDK is a **direct reference**, `livepeer-gateway @ git+…@2017a80` (`allow-direct-references = true`, T1). PyPI refuses uploads whose metadata has direct references, so PyPI is blocked until an SDK release. Installing the wheel needs `git` |
-| Engine image | `deploy/dev-stack/engine/Dockerfile` runs `pip install ".[server…]"` from the source tree: **not from the wheel and not from `uv.lock`**, so dependency versions float at build time. Base `python:3.12.7-slim` by tag, not digest. The Railway images are in NE-Build-Track/deployments |
+| Engine image | `deploy/dev-stack/engine/Dockerfile` runs `pip install ".[server…]"` from the source tree: **not from the wheel and not from `uv.lock`**, so dependency versions float at build time. Base `python:3.12.7-slim` by tag, not digest |
 | Image checks | CI job `container`: non-root, `lpb smoke`, `/readyz`, unauthenticated `POST /v1/jobs` → 401 |
 | Install check | CI job `build-install`: wheel into a clean venv, `lpb smoke`, `lpb revision`; `test_packaging.py` checks that the migrations ship |
 | Other CI | `checks` (ruff, format, mypy strict, `check_docs`, `gen-docs --check`, tests with coverage gates), `postgres` |
 | Actions | Pinned by major tag (`actions/checkout@v4`, `astral-sh/setup-uv@v5`, `actions/upload-artifact@v4`), not by SHA |
-| Deploys | This repository does not deploy. Railway deploys are `workflow_dispatch` in NE-Build-Track/deployments |
+| Deploys | This repository does not deploy |
 | Registry | `IMAGE_REGISTRY=registry.livepeer.tools` in `deploy/dev-stack/.env.example` only prefixes local tags; builds never push. No GHCR packages |
 | Release notes | No `CHANGELOG` and no release workflow. Decisions and `m2-traceability.md` partly serve |
 
@@ -116,7 +116,7 @@ Actions are pinned by SHA. This is a comparison only; builder-core copies nothin
 | Artifact | How |
 | --- | --- |
 | Wheel and sdist | `uv build`; `SHA256SUMS`; the version must equal the tag |
-| Engine image (`lpb serve`, `lpb discovery`) | One `deploy/image/Dockerfile`: installs **the wheel** with dependencies constrained by `uv export --frozen --all-extras --no-dev --no-emit-project`; base pinned by digest; non-root. The Railway and dev-stack Dockerfiles build `FROM` it, or are replaced by it |
+| Engine image (`lpb serve`, `lpb discovery`) | One `deploy/image/Dockerfile`: installs **the wheel** with dependencies constrained by `uv export --frozen --all-extras --no-dev --no-emit-project`; base pinned by digest; non-root. The dev-stack Dockerfile builds `FROM` it, or is replaced by it |
 | SBOM | CycloneDX, generated from the locked environment and from the image (Q4) |
 | Provenance | GitHub artifact attestations (Sigstore, keyless) for the wheel, sdist and image digest; a signed annotated tag by Mike (Q5) |
 | Release notes | `CHANGELOG.md` (one section per version). The GitHub release body adds: pins (SDK, node, Batteries), migration revisions, upgrade steps, `limitations.md` from ISS-37, and links to the console's matching artifacts |
@@ -144,8 +144,7 @@ The workflow is manual (`workflow_dispatch`, input: tag). Each gate must pass be
 | 7. Human | Mike reviews the draft, then publishes it or leaves it as a draft. Visibility, transfer and operation are separate decisions |
 
 The branch flow finishes M3 through PR #32 as drafted (`releases/m3` → `releases/final` → `main`, then tag
-`v0.2.0`). M5 cuts `releases/v1.0` from `main`. A push to this repository does not deploy. Railway
-deploys are dispatched from NE-Build-Track/deployments.
+`v0.2.0`). M5 cuts `releases/v1.0` from `main`. This repository does not deploy.
 
 ### 4. Consumers converge on the release
 
@@ -158,9 +157,8 @@ wheel by version. The console's `pins.test.ts` may assert that the engine pin eq
 | --- | --- |
 | `.github/workflows/release.yml` (new) | Gates 1–6 |
 | `.github/workflows/ci.yml` | `on: workflow_call`; actions pinned by SHA |
-| NE-Build-Track/deployments workflows | Pin the Railway CLI version; maybe deploy from tags instead of a manual dispatch (Q3) |
 | `deploy/image/Dockerfile` (new) | Wheel-based, lock-constrained, digest-pinned base |
-| `deploy/dev-stack/engine/Dockerfile` and the Dockerfiles in NE-Build-Track/deployments | Build `FROM` the release image, or are deleted |
+| `deploy/dev-stack/engine/Dockerfile` | Build `FROM` the release image, or is deleted |
 | `scripts/release_check.py` (new) | Version, tag, wheel contents, checksums |
 | `tests/store/test_packaging.py` | Inspect the wheel named by the build, not `sorted(...)[-1]` |
 | `tests/structure/test_release.py` (new) | Workflow and Dockerfile invariants, like `test_deploy.py` |
@@ -232,8 +230,7 @@ by someone other than its author (it feeds ISS-37's fresh-reviewer check).
 
 - **Q1.** Final version `v1.0.0` (recommended: M5 is the delivery), or stay at `v0.x`?
 - **Q2.** Draft GitHub release plus a private GHCR image (recommended), or CI artifacts only?
-- **Q3.** Keep production deploys on push to `main` and `releases/**`, or deploy from tags
-  (recommended, so a release merge does not deploy by surprise)?
+- **Q3.** Settled 9 November: this repository does not deploy, so a release merge deploys nothing.
 - **Q4.** SBOM and scan tools, and the license allowlist (proposed: MIT, BSD, Apache-2.0, PSF, ISC,
   MPL-2.0, each exception recorded)?
 - **Q5.** Signing: Mike's signed tag plus GitHub attestations (recommended), or a cosign key?

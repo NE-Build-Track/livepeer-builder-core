@@ -43,7 +43,7 @@ Today the engine reads the remote signer's `GET /discover-orchestrators`. In liv
   - the dev stack runs livepeer/node `livepeer-discovery` at `f45d83f` in static mode (`config/discovery.toml`);
   - the engine's `LPB_DISCOVERY_URL` still points at `GET /discovery`;
   - the signer configs have no `Orchestrators` list and no pinned certificates;
-  - Railway deployment, including any discovery image, is NE-Build-Track/deployments. This repository does not deploy.
+  - this repository does not deploy.
 - [x] ChatLPT, the console and inference-gateway are pinned to the branch. Their stacks run the discovery service on the static list, and their live tests pass (re-pin to the merge on `releases/m3`).
 
 ## Design

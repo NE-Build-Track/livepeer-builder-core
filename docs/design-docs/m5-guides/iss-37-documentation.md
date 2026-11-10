@@ -37,7 +37,7 @@ M4. M5 runs from 21 to 31 December 2026.
 | Operations | `docs/RELIABILITY.md` (configuration table, `lpb` commands, backup and restore, failure behavior), `docs/SECURITY.md` (secrets, trust boundaries), `docs/QUALITY_SCORE.md` |
 | Extension | `docs/design-docs/extending-the-engine.md`; `docs/generated/interfaces.md` |
 | Generated | `docs/generated/`: `openapi.json`, `db-schema.md`, `interfaces.md`, `contracts.md`, written by `lpb gen-docs` (`src/livepeer_builder/docs_gen.py`, `docs_diagrams.py`). CI runs `lpb gen-docs --check` |
-| Deploy | `deploy/dev-stack/README.md` (payer prerequisites). Railway deployment is the private repository NE-Build-Track/deployments, not this one |
+| Deploy | `deploy/dev-stack/README.md` (payer prerequisites). This repository does not deploy |
 | References | `docs/references/`: pins, licenses, wire formats, runtime evidence |
 | Reference app (console) | `README.md`, `docs/guides/m3-journey.md` (the ISS-24 guide), `deploy/README.md`, `deploy/keycloak/README.md`, `docs/references/payment-stack.md` |
 

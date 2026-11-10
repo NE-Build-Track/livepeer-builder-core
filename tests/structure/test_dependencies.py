@@ -26,9 +26,10 @@ DISTRIBUTIONS = {
     "sqlalchemy": "sqlalchemy",
     "starlette": "starlette",
     "uvicorn": "uvicorn",
+    "yarl": "yarl",
 }
 # Package directory -> the extra its imports may also come from.
-EXTRAS = {"http": "server", "discovery": "server"}
+EXTRAS = {"http": "server"}
 
 
 def distribution(requirement: str) -> str:

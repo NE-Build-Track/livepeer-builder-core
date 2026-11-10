@@ -6,8 +6,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
-from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.contracts import ActorContext, Job, JobRequest
 from livepeer_builder.errors import (
     NoCapacity,
@@ -255,8 +254,11 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
 
 async def test_lifespan_starts_and_stops_the_engine() -> None:
     engine = await BuilderEngine.create(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        supply=EngineSupply(discovery_source=StaticDiscoverySource([runner()])),
+        EngineSettings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            log_json=False,
+            discovery_url="http://127.0.0.1:9/discovery",
+        )
     )
     app = create_app(engine)
     async with app.router.lifespan_context(app):  # what an ASGI server runs at startup and shutdown
@@ -266,8 +268,11 @@ async def test_lifespan_starts_and_stops_the_engine() -> None:
 
 async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFactory) -> None:
     engine = await BuilderEngine.create(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
-        supply=EngineSupply(discovery_source=StaticDiscoverySource()),
+        EngineSettings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            log_json=False,
+            discovery_url="http://127.0.0.1:9/discovery",
+        )
     )
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:

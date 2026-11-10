@@ -6,12 +6,22 @@ The region between the docs markers is the README's example; scripts/check_docs.
 from pathlib import Path
 
 # docs:start quick-start
-from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, EngineSupply, JobCost, JobRequest
+from livepeer_builder import (
+    ActorContext,
+    BuilderEngine,
+    Decorate,
+    EngineSettings,
+    EngineSupply,
+    JobCost,
+    JobRequest,
+)
 
 
-async def quick_start(settings: EngineSettings, supply: EngineSupply | None = None) -> JobCost:
-    """Run one paid job for a customer and read what it cost. ``supply`` replaces parts (tests use it)."""
-    async with await BuilderEngine.create(settings, supply=supply) as engine:
+async def quick_start(
+    settings: EngineSettings, supply: EngineSupply | None = None, decorate: Decorate | None = None
+) -> JobCost:
+    """Run one paid job for a customer and read what it cost. ``supply`` replaces parts and ``decorate`` wraps them."""
+    async with await BuilderEngine.create(settings, supply=supply, decorate=decorate) as engine:
         actor = ActorContext(
             actor_id="customer-42",
             permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
@@ -25,10 +35,8 @@ async def quick_start(settings: EngineSettings, supply: EngineSupply | None = No
 
 
 async def test_the_quick_start_runs_a_job_and_reads_its_cost(tmp_path: Path) -> None:
-    from livepeer_builder.adapters.static import (
-        StaticDiscoverySource,  # here, so the region stays the README's
-    )
     from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
+    from livepeer_builder.testing.discovery import serve
 
     settings = EngineSettings.model_validate(
         {
@@ -39,13 +47,17 @@ async def test_the_quick_start_runs_a_job_and_reads_its_cost(tmp_path: Path) -> 
             "shared_payment_key": "lpg_example",
             "shared_allocation_id": "alloc_example",
             "log_json": False,
+            "discovery_url": "http://discovery.test/discovery",
         }
     )
+    install, client = serve((runner("livepeer-example/echo"),))
     offline = EngineSupply(
-        discovery_source=StaticDiscoverySource([runner("livepeer-example/echo")]),
         transport=ScriptedTransport([ScriptedTransport.ok()]),
         allocation_manager=FakeAllocationManager(),
         usage_source=FakeUsageSource(),  # the cost loop runs: its first sync must not leave this job none (#33)
     )
-    cost = await quick_start(settings, offline)
+    try:
+        cost = await quick_start(settings, offline, install)
+    finally:
+        await client.aclose()
     assert cost.status == "pending"

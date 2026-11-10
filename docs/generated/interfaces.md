@@ -129,7 +129,6 @@ classDiagram
     class SqlCostSnapshot
     class SqlMaintenance
     class SqlStore
-    class StaticDiscoverySource
     class SystemClock
     Authenticator <|.. ApiKeyAuthenticator
     Authenticator <|.. AuthenticatorChain
@@ -139,7 +138,6 @@ classDiagram
     SecretStore <|.. SettingsSecretStore
     SecretStore <|.. EncryptedDbSecretStore
     DiscoverySource <|.. HttpDiscoverySource
-    DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
@@ -168,7 +166,6 @@ classDiagram
 | `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
 | `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
-| `DiscoverySource` | `StaticDiscoverySource` | `livepeer_builder.adapters.static` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |

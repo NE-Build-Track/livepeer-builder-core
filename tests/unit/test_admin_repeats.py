@@ -438,8 +438,15 @@ def test_the_stale_window_must_outlast_a_commands_batteries_calls() -> None:
     so a resume must not start while the presumed-dead run's calls may still be in flight: its two calls
     (create, then read back) each take up to LPB_BATTERIES_TIMEOUT_S. The window is four of them."""
     with pytest.raises(ValidationError, match="LPB_OPERATION_STALE_S"):
-        EngineSettings(operation_stale_s=60, batteries_timeout_s=30)
-    assert EngineSettings(operation_stale_s=120, batteries_timeout_s=30).operation_stale_s == 120
+        EngineSettings(
+            discovery_url="http://127.0.0.1:9/discovery", operation_stale_s=60, batteries_timeout_s=30
+        )
+    assert (
+        EngineSettings(
+            discovery_url="http://127.0.0.1:9/discovery", operation_stale_s=120, batteries_timeout_s=30
+        ).operation_stale_s
+        == 120
+    )
 
 
 async def test_a_run_that_outlives_half_the_stale_window_is_cancelled_and_left_for_a_resume(
@@ -474,8 +481,12 @@ async def test_a_run_that_outlives_half_the_stale_window_is_cancelled_and_left_f
 async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
-    assert EngineSettings().operation_stale_s == 120  # Q3
-    shorter = {"LPB_OPERATION_STALE_S": "30", "LPB_BATTERIES_TIMEOUT_S": "5"}
+    assert EngineSettings(discovery_url="http://127.0.0.1:9/discovery").operation_stale_s == 120  # Q3
+    shorter = {
+        "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
+        "LPB_OPERATION_STALE_S": "30",
+        "LPB_BATTERIES_TIMEOUT_S": "5",
+    }
     assert EngineSettings.from_env(shorter).operation_stale_s == 30
     engine = await make_engine(operation_stale_s=30, batteries_timeout_s=5)
     await engine.payments.provision(admin, provision_request(amount="0"))

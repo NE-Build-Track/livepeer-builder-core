@@ -35,7 +35,7 @@ flowchart LR
         Runner["Live Runners<br/>(runner apps)"]
         Chain[("Arbitrum One<br/>TicketBroker, BondingManager,<br/>AIServiceRegistry")]
     end
-    DiscSvc["Discovery service<br/>(lpb discovery, its own process)"]
+    DiscSvc["livepeer/node livepeer-discovery<br/>(GET /discovery)"]
     User --> App
     App -->|"imported (in-process)"| Core
     App -->|"or REST + engine key / JWT"| API --> Core
@@ -44,7 +44,6 @@ flowchart LR
     Core -->|"sign (SDK)"| Signer
     Core -->|"LPB_DISCOVERY_URL: GET /discovery"| DiscSvc
     DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
-    DiscSvc -.->|"active set + AI service URIs (on-chain directory)"| Chain
     Core -->|"provision, fund, /v1/usage"| Bat
     Core -->|"paid call (adapters/runner_call.py)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat

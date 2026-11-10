@@ -1145,6 +1145,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "yarl" },
 ]
 
 [package.optional-dependencies]
@@ -1186,6 +1187,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "starlette", marker = "extra == 'server'", specifier = ">=0.37.2" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
+    { name = "yarl", specifier = ">=1.9" },
 ]
 provides-extras = ["postgres", "server"]
 

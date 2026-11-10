@@ -5,9 +5,10 @@
 - **Owner:** Mike.
 - **Ticket:** [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45), part of ISS-09 ([Network-Engineering-SPE#22](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/22)).
 - **Branch:** `tasks/mz/discovery-service`, off `releases/m3` at `629f1ab`.
-- **Progress:** design agreed 26 October; in progress.
+- **Outcome:** built 26 October to 5 November, superseded by D63, removed here.
+- **Progress:** `lpb discovery` and `livepeer_builder.discovery` are removed. The engine reads livepeer/node's `/discovery` contract through `HttpDiscoverySource`.
 - **Overlap:** it covers the problem in #27 and #30. PR #34 (`LPB_ORCHESTRATOR_LIST`) is being handled separately.
-- **Decision:** D43.
+- **Decision:** D63. Supersedes D43 except that the signer only signs.
 
 ## Goal
 
@@ -257,6 +258,8 @@ The calls are plain JSON-RPC `eth_call`, with no `web3` dependency. Each selecto
     is built and flagged by mypy, so it can no longer make every `GET /discovery` a 500.
   - **`Probes` retired:** the directory is the service's one port, so the prober is no longer
     replaceable. `Catalog` takes a `Prober`, and `serve()` has no `prober=` argument.
+- **5 November, the process moves out.** `lpb discovery` and `src/livepeer_builder/discovery/` are removed. The engine's `HttpDiscoverySource` is unchanged. The service name and `GET /discovery` stay, so `LPB_DISCOVERY_URL` does not change. **9 November:** the dev stack runs livepeer/node's static discovery, from #95, and this repository does not deploy. ChatLPT and the console still run `lpb discovery` from a pinned engine image until those pins move.
+- **9 November, D63.** The engine reads livepeer/node's `/discovery` contract through one HTTP source. `LPB_DISCOVERY_URL` is required. `StaticDiscoverySource` is removed. This plan is completed.
 - **30 October, T26.** A leading BOM is accepted (`utf-8-sig`; `test_a_leading_bom_is_the_inventory_without_it`).
   Each entry is walked once. `utils._not_json` and `utils.read_capped` are shared with the engine.
   A `runners` value that is not a list still fails that probe. An empty success would replace the last

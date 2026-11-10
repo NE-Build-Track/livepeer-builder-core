@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import SecretRef
 from livepeer_builder.protocols import (
@@ -116,7 +115,6 @@ class EngineSupply:
     policy: AccessPolicy | _Unset = UNSET
     authenticators: tuple[Authenticator, ...] | _Unset = UNSET
     api_keys: ApiKeys | _Unset | None = UNSET
-    discovery_source: DiscoverySource | _Unset = UNSET
     transport: RunnerTransport | _Unset = UNSET
     selection: SelectionPolicy | _Unset = UNSET
     allocation_manager: AllocationManager | _Unset | None = UNSET
@@ -231,15 +229,10 @@ async def default_parts(
     else:
         usage_source = None
 
-    discovery_source: DiscoverySource
-    if not isinstance(supply.discovery_source, _Unset):
-        discovery_source = supply.discovery_source
-    elif settings.discovery_url:  # the signer only signs; it is not a discovery source (#45)
-        http_source = HttpDiscoverySource(settings.discovery_url, max_bytes=settings.discovery_max_bytes)
-        own(stack, http_source, http_source.aclose)
-        discovery_source = http_source
-    else:
-        discovery_source = StaticDiscoverySource()
+    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source.
+    http_source = HttpDiscoverySource(settings.discovery_url)
+    own(stack, http_source, http_source.aclose)
+    discovery_source: DiscoverySource = http_source
 
     return EngineParts(
         store=store,

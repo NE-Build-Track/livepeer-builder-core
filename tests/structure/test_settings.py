@@ -9,8 +9,7 @@ from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "livepeer_builder"
 ENV_NAMES = {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
-# the discovery service is its own process (#45); discovery/settings.py is its config layer
-ALLOWED = {SRC / "config.py", SRC / "discovery" / "settings.py"}
+ALLOWED = {SRC / "config.py"}
 
 
 def env_reads(path: Path) -> list[int]:

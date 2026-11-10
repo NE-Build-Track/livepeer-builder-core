@@ -10,11 +10,11 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.config import EngineSettings, generate_secret_key
 from livepeer_builder.contracts import Runner
-from livepeer_builder.runtime.assembly import UNSET, Decorate, EngineSupply
+from livepeer_builder.runtime.assembly import UNSET, Decorate, EngineParts, EngineSupply
 from livepeer_builder.runtime.engine import BuilderEngine
+from livepeer_builder.testing.discovery import FAKE_DISCOVERY_URL, serve
 from livepeer_builder.testing.fakes import (
     FakeAllocationManager,
     FakeUsageSource,
@@ -47,24 +47,32 @@ async def make_engine(
         "allocation_mode": "per_actor",
         "secret_key": generate_secret_key(),
         "log_json": False,
+        "discovery_url": FAKE_DISCOVERY_URL,
         **settings,
     }
     manager = FakeAllocationManager()
+    listed = tuple(runners) or (runner(),)
+    install, client = serve(listed)
+
+    def with_runners(parts: EngineParts) -> EngineParts:
+        installed = install(parts)
+        return decorate(installed) if decorate is not None else installed
+
     base = EngineSupply(
         clock=FixedClock(),
-        discovery_source=StaticDiscoverySource(tuple(runners) or (runner(),)),
         transport=ScriptedStreamTransport(),
         allocation_manager=manager,
         grants_manager=manager,
         usage_source=FakeUsageSource(),
     )
     engine = await BuilderEngine.create(
-        EngineSettings.model_validate(values), supply=overlay(base, supply), decorate=decorate
+        EngineSettings.model_validate(values), supply=overlay(base, supply), decorate=with_runners
     )
     try:
         await engine.discovery.refresh()
         yield engine
     finally:
+        await client.aclose()
         await engine.stop()
 
 

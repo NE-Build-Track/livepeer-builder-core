@@ -46,8 +46,6 @@ ALLOWED: dict[str, set[str]] = {
         "adapters",
     },
     "http": {"contracts", "errors", "api", "runtime", "config"},
-    # the discovery service is its own process (#45): it shares nothing with the engine but utils
-    "discovery": {"utils"},
     "entry": {"*"},
 }
 
@@ -56,8 +54,10 @@ CONFINED: dict[str, tuple[str, ...]] = {
     # adapters/signer_failures.py is runner_call's reading of the SDK's signer errors (D58)
     "livepeer_gateway": ("adapters/sdk.py", "adapters/runner_call.py", "adapters/signer_failures.py"),
     "aiohttp": ("adapters/runner_call.py", "adapters/signer_failures.py"),
+    # The discovery reader keeps a runner URL only when aiohttp's parser connects to the host it names.
+    "yarl": ("adapters/discovery_inventory.py",),
     # sdk.py fetches /discovery itself so price_usd stays a Decimal (livepeer-python-gateway#88).
-    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py", "discovery/"),
+    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py"),
     "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),
@@ -65,8 +65,8 @@ CONFINED: dict[str, tuple[str, ...]] = {
     "asyncpg": ("store/",),
     "aiosqlite": ("store/",),
     "fastapi": ("http/",),
-    "starlette": ("http/", "discovery/server.py"),
-    "uvicorn": ("http/server.py", "discovery/server.py"),
+    "starlette": ("http/",),
+    "uvicorn": ("http/server.py",),
 }
 # DI containers are allowed nowhere: the engine is wired by hand in runtime/assembly.py (decision 1 in
 # docs/exec-plans/active/dependency-injection-refactor.md).
@@ -91,7 +91,6 @@ REMEDIATION = {
     "contracts": "Contracts are the bottom layer and import nothing else in the package.",
     "http": "The HTTP layer calls BuilderEngine (runtime); it never reaches services or stores directly.",
     "testing": "Fakes implement protocols with contract types; they must not depend on implementations.",
-    "discovery": "The discovery service runs as its own process: it imports nothing from the engine.",
 }
 
 

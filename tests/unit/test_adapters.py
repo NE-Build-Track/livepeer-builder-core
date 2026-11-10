@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import generate_secret_key
-from livepeer_builder.adapters import sdk
 from livepeer_builder.adapters.batteries import (
     TOKEN_HEADER,
     BatteriesClient,
@@ -17,7 +16,7 @@ from livepeer_builder.adapters.batteries import (
     allowance_from_body,
     batteries_http_client,
 )
-from livepeer_builder.adapters.sdk import runners_from_entries
+from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import Money, SecretRef
@@ -245,18 +244,31 @@ async def test_usage_pages_and_cursor_mismatch() -> None:
 
 
 def test_discovery_entries_become_runners() -> None:
-    entries = [
-        {
-            "address": "https://orch.example",
-            "runners": [
-                {"url": "https://r1", "app": "a/b", "mode": "single-shot", "capacity": 2, "session_ids": ["x"],
-                 "price_info": {"price": "0.5", "currency": "USD", "unit": "Request"}},
-                {"app": "missing-url"},
-            ],
-        }
-    ]  # fmt: skip
-    (only,) = runners_from_entries(entries)
-    assert (only.capacity_available, only.rate and only.rate.unit) == (1, "request")
+    body = json.dumps(
+        [
+            {
+                "address": "https://orch.example",
+                "runners": [
+                    {
+                        "url": "https://orch.example/r1",
+                        "app": "a/b",
+                        "mode": "single-shot",
+                        "observed_at": "2026-10-22T18:05:00Z",
+                        "capacity": 2,
+                        "capacity_available": 1,
+                        "price_info": {"price": 0.5, "currency": "USD", "unit": "Request"},
+                    },
+                    {"app": "missing-url"},
+                ],
+            }
+        ]
+    )
+    (only,) = read_inventory(body)
+    assert only.capacity_available == 1
+    assert only.price_info is not None and (only.price_info.currency, only.price_info.unit) == (
+        "USD",
+        "Request",
+    )
 
 
 async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
@@ -282,6 +294,7 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
 def test_settings_from_environment() -> None:
     settings = EngineSettings.from_env(
         {
+            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
             "LPB_ALLOCATION_MODE": "per_application",
             "LPB_MAX_CONCURRENT_JOBS": "3",
             "LPB_SHARED_PAYMENT_KEY": "lpg_x",
@@ -290,19 +303,26 @@ def test_settings_from_environment() -> None:
     assert settings.allocation_mode == "per_application" and settings.max_concurrent_jobs == 3
     assert settings.shared_payment_key is not None and "lpg_x" not in repr(settings)
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
-    ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
+    ignored = EngineSettings.from_env(
+        {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_GRANT_ID": "grant_old"}
+    )
     assert "grant_id" not in ignored.model_dump()
 
 
 def test_tuning_values_are_settings_with_todays_defaults() -> None:
-    defaults = EngineSettings()
+    defaults = EngineSettings(discovery_url="http://127.0.0.1:9/discovery")
     assert (defaults.stream_open_grace_s, defaults.batteries_timeout_s, defaults.retention_interval_s) == (
         5.0,
         30.0,
         6 * 3600,
     )
     tuned = EngineSettings.from_env(
-        {"LPB_STREAM_OPEN_GRACE_S": "0.5", "LPB_BATTERIES_TIMEOUT_S": "7", "LPB_RETENTION_INTERVAL_S": "60"}
+        {
+            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
+            "LPB_STREAM_OPEN_GRACE_S": "0.5",
+            "LPB_BATTERIES_TIMEOUT_S": "7",
+            "LPB_RETENTION_INTERVAL_S": "60",
+        }
     )
     assert (tuned.stream_open_grace_s, tuned.batteries_timeout_s, tuned.retention_interval_s) == (
         0.5,
@@ -311,22 +331,27 @@ def test_tuning_values_are_settings_with_todays_defaults() -> None:
     )
     for field in ("stream_open_grace_s", "batteries_timeout_s", "retention_interval_s"):
         with pytest.raises(ValidationError):
-            EngineSettings.model_validate({field: 0})
+            EngineSettings.model_validate({field: 0, "discovery_url": "http://127.0.0.1:9/discovery"})
 
 
 def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
-    assert EngineSettings().max_paid_attempts == 2  # D55
-    assert EngineSettings.from_env({"LPB_MAX_PAID_ATTEMPTS": "3"}).max_paid_attempts == 3
+    assert EngineSettings(discovery_url="http://127.0.0.1:9/discovery").max_paid_attempts == 2  # D55
+    assert (
+        EngineSettings.from_env(
+            {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_MAX_PAID_ATTEMPTS": "3"}
+        ).max_paid_attempts
+        == 3
+    )
     for value in (0, 11):
         with pytest.raises(ValidationError):
-            EngineSettings.model_validate({"max_paid_attempts": value})
+            EngineSettings.model_validate(
+                {"max_paid_attempts": value, "discovery_url": "http://127.0.0.1:9/discovery"}
+            )
 
 
-def test_the_discovery_inventory_cap_is_an_operator_setting() -> None:
-    assert EngineSettings().discovery_max_bytes == 16 << 20
-    assert EngineSettings.from_env({"LPB_DISCOVERY_MAX_BYTES": "33554432"}).discovery_max_bytes == 32 << 20
+def test_discovery_url_is_required() -> None:
     with pytest.raises(ValidationError):
-        EngineSettings.model_validate({"discovery_max_bytes": 0})
+        EngineSettings()
 
 
 @pytest.mark.parametrize(
@@ -339,6 +364,30 @@ def test_a_discovery_url_without_an_http_scheme_and_host_is_refused_at_startup(u
         ValidationError, match="LPB_DISCOVERY_URL must be an http:// or https:// URL with a host"
     ):
         EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:secret@discovery.example/discovery",
+        "https://token@discovery.example/discovery",
+        "//user:secret@discovery.example/discovery",
+        "https://discovery.example/discovery?token=secret",
+        "https://discovery.example/discovery#secret",
+    ],
+)
+def test_a_discovery_url_with_userinfo_a_query_or_a_fragment_is_refused_at_startup(url: str) -> None:
+    """A refresh error quotes the URL, /readyz serves it unauthenticated, and httpx would send the userinfo as
+    Basic auth. The refusal names no part of the URL (D58, as for signer_url)."""
+    with pytest.raises(ValidationError) as refused:
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": url})
+    assert "must not carry userinfo, a query or a fragment" in str(refused.value)
+    assert "secret" not in str(refused.value) and "token" not in str(refused.value)
+
+
+def test_a_plain_discovery_url_is_kept() -> None:
+    url = "https://discovery.example:8939/path/discovery"
+    assert EngineSettings.from_env({"LPB_DISCOVERY_URL": url}).discovery_url == url
 
 
 @pytest.mark.parametrize("padded", ["http://discovery:8939/discovery\n", " http://discovery:8939/discovery "])
@@ -363,7 +412,6 @@ def test_a_discovery_url_with_whitespace_inside_is_refused_at_startup(url: str) 
 def test_an_http_or_https_discovery_url_is_accepted() -> None:
     for url in ("http://discovery:8939/discovery", "https://orch.example:8935/discovery"):
         assert EngineSettings.from_env({"LPB_DISCOVERY_URL": url}).discovery_url == url
-    assert EngineSettings.model_validate({"discovery_url": None}).discovery_url is None  # static discovery
 
 
 def test_batteries_http_client_uses_the_configured_timeout() -> None:
@@ -387,6 +435,7 @@ def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
                     "metadata": '{"model_id":"Qwen3.8-27B","max_context":131072}',
                     "gpu": {"id": "0", "name": "H100", "vram_mb": 81920},
                     "mode": "single-shot",
+                    "observed_at": "2026-10-22T18:05:00Z",
                     "capacity": 8,
                     "capacity_used": 3,
                     "capacity_available": 5,
@@ -395,17 +444,19 @@ def test_runners_from_entries_keeps_version_metadata_and_gpu() -> None:
                 {
                     "url": "https://orch.example:8935/apps/q/app",
                     "app": "x/y",
+                    "observed_at": "2026-10-22T18:05:00Z",
                     "capacity": 1,
-                    "session_ids": ["s"],
+                    "capacity_used": 1,
                 },
             ],
         }
     ]
-    first, second = sdk.runners_from_entries(entries)
+    first, second = read_inventory(json.dumps(entries))
     assert first.version == "1.2.0" and first.metadata is not None and "max_context" in first.metadata
     assert first.gpu is not None and (first.gpu.name, first.gpu.vram_mb) == ("H100", 81920)
-    assert first.capacity_available == 5  # the node's own figure wins over counting session_ids
-    assert (second.version, second.metadata, second.gpu, second.capacity_available) == (None, None, None, 0)
+    assert first.capacity_available == 5
+    assert (second.version, second.metadata, second.gpu) == (None, None, None)
+    assert second.capacity == 1 and second.capacity_used == 1 and second.capacity_available is None
 
 
 async def test_usage_feed_is_unfiltered_by_default() -> None:

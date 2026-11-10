@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, CallTimings, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import JobFailed, OperationExists, OperationInProgress, RunnerCallError
 from livepeer_builder.http import create_app
@@ -386,10 +385,6 @@ async def test_restart_resolves_an_open_stream_as_uncertain(
     job = await engine.jobs.get(alice, stream.job.id)
     assert job.state == "uncertain" and job.failure is not None and job.failure.kind == "interrupted"
     await stream.aclose()
-
-
-def test_static_discovery_source_still_builds_runners_without_metadata() -> None:
-    assert StaticDiscoverySource((runner(APP),)) is not None
 
 
 async def test_an_opened_stream_keeps_where_its_time_went(

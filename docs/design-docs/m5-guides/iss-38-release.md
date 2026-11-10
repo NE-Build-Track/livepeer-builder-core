@@ -116,7 +116,7 @@ Actions are pinned by SHA. This is a comparison only; builder-core copies nothin
 | Artifact | How |
 | --- | --- |
 | Wheel and sdist | `uv build`; `SHA256SUMS`; the version must equal the tag |
-| Engine image (`lpb serve`, `lpb discovery`) | One `deploy/image/Dockerfile`: installs **the wheel** with dependencies constrained by `uv export --frozen --all-extras --no-dev --no-emit-project`; base pinned by digest; non-root. The dev-stack Dockerfile builds `FROM` it, or is replaced by it |
+| Engine image (`lpb serve`) | One `deploy/image/Dockerfile`: installs **the wheel** with dependencies constrained by `uv export --frozen --all-extras --no-dev --no-emit-project`; base pinned by digest; non-root. The dev-stack Dockerfile builds `FROM` it, or is replaced by it |
 | SBOM | CycloneDX, generated from the locked environment and from the image (Q4) |
 | Provenance | GitHub artifact attestations (Sigstore, keyless) for the wheel, sdist and image digest; a signed annotated tag by Mike (Q5) |
 | Release notes | `CHANGELOG.md` (one section per version). The GitHub release body adds: pins (SDK, node, Batteries), migration revisions, upgrade steps, `limitations.md` from ISS-37, and links to the console's matching artifacts |

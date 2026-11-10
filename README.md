@@ -31,12 +31,22 @@ Your backend authenticates users and calls the engine in-process. Full walkthrou
 
 <!-- example: tests/unit/test_readme_example.py#quick-start -->
 ```python
-from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, EngineSupply, JobCost, JobRequest
+from livepeer_builder import (
+    ActorContext,
+    BuilderEngine,
+    Decorate,
+    EngineSettings,
+    EngineSupply,
+    JobCost,
+    JobRequest,
+)
 
 
-async def quick_start(settings: EngineSettings, supply: EngineSupply | None = None) -> JobCost:
-    """Run one paid job for a customer and read what it cost. ``supply`` replaces parts (tests use it)."""
-    async with await BuilderEngine.create(settings, supply=supply) as engine:
+async def quick_start(
+    settings: EngineSettings, supply: EngineSupply | None = None, decorate: Decorate | None = None
+) -> JobCost:
+    """Run one paid job for a customer and read what it cost. ``supply`` replaces parts and ``decorate`` wraps them."""
+    async with await BuilderEngine.create(settings, supply=supply, decorate=decorate) as engine:
         actor = ActorContext(
             actor_id="customer-42",
             permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
@@ -53,6 +63,7 @@ stops it, closing what it opened. This block is tested (`tests/unit/test_readme_
 
 ```sh
 export LPB_DATABASE_URL=sqlite+aiosqlite:///./livepeer-builder.db
+export LPB_DISCOVERY_URL=http://discovery:8939/discovery
 export LPB_SIGNER_URL=https://signer.example LPB_BATTERIES_URL=https://batteries.example
 export LPB_BATTERIES_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
 export LPB_BATTERIES_OPERATOR_TOKEN=...   # optional: turns on the grant desk (list and create grants)

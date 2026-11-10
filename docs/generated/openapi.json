@@ -1422,48 +1422,6 @@
         "title": "Money",
         "type": "object"
       },
-      "NetworkRate": {
-        "additionalProperties": false,
-        "description": "A rate exactly as advertised: a wholesale network price per unit, not a job quote or a retail price.",
-        "properties": {
-          "amount": {
-            "title": "Amount",
-            "type": "string"
-          },
-          "currency": {
-            "title": "Currency",
-            "type": "string"
-          },
-          "price_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Price Usd"
-          },
-          "source": {
-            "const": "orchestrator",
-            "default": "orchestrator",
-            "title": "Source",
-            "type": "string"
-          },
-          "unit": {
-            "title": "Unit",
-            "type": "string"
-          }
-        },
-        "required": [
-          "amount",
-          "currency",
-          "unit"
-        ],
-        "title": "NetworkRate",
-        "type": "object"
-      },
       "ObservedRate": {
         "additionalProperties": false,
         "description": "A rate as the catalog serves it: when it was last known, and whose clock says so.",
@@ -1594,6 +1552,58 @@
           "observed_at"
         ],
         "title": "Offering",
+        "type": "object"
+      },
+      "PriceInfo": {
+        "additionalProperties": false,
+        "description": "``price_info`` as advertised. ``price`` and ``price_usd`` are exact decimals, all four fields optional.\n\nA JSON number ``Decimal`` cannot hold is absent here. The runner is still kept, and ``payable_rate``\nreports that the price cannot be paid.",
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Usd"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "title": "PriceInfo",
         "type": "object"
       },
       "ProvisionBody": {
@@ -1865,6 +1875,7 @@
       },
       "Runner": {
         "additionalProperties": false,
+        "description": "One runner a discovery document advertises.\n\n``address`` becomes ``orchestrator_url`` only when its origin matches ``url``; otherwise payment and\nfailover follow the host the engine calls.",
         "properties": {
           "app": {
             "title": "App",
@@ -1891,6 +1902,17 @@
               }
             ],
             "title": "Capacity Available"
+          },
+          "capacity_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Used"
           },
           "gpu": {
             "anyOf": [
@@ -1947,37 +1969,15 @@
             ],
             "title": "Orchestrator Url"
           },
-          "rate": {
+          "price_info": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/NetworkRate"
+                "$ref": "#/components/schemas/PriceInfo"
               },
               {
                 "type": "null"
               }
             ]
-          },
-          "rate_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rate Error"
-          },
-          "runner_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runner Id"
           },
           "url": {
             "title": "Url",
@@ -1997,20 +1997,14 @@
         },
         "required": [
           "url",
-          "app",
-          "runner_id",
-          "mode",
-          "orchestrator_url",
-          "capacity",
-          "capacity_available",
-          "rate"
+          "app"
         ],
         "title": "Runner",
         "type": "object"
       },
       "RunnerGPU": {
         "additionalProperties": false,
-        "description": "The GPU a runner reports in its registration, as the node echoes it.",
+        "description": "The GPU a runner reports. The engine stores ``id``, ``name`` and ``vram_mb`` and ignores the rest.",
         "properties": {
           "id": {
             "anyOf": [

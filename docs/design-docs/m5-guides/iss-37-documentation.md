@@ -60,11 +60,11 @@ M4. M5 runs from 21 to 31 December 2026.
 | Item | Covered by | Gap |
 | --- | --- | --- |
 | Embedded mode | `guides/embedded-mode.md`; README "Embed it" | Untested blocks. Its install line, `pip install livepeer-builder`, fails: the name is not on PyPI (404 on 29 October) |
-| Service mode | README "Run the service"; `ARCHITECTURE.md#integration-modes`; `extending-the-engine.md#service-mode` | No guide. The README steps never set `LPB_DISCOVERY_URL`, so the engine starts with empty static discovery and an empty catalog |
+| Service mode | README "Run the service"; `ARCHITECTURE.md#integration-modes`; `extending-the-engine.md#service-mode` | No guide. `LPB_DISCOVERY_URL` is required, so a start without it fails |
 | Both payment configurations | `payments.md` (allocation modes; Mode B "deferred to M4") | No setup guide. `per_application` needs `LPB_SHARED_ALLOCATION_ID` set by hand (T5). The second configuration is ISS-31's output |
 | Enterprise auth replacement | `extending-the-engine.md`; `access.md` (JWT bearer and the appendix); console `deploy/keycloak/README.md` | No guide. #51 (public and confidential OIDC clients) is open. `QUALITY_SCORE.md` still grades Access B with "JWT and trusted backend are C (M4)", although JWT bearer is built (T7, D45) |
 | Jobs and reporting | `engine.md`, `payments.md#cost-classification` | Contract prose only, with no task path ("run a job, read result and cost, reconcile"). Async and persistent modes arrive with ISS-26 and ISS-27 |
-| Configuration | `RELIABILITY.md#configuration`; `discovery.md#settings` (`LPD_*`) | Unguarded (above) |
+| Configuration | `RELIABILITY.md#configuration`; [discovery.md](../../contracts/discovery.md) (`LPB_DISCOVERY_URL` required) | Unguarded (above) |
 | Upgrades | `persistence.md#migrations` (`lpb migrate`, `lpb revision`, drift test) | No procedure (stop, back up, migrate, start, verify), no release notes, no statement on downgrades |
 | Retention | `persistence.md#retention` | Adequate |
 | Backup and restore | `RELIABILITY.md#backup-and-restore`; drill in `tests/store/test_durability.py` | Adequate for SQLite. PostgreSQL gets one line (`pg_dump`), and PostgreSQL is stretch scope |

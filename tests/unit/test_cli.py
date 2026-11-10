@@ -14,6 +14,7 @@ from livepeer_builder.store import create_engine, upgrade
 def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "engine.db"
     monkeypatch.setenv("LPB_DATABASE_URL", f"sqlite+aiosqlite:///{path}")
+    monkeypatch.setenv("LPB_DISCOVERY_URL", "http://127.0.0.1:9/discovery")
     monkeypatch.setenv("LPB_LOG_JSON", "false")
     monkeypatch.chdir(tmp_path)
     return path

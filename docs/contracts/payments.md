@@ -232,8 +232,8 @@ What a rate means, and what it does not:
    `currency` / `unit`, or a `price` above `0` but below `1e-300`, or from `1e300`), a free rate (`0`),
    or a rate in any currency and unit but `wei` per `seconds` or `fixed`. The currency and the unit are
    checked when the runner asks for payment, not before: a runner that answers without a 402 is not
-   refused for them. Paid jobs try runners with a usable rate first ([engine.md](engine.md#behavior-the-contract-fixes)). A bad `price_usd` alone sets `Runner.rate_error` but keeps the wei
-   ceiling. The node signer checks no price at all when it gets no ceiling, and refuses (400) one that is
+   refused for them. Paid jobs try runners with a usable rate first ([engine.md](engine.md#behavior-the-contract-fixes)). A `price_usd` the reader cannot hold is absent on `price_info`. The wei
+   price is still what is paid when `payable_rate` accepts it. The node signer checks no price at all when it gets no ceiling, and refuses (400) one that is
    not a positive `wei` price in the payment type's unit.
 6. **Tickets are probabilistic.** The reported cost is the expected value at signing. A single job's
    settled on-chain cost can differ; settlement is an operator-level figure.

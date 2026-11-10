@@ -12,7 +12,6 @@ from aiohttp.test_utils import TestServer
 
 from livepeer_builder import BuilderEngine, EngineSettings, generate_secret_key
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import ActorContext, AuthRequest, Runner
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import DiscoverySource
@@ -25,7 +24,7 @@ from livepeer_builder.runtime.assembly import (
     default_parts,
 )
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import FakeAllocationManager, FixedClock, runner
+from livepeer_builder.testing import FakeAllocationManager, FixedClock
 from tests.unit.test_runtime import LOOPS, running_loops
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
@@ -33,7 +32,12 @@ UNOPENABLE = "sqlite+aiosqlite:////nonexistent-dir/never-opened.db"
 
 
 def settings(**values: object) -> EngineSettings:
-    return EngineSettings.model_validate({"database_url": MEMORY, "log_json": False, **values})
+    base: dict[str, object] = {
+        "database_url": MEMORY,
+        "log_json": False,
+        "discovery_url": "http://127.0.0.1:9/discovery",
+    }
+    return EngineSettings.model_validate({**base, **values})
 
 
 class HeaderAuthenticator:
@@ -63,10 +67,11 @@ class Recording:
         return await self.inner.fetch()
 
 
-def test_engine_supply_names_exactly_the_engine_parts() -> None:
+def test_engine_supply_names_the_parts_a_caller_can_replace() -> None:
+    """Discovery is always ``HttpDiscoverySource`` (D63). Callers wrap it through decorate, not supply."""
     parts = [field.name for field in dataclasses.fields(EngineParts)]
     supply = [field.name for field in dataclasses.fields(EngineSupply)]
-    assert supply == parts, "EngineSupply and EngineParts must have the same fields (decision 6)"
+    assert supply == [name for name in parts if name != "discovery_source"]
     assert all(getattr(EngineSupply(), name) is UNSET for name in supply)
 
 
@@ -208,7 +213,7 @@ async def test_api_keys_carry_the_realm_into_the_challenge(store: SqlStore) -> N
 async def test_async_with_starts_and_stops_the_engine(store: SqlStore, clock: FixedClock) -> None:
     engine = await BuilderEngine.create(
         settings(),
-        supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource([runner()])),
+        supply=EngineSupply(store=store, clock=clock),
     )
     async with engine as started:
         assert started is engine and engine.health().ready and running_loops() == LOOPS
@@ -240,7 +245,6 @@ async def test_start_logs_the_authentication_and_grant_desk_modes(
             clock=clock,
             api_keys=None,
             authenticators=(HeaderAuthenticator(),),
-            discovery_source=StaticDiscoverySource(),
         ),
     )
     with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):

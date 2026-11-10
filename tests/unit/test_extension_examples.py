@@ -15,7 +15,6 @@ from decimal import Decimal
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
     ActorContext,
     AuthProvenance,
@@ -28,11 +27,13 @@ from livepeer_builder.contracts import (
     Runner,
     SecretRef,
 )
+from livepeer_builder.contracts.discovery import payable_rate
 from livepeer_builder.errors import AccessDenied, NotAuthenticated, NotFound
 from livepeer_builder.protocols import AccessPolicy, DiscoverySource
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager, FixedClock, ScriptedTransport, runner
+from livepeer_builder.testing.discovery import serve
 
 # -- 1. Authenticator: trust the enterprise SSO gateway, verified by HMAC ----------------------------
 
@@ -131,7 +132,8 @@ class CheapestReadyFirst:
         del request
 
         def key(r: Runner) -> tuple[Decimal, int]:
-            price = r.rate.amount if r.rate else Decimal("Infinity")
+            rate = payable_rate(r.price_info)
+            price = rate.amount if rate else Decimal("Infinity")
             return price, -(r.capacity_available if r.capacity_available is not None else 1)
 
         return sorted(candidates, key=key)
@@ -188,28 +190,35 @@ async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore
     transport = ScriptedTransport()
     supply = enterprise_supply()
     vault = supply.secret_store
-    # The test adds what a deployment would configure: an in-memory store, a clock, runners, a transport.
+    listed = [
+        priced("https://expensive", "0.50"),
+        priced("https://cheap", "0.10"),
+        priced("https://unapproved", "0.01", orchestrator="https://rogue.example"),
+    ]
+    install, client = serve(listed)
+
+    def decorate(parts: EngineParts) -> EngineParts:
+        return enterprise_decorations(install(parts))
+
     under_test = dataclasses.replace(
         supply,
         store=store,
         clock=clock,
-        discovery_source=StaticDiscoverySource(
-            [
-                priced("https://expensive", "0.50"),
-                priced("https://cheap", "0.10"),
-                priced("https://unapproved", "0.01", orchestrator="https://rogue.example"),
-            ]
-        ),
         transport=transport,
         allocation_manager=FakeAllocationManager(),
     )
     engine = await BuilderEngine.create(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
+        EngineSettings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            log_json=False,
+            discovery_url="http://discovery.test/discovery",
+        ),
         supply=under_test,
-        decorate=enterprise_decorations,
+        decorate=decorate,
     )
     await engine.discovery.refresh()
     yield engine, vault, transport
+    await client.aclose()
     await engine.stop()
 
 

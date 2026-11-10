@@ -9,45 +9,38 @@ a lost signer reply would skip (docs/references/sdk-gateway.md)."""
 import asyncio
 import contextlib
 import json
-import logging
-import re
-from collections.abc import Sequence
-from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 
 import httpx
 
+from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_call import (
     PaidRequest,
     PaymentEvents,
     SdkRunnerStream,
     json_object,
 )
-from livepeer_builder.contracts import (
-    JobRequest,
-    NetworkRate,
-    Runner,
-    RunnerGPU,
-    RunnerReply,
-)
-from livepeer_builder.contracts.discovery import DISCOVERY_MAX_BYTES, PRICE_LIMIT, PRICE_RULE, is_price
+from livepeer_builder.contracts import JobRequest, Runner, RunnerReply
+from livepeer_builder.contracts.discovery import payable_rate
 from livepeer_builder.protocols import OnSigned
-from livepeer_builder.utils import loads_json_numbers, read_capped
 
-_LOG = logging.getLogger(__name__)
-# RFC 3339 as Go writes it (time.RFC3339Nano); fromisoformat alone also takes ISO 8601's other forms
-_RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
+
+def memory_discovery_client(body: bytes) -> httpx.AsyncClient:
+    """An in-memory client that answers every GET with ``body``. Used by ``FakeDiscoveryService``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, content=body)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
 class HttpDiscoverySource:
-    """Reads a ``/discovery`` inventory from ``LPB_DISCOVERY_URL``: the discovery service
-    (docs/contracts/discovery.md), livepeer-node's own, or one orchestrator. Sends no
-    credentials; the signer is not involved in discovery (#45). ``price_usd`` stays a ``Decimal``.
+    """Reads ``GET LPB_DISCOVERY_URL`` as livepeer/node's ``/discovery`` contract (D63). Sends no
+    credentials; the signer is not involved in discovery (#45).
 
-    The whole request, body included, gets ``timeout_s`` (5 s, as the SDK's ``discover_runners`` had) and
-    at most ``max_bytes`` (16 MiB, ``LPB_DISCOVERY_MAX_BYTES``: a discovery service's combined inventory):
-    ``DiscoveryService`` refreshes serially, so a slow or huge source would otherwise freeze the snapshot. A
-    redirect is not followed, even by an injected client; it fails the refresh.
+    The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
+    so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
+    client; it fails the refresh. There is no size cap (D63).
     """
 
     def __init__(
@@ -56,7 +49,6 @@ class HttpDiscoverySource:
         *,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
-        max_bytes: int = DISCOVERY_MAX_BYTES,
     ) -> None:
         self._discovery_url = discovery_url
         self._client = client or httpx.AsyncClient(
@@ -64,7 +56,6 @@ class HttpDiscoverySource:
         )  # one per source: polls reuse its connection
         self._owns_client = client is None
         self._timeout_s = timeout_s
-        self._max_bytes = max_bytes
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -78,17 +69,14 @@ class HttpDiscoverySource:
         except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
             message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
             raise TimeoutError(message) from error
-        entries = loads_json_numbers(body)
-        if not isinstance(entries, list):
-            raise ValueError("discovery response is not a JSON list")
-        return tuple(runners_from_entries(entries))
+        return read_inventory(body)
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
         request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
-        response = await client.send(request, stream=True, follow_redirects=False)
+        response = await client.send(request, follow_redirects=False)
         async with contextlib.aclosing(response):
             response.raise_for_status()
-            return await read_capped(response.aiter_bytes(), self._max_bytes)
+            return response.content
 
 
 class SdkRunnerTransport:
@@ -123,7 +111,7 @@ class SdkRunnerTransport:
             headers=request.headers,
             return_http_errors=request.return_http_errors,
             app=runner.app,
-            rate=runner.rate,
+            rate=payable_rate(runner.price_info),
             signer_url=signer_url,
             signer_headers={"Authorization": f"Bearer {credential}"} if signer_url is not None else None,
             retries=self._retries,
@@ -179,134 +167,3 @@ class SdkRunnerTransport:
                 ) from error
             message = f"no response from {paid.url} within {request.first_byte_timeout_s:g}s"
             raise events.error("timeout", message) from error
-
-
-def runners_from_entries(entries: Sequence[object]) -> list[Runner]:
-    """Every runner that parses. A malformed entry or runner record is skipped, never the inventory: one bad
-    orchestrator must not stale discovery for the rest (livepeer/node's Decode does the same)."""
-    runners: list[Runner] = []
-    skipped_entries = skipped_runners = 0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            skipped_entries += 1
-            continue
-        records = entry.get("runners")
-        if records is None:  # null is a Go nil slice: no runners, nothing wrong
-            continue
-        if not isinstance(records, list):
-            skipped_entries += 1
-            continue
-        orchestrator_url = _text(entry.get("address"))
-        for raw in records:
-            runner = _runner_from_raw(raw, orchestrator_url)
-            if runner is None:
-                skipped_runners += 1
-            else:
-                runners.append(runner)
-    if skipped_entries or skipped_runners:
-        _LOG.warning(
-            "discovery inventory had malformed records",
-            extra={
-                "event": "discovery.inventory_skipped",
-                "entries": skipped_entries,
-                "runners": skipped_runners,
-            },
-        )
-    return runners
-
-
-def _runner_from_raw(raw: object, orchestrator_url: str | None) -> Runner | None:
-    if not isinstance(raw, dict):
-        return None
-    url, app = _text(raw.get("url")), _text(raw.get("app"))
-    if not url or not app:
-        return None
-    capacity = raw.get("capacity") if isinstance(raw.get("capacity"), int) else None
-    sessions = raw.get("session_ids")
-    available = capacity - len(sessions) if capacity is not None and isinstance(sessions, list) else None
-    reported = raw.get("capacity_available")
-    if isinstance(reported, int) and not isinstance(reported, bool):
-        available = reported  # the node reports it directly; session_ids is the older form
-    rate, rate_error = _rate(raw.get("price_info"))
-    return Runner(
-        url=url,
-        app=app,
-        runner_id=_text(raw.get("runner_id")),
-        mode=_text(raw.get("mode")),
-        orchestrator_url=orchestrator_url,
-        capacity=capacity,
-        capacity_available=available,
-        rate=rate,
-        rate_error=rate_error,
-        observed_at=_stamp(raw.get("observed_at")),
-        version=_text(raw.get("version")),
-        metadata=_text(raw.get("metadata")),
-        gpu=_gpu(raw.get("gpu")),
-    )
-
-
-def _gpu(value: object) -> RunnerGPU | None:
-    if not isinstance(value, dict):
-        return None
-    vram = value.get("vram_mb")
-    gpu = RunnerGPU(
-        id=_text(value.get("id")),
-        name=_text(value.get("name")),
-        vram_mb=vram if isinstance(vram, int) and vram > 0 else None,
-    )
-    return gpu if (gpu.id or gpu.name or gpu.vram_mb) else None
-
-
-def _rate(value: object) -> tuple[NetworkRate | None, str | None]:
-    """The rate exactly as advertised, or why the advertised ``price_info`` is not one. No defaults."""
-    if value is None:
-        return None, None  # off-chain: livepeer-node advertises no price
-    if not isinstance(value, dict):
-        return None, "price_info is not an object"
-    amount = _decimal(value.get("price"))
-    if amount is None or not is_price(amount):
-        return None, PRICE_RULE
-    currency = _text(value.get("currency"))
-    if currency is None:
-        return None, "price_info has no currency"
-    unit = _text(value.get("unit"))
-    if unit is None:
-        return None, "price_info has no unit"
-    price_usd = _decimal(value.get("price_usd"))
-    error = None
-    if price_usd is None and value.get("price_usd") is not None:
-        error = "price_usd is not a nonnegative number"
-    return NetworkRate(
-        amount=amount,
-        currency=currency,
-        unit=unit,
-        price_usd=price_usd,
-    ), error
-
-
-def _stamp(value: object) -> datetime | None:
-    """An RFC 3339 time in UTC (Go's nanoseconds truncate to microseconds), or None.
-
-    A time with no offset is not RFC 3339. A time that parses but cannot be converted to UTC (``0001-01-01``
-    with a positive offset, ``9999-12-31`` with a negative one) is unreadable too: ``astimezone`` raises
-    ``OverflowError``, and that must not fail the rest of the inventory.
-    """
-    if not isinstance(value, str) or not _RFC3339.fullmatch(value):
-        return None
-    try:
-        return datetime.fromisoformat(value).astimezone(UTC)
-    except (ValueError, OverflowError):
-        return None
-
-
-def _decimal(value: object) -> Decimal | None:
-    """A finite, nonnegative decimal below ``PRICE_LIMIT``, or None."""
-    try:
-        amount = value if isinstance(value, Decimal) else Decimal(str(value))
-    except InvalidOperation:
-        return None
-    return amount if amount.is_finite() and 0 <= amount < PRICE_LIMIT else None
-
-
-def _text(value: object) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None

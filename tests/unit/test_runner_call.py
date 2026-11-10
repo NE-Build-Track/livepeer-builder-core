@@ -16,7 +16,7 @@ import pytest
 from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents, stop_funding
 from livepeer_builder.adapters.runner_price import max_price, payment_type
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import JobRequest, NetworkRate, Runner
+from livepeer_builder.contracts import JobRequest, NetworkRate, PriceInfo, Runner
 from livepeer_builder.errors import RunnerCallError
 from tests.unit.livepeer_net import Net, Reply, start
 
@@ -98,6 +98,12 @@ def _rate(amount: str, currency: str = "wei", unit: str = "fixed") -> NetworkRat
     return NetworkRate(amount=Decimal(amount), currency=currency, unit=unit)
 
 
+def _advertised(rate: NetworkRate | None) -> PriceInfo | None:
+    if rate is None:
+        return None
+    return PriceInfo(price=rate.amount, currency=rate.currency, unit=rate.unit, price_usd=rate.price_usd)
+
+
 @pytest.mark.parametrize(
     ("rate", "reason"),
     [
@@ -116,7 +122,7 @@ async def test_a_runner_the_signer_cannot_cap_is_never_signed_for(
 ) -> None:
     """Its 402 is refused before the signer is asked, so the job fails over unpaid."""
     with pytest.raises(RunnerCallError) as refused:
-        await call(net, runner=net.runner().model_copy(update={"rate": rate}))
+        await call(net, runner=net.runner().model_copy(update={"price_info": _advertised(rate)}))
     assert (refused.value.kind, refused.value.payment_sent) == ("payment_refused", False)  # the next runner
     assert reason in str(refused.value)
     assert not any(
@@ -131,7 +137,7 @@ async def test_a_runner_the_signer_cannot_cap_still_serves_a_call_it_does_not_ch
 ) -> None:
     """The price is checked only when the runner asks for payment (#77 review)."""
     net.paid = False
-    reply = await call(net, runner=net.runner().model_copy(update={"rate": rate}))
+    reply = await call(net, runner=net.runner().model_copy(update={"price_info": _advertised(rate)}))
     assert (reply.status_code, reply.payment_sent) == (200, False)
 
 
@@ -246,8 +252,8 @@ async def test_unreachable_runner_or_signer_is_unpaid() -> None:
     closed = "http://127.0.0.1:9"
     transport = SdkRunnerTransport(None)
     target = Runner(
-        url=closed, app=APP, runner_id="r", mode="single-shot", orchestrator_url=closed,
-        capacity=1, capacity_available=1, rate=None,
+        url=closed, app=APP, mode="single-shot", orchestrator_url=closed,
+        capacity=1, capacity_available=1,
     )  # fmt: skip
     with pytest.raises(RunnerCallError) as runner_down:
         await transport.call(target, JobRequest(app=APP), None)

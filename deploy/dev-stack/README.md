@@ -87,7 +87,7 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
 
 - **`secrets/` and `.env` are git-ignored.** Keep the RPC URL and keys only there.
 - **Image registry:** `IMAGE_REGISTRY` in `.env` prefixes the images this stack builds
-  (`<registry>/livepeer-builder-dev/{clearinghouse,node,engine,discovery}`). This environment uses
+  (`<registry>/livepeer-builder-dev/{clearinghouse,node,engine}`). This environment uses
   `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
   image is an explicit `docker compose push <service>`. Base images (`python`, Go) still come from
   Docker Hub.

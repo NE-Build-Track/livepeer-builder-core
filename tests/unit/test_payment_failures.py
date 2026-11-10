@@ -266,7 +266,7 @@ def test_a_signer_url_that_could_carry_a_secret_is_refused_at_startup(url: str) 
     """Error text quotes the signer URL in logs (D58): it must hold nothing secret. Nor does the startup
     error echo it."""
     with pytest.raises(ValidationError) as refused:
-        EngineSettings.from_env({"LPB_SIGNER_URL": url})
+        EngineSettings.from_env({"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_SIGNER_URL": url})
     assert "signer_url" in str(refused.value) and "s3cret" not in str(refused.value)
 
 
@@ -274,7 +274,12 @@ def test_a_signer_url_that_could_carry_a_secret_is_refused_at_startup(url: str) 
     "url", ["http://signer:8081", "signer.example:8081", "https://signer.example/", None]
 )
 def test_a_plain_signer_url_is_accepted(url: str | None) -> None:
-    assert EngineSettings.model_validate({"signer_url": url}).signer_url == url
+    assert (
+        EngineSettings.model_validate(
+            {"discovery_url": "http://127.0.0.1:9/discovery", "signer_url": url}
+        ).signer_url
+        == url
+    )
 
 
 async def test_a_refresh_past_its_budget_on_every_runner_is_told_in_the_engine_s_words(

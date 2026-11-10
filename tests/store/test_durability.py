@@ -9,7 +9,6 @@ from alembic.migration import MigrationContext
 from sqlalchemy import insert, inspect, text
 
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import OperationRecord, SignedSession
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import (
@@ -163,10 +162,10 @@ async def test_records_survive_restart_and_interrupted_jobs_resolve(
     )
     await first.close()  # the process dies mid-call
 
-    settings = EngineSettings(database_url=database_url, log_json=False)
-    engine = await BuilderEngine.create(
-        settings, supply=EngineSupply(clock=clock, discovery_source=StaticDiscoverySource())
+    settings = EngineSettings(
+        database_url=database_url, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
     )
+    engine = await BuilderEngine.create(settings, supply=EngineSupply(clock=clock))
     await engine.start()
     recovered = await engine.store.get_job(running.id)
     await engine.stop()
@@ -267,8 +266,10 @@ async def test_a_crash_while_signing_leaves_the_cost_pending(database_url: str, 
     await store.record_payment_evidence(attempt)
     await store.close()
     engine = await BuilderEngine.create(
-        EngineSettings(database_url=database_url, log_json=False),
-        supply=EngineSupply(clock=clock, discovery_source=StaticDiscoverySource()),
+        EngineSettings(
+            database_url=database_url, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
+        ),
+        supply=EngineSupply(clock=clock),
     )
     await engine.start()
     try:

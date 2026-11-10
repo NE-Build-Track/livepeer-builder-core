@@ -18,13 +18,14 @@ dependencies = [
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "cryptography>=42",
-    "aiohttp>=3.9",  # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
+    "aiohttp>=3.9", # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
     # Pin to livepeer/livepeer-python-gateway main at 2017a80 (26 October): Enforce TLS (#76),
     # streamable runner bodies (#80), on_payment_session (#81; reports LivePaymentSession.manifest_id)
     # and the runner-side session stop (#83; unused here). PyPI 1.0.0 lacks the callback, so this
     # stays a git SHA until a release (tech debt T1).
     "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@2017a80c740af5fcb0fef4ee84659af9b07fb90c",
     "pyjwt[crypto]>=2.13",
+    "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +79,7 @@ ignore = ["S101"]  # assert is how pytest checks
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S108", "PT018", "E501"]  # fixture tokens, temp paths, compact asserts
 "src/livepeer_builder/cli.py" = ["T201"]  # the CLI prints its results
+"scripts/check_discovery_schema.py" = ["T201", "S310"]  # https-only GitHub fetches; the report is the workflow's text
 
 [tool.mypy]
 strict = true
@@ -88,7 +90,7 @@ files = ["src/livepeer_builder", "tests/structure/test_conformance.py", "scripts
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["livepeer_gateway", "livepeer_gateway.*", "aiohttp", "aiohttp.*"]
+module = ["livepeer_gateway", "livepeer_gateway.*", "aiohttp", "aiohttp.*", "jsonschema", "jsonschema.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

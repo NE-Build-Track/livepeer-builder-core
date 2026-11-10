@@ -15,7 +15,7 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
-from livepeer_builder.contracts.discovery import ObservedBy
+from livepeer_builder.contracts.discovery import ObservedBy, payable_rate
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
 from livepeer_builder.utils import is_payable, signable
 
@@ -39,7 +39,8 @@ def capped_first(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
 
 
 def _paid_ready(runner: Runner) -> bool:
-    rate = runner.rate  # a free runner is never asked to pay; a 402 from it is still refused
+    # a free runner is never asked to pay; a 402 from it is still refused
+    rate = payable_rate(runner.price_info)
     return rate is not None and (rate.amount == 0 or signable(rate.amount, rate.currency, rate.unit))
 
 
@@ -111,7 +112,7 @@ class DiscoveryService:
         by_unit: dict[tuple[str, bool, str, str], list[Runner]] = {}
         for runner in self._snapshot.runners:
             if app is None or runner.app == app:
-                rate = runner.rate
+                rate = payable_rate(runner.price_info)
                 key = (runner.app, False, rate.currency, rate.unit) if rate else (runner.app, True, "", "")
                 by_unit.setdefault(key, []).append(runner)
         fresh = self.is_fresh()
@@ -153,7 +154,11 @@ def _range(group: list[Runner], polled_at: datetime) -> tuple[ObservedRate, Obse
 
     Two ``ObservedRate`` are built, not one per runner: the catalog is public, built on every request.
     """
-    rated = [(runner.rate, runner.observed_at) for runner in group if runner.rate is not None]
+    rated = [
+        (rate, runner.observed_at)
+        for runner in group
+        if (rate := payable_rate(runner.price_info)) is not None
+    ]
     if not rated:
         return None
     cheapest = min(rated, key=lambda pair: pair[0].amount)

@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.discovery import DISCOVERY_CONTRACT
 from livepeer_builder.contracts.payments import AllocationMode
 
 
@@ -11,6 +12,7 @@ class EngineHealth(Contract):
     discovery_fresh: bool
     discovery_observed_at: datetime | None
     discovery_error: str | None
+    discovery_contract: str = DISCOVERY_CONTRACT
     cost_sync_at: datetime | None
     cost_sync_error: str | None
     running_jobs: int

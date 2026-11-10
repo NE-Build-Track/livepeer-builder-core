@@ -24,9 +24,6 @@ The engine has two sets of interfaces, and they point in opposite directions:
 | What the engine **offers** | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
 | What the engine **needs** | `protocols/` (ports) | adapters, the store, or the enterprise | services only |
 
-The discovery service has a third, one-method interface: `OrchestratorDirectory`. It lives in its own
-process and shares no code with the engine ([discovery contract](../contracts/discovery.md)).
-
 ```mermaid
 classDiagram
     direction LR
@@ -311,9 +308,7 @@ classDiagram
     }
     class HttpDiscoverySource {
         GET LPB_DISCOVERY_URL
-    }
-    class StaticDiscoverySource {
-        no runners
+        schema validation
     }
     class MostCapacityFirst
     class SdkRunnerTransport {
@@ -322,7 +317,6 @@ classDiagram
     class SdkRunnerStream
     RunnerTransport <|-- StreamingRunnerTransport
     DiscoverySource <|.. HttpDiscoverySource
-    DiscoverySource <|.. StaticDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     StreamingRunnerTransport <|.. SdkRunnerTransport
     RunnerStream <|.. SdkRunnerStream
@@ -558,7 +552,7 @@ sequenceDiagram
     B->>DP: default_parts(settings, stack, supply)
     Note over DP: builds only what was not supplied, in dependency order
     DP->>Stack: own(SqlStore), own(BatteriesClient), own(BatteriesUsageSource)
-    DP-->>B: EngineParts (HttpDiscoverySource if LPB_DISCOVERY_URL, else StaticDiscoverySource)
+    DP-->>B: EngineParts (HttpDiscoverySource from LPB_DISCOVERY_URL)
     opt decorate given
         B->>D: decorate(parts)
         D-->>B: EngineParts (e.g. replace(parts, policy=Audited(parts.policy)))
@@ -630,119 +624,58 @@ sequenceDiagram
 A streamed job follows the same steps up to the runner's answer, through `StreamingRunnerTransport.open`,
 and then hands the open `RunnerStream` to a `JobStream` ([the streamed request](#a-streamed-request)).
 
-## Discovery: the engine and the discovery service
+## Discovery: the engine side
 
-The engine reads runners through one port, `DiscoverySource`. By default that is
-`HttpDiscoverySource`, which reads livepeer-node's `/discovery` format from `LPB_DISCOVERY_URL`. The
-discovery service is what usually answers there, and its own port, `OrchestratorDirectory`, decides
-which orchestrators it asks.
+The engine reads runners through one port, `DiscoverySource`. `default_parts` always installs
+`HttpDiscoverySource`, which `GET`s `LPB_DISCOVERY_URL` and validates each record against the vendored
+schema ([contract](../contracts/discovery.md)). `DiscoveryService` keeps the last good snapshot,
+builds offerings, and hands candidates to selection. An enterprise filter wraps that source through
+`decorate`. Tests use `FakeDiscoveryService`, which serves a node-format document to the same reader.
 
 ```mermaid
 classDiagram
     direction LR
-    class OrchestratorDirectory {
+    class HttpDiscoverySource {
+        GET LPB_DISCOVERY_URL
+        validate each record
+    }
+    class DiscoveryService {
+        +snapshot DiscoverySnapshot
+        +async refresh() DiscoverySnapshot
+        +offerings(app) Offering[]
+        +candidates(app) Runner[]
+    }
+    class SelectionPolicy {
         <<interface>>
-        +async orchestrators() Orchestrator[]
+        +order(candidates, request) Runner[]
     }
-    class Orchestrator {
-        +url str
-        +address str?
+    class Decorate {
+        wrap discovery_source
     }
-    class StaticDirectory {
-        +parse(value)$ StaticDirectory
-        list or file of base URLs
+    class FakeDiscoveryService {
+        testing only
+        serves a node-format document
     }
-    class OnChainDirectory {
-        -chain EthCall
-        -controller str
-        -registry str? AI registry by default
-        -max_pool int
-        Controller lookups, pool walk, isActiveTranscoder, getServiceURI
-        https only, marks public_only, skips unreadable
-    }
-    class EthCall {
-        <<interface>>
-        +async call(to, data) str
-    }
-    class JsonRpcChain {
-        eth_call over LPD_ARBITRUM_RPC_URL
-    }
-    class ApprovedOnly {
-        example: wraps any directory
-    }
-    class Prober {
-        +async probe_all(orchestrators) Probe[]
-        16 at a time, 5 s, 1 MiB
-        deployment trust store
-        public_only: resolve, check, pin the address
-    }
-    class Probe {
-        +orchestrator Orchestrator
-        +entry InventoryEntry?
-        +failure untrusted_certificate, private_address or failed
-    }
-    class InventoryEntry {
-        +address str
-        +runners RawJson[]
-        each runner as the JSON text received
-    }
-    class Catalog {
-        +async load_directory() None
-        +async probe() None
-        +inventory() InventoryEntry[]
-        +status() CatalogStatus
-        +async run(stop, directory_interval_s, probe_interval_s) None
-    }
-    OrchestratorDirectory <|.. StaticDirectory
-    OrchestratorDirectory <|.. OnChainDirectory
-    OrchestratorDirectory <|.. ApprovedOnly
-    OrchestratorDirectory ..> Orchestrator : returns
-    OnChainDirectory --> EthCall
-    EthCall <|.. JsonRpcChain
-    Prober ..> Probe : returns
-    Probe --> InventoryEntry
-    Catalog --> OrchestratorDirectory
-    Catalog --> Prober
+    DiscoveryService --> HttpDiscoverySource
+    HttpDiscoverySource ..> SelectionPolicy : runners, then order
+    Decorate ..> HttpDiscoverySource : wraps
+    FakeDiscoveryService ..> HttpDiscoverySource : in-memory GET
 ```
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Cat as Catalog.run
-    participant Dir as OnChainDirectory
-    participant Ctl as Controller (eth_call)
-    participant BM as BondingManager (eth_call)
-    participant Reg as AIServiceRegistry, the override (eth_call)
-    participant Pr as Prober
-    participant O as Orchestrator GET /discovery
-    participant DS as DiscoveryService (engine)
+    participant DS as DiscoveryService
     participant H as HttpDiscoverySource
-    participant Svc as GET /discovery (this service)
-    Cat->>Dir: orchestrators() (every LPD_DIRECTORY_INTERVAL_S, within LPD_DIRECTORY_TIMEOUT_S)
-    Dir->>Ctl: getContract(BondingManager), and ServiceRegistry only with LPD_SERVICE_REGISTRY=controller
-    Dir->>BM: getTranscoderPoolSize, getFirstTranscoderInPool
-    loop at most pool size, never past 1000
-        Dir->>BM: getNextTranscoderInPool(address)
-    end
-    par each pool member
-        Dir->>BM: isActiveTranscoder(address)
-        Dir->>Reg: getServiceURI(address) (empty, not https, a manifest, or unreadable: skipped)
-    end
-    Dir-->>Cat: Orchestrator[] marked public_only (a failed load keeps the previous directory)
-    loop every LPD_PROBE_INTERVAL_S (a failed pass is logged, the loop goes on)
-        Cat->>Pr: probe_all(orchestrators)
-        Note over Pr: public_only: resolve once, refuse a non-public address, connect to the one checked
-        Pr->>O: GET base URL /discovery (verified TLS, no redirects)
-        O-->>Pr: runners, or an error
-        Pr-->>Cat: Probe[] (entry, or failure)
-        Note over Cat: keep the last inventory until LPD_MAX_FAILED_REFRESHES failures in a row
-    end
-    loop every LPB_DISCOVERY_INTERVAL_S, in the engine
+    participant Svc as GET LPB_DISCOVERY_URL
+    loop every LPB_DISCOVERY_INTERVAL_S
         DS->>H: fetch()
-        H->>Svc: GET (no credentials)
-        Svc-->>H: [{address, runners}] from Catalog.inventory()
-        H-->>DS: Runner[] (a failure keeps the last snapshot)
+        H->>Svc: GET (no credentials, no redirects)
+        Svc-->>H: JSON array, or an error
+        Note over H: keep each schema-valid runner, skip the rest
+        H-->>DS: Runner[] (a failed refresh keeps the last snapshot)
     end
+    DS->>DS: offerings and candidates from the snapshot
 ```
 
 ## The REST service (`http/`)

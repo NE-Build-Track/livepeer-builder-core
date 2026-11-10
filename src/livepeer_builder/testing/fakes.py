@@ -16,8 +16,8 @@ from livepeer_builder.contracts import (
     GrantRecord,
     JobRequest,
     Money,
-    NetworkRate,
     NewAllocationKey,
+    PriceInfo,
     Runner,
     RunnerReply,
     SecretRef,
@@ -53,12 +53,12 @@ def runner(
     return Runner(
         url=url,
         app=app,
-        runner_id=url.rsplit("/", 1)[-1],
         mode="single-shot",
         orchestrator_url=orchestrator_url,
         capacity=capacity_available,
         capacity_available=capacity_available,
-        rate=NetworkRate(amount=Decimal(price), currency="wei", unit="fixed") if price else None,
+        price_info=PriceInfo(price=Decimal(price), currency="wei", unit="fixed") if price else None,
+        observed_at=datetime(2026, 10, 22, 17, 5, 0, 123000, tzinfo=UTC),
         metadata=metadata,
     )
 

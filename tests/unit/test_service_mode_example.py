@@ -12,10 +12,8 @@ import pytest
 from fastapi import APIRouter, Depends, FastAPI
 
 from livepeer_builder import ActorContext, EngineApi, EngineParts, EngineSettings, EngineSupply
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.http.server import actor_dependency, build_app, serve
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import runner
 from tests.unit.test_extension_examples import (
     DIRECTORY,
     SECRET,
@@ -52,7 +50,12 @@ def corp_routes(app: FastAPI, engine: EngineApi) -> None:
 
 def settings(**values: object) -> EngineSettings:
     return EngineSettings.model_validate(
-        {"database_url": "sqlite+aiosqlite:///:memory:", "log_json": False, **values}
+        {
+            "database_url": "sqlite+aiosqlite:///:memory:",
+            "log_json": False,
+            "discovery_url": "http://127.0.0.1:9/discovery",
+            **values,
+        }
     )
 
 
@@ -67,9 +70,7 @@ def sso_headers(user: str = "alice", tenant: str = "acme") -> dict[str, str]:
 
 
 async def test_the_customized_service_authenticates_and_serves_the_extra_route(store: SqlStore) -> None:
-    supply = dataclasses.replace(
-        corp_supply(), store=store, discovery_source=StaticDiscoverySource([runner()])
-    )
+    supply = dataclasses.replace(corp_supply(), store=store)
     app = await build_app(settings(), supply=supply, decorate=corp_decorations, extend=corp_routes)
     async with (
         app.router.lifespan_context(app),  # starts and stops the engine, as an ASGI server would

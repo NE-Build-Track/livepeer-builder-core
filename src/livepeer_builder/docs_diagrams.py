@@ -19,7 +19,6 @@ from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
 from livepeer_builder.adapters.runner_call import SdkRunnerStream
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.contracts import (
     ActorContext,
     Allowance,
@@ -38,6 +37,7 @@ from livepeer_builder.contracts import (
     NetworkRate,
     ObservedRate,
     Offering,
+    PriceInfo,
     ProvisionedActor,
     ResourceRef,
     ResultRef,
@@ -58,7 +58,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain, JwtBearerAuthenticator),
     "AccessPolicy": (DefaultPolicy,),
     "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
-    "DiscoverySource": (HttpDiscoverySource, StaticDiscoverySource),
+    "DiscoverySource": (HttpDiscoverySource,),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
@@ -80,7 +80,7 @@ REPOS = ("ActorRepo", "KeyRepo", "JobRepo", "OperationRepo", "CostRepo", "Secret
 CONTRACTS: tuple[type[BaseModel], ...] = (
     AuthRequest, ActorContext, AuthProvenance, ResourceRef,
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
-    Runner, RunnerGPU, NetworkRate, ObservedRate, Offering,
+    Runner, RunnerGPU, PriceInfo, NetworkRate, ObservedRate, Offering,
     JobCost, AttemptCost, Fees,
     ProvisionedActor, SecretRef, Allowance, Money,
 )  # fmt: skip

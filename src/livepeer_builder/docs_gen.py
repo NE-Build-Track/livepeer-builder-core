@@ -14,7 +14,11 @@ async def render_openapi() -> str:
 
     # Every optional capability on (API keys by default; the grant desk needs a grants manager),
     # so the committed spec documents the whole API. A deployment without one lacks those routes.
-    settings = EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False)
+    settings = EngineSettings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
+    )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:
         schema = create_app(engine, manage_lifecycle=False).openapi()

@@ -10,7 +10,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
-| `LPB_DISCOVERY_URL` | unset | A livepeer-node `/discovery` inventory to read runners from: the on-chain discovery service ([contract](contracts/discovery.md)), livepeer-node's own, or one orchestrator. Unset → empty static discovery. No credential is sent. Must be an `http://` or `https://` URL with a host, or the engine refuses to start (a bare `host:port` is refused). Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all and reads at most `LPB_DISCOVERY_MAX_BYTES`; a failed poll keeps the last good snapshot, and an entry or runner record that does not parse is skipped (`discovery.inventory_skipped`) |
+| `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused). Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record that fails the schema is skipped (`discovery.inventory_skipped`) |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
@@ -22,9 +22,8 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
 | `LPB_MAX_PAID_ATTEMPTS` | `2` | Paid attempts a job may fail over from (1 to 10; `1` turns paid failover off). The operator pays for them, so the caller's `max_attempts` cannot raise it (D55) |
-| `LPB_DISCOVERY_MAX_BYTES` | `16777216` (16 MiB) | The largest inventory one poll of `LPB_DISCOVERY_URL` reads; a larger one is a failed refresh. livepeer/node reads at most 1 MiB from one orchestrator, but a discovery service's combined inventory holds many, and 1 MiB is only about 2,000 runner records |
 | `LPB_DISCOVERY_INTERVAL_S`, `LPB_COST_SYNC_INTERVAL_S` | `15`, `30` | Background loops |
-| `LPB_RATE_MAX_AGE_S` | `600` | An orchestrator-stamped rate older than this makes its offering `stale` ([engine.md](contracts/engine.md#rates-iss-10)). The default is two of livepeer-node discovery's default 5-minute refreshes. The on-chain discovery service probes every 30 s and evicts a source after 6 failed probes |
+| `LPB_RATE_MAX_AGE_S` | `600` | An orchestrator-stamped rate older than this makes its offering `stale` ([engine.md](contracts/engine.md#rates-iss-10)). Catalog policy (D62 (3)). The default is two of livepeer/node `livepeer-discovery`'s default 5-minute refreshes |
 | `LPB_STREAM_FINALIZE_TIMEOUT_S` | `10` | The most a stream's closing writes may take; the slot is released regardless (D34) |
 | `LPB_STREAM_DRAIN_TIMEOUT_S` | `30` | On stop, how long open streams may finish before they are abandoned (D36) |
 | `LPB_STREAM_SETTLE_S` | `1` | After a disconnect or cancel, how long the runner may take to end the stream and count as succeeded; `0` turns it off (D38) |
@@ -58,8 +57,9 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |
 
-Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors, the last
-cost sync and its error, running jobs, the allocation mode and the version. Logs are JSON lines; every
+Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors,
+`discovery_contract`, the last cost sync and its error, running jobs, the allocation mode and the
+version. Logs are JSON lines; every
 line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 
 `scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
@@ -86,7 +86,7 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
-| The discovery service loses an orchestrator | The dev stack's collector drops a source that fails TLS or whose runners do not decode. The engine keeps its last good snapshot ([contract](contracts/discovery.md)) |
+| livepeer/node's `livepeer-discovery` drops an orchestrator | The dev stack's collector drops a source that fails TLS or whose runners do not decode. The engine keeps its last good snapshot ([contract](contracts/discovery.md)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |

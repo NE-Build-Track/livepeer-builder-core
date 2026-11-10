@@ -17,7 +17,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from multidict import CIMultiDict
 
-from livepeer_builder.contracts import NetworkRate, Runner
+from livepeer_builder.contracts import PriceInfo, Runner
 
 # What the signer does with one /generate-live-payment request: "ok", an HTTP status, "malformed" (no
 # segCreds), "drop" (the connection closes before the reply) or a number of seconds to hang.
@@ -71,10 +71,13 @@ class Net:
         self, unit: str = "fixed", price: str = "0.10", orchestrator_url: str | None = None, name: str = ""
     ) -> Runner:
         return Runner(
-            url=f"{self.url}/app" + (f"/{name}" if name else ""), app="example/echo", runner_id=name or "r1",
+            url=f"{self.url}/app" + (f"/{name}" if name else ""),
+            app="example/echo",
             mode="single-shot",
-            orchestrator_url=orchestrator_url or self.url, capacity=1, capacity_available=1,
-            rate=NetworkRate(amount=Decimal(price), currency="wei", unit=unit),
+            orchestrator_url=orchestrator_url or self.url,
+            capacity=1,
+            capacity_available=1,
+            price_info=PriceInfo(price=Decimal(price), currency="wei", unit=unit),
         )  # fmt: skip
 
     async def _sign_info(self, request: web.Request) -> web.Response:

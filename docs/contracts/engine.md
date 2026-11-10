@@ -11,11 +11,11 @@ drift. Times are UTC. Money is `Decimal`. Engine IDs are UUIDs.
 ## Discovery
 
 `DiscoveryService` keeps a snapshot of advertised runners from its `DiscoverySource`. It is refreshed every
-`discovery_interval_s` and counts as stale after three missed intervals. The default source,
-`HttpDiscoverySource`, reads a livepeer-node `/discovery` inventory from `LPB_DISCOVERY_URL`: normally the
-discovery service ([discovery.md](discovery.md)), which finds orchestrators on-chain or from a static list.
-The signer only signs; it is not a discovery source (D43). With no `LPB_DISCOVERY_URL` the snapshot is
-empty unless an embedder supplies a source.
+`discovery_interval_s` and counts as stale after three missed intervals. The source is
+`HttpDiscoverySource`, which reads livepeer/node's `/discovery` contract from `LPB_DISCOVERY_URL`
+([discovery.md](discovery.md)). That URL is required. The signer only signs; it is not a discovery source
+(D43, superseded by D63 except for that). An enterprise changes which runners are visible by wrapping the
+source through `decorate`.
 
 `offerings(app=None)` is public: it takes no actor and checks no permission, and `GET /v1/offerings`
 needs no key (D51, proposed, [#5](https://github.com/NE-Build-Track/livepeer-builder-core/issues/5)).
@@ -25,7 +25,7 @@ returns runner URLs and still checks `discover`.
 
 | Model | Meaning |
 | --- | --- |
-| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), capacity, `rate`, `rate_error`, `observed_at`, and what the runner registered: `version`, `metadata` (up to 1 KB of app text, often JSON) and `gpu`. The engine never interprets `metadata` |
+| `Runner` | One advertised runner: `url`, `app`, `mode` (`single-shot` or `persistent`), `orchestrator_url`, `capacity`, `capacity_used`, `capacity_available`, `price_info` as advertised, `observed_at`, and what the runner registered: `version`, `metadata` and `gpu`. The engine never interprets `metadata` |
 | `NetworkRate` | A wholesale network rate exactly as advertised: `amount`, `currency`, `unit`, `price_usd`, `source`. `amount` is `0` (free) or from `1e-300` to below `1e300` from any source, so the engine can always pad a positive amount into a positive float ceiling above the price; it never signs for `0`. Not a job quote and not a retail price ([Rates](#rates-iss-10)) |
 | `ObservedRate` | A `NetworkRate` as the catalog serves it, plus `observed_at` and `observed_by` |
 | `Offering` | One runner app in one `(currency, unit)`: its modes, the cheapest and dearest rate (`rate_low`, `rate_high`), `rate_status`, `stale`, runner and ready counts, and `observed_at` (the engine's last good poll). An app advertised in two units is two offerings. Its runners with no rate are one more offering, after those, with no range (`rate_low` and `rate_high` are `null`) and `rate_status` `missing`: they still serve jobs, so every app is listed |
@@ -35,18 +35,12 @@ returns runner URLs and still checks `discover`.
 The engine reports each rate as the orchestrator advertised it. It never converts a currency, quotes a
 job total or applies a margin ([payments.md](payments.md#pricing-assumptions)).
 
-**Parsing (`adapters/sdk.py`).** livepeer-node advertises, per runner on-chain,
-`{"price": <wei>, "price_usd": <USD>, "currency": "wei", "unit": "seconds" | "fixed"}`, and no
-`price_info` off-chain. The adapter keeps `price`, `currency` and `unit` as advertised (lower-cased) and
-invents nothing:
-
-| `price_info` | `Runner.rate` | `Runner.rate_error` |
-| --- | --- | --- |
-| absent or `null` (off-chain) | `None` | `None` |
-| complete | the rate; `price_usd` too when it is a finite, nonnegative decimal below `1e300` | `None` |
-| not an object, a bad price (not finite, negative, above `0` but below `1e-300`, or `1e300` or more), no `currency`, or no `unit` | `None` | why, e.g. `"price_info has no currency"` or `"price must be 0, or from 1e-300 to below 1e300"` |
-| complete, but `price_usd` is present and not a finite, nonnegative number below `1e300` | the rate, without `price_usd` | `"price_usd is not a nonnegative number"`; only that field is dropped, the wei rate is still usable and payable, so `rate_error` alone does not mean "do not pay" |
-| a `price` or `price_usd` number whose exponent `Decimal` cannot build (past `10**18` either way, for example `1e` and twenty 9s), or an integer longer than the runtime digit limit (4300 digits by default) | as for a bad `price` (`None`) or a bad `price_usd` (the rate, without it) | the same reasons. Only that field is unreadable, never the document: a cache that passes the token through (livepeer-node's discovery) does not stop every other orchestrator from updating. The retired `lpb discovery` process refused such an orchestrator instead ([#87](https://github.com/NE-Build-Track/livepeer-builder-core/pull/87)) |
+**Parsing.** The reader keeps `price_info` as advertised and makes no price judgement (D63).
+`payable_rate` is what the catalog and the signer use. It returns a `NetworkRate` only when `price`,
+`currency` and `unit` are present and the price is `0` or from `1e-300` to below `1e300`. Anything else
+is not payable. A `price_usd` token `Decimal` cannot hold is absent on `price_info`. The runner is still
+kept, and a wei price that `payable_rate` accepts is still paid. A token that does not fit never fails
+the rest of the document.
 
 The floor for a positive price is `1e-300`, inside the normal float range. Below it, `1E-400` and
 `1E-999999` pad to the float `0.0`, and near the bottom of the range the 1.2% pad can land under the
@@ -74,18 +68,18 @@ payment (a 402): a runner priced in `hour` that answers without asking serves a 
 **Age (`services/discovery.py`).** livepeer-node stamps each runner with `observed_at`, an
 [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time, from the `v1.0.3` tag (first released in
 `v1.0.4`). The stamp is the orchestrator's **response time**. Read directly from an orchestrator it is
-about the engine's poll time. Read through a cache (livepeer-node's `livepeer discovery`, or another process)
-it is when that cache last read the orchestrator, which is the age the catalog needs. Each served rate
-says which clock it used:
+about the engine's poll time. Read through a cache (livepeer/node's `livepeer-discovery`, or another
+process that serves the same contract) it is when that cache last read the orchestrator, which is the
+age the catalog needs. Each served rate says which clock it used:
 
 | Runner stamp | `observed_at` | `observed_by` |
 | --- | --- | --- |
 | present and at most 30 s after the poll | the stamp | `orchestrator` |
-| absent (livepeer-node `v1.0.2`, go-livepeer), unreadable (including one with no UTC offset from a non-HTTP source), or more than 30 s ahead | the poll time | `engine` |
+| absent, unreadable, or more than 30 s ahead | the poll time | `engine` |
 
-The 30 s bound is livepeer-node's own (`ClockSkew` in `discovery/shared/inventory.go`). The engine is
-deliberately looser than livepeer-node's collectors: they drop a runner with no or a future stamp (#70),
-while the engine keeps it with its poll time.
+The 30 s bound is livepeer/node's own (`ClockSkew` in `discovery/shared/inventory.go`). The HTTP reader
+is not looser than the schema: a runner with no `observed_at` fails validation and does not appear.
+The poll-time row is for a stamp the catalog cannot use, including one a custom source handed over.
 
 **Offering status.**
 
@@ -108,8 +102,8 @@ section when go-livepeer is retired (D2).
 | go-livepeer `/discovery` | What the engine does |
 | --- | --- |
 | `price` always wei, `currency` always `wei`, **no `price_usd`** (the field exists from `v0.9.3`, but only go-livepeer's remote signer fills it, with its own wei-to-USD conversion) | `price_usd` is `None`. go-livepeer keeps the registered USD price internally; no upstream change is planned (go-livepeer is deprecated) |
-| no `observed_at` | `observed_by="engine"`, as for livepeer-node `v1.0.2` |
-| an on-chain runner listed with **no `price_info`** while its price feed is not ready | `rate=None`. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
+| no `observed_at` | the schema rejects the runner, so `HttpDiscoverySource` does not keep it |
+| an on-chain runner listed with **no `price_info`** while its price feed is not ready | `price_info` is absent. If it asks for payment, the engine refuses before signing (it never signs without a ceiling) |
 | wei rounded down (livepeer-node rounds up) | Nothing: the 1.2 % ceiling padding covers one wei |
 
 Capability → app resolution (descriptor or configuration table) is a later contract. In M2 the caller

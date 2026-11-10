@@ -111,13 +111,12 @@ classDiagram
     class Runner {
         +str url
         +str app
-        +str? runner_id
         +str? mode
         +str? orchestrator_url
         +int? capacity
+        +int? capacity_used
         +int? capacity_available
-        +NetworkRate? rate
-        +str? rate_error
+        +PriceInfo? price_info
         +datetime? observed_at
         +str? version
         +str? metadata
@@ -127,6 +126,12 @@ classDiagram
         +str? id
         +str? name
         +int? vram_mb
+    }
+    class PriceInfo {
+        +Decimal? price
+        +Decimal? price_usd
+        +str? currency
+        +str? unit
     }
     class NetworkRate {
         +Decimal amount
@@ -217,6 +222,6 @@ classDiagram
     Offering *-- ObservedRate : rate_high
     Offering *-- ObservedRate : rate_low
     ProvisionedActor *-- SecretRef : secret_ref
-    Runner *-- NetworkRate : rate
+    Runner *-- PriceInfo : price_info
     Runner *-- RunnerGPU : gpu
 ```

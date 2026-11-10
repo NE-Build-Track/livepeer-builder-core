@@ -1,4 +1,4 @@
-"""Discovery contracts: runners the signer advertises and the offerings built from them."""
+"""Discovery contracts: runners a ``/discovery`` document advertises, and the offerings built from them."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -8,17 +8,16 @@ from pydantic import field_validator, model_validator
 
 from livepeer_builder.contracts.common import Contract
 
-# max_price pads a rate into a float ceiling for the signer; a larger price overflows or is no float
+# The vendored schema. /readyz reports this; the full pin is discovery.schema.pin.json beside the schema.
+DISCOVERY_CONTRACT = "livepeer/node@f45d83f"
+# max_price pads a rate into a float ceiling for the signer; a larger price overflows or is no float.
+# These checks belong to the payment layer (D63): the discovery reader keeps price_info as advertised.
 PRICE_LIMIT = Decimal("1e300")
-# ... and the signer refuses a ceiling that is not positive. Below the normal float range the padded
-# float rounds to 0.0, or below the price itself (7e-324 pads to 5e-324). 0 itself is a price (free): it
-# needs no ceiling, and the engine never signs for it.
+# The signer refuses a ceiling that is not positive. Below the normal float range the padded float rounds
+# to 0.0, or below the price itself (7e-324 pads to 5e-324). 0 itself is a price (free): it needs no
+# ceiling, and the engine never signs for it.
 PRICE_FLOOR = Decimal("1e-300")
 PRICE_RULE = "price must be 0, or from 1e-300 to below 1e300"
-# The most a /discovery inventory may be (LPB_DISCOVERY_MAX_BYTES). livepeer/node reads at most 1 MiB from
-# one orchestrator (discovery/shared/inventory.go, MaxBody); a discovery service's combined inventory is many
-# of those, and 1 MiB holds only about 2,000 runner records (#77 review)
-DISCOVERY_MAX_BYTES = 16 << 20
 
 
 def is_price(amount: Decimal) -> bool:
@@ -64,31 +63,57 @@ class ObservedRate(NetworkRate):
 
 
 class RunnerGPU(Contract):
-    """The GPU a runner reports in its registration, as the node echoes it."""
+    """The GPU a runner reports, as the discovery schema's ``gpu`` object echoes it."""
 
     id: str | None = None
     name: str | None = None
     vram_mb: int | None = None
 
 
+class PriceInfo(Contract):
+    """``price_info`` as advertised. ``price`` and ``price_usd`` are exact decimals, all four fields optional.
+
+    A JSON number ``Decimal`` cannot hold is absent here. The runner is still kept, and ``payable_rate``
+    reports that the price cannot be paid.
+    """
+
+    price: Decimal | None = None
+    price_usd: Decimal | None = None
+    currency: str | None = None
+    unit: str | None = None
+
+
+def payable_rate(info: PriceInfo | None) -> NetworkRate | None:
+    """The advertised price as a rate the catalog and the signer can use, or None when it cannot be paid."""
+    if info is None or info.price is None or not info.currency or not info.unit:
+        return None
+    try:
+        return NetworkRate(
+            amount=info.price,
+            currency=info.currency,
+            unit=info.unit,
+            price_usd=info.price_usd,
+        )
+    except ValueError:
+        return None
+
+
 class Runner(Contract):
+    """One runner from the discovery schema. ``address`` is kept as ``orchestrator_url``."""
+
     url: str
     app: str
-    runner_id: str | None
-    mode: str | None  # "single-shot" or "persistent"
-    orchestrator_url: str | None
-    capacity: int | None
-    capacity_available: int | None
-    rate: NetworkRate | None
-    # why an advertised price_info is not a rate; None when it parsed or none was advertised. A bad price_usd
-    # alone sets it while rate is still set and payable: only that field was dropped.
-    rate_error: str | None = None
-    # livepeer-node's observed_at stamp (tagged v1.0.3, released in v1.0.4): the orchestrator's response time,
-    # kept by discovery caches. None from older nodes, go-livepeer, or an unreadable stamp.
+    mode: str | None = None  # "single-shot" or "persistent"; other values are forwarded unchanged
+    orchestrator_url: str | None = None
+    capacity: int | None = None
+    capacity_used: int | None = None
+    capacity_available: int | None = None
+    price_info: PriceInfo | None = None  # as advertised; payable_rate decides whether it can be paid
+    # The schema requires observed_at. None is a stamp the clock cannot convert, or a runner a custom
+    # source handed over without one: the HTTP reader does not keep an unstamped record.
     observed_at: datetime | None = None
-    # Echoed from the runner's registration (node discovery entry). The engine never interprets them.
     version: str | None = None
-    metadata: str | None = None  # up to 1 KB of app-controlled text, often JSON (model limits, labels)
+    metadata: str | None = None
     gpu: RunnerGPU | None = None
 
 

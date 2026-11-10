@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /discovery response",
+  "description": "A forwarding contract for orchestrator and standalone discovery inventories. Empty arrays are successful inventories. Aggregators must preserve complete runner records, including unknown properties and the lexical form of numeric tokens. Timestamp freshness and tolerant record skipping are runtime checks, not schema constraints.",
+  "type": "array",
+  "items": {
+    "oneOf": [
+      { "$ref": "#/$defs/metadataEntry" },
+      { "$ref": "#/$defs/orchestratorEntry" }
+    ]
+  },
+  "$defs": {
+    "httpURL": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://([^/?#@]*@)?[^/?#@:][^/?#@]*([/?#]|$)"
+    },
+    "baseURL": {
+      "$ref": "#/$defs/httpURL",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+(/[^?#]*)?$",
+      "description": "An HTTP(S) base URL without credentials, query, or fragment; deployment paths are allowed."
+    },
+    "metadataEntry": {
+      "type": "object",
+      "description": "Standalone discovery prepends this entry only when it advertises successfully queried, non-evicted sources.",
+      "required": ["nodes"],
+      "not": { "required": ["address"] },
+      "properties": {
+        "runners": { "type": "array", "maxItems": 0 },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "node": {
+      "type": "object",
+      "required": ["url", "queried_at"],
+      "properties": {
+        "url": {
+          "$ref": "#/$defs/baseURL",
+          "description": "The queried source's HTTP(S) base URL."
+        },
+        "queried_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 time of the source's last successful query."
+        }
+      },
+      "additionalProperties": true
+    },
+    "orchestratorEntry": {
+      "type": "object",
+      "required": ["address", "runners"],
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/baseURL",
+          "description": "The owning orchestrator's HTTP(S) base URL, including any deployment path; not an Ethereum address."
+        },
+        "runners": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/runner" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "runner": {
+      "type": "object",
+      "description": "A ready app. Aggregators must forward unknown properties.",
+      "required": ["url", "app", "observed_at"],
+      "properties": {
+        "url": {
+          "$ref": "#/$defs/httpURL",
+          "description": "The app endpoint advertised by the owning orchestrator."
+        },
+        "app": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Application name."
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 observation time, allowing fractional seconds. Orchestrators stamp local runners at response time; aggregators preserve the timestamp."
+        },
+        "version": {
+          "type": "string",
+          "description": "Application version."
+        },
+        "metadata": {
+          "type": "string",
+          "description": "Application-supplied metadata."
+        },
+        "gpu": { "$ref": "#/$defs/gpu" },
+        "mode": {
+          "type": "string",
+          "description": "This orchestrator emits persistent or single-shot; discovery forwards other upstream values unchanged."
+        },
+        "capacity": {
+          "type": "integer",
+          "description": "Configured concurrent session capacity."
+        },
+        "capacity_used": {
+          "type": "integer",
+          "description": "Currently reserved sessions."
+        },
+        "capacity_available": {
+          "type": "integer",
+          "description": "Capacity currently available for new sessions."
+        },
+        "price_info": { "$ref": "#/$defs/priceInfo" }
+      },
+      "additionalProperties": true
+    },
+    "gpu": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "GPU identifier." },
+        "name": { "type": "string", "description": "GPU name." },
+        "vram_mb": { "type": "integer", "description": "GPU memory in MB." }
+      },
+      "additionalProperties": true
+    },
+    "priceInfo": {
+      "type": "object",
+      "properties": {
+        "price": {
+          "type": "number",
+          "description": "Price per advertised unit in the advertised currency. Consumers must preserve the exact JSON numeric token without rounding through binary floating point."
+        },
+        "price_usd": {
+          "type": "number",
+          "description": "Optional registered USD price per advertised unit. Consumers must preserve the exact JSON numeric token without rounding through binary floating point. On-chain orchestrators divide hourly quotes by 3600 for the seconds unit and leave fixed quotes unchanged, with up to 36 fractional digits and trailing zeros trimmed."
+        },
+        "currency": {
+          "type": "string",
+          "description": "This orchestrator emits wei; discovery forwards other upstream currencies unchanged."
+        },
+        "unit": {
+          "type": "string",
+          "description": "This orchestrator emits seconds or fixed; discovery forwards other upstream units unchanged."
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

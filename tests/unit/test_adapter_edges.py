@@ -19,11 +19,12 @@ from livepeer_builder.adapters.batteries import (
     error_message,
     usage_row_from_item,
 )
+from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_call import network_kind
-from livepeer_builder.adapters.sdk import HttpDiscoverySource, runners_from_entries
+from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
-from livepeer_builder.contracts import Money, NetworkRate, SecretRef
-from livepeer_builder.contracts.discovery import PRICE_RULE
+from livepeer_builder.contracts import Money, SecretRef
+from livepeer_builder.contracts.discovery import payable_rate
 from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
@@ -34,7 +35,6 @@ from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
-from livepeer_builder.utils import loads_json_numbers
 
 # -- Batteries -----------------------------------------------------------------------------------------
 
@@ -139,23 +139,28 @@ def discovery_serving(body: bytes) -> httpx.AsyncClient:
 
 
 async def test_http_discovery_reads_only_the_discovery_url_and_parses_entries() -> None:
-    body = b'[{"address":"https://o","runners":[{"url":"https://r","app":"a/b","price_info":"bad"},"junk"]}]'
+    body = (
+        b'[{"address":"https://orch.example","runners":['
+        b'{"url":"https://orch.example/app","app":"a/b","observed_at":"2026-10-22T18:05:00Z"},'
+        b'"junk"]}]'
+    )
     async with discovery_serving(body) as client:
         (runner,) = await HttpDiscoverySource("http://discovery:8939/discovery", client=client).fetch()
-    assert runner.rate is None and runner.orchestrator_url == "https://o"
+    assert runner.price_info is None and runner.orchestrator_url == "https://orch.example"
 
 
 async def test_http_discovery_keeps_every_digit_of_a_node_price_usd() -> None:
     body = (
-        b'[{"address":"https://o","runners":[{"url":"https://r","app":"a/b","price_info":'
+        b'[{"address":"https://orch.example","runners":[{"url":"https://orch.example/app","app":"a/b",'
+        b'"observed_at":"2026-10-22T18:05:00Z","price_info":'
         b'{"price":4492197255,"price_usd":0.0000027777777777777777777777777777,'
         b'"currency":"wei","unit":"seconds"}}]}]'
     )
     async with discovery_serving(body) as client:
         (runner,) = await HttpDiscoverySource("http://discovery:8939/discovery", client=client).fetch()
-    assert runner.rate is not None
-    assert runner.rate.price_usd == Decimal("0.0000027777777777777777777777777777")
-    assert runner.rate.amount == Decimal(4492197255)
+    assert runner.price_info is not None
+    assert runner.price_info.price_usd == Decimal("0.0000027777777777777777777777777777")
+    assert runner.price_info.price == Decimal(4492197255)
 
 
 async def test_http_discovery_keeps_one_client_across_polls_and_closes_it(
@@ -209,20 +214,6 @@ async def test_an_httpx_timeout_says_which_inventory_did_not_arrive(clock: Fixed
     assert "no inventory from http://discovery:8939/discovery within 5s" in snapshot.last_error
 
 
-@pytest.mark.parametrize(("padding", "refused"), [((16 << 20) - 2, False), (16 << 20, True)])
-async def test_http_discovery_reads_at_most_16_mib(padding: int, refused: bool) -> None:
-    """A discovery service's combined inventory: livepeer/node's MaxBody (1 MiB) is per orchestrator, and
-    about 2,000 runner records fill it (#77 review)."""
-    body = b"[" + b" " * padding + b"]"  # exactly 16 MiB, or one byte over
-    async with discovery_serving(body) as client:
-        source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
-        if refused:
-            with pytest.raises(ValueError, match="inventory larger than 16777216 bytes"):
-                await source.fetch()
-        else:
-            assert await source.fetch() == ()
-
-
 @pytest.mark.parametrize(
     ("body", "error"),
     [(b"{}", "discovery response is not a JSON list"), (b"[NaN]", "NaN is not a JSON number")],
@@ -234,33 +225,43 @@ async def test_http_discovery_refuses_a_document_that_is_not_a_json_list(body: b
             await HttpDiscoverySource("http://discovery:8939/discovery", client=client).fetch()
 
 
-GOOD_ENTRY = {"address": "https://good", "runners": [{"url": "https://good/apps/r1/app", "app": "a/b"}]}
+_STAMP = "2026-10-22T18:05:00.123+01:00"
+GOOD_ENTRY = {
+    "address": "https://orch.example",
+    "runners": [
+        {
+            "url": "https://orch.example/apps/r1/app",
+            "app": "a/b",
+            "observed_at": _STAMP,
+        }
+    ],
+}
 
 
 def test_a_malformed_entry_or_record_is_skipped_counted_and_loses_nothing_else(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """livepeer/node's Decode skips a bad entry and keeps the rest; one bad entry must not stale discovery."""
+    """A record the schema rejects is skipped. One bad record must not drop the rest."""
     entries = [
-        None,  # an entry that is not an object
-        {"address": "https://bad", "runners": 5},  # runners that is not a list ...
-        {"address": "https://bad", "runners": "r1"},
-        {"address": "https://bad", "runners": {"url": "https://bad/apps/r1/app", "app": "a/b"}},
-        {"address": "https://none", "runners": None},  # a Go nil slice: no runners, nothing wrong
-        {"address": "https://good", "runners": [None, 7, {"app": "a/b"}, GOOD_ENTRY["runners"][0]]},  # type: ignore[index]
+        None,
+        {"address": "https://bad.example", "runners": 5},
+        {"address": "https://bad.example", "runners": "r1"},
+        {"address": "https://bad.example", "runners": {"url": "https://bad.example/app"}},
+        {"address": "https://none.example", "runners": None},
+        {"address": "https://orch.example", "runners": [None, 7, {"app": "a/b"}, GOOD_ENTRY["runners"][0]]},
     ]
-    with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.sdk"):
-        (runner,) = runners_from_entries(entries)
+    with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.discovery_inventory"):
+        (runner,) = read_inventory(json.dumps(entries))
     [record] = [
         item for item in caplog.records if getattr(item, "event", "") == "discovery.inventory_skipped"
     ]
-    assert (record.entries, record.runners) == (4, 3)  # two non-object records and one with no url
-    assert runner.url == "https://good/apps/r1/app"
+    assert sum(record.reasons.values()) == 8  # five entries and three runners
+    assert runner.url == "https://orch.example/apps/r1/app"
 
 
 def test_a_clean_inventory_logs_no_skip(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.sdk"):
-        runners_from_entries([GOOD_ENTRY, {"address": "https://none", "runners": None}])
+    with caplog.at_level(logging.WARNING, logger="livepeer_builder.adapters.discovery_inventory"):
+        read_inventory(json.dumps([GOOD_ENTRY, {"nodes": []}]))
     assert not [
         item for item in caplog.records if getattr(item, "event", "") == "discovery.inventory_skipped"
     ]
@@ -281,7 +282,7 @@ async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: Fixe
         discovery = DiscoveryService(source, DefaultPolicy(), clock)
         await discovery.refresh()
         snapshot = await discovery.refresh()
-    assert [runner.url for runner in snapshot.runners] == ["https://good/apps/r1/app"]
+    assert [runner.url for runner in snapshot.runners] == ["https://orch.example/apps/r1/app"]
     assert snapshot.last_error is not None and "301" in snapshot.last_error
     assert seen == ["http://discovery:8939/discovery"] * 2
 
@@ -302,58 +303,63 @@ async def test_an_injected_client_that_follows_redirects_does_not_follow_the_dis
     assert seen == ["http://discovery:8939/discovery"]
 
 
-async def test_a_number_decimal_cannot_build_fails_one_runner_not_the_refresh() -> None:
-    """livepeer-node's discovery cache passes price_usd through as received: one such token must not stop every
-    orchestrator from updating (#77 review)."""
+def _stamped(url: str, price: str) -> str:
+    return (
+        '{"url":"' + url + '","app":"a/b","observed_at":"' + _STAMP + '",'
+        '"price_info":{"price":' + price + ',"currency":"wei","unit":"fixed"}}'
+    )
+
+
+async def test_a_number_decimal_cannot_build_keeps_the_runner() -> None:
+    """A number token ``Decimal`` cannot hold still counts as a number. That runner is kept and cannot be paid."""
     huge, tiny = "1e" + "9" * 20, "1e-" + "9" * 20
     body = (
-        '[{"address":"https://a","runners":['
-        '{"url":"https://a/apps/good/app","app":"a/b","price_info":{"price":10,"currency":"wei","unit":"fixed"}},'
-        '{"url":"https://a/apps/usd/app","app":"a/b","price_info":{"price":10,"price_usd":' + huge + ","
-        '"currency":"wei","unit":"fixed"}}]},'
-        '{"address":"https://b","runners":['
-        '{"url":"https://b/apps/r1/app","app":"a/b","price_info":{"price":'
-        + tiny
-        + ',"currency":"wei","unit":"fixed"}}]}]'
+        '[{"address":"https://a.example","runners":['
+        + _stamped("https://a.example/apps/good/app", "10")
+        + ","
+        + _stamped("https://a.example/apps/usd/app", "10").replace(
+            '"unit":"fixed"', '"price_usd":' + huge + ',"unit":"fixed"'
+        )
+        + ']},{"address":"https://b.example","runners":['
+        + _stamped("https://b.example/apps/r1/app", tiny)
+        + "]}]"
     ).encode()
     async with discovery_serving(body) as client:
-        good, bad_usd, bad_price = await HttpDiscoverySource(
+        good, huge_usd, tiny_price = await HttpDiscoverySource(
             "http://discovery:8939/discovery", client=client
         ).fetch()
-    wei = NetworkRate(amount=Decimal(10), currency="wei", unit="fixed")
-    assert (good.rate, good.rate_error) == (wei, None)
-    assert (bad_usd.rate, bad_usd.rate_error) == (wei, "price_usd is not a nonnegative number")
-    assert (bad_price.rate, bad_price.rate_error) == (None, PRICE_RULE)
+    assert good.price_info is not None and good.price_info.price == Decimal(10)
+    assert huge_usd.price_info is not None and huge_usd.price_info.price == Decimal(10)
+    assert huge_usd.price_info.price_usd is None  # the token is a number Decimal cannot hold
+    assert tiny_price.price_info is not None and payable_rate(tiny_price.price_info) is None
 
 
-def test_an_integer_past_the_digit_limit_fails_one_runner_not_the_refresh() -> None:
-    """``json.loads`` raises ValueError past ``sys.get_int_max_str_digits()`` (4300). One such price must not
-    stop the rest of the inventory from updating."""
+def test_an_integer_past_the_digit_limit_keeps_both_runners() -> None:
+    """The token is still a JSON number past ``sys.get_int_max_str_digits()``. It does not fail the refresh."""
     huge = "9" * (sys.get_int_max_str_digits() + 1)
     body = (
-        '[{"address":"https://a","runners":['
-        '{"url":"https://a/apps/good/app","app":"a/b","price_info":{"price":10,"currency":"wei","unit":"fixed"}},'
-        '{"url":"https://a/apps/big/app","app":"a/b","price_info":{"price":'
-        + huge
-        + ',"currency":"wei","unit":"fixed"}}]}]'
+        '[{"address":"https://a.example","runners":['
+        + _stamped("https://a.example/apps/good/app", "10")
+        + ","
+        + _stamped("https://a.example/apps/big/app", huge)
+        + "]}]"
     )
-    good, bad = runners_from_entries(loads_json_numbers(body))
-    assert (good.rate, good.rate_error) == (
-        NetworkRate(amount=Decimal(10), currency="wei", unit="fixed"),
-        None,
-    )
-    assert (bad.rate, bad.rate_error) == (None, PRICE_RULE)
+    good, big = read_inventory(body)
+    assert good.price_info is not None and good.price_info.price == Decimal(10)
+    assert big.price_info is not None and payable_rate(big.price_info) is None
 
 
-def test_rates_reject_bad_prices() -> None:
-    entries = [
-        {"address": "https://o", "runners": [
-            {"url": "https://r1", "app": "a", "price_info": {"price": "not-a-number"}},
-            {"url": "https://r2", "app": "a", "price_info": {"price": "-1"}},
-            {"url": "https://r3", "app": "a", "price_info": {"price": "NaN"}},
-        ]},
-    ]  # fmt: skip
-    assert [r.rate for r in runners_from_entries(entries)] == [None, None, None]
+def test_a_price_string_is_skipped_and_a_negative_price_is_kept_unpayable() -> None:
+    body = (
+        '[{"address":"https://orch.example","runners":['
+        + '{"url":"https://orch.example/r1","app":"a","observed_at":"'
+        + _STAMP
+        + '","price_info":{"price":"not-a-number"}},'
+        + _stamped("https://orch.example/r2", "-1")
+        + "]}]"
+    )
+    (negative,) = read_inventory(body)
+    assert negative.url.endswith("/r2") and payable_rate(negative.price_info) is None
 
 
 def test_network_errors_are_classified_through_their_causes() -> None:

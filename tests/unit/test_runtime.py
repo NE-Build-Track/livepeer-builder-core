@@ -14,7 +14,6 @@ from sqlalchemy.exc import OperationalError
 from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply, PurgeReport
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
-from livepeer_builder.adapters.static import StaticDiscoverySource
 from livepeer_builder.http import create_app
 from livepeer_builder.runtime import engine as engine_module
 from livepeer_builder.runtime.assembly import assemble, default_parts
@@ -76,6 +75,7 @@ async def test_batteries_without_an_operator_token_starts_without_the_grant_desk
         batteries_url="https://batteries.example",
         batteries_token="t",
         log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
     )
     async with contextlib.AsyncExitStack() as stack:
         parts = await default_parts(settings, stack)
@@ -92,10 +92,11 @@ async def test_default_adapters_follow_settings() -> None:
         batteries_token="t",
         batteries_operator_token="desk",
         log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
     )
     async with contextlib.AsyncExitStack() as stack:  # closes the owned clients and store
         parts = await default_parts(settings, stack)
-        assert isinstance(parts.discovery_source, StaticDiscoverySource)  # the signer only signs (#45)
+        assert isinstance(parts.discovery_source, HttpDiscoverySource)
         assert isinstance(parts.allocation_manager, BatteriesClient)
         assert isinstance(parts.usage_source, BatteriesUsageSource)  # unfiltered by design (iss-04)
 
@@ -109,28 +110,6 @@ async def test_a_discovery_url_reads_the_discovery_service() -> None:
         assert isinstance(parts.discovery_source, HttpDiscoverySource)
 
 
-async def test_the_discovery_service_is_read_under_lpb_discovery_max_bytes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livepeer_builder.adapters.sdk import HttpDiscoverySource
-
-    built: list[HttpDiscoverySource] = []
-
-    def source(url: str, *, max_bytes: int) -> HttpDiscoverySource:
-        built.append(HttpDiscoverySource(url, max_bytes=max_bytes))
-        return built[-1]
-
-    monkeypatch.setattr("livepeer_builder.adapters.sdk.HttpDiscoverySource", source)
-    settings = EngineSettings(
-        database_url=MEMORY, discovery_url="http://d/discovery", discovery_max_bytes=7, log_json=False
-    )
-    async with contextlib.AsyncExitStack() as stack:
-        await default_parts(settings, stack)
-    (made,) = built
-    assert (made._discovery_url, made._max_bytes) == ("http://d/discovery", 7)
-    assert made._client.is_closed  # the engine closes the source's client when it stops
-
-
 async def test_operator_token_wires_a_separate_grants_client() -> None:
     settings = EngineSettings(
         database_url=MEMORY,
@@ -138,6 +117,7 @@ async def test_operator_token_wires_a_separate_grants_client() -> None:
         batteries_token="actor",
         batteries_operator_token="operator",
         log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
     )
     async with contextlib.AsyncExitStack() as stack:
         parts = await default_parts(settings, stack)
@@ -155,12 +135,11 @@ async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: F
         cost_sync_interval_s=0.01,
         retention_jobs_days=30,
         log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
     )
     engine = await BuilderEngine.create(
         settings,
-        supply=EngineSupply(
-            store=store, clock=clock, discovery_source=StaticDiscoverySource(), usage_source=usage
-        ),
+        supply=EngineSupply(store=store, clock=clock, usage_source=usage),
     )
     await engine.start()
     async with asyncio.timeout(5):  # wait for each loop's first run, not a fixed time
@@ -177,12 +156,15 @@ async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedC
         async def page(self, cursor: str | None, limit: int = 1000) -> object:
             raise RuntimeError("batteries down")
 
-    settings = EngineSettings(database_url=MEMORY, cost_sync_interval_s=0.01, log_json=False)
+    settings = EngineSettings(
+        database_url=MEMORY,
+        cost_sync_interval_s=0.01,
+        log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
+    )
     engine = await BuilderEngine.create(
         settings,
-        supply=EngineSupply(
-            store=store, clock=clock, discovery_source=StaticDiscoverySource(), usage_source=Broken()
-        ),
+        supply=EngineSupply(store=store, clock=clock, usage_source=Broken()),
     )
     await engine.start()
     await asyncio.sleep(0.05)
@@ -193,10 +175,13 @@ async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedC
 async def test_retention_failures_are_logged_not_fatal(
     store: SqlStore, clock: FixedClock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    settings = EngineSettings(database_url=MEMORY, retention_usage_days=1, log_json=False)
-    engine = await BuilderEngine.create(
-        settings, supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource())
+    settings = EngineSettings(
+        database_url=MEMORY,
+        retention_usage_days=1,
+        log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
     )
+    engine = await BuilderEngine.create(settings, supply=EngineSupply(store=store, clock=clock))
 
     async def broken_purge() -> object:
         raise RuntimeError("disk full")
@@ -217,7 +202,9 @@ async def test_cleanup_failures_are_logged_not_raised(
 
     # Fault injection on builder-core's own store: there is no seam for an engine-owned resource.
     monkeypatch.setattr(SqlStore, "close", fails)
-    engine = await BuilderEngine.create(EngineSettings(database_url=MEMORY, log_json=False))
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery")
+    )
     with caplog.at_level(logging.ERROR):
         await engine.stop()  # does not raise
     failures = [r for r in caplog.records if getattr(r, "event", "") == "engine.close_failed"]
@@ -243,7 +230,12 @@ async def test_a_failure_part_way_through_construction_closes_what_it_opened(
     # Spies: they record and delegate, changing no behaviour (the store has no injection seam yet).
     monkeypatch.setattr(SqlStore, "connect", recording_connect)
     monkeypatch.setattr(SqlStore, "close", recording_close)
-    settings = EngineSettings(database_url=MEMORY, secret_key="not-a-fernet-key", log_json=False)
+    settings = EngineSettings(
+        database_url=MEMORY,
+        secret_key="not-a-fernet-key",
+        log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
+    )
     with pytest.raises(ValueError, match="Fernet key"):
         await BuilderEngine.create(settings)
     assert len(opened) == 1 and closed == opened
@@ -251,8 +243,8 @@ async def test_a_failure_part_way_through_construction_closes_what_it_opened(
 
 async def test_stop_twice_is_safe_and_a_stopped_engine_cannot_restart() -> None:
     engine = await BuilderEngine.create(
-        EngineSettings(database_url=MEMORY, log_json=False),
-        supply=EngineSupply(discovery_source=StaticDiscoverySource()),
+        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+        supply=EngineSupply(),
     )
     await engine.stop()  # before start, as CLI commands do
     await engine.stop()
@@ -279,11 +271,16 @@ async def test_purge_and_revision_go_to_the_store_maintenance(clock: FixedClock)
             return None
 
     engine = await BuilderEngine.create(
-        EngineSettings(database_url=MEMORY, log_json=False, retention_jobs_days=30, retention_usage_days=7),
+        EngineSettings(
+            database_url=MEMORY,
+            log_json=False,
+            retention_jobs_days=30,
+            retention_usage_days=7,
+            discovery_url="http://127.0.0.1:9/discovery",
+        ),
         supply=EngineSupply(
             store=NotSql(),  # type: ignore[arg-type]
             clock=clock,
-            discovery_source=StaticDiscoverySource(),
         ),
     )
     assert await engine.purge() == PurgeReport(jobs_deleted=3, usage_rows_deleted=4)
@@ -299,11 +296,10 @@ async def test_purge_and_revision_without_store_maintenance(clock: FixedClock) -
             return None
 
     engine = await BuilderEngine.create(
-        EngineSettings(database_url=MEMORY, log_json=False),
+        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
         supply=EngineSupply(
             store=NotSql(),  # type: ignore[arg-type]
             clock=clock,
-            discovery_source=StaticDiscoverySource(),
         ),
     )
     assert (await engine.purge()).jobs_deleted == 0
@@ -314,11 +310,13 @@ async def test_retention_runs_every_retention_interval(
     store: SqlStore, clock: FixedClock, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = EngineSettings(
-        database_url=MEMORY, retention_jobs_days=30, retention_interval_s=0.02, log_json=False
+        database_url=MEMORY,
+        retention_jobs_days=30,
+        retention_interval_s=0.02,
+        log_json=False,
+        discovery_url="http://127.0.0.1:9/discovery",
     )
-    engine = await BuilderEngine.create(
-        settings, supply=EngineSupply(store=store, clock=clock, discovery_source=StaticDiscoverySource())
-    )
+    engine = await BuilderEngine.create(settings, supply=EngineSupply(store=store, clock=clock))
     with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
         await engine.start()
         await asyncio.sleep(0.15)  # about seven intervals
@@ -342,10 +340,12 @@ def record_closes(monkeypatch: pytest.MonkeyPatch) -> list[SqlStore]:
 
 def unmigrated() -> EngineSettings:
     """No tables: ``start()`` fails in ``recover_interrupted`` after ``create`` opened the store."""
-    return EngineSettings(database_url=MEMORY, auto_migrate=False, log_json=False)
+    return EngineSettings(
+        database_url=MEMORY, auto_migrate=False, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
+    )
 
 
-QUIET = EngineSupply(discovery_source=StaticDiscoverySource())
+QUIET = EngineSupply()
 
 
 async def test_a_failed_start_in_async_with_closes_what_create_opened(
@@ -381,6 +381,8 @@ async def test_a_failure_in_assemble_closes_what_create_opened(monkeypatch: pyte
 
     with pytest.raises(AttributeError):
         await BuilderEngine.create(
-            EngineSettings(database_url=MEMORY, log_json=False), supply=QUIET, decorate=broken
+            EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+            supply=QUIET,
+            decorate=broken,
         )
     assert len(closed) == 1

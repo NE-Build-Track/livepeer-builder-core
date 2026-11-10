@@ -32,6 +32,7 @@ from livepeer_builder.contracts.discovery import (
     NetworkRate,
     ObservedRate,
     Offering,
+    PriceInfo,
     Runner,
     RunnerGPU,
 )
@@ -132,6 +133,7 @@ __all__ = [
     "PaymentCredential",
     "PaymentReason",
     "PaymentState",
+    "PriceInfo",
     "ProvisionRequest",
     "ProvisionedActor",
     "PurgeReport",

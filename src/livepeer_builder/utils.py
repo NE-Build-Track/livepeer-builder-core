@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import AsyncIterable, Coroutine
+from collections.abc import Coroutine
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -96,30 +96,3 @@ def _lenient_int(token: str) -> int | _UnreadableNumber:
 
 def _not_json(token: str) -> Any:
     raise ValueError(f"{token} is not a JSON number")
-
-
-async def read_capped(chunks: AsyncIterable[bytes], limit: int) -> bytes:
-    """A streamed body, refused (``ValueError``) as soon as it is longer than ``limit`` bytes."""
-    body = bytearray()
-    async for chunk in chunks:
-        body += chunk
-        if len(body) > limit:
-            raise ValueError(f"inventory larger than {limit} bytes")
-    return bytes(body)
-
-
-def decimal_json_number(token: str) -> Decimal:
-    """A JSON number token as :class:`Decimal`.
-
-    A number ``Decimal`` cannot build raises ``InvalidOperation``, here a ``ValueError``. Re-serving
-    that token would fail every engine refresh that parses it, so the caller refuses the inventory.
-
-    The limit is the platform's, not ours. On 64-bit CPython (libmpdec) a number is refused when its
-    adjusted exponent is above ``MAX_EMAX`` (999999999999999999) or its exponent is below ``MIN_ETINY``
-    (-1999999999999999997), so ``1e-1000000000000000000`` is kept. 32-bit builds refuse sooner, and the
-    pure-Python ``_pydecimal`` builds both. No price comes near either limit.
-    """
-    try:  # a JSON number token is never NaN or Infinity: those are constants (parse_constant)
-        return Decimal(token)
-    except InvalidOperation as exc:
-        raise ValueError(f"{token} is not a JSON number") from exc

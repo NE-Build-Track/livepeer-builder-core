@@ -20,7 +20,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 | `AccessPolicy` | `DefaultPolicy` (permissions + own records + admin kind) | `TeamReadPolicy`: teammates read each other's jobs. Or org admins, RBAC/ABAC, entitlements | decorate (wrap `parts.policy`) or supply `policy=` |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | `AuditedVaultSecretStore`: HashiCorp Vault, AWS/GCP secret manager, HSM | supply `secret_store=` |
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | supply `selection=` |
-| `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`) / `StaticDiscoverySource` | `ApprovedOrchestratorsOnly`: an allow-list wrapper. Or an in-process registry or cached catalog | decorate (wrap `parts.discovery_source`) or supply `discovery_source=` |
+| `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`, required) | `ApprovedOrchestratorsOnly`: an allow-list wrapper around the HTTP source | decorate (wrap `parts.discovery_source`) |
 | `RunnerTransport` | `SdkRunnerTransport` (Live Runner via the SDK) | Another network transport, or a recording proxy for audit | supply or decorate `transport=` |
 | `StreamingRunnerTransport` (optional `open` beside `call`) | `SdkRunnerTransport` | The same transport, streaming. Without `open`, `jobs.streaming` is `None` and the REST streaming route answers 400 (D33) | supply `transport=` |
 | `AllocationManager` / `UsageSource` | `BatteriesClient` / `BatteriesUsageSource` | Another payment provider, or a hosted operator's API (Mode B) | supply `allocation_manager=` / `usage_source=` |
@@ -247,13 +247,14 @@ asyncio.run(
 
 ## Discovery
 
-Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` points at a `GET /discovery`
-inventory ([contract](../contracts/discovery.md)): livepeer-node's own discovery, or one
-orchestrator. This package does not ship that process.
+Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` is required and points at a
+`GET /discovery` document that follows livepeer/node's contract
+([contract](../contracts/discovery.md)). The reference implementation is livepeer/node's
+`livepeer-discovery`. This package does not ship a discovery process.
 
-To change who the engine calls without replacing that process, supply or decorate a `DiscoverySource`.
-Raising from it keeps the last good snapshot. To replace the inventory entirely, serve the same
-document from another process and point `LPB_DISCOVERY_URL` at it.
+To change who the engine calls without replacing that process, wrap `HttpDiscoverySource` through
+`decorate`. Raising from the wrapper keeps the last good snapshot. To replace the inventory entirely,
+serve the same document from another process and point `LPB_DISCOVERY_URL` at it.
 
 ## Rules every implementation must keep
 

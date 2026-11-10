@@ -15,7 +15,7 @@ flowchart TB
         AD["adapters: SDK, Batteries, auth, secrets"]
         ST["store: SQLite / PostgreSQL"]
     end
-    Disc["discovery service (GET /discovery)"]
+    Disc["livepeer/node livepeer-discovery<br/>(GET /discovery)"]
     SDK["livepeer-python-gateway (pinned 2017a80)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
@@ -78,7 +78,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `Authenticator` | `ApiKeyAuthenticator`, and `JwtBearerAuthenticator` with `LPB_AUTH=jwt` (D45), in an `AuthenticatorChain` | use SSO, mTLS, another token scheme |
 | `AccessPolicy` | `DefaultPolicy` (permissions + ownership) | add teams, org admins, RBAC |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | use Vault or a cloud secret manager |
-| `DiscoverySource` | `HttpDiscoverySource` (`LPB_DISCOVERY_URL`) / `StaticDiscoverySource` | read another `GET /discovery` inventory ([contract](docs/contracts/discovery.md)) |
+| `DiscoverySource` | `HttpDiscoverySource` (`LPB_DISCOVERY_URL`, required) | read another service that serves the same contract, by wrapping the source through `decorate` ([contract](docs/contracts/discovery.md)) |
 | `SelectionPolicy` | `MostCapacityFirst` | rank by price or latency |
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |

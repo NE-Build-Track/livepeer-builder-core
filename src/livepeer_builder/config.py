@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
-from livepeer_builder.contracts.discovery import DISCOVERY_MAX_BYTES
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
@@ -46,12 +45,12 @@ class EngineSettings(Contract):
 
     # network
     signer_url: str | None = None
-    discovery_url: str | None = None  # livepeer-node /discovery inventory: the discovery service (#45)
+    # Required. GET this URL for the livepeer/node /discovery contract (D63). The engine does not start
+    # without it, and it does not fall back to a built-in list.
+    discovery_url: str
     discovery_interval_s: float = Field(default=15.0, gt=0)
-    discovery_max_bytes: int = Field(default=DISCOVERY_MAX_BYTES, gt=0)  # the largest inventory a poll reads
-    # an orchestrator-stamped rate older than this makes its offering stale: two of livepeer-node
-    # discovery's default 5-minute refreshes. The on-chain discovery service probes every 30 s and
-    # evicts after 6 failed probes.
+    # How old an orchestrator-stamped rate may be before its offering is stale (D62 (3)). D63: the reader
+    # keeps price_info as advertised, and this age is catalog policy.
     rate_max_age_s: float = Field(default=600.0, gt=0)
     max_payment_challenge_retries: int = Field(default=3, ge=0)
 
@@ -137,10 +136,8 @@ class EngineSettings(Contract):
 
     @field_validator("discovery_url")
     @classmethod
-    def _http_discovery_url(cls, value: str | None) -> str | None:
+    def _http_discovery_url(cls, value: str) -> str:
         # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
-        if value is None:
-            return None
         value = value.strip()  # urlsplit ignores padding; httpx refuses a newline and sends a space as %20
         try:
             parts = urlsplit(value)

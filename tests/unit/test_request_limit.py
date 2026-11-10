@@ -93,7 +93,9 @@ def test_the_default_admits_the_largest_raw_body_a_job_may_carry() -> None:
             "raw_body": base64.b64encode(b"\0" * (8 * 1024 * 1024)).decode(),
         }
     )
-    default = EngineSettings.model_validate({"database_url": "sqlite+aiosqlite:///:memory:"})
+    default = EngineSettings.model_validate(
+        {"database_url": "sqlite+aiosqlite:///:memory:", "discovery_url": "http://127.0.0.1:9/discovery"}
+    )
     assert len(largest.encode()) < default.http_max_request_bytes == 16 * 1024 * 1024
 
 
@@ -102,6 +104,7 @@ async def test_the_service_takes_the_limit_from_its_settings(store: SqlStore) ->
     settings = EngineSettings.from_env(
         {
             "LPB_DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
             "LPB_LOG_JSON": "false",
             "LPB_HTTP_MAX_REQUEST_BYTES": str(LIMIT),
         }

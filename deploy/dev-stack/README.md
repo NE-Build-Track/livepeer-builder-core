@@ -108,8 +108,11 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
   `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine's grant desk can
   list or create grants.
-  The Railway Batteries image, in NE-Build-Track/deployments, writes the same `builder-engine` list.
-  That repository's structure test fails when the two lists drift.
+  Any deployment gives the engine the same permissions, which `config/init-secrets.py` writes:
+  - `builder-engine` (`LPB_BATTERIES_TOKEN`): `grants.fund`, `allocations.create`, `allocations.fund`,
+    `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`, `api_keys.read`,
+    `api_keys.revoke` and `usage.read`;
+  - `grant-desk` (`LPB_BATTERIES_OPERATOR_TOKEN`, optional): `grants.read` and `grants.create`.
 - **No pinned certificates.** The signer no longer discovers, so it needs no orchestrator certificates
   (T12 closed by D43). `config/pinned-certs/` is gone. The engine still verifies runner TLS against
   the system trust store.

@@ -130,7 +130,7 @@ management credential from the engine entirely and closes T13. It is research, n
 ### The test/operator arrangement (to document, not a service)
 
 Recommended: **two Compose projects on one host**, so the boundary is real (separate networks, separate
-credential files) and reproducible without Railway.
+credential files) and reproducible without a hosted deployment.
 
 - **Operator project** (Batteries + signer, the payer keystore): creates a grant, an allocation and one
   `lpg_` key with the Batteries CLI, writes a credential file with a `tenant-engine` entry allowing
@@ -166,7 +166,7 @@ for the arrangement; console `m3-environment.md` and `m3-journey.md` (the "secon
 **Levels.** Settings validation and assembly wiring are unit tests with `FakeUsageSource` and
 `FakeAllocationManager` (`testing/fakes.py`); the refusal is a service test plus one HTTP route test; the
 check command runs against `httpx.MockTransport` for the adapter calls. The deploy files are checked by a
-structure test (as `test_deploy.py` checks the Railway credential list). The live check is the operator
+structure test. The live check is the operator
 arrangement, run once and recorded (it is ISS-36's input, not its evidence).
 
 **Seams.** Settings (pure), `EngineSupply` (inject the fakes), `MockTransport` for Batteries reads.
@@ -227,7 +227,7 @@ above updated.
 
 - **Q1.** Is `per_application` only acceptable for configuration 2 in M4 (recommended), or must per-actor
   caps work under a separate operator (then a Batteries change or a tenant layer is a prerequisite)?
-- **Q2.** Arrangement: two Compose projects on one host (recommended), or Railway's Batteries and signer
+- **Q2.** Arrangement: two Compose projects on one host (recommended), or the hosted Batteries and signer
   made public?
 - **Q3.** Close T5 by reading the key's allocation at start (needs `api_keys.read`, a wider grant), or
   keep `LPB_SHARED_ALLOCATION_ID` by hand (recommended)?

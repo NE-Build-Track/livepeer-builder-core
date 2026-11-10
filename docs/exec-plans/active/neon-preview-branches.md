@@ -10,7 +10,7 @@
 
 ## Goal
 
-Run the builder engine on Neon instead of Railway Postgres, and give every pull request its own
+Run the hosted builder engine on Neon instead of its previous Postgres, and give every pull request its own
 copy of production data. Production stays on one protected branch. A pull request gets a branch of
 that data, migrates it, and the branch is deleted when the PR closes.
 
@@ -19,7 +19,7 @@ that data, migrates it, and the branch is deleted when the PR closes.
 - [x] Neon project `builder-engine` (`floral-frog-74114075`) in the Elite org, region
   `aws-eu-central-1`, Postgres 18. Branch `main` is protected, and its compute does not suspend.
   Autoscaling is 0.25–2 CU.
-- [x] Production Railway Postgres restored onto `main`. Alembic revision `0005`. Row counts matched
+- [x] Production's previous Postgres restored onto `main`. Alembic revision `0005`. Row counts matched
   at cutover. `GET /livez` on the production engine returns 200, and later usage rows are on Neon.
 - [x] The engine URL is the direct Neon host. The entrypoint maps `sslmode` to asyncpg's `ssl` and
   drops `channel_binding`. Preview deploys run migrations. Tests cover both.
@@ -29,7 +29,7 @@ that data, migrates it, and the branch is deleted when the PR closes.
   no preview workflow. Production stays on Neon `main`.
 - [x] `NEON_API_KEY` and `NEON_PROJECT_ID` are set on the GitHub `preview` environment. PR #60
   created `preview/pr-60` from `main`.
-- [x] Railway Postgres is still provisioned in production and preview.
+- [x] The previous Postgres is still provisioned in production and preview.
 
 ## Progress
 

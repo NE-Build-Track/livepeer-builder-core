@@ -232,8 +232,7 @@ by someone other than its author (it feeds ISS-37's fresh-reviewer check).
 
 - **Q1.** Final version `v1.0.0` (recommended: M5 is the delivery), or stay at `v0.x`?
 - **Q2.** Draft GitHub release plus a private GHCR image (recommended), or CI artifacts only?
-- **Q3.** Keep production deploys on push to `main` and `releases/**`, or deploy from tags
-  (recommended, so a release merge does not deploy by surprise)?
+- **Q3.** Settled 9 November: this repository does not deploy, so a release merge deploys nothing.
 - **Q4.** SBOM and scan tools, and the license allowlist (proposed: MIT, BSD, Apache-2.0, PSF, ISC,
   MPL-2.0, each exception recorded)?
 - **Q5.** Signing: Mike's signed tag plus GitHub attestations (recommended), or a cosign key?

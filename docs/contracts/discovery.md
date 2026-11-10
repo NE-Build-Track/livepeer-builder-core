@@ -17,7 +17,7 @@ The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in sta
 
 The reader takes the fields it stores. An entry is read when `address` is a URL the engine can call and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is a URL the engine can call, `app` is a non-empty string, and `observed_at` is an RFC 3339 timestamp that converts to UTC.
 
-A URL the engine can call is `http` or `https`, has an ASCII host the engine's HTTP client connects to as written and, if any, a port from 1 to 65535, and holds no whitespace or control character, which the HTTP client cannot send. aiohttp folds a non-ASCII host, so `https://①27.0.0.1` would reach `127.0.0.1` under a name the payment-origin check never sees; a host written in punycode (`xn--`) is read. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, the address becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
+A URL the engine can call is `http` or `https`, has an ASCII host the engine's HTTP client connects to as written and, if any, a port from 1 to 65535, and holds no whitespace or control character, which the HTTP client cannot send. aiohttp folds a non-ASCII host, so `https://①27.0.0.1` would reach `127.0.0.1` under a name the payment-origin check never sees; a host written in punycode (`xn--`) is read. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, an `address` whose origin matches that URL becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
 
 There is no size limit, no stamp-age filter, and no de-duplication. An integer field reads any whole JSON number node accepts (`3`, `3.0`, `3e0`) that fits 64 bits. A price string, a fractional capacity, or any other optional field of the wrong type is absent, and the runner stays. `capacity_available` is the exception: a missing one is unknown, which selection treats as one free slot, but a value that is present and not an integer reads as 0, so that runner is not chosen.
 
@@ -25,11 +25,11 @@ Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/
 
 ## Schema fields and `Runner`
 
-`address` on an orchestrator entry becomes `orchestrator_url`. `price_info` is kept as advertised: `price`, `price_usd`, `currency` and `unit`, all optional. `price` and `price_usd` are exact decimals when the token fits.
+`address` on an orchestrator entry becomes `orchestrator_url` only when its origin equals the runner URL's origin. A claimed address on another host is dropped, so `PaidRequest` will not sign a challenge whose `payment_url` is that host and `orchestrator_of` will not exclude it as a failover group. The pinned dump uses the same host for `address` and every runner URL, so those runners keep their address. `price_info` is kept as advertised: `price`, `price_usd`, `currency` and `unit`, all optional. `price` and `price_usd` are exact decimals when the token fits.
 
 | Schema | `Runner` |
 | --- | --- |
-| entry `address` | `orchestrator_url` |
+| entry `address` | `orchestrator_url` when its origin matches `url`; otherwise absent |
 | `url`, `app`, `mode` | the same names |
 | `observed_at` | `observed_at`, as UTC. A missing stamp, or one the clock cannot convert, skips the runner |
 | `capacity`, `capacity_used`, `capacity_available` | the same names. There is no `session_ids` fallback |

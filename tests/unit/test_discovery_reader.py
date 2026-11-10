@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from livepeer_builder.adapters.discovery_inventory import read_inventory
+from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents
+from livepeer_builder.errors import RunnerCallError
 
 _NODE_DOCUMENT = Path(__file__).with_name("node_discovery_f45d83f.json").read_text()
 _RUNNER = '{"url":"https://orch.example/app","app":"example","observed_at":"2026-10-22T18:05:00.123+01:00"}'
@@ -31,6 +33,7 @@ def test_every_runner_node_serves_is_read_with_its_exact_price() -> None:
     read = read_inventory(_NODE_DOCUMENT)
     assert len(read) == len(served) == 26
     for runner, (address, raw) in zip(read, served, strict=True):
+        # The dump uses the same host for address and every runner URL, so the address is kept.
         assert (runner.url, runner.app, runner.orchestrator_url) == (raw["url"], raw["app"], address)
         advertised = raw.get("price_info") or {}
         assert runner.price_info is not None
@@ -40,6 +43,47 @@ def test_every_runner_node_serves_is_read_with_its_exact_price() -> None:
             advertised["currency"],
             advertised["unit"],
         )
+
+
+def test_a_claimed_address_on_another_host_is_not_a_payment_origin() -> None:
+    """livepeer-discovery republishes the claimed address; a challenge on that host must not be signed."""
+    claimed = "https://claimed.example:8935"
+    (runner,) = read_inventory(_envelope(_RUNNER, claimed))
+    assert runner.orchestrator_url is None
+    paid = PaidRequest(
+        runner.url,
+        method="POST",
+        body=b"{}",
+        app="example",
+        rate=None,
+        signer_url=None,
+        signer_headers=None,
+        retries=0,
+        events=PaymentEvents(),
+        orchestrator_url=runner.orchestrator_url,
+    )
+    challenge = json.dumps(
+        {"payment_params": "p", "manifest_id": "m-1", "payment_url": f"{claimed}/session/m-1/payment"}
+    )
+    with pytest.raises(RunnerCallError, match="invalid payment challenge") as refused:
+        paid._challenge(challenge)
+    assert (refused.value.kind, refused.value.status_code, refused.value.payment_sent) == (
+        "http",
+        402,
+        False,
+    )
+    assert (
+        paid._challenge(
+            json.dumps(
+                {
+                    "payment_params": "p",
+                    "manifest_id": "m-1",
+                    "payment_url": "https://orch.example/session/m-1/payment",
+                }
+            )
+        ).manifest_id
+        == "m-1"
+    )
 
 
 # Cases from livepeer/node's discovery/schema_test.go at f45d83f, by its own names. The reader keeps a

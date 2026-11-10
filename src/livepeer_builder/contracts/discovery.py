@@ -41,7 +41,11 @@ class PriceInfo(Contract):
 
 
 class Runner(Contract):
-    """One runner a discovery document advertises. ``address`` is kept as ``orchestrator_url``."""
+    """One runner a discovery document advertises.
+
+    ``address`` becomes ``orchestrator_url`` only when its origin matches ``url``; otherwise payment and
+    failover follow the host the engine calls.
+    """
 
     url: str
     app: str

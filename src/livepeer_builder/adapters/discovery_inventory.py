@@ -111,11 +111,15 @@ def _runner(raw: object, address: str) -> Runner | None:
     if observed_at is None:
         return None
     gpu = raw.get("gpu")
+    # livepeer-discovery at the pin republishes the claimed address. The removed prober stored the URL
+    # it had fetched, so one orchestrator could not name another's payment host. Keep the address only
+    # when its origin is the runner URL's: PaidRequest will otherwise sign a 402 whose payment_url is
+    # that host, and orchestrator_of will use it as the failover group.
     return Runner(
         url=url,
         app=app,
         mode=_string(raw.get("mode")),
-        orchestrator_url=address,
+        orchestrator_url=address if _origin(address) == _origin(url) else None,
         capacity=_integer(raw.get("capacity")),
         capacity_used=_integer(raw.get("capacity_used")),
         capacity_available=_available(raw),
@@ -134,8 +138,9 @@ def _http_url(value: object) -> str | None:
     ``urlsplit`` names, the one the payment-origin check compares, on a port from 1 to 65535. yarl folds
     a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
     The URL holds no whitespace or control character, which aiohttp cannot send. It has no userinfo,
-    query or fragment: the engine appends each request's path to a runner URL, the address becomes
-    ``orchestrator_url`` for the payment-origin check, and error text quotes both.
+    query or fragment: the engine appends each request's path to a runner URL, an ``address`` whose
+    origin matches that URL becomes ``orchestrator_url`` for the payment-origin check, and error text
+    quotes both.
     """
     if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
         return None
@@ -150,6 +155,20 @@ def _http_url(value: object) -> str | None:
     if dialed.raw_host != host or not 1 <= (dialed.port or 0) <= 65535:
         return None
     return value
+
+
+def _origin(url: str) -> str | None:
+    """``scheme://host:port`` as ``PaidRequest`` compares payment origins, or ``None`` when unusable."""
+    try:
+        parts = urlsplit(url)
+        scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    if scheme not in _HTTP or not host or not 1 <= port <= 65535:
+        return None
+    return f"{scheme}://{host.lower()}:{port}"
 
 
 def _price_info(value: object) -> PriceInfo | None:

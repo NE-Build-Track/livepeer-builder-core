@@ -5,6 +5,9 @@
 - **Owner:** John.
 - **Ticket:** none. Operator cutover of the builder-engine database.
 - **Branch:** `feat/neon-migration`.
+- **Outcome:** closed 9 November. Deployment, including the Neon preview branches, left this
+  repository with #95; this repository does not deploy. The items below record what was built here
+  before then.
 - **Progress:** production is on Neon. PR #60 created `preview/pr-60`; the first preview job
   failed with HTTP 423 while the compute was still locked.
 

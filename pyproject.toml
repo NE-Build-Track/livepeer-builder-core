@@ -19,6 +19,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "cryptography>=42",
     "aiohttp>=3.9", # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
+    "yarl>=1.9", # aiohttp's URL parser; adapters/discovery_inventory.py keeps a URL only as aiohttp reads it
     # Pin to livepeer/livepeer-python-gateway main at 2017a80 (26 October): Enforce TLS (#76),
     # streamable runner bodies (#80), on_payment_session (#81; reports LivePaymentSession.manifest_id)
     # and the runner-side session stop (#83; unused here). PyPI 1.0.0 lacks the callback, so this

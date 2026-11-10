@@ -105,11 +105,39 @@ def test_an_empty_or_metadata_only_document_has_no_runners(body: str) -> None:
         "https://orch.example:abc/app",
         "https://orch.example:1:2/app",
         "https://orch.example:99999/app",
+        "https://orch.example:0/app",
+        "https://orch.example:00/app",
         "https://orch.example/app?",
+        # aiohttp refuses these, or connects to a host other than the one the payment-origin check names.
+        "https://orch.example\\evil/app",
+        "https://[::1]]/app",
+        "https://\u246027.0.0.1/app",
+        "https://\uff11\uff12\uff17\uff0e\uff10\uff0e\uff10\uff0e\uff11/app",
+        "https://127\u30020\u30020\u30021/app",
+        "https://ex\xe4mple.com/app",
     ],
 )
 def test_a_runner_url_the_engine_cannot_send_is_skipped(url: str) -> None:
     assert read_inventory(_envelope(_RUNNER.replace("https://orch.example/app", json.dumps(url)[1:-1]))) == ()
+
+
+def test_an_address_aiohttp_would_connect_to_under_another_name_skips_its_entry() -> None:
+    assert read_inventory(_envelope(_RUNNER, "https://\u246027.0.0.1")) == ()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://ORCH.example/app",
+        "https://xn--exmple-cua.com/app",
+        "http://[::1]:8935/app",
+        "https://orch.example:65535/app",
+        "http://orch.example:080/app",
+    ],
+)
+def test_a_runner_url_aiohttp_reads_as_written_is_kept(url: str) -> None:
+    (runner,) = read_inventory(_envelope(_RUNNER.replace("https://orch.example/app", url)))
+    assert runner.url == url
 
 
 def test_one_bad_runner_does_not_drop_the_rest() -> None:

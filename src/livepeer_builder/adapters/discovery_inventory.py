@@ -13,6 +13,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlsplit
 
+import yarl
+
 from livepeer_builder.contracts.discovery import PriceInfo, Runner, RunnerGPU
 
 _LOG = logging.getLogger(__name__)
@@ -128,19 +130,24 @@ def _runner(raw: object, address: str) -> Runner | None:
 def _http_url(value: object) -> str | None:
     """An ``http`` or ``https`` URL the engine can call, kept as written; otherwise None.
 
-    It has a host and, if any, a numeric port in range, and no whitespace or control character, which
-    httpx cannot send. It has no userinfo, query or fragment: the engine appends each request's path to
-    a runner URL, the address becomes ``orchestrator_url`` for the payment-origin check, and error text
-    quotes both.
+    aiohttp, which makes every runner call, reads the URL with yarl. yarl must connect to the host
+    ``urlsplit`` names, the one the payment-origin check compares, on a port from 1 to 65535. yarl folds
+    a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
+    The URL holds no whitespace or control character, which aiohttp cannot send. It has no userinfo,
+    query or fragment: the engine appends each request's path to a runner URL, the address becomes
+    ``orchestrator_url`` for the payment-origin check, and error text quotes both.
     """
     if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
         return None
     try:
         parts = urlsplit(value)
-        host, _ = parts.hostname, parts.port  # .port raises for a port that is not a number in range
+        host, _ = parts.hostname, parts.port  # .port raises for a port that is not a number
+        dialed = yarl.URL(value)
     except ValueError:
         return None
     if parts.scheme not in _HTTP or not host or "@" in parts.netloc or "?" in value or "#" in value:
+        return None
+    if dialed.raw_host != host or not 1 <= (dialed.port or 0) <= 65535:
         return None
     return value
 

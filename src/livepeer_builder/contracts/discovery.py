@@ -9,8 +9,6 @@ from pydantic import model_validator
 from livepeer_builder.contracts.common import Contract
 from livepeer_builder.contracts.payments import NetworkRate
 
-# The vendored schema. /readyz reports this; the full pin is discovery.schema.pin.json beside the schema.
-DISCOVERY_CONTRACT = "livepeer/node@f45d83f"
 ObservedBy = Literal["orchestrator", "engine"]
 
 
@@ -22,7 +20,7 @@ class ObservedRate(NetworkRate):
 
 
 class RunnerGPU(Contract):
-    """The GPU a runner reports, as the discovery schema's ``gpu`` object echoes it."""
+    """The GPU a runner reports. The engine stores ``id``, ``name`` and ``vram_mb`` and ignores the rest."""
 
     id: str | None = None
     name: str | None = None
@@ -43,7 +41,7 @@ class PriceInfo(Contract):
 
 
 class Runner(Contract):
-    """One runner from the discovery schema. ``address`` is kept as ``orchestrator_url``."""
+    """One runner a discovery document advertises. ``address`` is kept as ``orchestrator_url``."""
 
     url: str
     app: str
@@ -53,8 +51,8 @@ class Runner(Contract):
     capacity_used: int | None = None
     capacity_available: int | None = None
     price_info: PriceInfo | None = None  # as advertised; payable_rate decides whether it can be paid
-    # The schema requires observed_at. None is a stamp the clock cannot convert, or a runner a custom
-    # source handed over without one: the HTTP reader does not keep an unstamped record.
+    # None is a runner a custom source handed over without a usable stamp. The HTTP reader skips a
+    # runner whose observed_at it cannot convert, including one that omits the stamp.
     observed_at: datetime | None = None
     version: str | None = None
     metadata: str | None = None

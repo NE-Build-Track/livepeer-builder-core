@@ -241,7 +241,7 @@ GOOD_ENTRY = {
 def test_a_malformed_entry_or_record_is_skipped_counted_and_loses_nothing_else(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A record the schema rejects is skipped. One bad record must not drop the rest."""
+    """A record the reader cannot use is skipped. One bad record must not drop the rest."""
     entries = [
         None,
         {"address": "https://bad.example", "runners": 5},
@@ -255,7 +255,7 @@ def test_a_malformed_entry_or_record_is_skipped_counted_and_loses_nothing_else(
     [record] = [
         item for item in caplog.records if getattr(item, "event", "") == "discovery.inventory_skipped"
     ]
-    assert sum(record.reasons.values()) == 8  # five entries and three runners
+    assert (record.entries, record.runners) == (5, 3)
     assert runner.url == "https://orch.example/apps/r1/app"
 
 
@@ -341,15 +341,18 @@ def test_an_integer_past_the_digit_limit_keeps_both_runners() -> None:
         '[{"address":"https://a.example","runners":['
         + _stamped("https://a.example/apps/good/app", "10")
         + ","
-        + _stamped("https://a.example/apps/big/app", huge)
+        + _stamped("https://a.example/apps/big/app", huge).replace(
+            '"observed_at"', '"capacity":' + huge + ',"observed_at"'
+        )
         + "]}]"
     )
     good, big = read_inventory(body)
     assert good.price_info is not None and good.price_info.price == Decimal(10)
     assert big.price_info is not None and payable_rate(big.price_info) is None
+    assert big.capacity is None
 
 
-def test_a_price_string_is_skipped_and_a_negative_price_is_kept_unpayable() -> None:
+def test_a_price_string_is_absent_and_a_negative_price_is_kept_unpayable() -> None:
     body = (
         '[{"address":"https://orch.example","runners":['
         + '{"url":"https://orch.example/r1","app":"a","observed_at":"'
@@ -358,8 +361,31 @@ def test_a_price_string_is_skipped_and_a_negative_price_is_kept_unpayable() -> N
         + _stamped("https://orch.example/r2", "-1")
         + "]}]"
     )
-    (negative,) = read_inventory(body)
+    string_price, negative = read_inventory(body)
+    assert string_price.url.endswith("/r1")
+    assert string_price.price_info is not None and string_price.price_info.price is None
     assert negative.url.endswith("/r2") and payable_rate(negative.price_info) is None
+
+
+def test_a_non_http_url_is_skipped_and_a_non_integer_capacity_is_absent() -> None:
+    """``1.0`` is a JSON number and not an integer capacity. The runner stays, with that field absent."""
+    kept = {**GOOD_ENTRY["runners"][0], "capacity": 1.0}
+    body = json.dumps(
+        [
+            {"address": "ftp://orch.example", "runners": [GOOD_ENTRY["runners"][0]]},
+            {"address": "http://[::1", "runners": [GOOD_ENTRY["runners"][0]]},
+            {
+                "address": "https://orch.example",
+                "runners": [
+                    {"url": "ftp://orch.example/app", "app": "a/b", "observed_at": _STAMP},
+                    {"url": "https://orch.example/empty", "app": "", "observed_at": _STAMP},
+                    kept,
+                ],
+            },
+        ]
+    )
+    (runner,) = read_inventory(body)
+    assert runner.url == kept["url"] and runner.capacity is None
 
 
 def test_network_errors_are_classified_through_their_causes() -> None:

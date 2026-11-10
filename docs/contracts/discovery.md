@@ -2,28 +2,22 @@
 
 - **Decision:** D63. Supersedes D43 except that the signer only signs. Amends D62 (1).
 - **Plan:** [discovery-service](../exec-plans/completed/discovery-service.md) (built 26 October to 5 November; removed here).
-- **Code:** `adapters/sdk.py` (`HttpDiscoverySource`), `adapters/discovery_inventory.py`, `contracts/discovery.py`, `contracts/discovery.schema.json`.
+- **Code:** `adapters/sdk.py` (`HttpDiscoverySource`), `adapters/discovery_inventory.py`, `contracts/discovery.py`.
 - **Status:** the engine reads livepeer/node's `/discovery` contract through one HTTP source. It does not know which process serves that URL.
 
 ## What the engine reads
 
 `LPB_DISCOVERY_URL` is required. The engine does not start without it, and it does not fall back to a built-in list. `HttpDiscoverySource` sends `GET` to that URL with no credential and does not follow redirects. The URL may carry no userinfo, query or fragment, and the engine refuses one at startup: a failed refresh's error quotes the URL, and `/readyz` serves it as `discovery_error`. A 3xx is a failed refresh. Each poll has 5 seconds in all.
 
-The body is a JSON array, the document livepeer/node's discovery schema describes. `[]` is an empty inventory. A body that is not a JSON array fails the refresh, and the last good snapshot stays.
+The body is a JSON array, the document livepeer/node's `livepeer-discovery` serves. `[]` is an empty inventory. A body that is not a JSON array fails the refresh, and the last good snapshot stays.
 
-The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in static mode (`deploy/dev-stack/config/discovery.toml`).
-
-## The contract and its pin
-
-The contract is livepeer/node's `docs/discovery.schema.json` at `f45d83fd68f73d195dffe8b45f6cac296d023c49`. The package vendors that file and a pin record beside it (`contracts/discovery.schema.pin.json`): repository `livepeer/node`, path `docs/discovery.schema.json`, that commit, and sha256 `9abe0cf90b2e21f8ddfdf215616a1a71f969ddaf69281b92719d3b60014475c4`. [upstream-baseline.md](../references/upstream-baseline.md) records the same pin. `/readyz` reports `discovery_contract` as `livepeer/node@f45d83f`.
-
-A bump replaces the vendored file and the pin together, updates the baseline row and `DISCOVERY_CONTRACT`, and re-runs the guards: the offline sha256 check, node's `TestDiscoverySchema` fixtures, node's recorded verdicts and the differential test. It also records node's verdicts again. Set the validator and Go versions in `scripts/discovery-verdicts/go.mod` to the ones node's `go.mod` names at the new commit, run `go -C scripts/discovery-verdicts run .`, and review every verdict that changed: a changed verdict means a rule moved upstream, and `adapters/discovery_formats.py` follows it. Go is needed for this step only, never in CI. A weekly workflow compares the schema at livepeer/node's `main`, and at its latest release tag once that tag contains the pinned commit, with the pin. A different schema, or none, on a compared ref opens an issue in this repository. Any other GitHub error fails the job and opens nothing. It does not run on pull requests.
+The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in static mode (`deploy/dev-stack/config/discovery.toml`). The node commit that stack builds is recorded in [upstream-baseline.md](../references/upstream-baseline.md).
 
 ## How a document is read
 
-`jsonschema` validates each entry and each runner against the schema's definitions. The rules are the file's. Formats and integers are judged as node's own schema test judges them: `santhosh-tekuri/jsonschema/v6` v6.0.3 with `compiler.AssertFormat()`, on Go 1.27. Python's `jsonschema` checks neither `date-time` nor `uri` by itself, so `adapters/discovery_formats.py` ports node's three rules (`date-time`, `uri` through Go's `net/url`, and `integer` through Go's `big.Rat`). `tests/unit/discovery_verdicts.json` holds node's own verdict, recorded by `scripts/discovery-verdicts`, for each edge case they were written against, and the reader must agree with every one. The reader adds none: no size limit, no stamp-age filter, and no de-duplication.
+The reader takes the fields it stores. An entry is read when `address` is an `http` or `https` URL with a host and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is an `http` or `https` URL with a host, `app` is a non-empty string, and `observed_at` converts to UTC. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
 
-A record that fails is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count per schema keyword. The rest of the document is kept. A metadata entry (`nodes`, and no `address`) is valid and yields no runners.
+There is no size limit, no stamp-age filter, and no de-duplication. A price string, a non-integer capacity, or any other optional field of the wrong type is absent, and the runner stays.
 
 Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), never as binary floats. A token `Decimal` cannot hold still counts as a number: the runner is kept, that field is absent, and the payment layer reports that the price cannot be paid. An integer field (`capacity`, `capacity_used`, `capacity_available`, `gpu.vram_mb`) holds a signed 64-bit value; a larger integer still passes the schema, so the runner is kept and that field is absent.
 
@@ -35,7 +29,7 @@ Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/
 | --- | --- |
 | entry `address` | `orchestrator_url` |
 | `url`, `app`, `mode` | the same names |
-| `observed_at` | `observed_at`, as UTC. A stamp the clock cannot convert is kept as `None` |
+| `observed_at` | `observed_at`, as UTC. A missing stamp, or one the clock cannot convert, skips the runner |
 | `capacity`, `capacity_used`, `capacity_available` | the same names. There is no `session_ids` fallback |
 | `price_info` | `price_info`, as advertised |
 | `version`, `metadata`, `gpu` | the same names. The engine never interprets `metadata` |
@@ -58,8 +52,8 @@ That process GETs each listed orchestrator at startup and every `RefreshInterval
 
 ## Testing
 
-`FakeDiscoveryService` (`livepeer_builder.testing`, test-only) serves a node-format document, including `observed_at` by default, through an in-memory HTTP client into the real `HttpDiscoverySource`. `make_engine(runners=…)` keeps that signature and is built on it, so a test runs the same reader and the same schema checks as production.
+`FakeDiscoveryService` (`livepeer_builder.testing`, test-only) serves a node-format document, including `observed_at` by default, through an in-memory HTTP client into the real `HttpDiscoverySource`. `make_engine(runners=…)` keeps that signature and is built on it, so a test runs the same reader as production.
 
 ## `observed_at`
 
-The schema requires `observed_at`, an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp. A runner that does not stamp it fails the schema and does not appear. That includes orchestrators on livepeer/node `v1.0.2`. A stamp the schema accepts and Python cannot hold, such as a leap second or year 0, keeps the runner with no `observed_at`. The catalog treats a missing or unusable stamp as the poll time (D62 (3)).
+The reader keeps a runner when `observed_at` is an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp it can convert to UTC. Nanoseconds truncate to microseconds. A runner that omits the stamp, or whose stamp does not convert, does not appear. That includes orchestrators on livepeer/node `v1.0.2`. The catalog still treats a stamp it cannot use, from a source other than this reader, as the poll time (D62 (3)).

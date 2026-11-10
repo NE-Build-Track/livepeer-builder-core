@@ -17,7 +17,7 @@ The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in sta
 
 The contract is livepeer/node's `docs/discovery.schema.json` at `f45d83fd68f73d195dffe8b45f6cac296d023c49`. The package vendors that file and a pin record beside it (`contracts/discovery.schema.pin.json`): repository `livepeer/node`, path `docs/discovery.schema.json`, that commit, and sha256 `9abe0cf90b2e21f8ddfdf215616a1a71f969ddaf69281b92719d3b60014475c4`. [upstream-baseline.md](../references/upstream-baseline.md) records the same pin. `/readyz` reports `discovery_contract` as `livepeer/node@f45d83f`.
 
-A bump replaces the vendored file and the pin together, updates the baseline row and `DISCOVERY_CONTRACT`, and re-runs the three guards: the offline sha256 check, node's `TestDiscoverySchema` fixtures, and the differential test. A weekly workflow compares the schema at livepeer/node's latest tag and at `main` with the pin and opens an issue in this repository when they differ. It does not run on pull requests.
+A bump replaces the vendored file and the pin together, updates the baseline row and `DISCOVERY_CONTRACT`, and re-runs the three guards: the offline sha256 check, node's `TestDiscoverySchema` fixtures, and the differential test. A weekly workflow compares the schema at livepeer/node's `main`, and at its latest release tag once that tag contains the pinned commit, with the pin. A different schema, or none, on a compared ref opens an issue in this repository. Any other GitHub error fails the job and opens nothing. It does not run on pull requests.
 
 ## How a document is read
 

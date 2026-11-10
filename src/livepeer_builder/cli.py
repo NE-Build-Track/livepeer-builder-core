@@ -1,4 +1,5 @@
-"""``lpb``: operator commands. Every command reads LPB_* settings (docs/RELIABILITY.md#operations).
+"""``lpb``: operator commands. Every command but ``verify``, ``gen-secret-key`` and ``gen-docs`` reads the
+LPB_* settings (docs/RELIABILITY.md#operations).
 
 lpb migrate            apply packaged migrations (production runs this before start)
 lpb revision           show the database revision and the package head

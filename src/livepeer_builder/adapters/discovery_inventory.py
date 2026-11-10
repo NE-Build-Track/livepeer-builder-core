@@ -19,6 +19,7 @@ _LOG = logging.getLogger(__name__)
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 _INTEGER = re.compile(r"-?(0|[1-9]\d*)$")
 _HTTP = frozenset({"http", "https"})
+_UNSENDABLE = re.compile(r"[\x00-\x20\x7f]")  # whitespace and control characters
 
 
 class JsonNumber:
@@ -31,9 +32,9 @@ class JsonNumber:
 def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
 
-    An entry needs an ``http`` or ``https`` ``address`` with a host, and a ``runners`` list. A metadata
-    entry (``nodes``, and no ``address``) yields nothing. A runner needs a non-empty ``app``, the same
-    kind of ``url``, and an ``observed_at`` the clock can convert to UTC. One bad record does not drop
+    An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
+    entry (``nodes``, and no ``address``) yields nothing. A runner needs a non-empty ``app``, a ``url``
+    the engine can call, and an ``observed_at`` the clock can convert to UTC. One bad record does not drop
     the rest. ``[]`` is an empty inventory. A number ``Decimal`` cannot hold is still a number: the
     runner is kept, and ``payable_rate`` reports that its price cannot be paid.
     """
@@ -120,15 +121,21 @@ def _runner(raw: object, address: str) -> Runner | None:
 
 
 def _http_url(value: object) -> str | None:
-    """An ``http`` or ``https`` URL with a host. The original text is kept."""
-    if not isinstance(value, str) or not value:
+    """An ``http`` or ``https`` URL the engine can call, kept as written; otherwise None.
+
+    It has a host and, if any, a numeric port in range, and no whitespace or control character, which
+    httpx cannot send. It has no userinfo, query or fragment: the engine appends each request's path to
+    a runner URL, the address becomes ``orchestrator_url`` for the payment-origin check, and error text
+    quotes both.
+    """
+    if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
         return None
     try:
         parts = urlsplit(value)
-        host = parts.hostname
+        host, _ = parts.hostname, parts.port  # .port raises for a port that is not a number in range
     except ValueError:
         return None
-    if parts.scheme not in _HTTP or not host:
+    if parts.scheme not in _HTTP or not host or "@" in parts.netloc or "?" in value or "#" in value:
         return None
     return value
 

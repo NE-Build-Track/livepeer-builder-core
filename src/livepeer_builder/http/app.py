@@ -8,7 +8,7 @@ docs/generated/openapi.json and checked for drift in CI.
 
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -249,8 +249,7 @@ def create_app(
         end: datetime | None = None,
         actor_id: str | None = None,
     ) -> CostSummary:
-        end = end or datetime.now(UTC)
-        return await engine.costs.summary(actor, start or end - timedelta(days=30), end, actor_id)
+        return await engine.costs.summary(actor, start, end, actor_id)  # the engine's clock fills the window
 
     @app.get("/v1/allowance", response_model=Allowance)
     async def allowance(actor: Actor, actor_id: str | None = None) -> Allowance:

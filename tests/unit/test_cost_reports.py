@@ -228,6 +228,23 @@ async def test_by_app_sums_to_the_class_total_in_the_same_window_and_scope(
             assert add_fees(classes[cls] for classes in summary.by_app.values() if cls in classes) == total
 
 
+async def test_a_summary_with_no_window_covers_the_30_days_to_the_engine_clock(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    clock: FixedClock,
+) -> None:  # fmt: skip  # the default window reads the injected Clock, never the wall clock
+    engine = await make_engine(default_currency="ETH")
+    await provision(engine, admin)
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
+    await engine.jobs.run(alice, JobRequest(app=APP))
+    clock.advance(1)  # [start, end): a job created at the end instant is not in the window
+    now = await engine.costs.summary(alice)
+    assert (now.start, now.end, now.jobs_pending) == (clock.now() - timedelta(days=30), clock.now(), 1)
+    clock.advance(timedelta(days=30).total_seconds())
+    later = await engine.costs.summary(alice)
+    assert later.jobs_pending == 0  # the job is now older than the window
+    assert (await engine.costs.summary(alice, end=later.end - timedelta(days=1))).jobs_pending == 1
+
+
 async def test_rest_returns_by_app_and_the_schema_declares_it(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
     usage: FakeUsageSource,

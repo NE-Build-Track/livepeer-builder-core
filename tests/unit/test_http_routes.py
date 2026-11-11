@@ -16,7 +16,13 @@ from livepeer_builder.errors import (
     RunnerCallError,
 )
 from livepeer_builder.http import create_app
-from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
+from livepeer_builder.testing import (
+    FakeAllocationManager,
+    FakeUsageSource,
+    FixedClock,
+    ScriptedTransport,
+    runner,
+)
 from tests.conftest import EngineFactory
 from tests.unit.test_runtime import LOOPS, running_loops
 
@@ -107,7 +113,9 @@ async def test_grant_fund_is_admin_only(api, manager: FakeAllocationManager) -> 
     assert manager.funded_grants[0][0] == "grant_chosen"
 
 
-async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTransport) -> None:  # type: ignore[no-untyped-def]
+async def test_keys_jobs_usage_and_costs_over_rest(
+    api, transport: ScriptedTransport, clock: FixedClock
+) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
     await client.post(
         ALLOCATION,
@@ -125,6 +133,7 @@ async def test_keys_jobs_usage_and_costs_over_rest(api, transport: ScriptedTrans
     ).status_code == 200
     assert (await client.get(f"/v1/jobs/{job_id}/result", headers=alice)).status_code == 501
     # Paid, usage not here yet: pending at once, before any sync (#33, ISS-17), and the same after it.
+    clock.advance(1)  # the default window ends at the engine's clock, and [start, end) excludes its end
     before = await client.get("/v1/costs/summary", headers=alice)
     assert before.status_code == 200 and before.json()["jobs_pending"] == 1
     early = (await client.get("/v1/costs/projections", headers=alice)).json()

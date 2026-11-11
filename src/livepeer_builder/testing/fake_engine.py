@@ -49,7 +49,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound, NotProvisioned
 from livepeer_builder.protocols import AccessPolicy
-from livepeer_builder.services.costs import classify, summarize
+from livepeer_builder.services.costs import classify, summarize, summary_window
 from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.operations import retry_of
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
@@ -348,13 +348,18 @@ class FakeCosts:
         return classify(job, ())
 
     async def summary(
-        self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
+        self,
+        actor: ActorContext,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        actor_id: str | None = None,
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
         owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
         self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._summary is not None:
             return self._summary
+        start, end = summary_window(datetime.now(UTC), start, end)  # the fake's jobs use the wall clock
         ran = self._jobs.in_scope(actor.application_id, target)
         return summarize(
             start, end, [(job.app, classify(job, ())) for job in ran if start <= job.created_at < end]

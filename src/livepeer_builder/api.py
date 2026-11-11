@@ -103,7 +103,11 @@ class JobsApi(Protocol):
 class CostsApi(Protocol):
     async def for_job(self, actor: ActorContext, job_id: UUID) -> JobCost: ...
     async def summary(
-        self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
+        self,
+        actor: ActorContext,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        actor_id: str | None = None,
     ) -> CostSummary: ...
 
 

@@ -23,7 +23,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 import asyncio
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
@@ -62,6 +62,16 @@ from livepeer_builder.services.ownership import check_owner, sees_every_actor
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _FAR_FUTURE = datetime(9999, 1, 1, tzinfo=UTC)
+SUMMARY_WINDOW = timedelta(days=30)  # a summary with no start covers this long before its end
+
+
+def summary_window(now: datetime, start: datetime | None, end: datetime | None) -> tuple[datetime, datetime]:
+    """The summary's ``[start, end)``: ``end`` defaults to ``now``; ``start`` to ``SUMMARY_WINDOW`` before
+    ``end``. The window is half-open, so a job created at ``now`` itself is not in it yet."""
+    end = end or now
+    return start or end - SUMMARY_WINDOW, end
+
+
 COST_CLASSES: tuple[CostClass, ...] = ("delivered", "failed_after_payment", "uncertain", "pending")
 _ENDED: frozenset[str] = frozenset({"succeeded", "failed", "uncertain"})  # store.matching.ENDED
 
@@ -208,10 +218,15 @@ class CostService:
         ]
 
     async def summary(
-        self, actor: ActorContext, start: datetime, end: datetime, actor_id: str | None = None
+        self,
+        actor: ActorContext,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        actor_id: str | None = None,
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
         self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
+        start, end = summary_window(self._clock.now(), start, end)
         async with self._store.cost_snapshot() as reads:
             costs = await _rollup(reads, actor.application_id, target, start, end)
         return summarize(start, end, costs)

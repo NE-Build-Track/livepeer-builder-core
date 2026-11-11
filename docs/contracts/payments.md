@@ -349,7 +349,7 @@ Units, on every field:
 | `fee_usd` | USD, an exact `Decimal`. `null` when an applied row lacks a USD price; `0` when there are no rows |
 | `row_count` | Applied Batteries usage rows counted in the fees |
 | `MeasuredUsage.quantities` | The app's own units (`tokens`, `seconds`, ...), integers, per job; never summed across apps |
-| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)` |
+| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end` |
 | `jobs_with_cost`, `jobs_pending` | Jobs: `observed` or `corrected`, and `pending` |
 
 **The summary** (`GET /v1/costs/summary`) totals the jobs in its window and scope (an actor's own; an

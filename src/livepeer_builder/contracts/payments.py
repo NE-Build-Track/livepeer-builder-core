@@ -110,7 +110,7 @@ class KnownActor(Contract):
 
 class FundRequest(Contract):
     amount: Money
-    operation_ref: str = Field(min_length=1, max_length=200)  # required: makes a retried fund safe
+    operation_ref: OperationRef  # required: makes a retried fund safe
     grant_id: str = ""  # grant funding only; allocation funding ignores it
 
 

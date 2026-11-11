@@ -54,7 +54,7 @@ class RotateKeyBody(BaseModel):
 
 
 class RotateBody(BaseModel):
-    operation_ref: str = Field(min_length=1, max_length=200)
+    operation_ref: OperationRef  # required (D57, Q4)
 
 
 class UsageBody(BaseModel):

@@ -512,6 +512,23 @@ async def test_a_replayed_grant_funding_is_204_and_says_it_is_a_replay(api) -> N
     assert "Idempotent-Replayed" not in first.headers and again.headers["Idempotent-Replayed"] == "true"
 
 
+@pytest.mark.parametrize("path", [ALLOCATION + "/fund", "/v1/admin/grant/fund", ALLOCATION + "/rotate-key"])
+async def test_an_operation_ref_with_a_nul_is_422_on_fund_and_rotate(  # type: ignore[no-untyped-def]
+    api, manager: FakeAllocationManager, path: str
+) -> None:  # the ledger's OperationRecord refuses it; unparsed here, that was a 500 inside the handler
+    client, _engine, admin, _alice = api
+    await client.post(
+        ALLOCATION,
+        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        headers=admin,
+    )
+    before = list(manager.calls)
+    body = {"amount": {"amount": "1", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "a\x00b"}
+    answer = await client.post(path, json=body, headers=admin)
+    assert answer.status_code == 422, answer.text
+    assert manager.calls == before
+
+
 @pytest.mark.parametrize(
     ("path", "grant_id"),
     [

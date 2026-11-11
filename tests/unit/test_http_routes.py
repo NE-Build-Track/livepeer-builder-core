@@ -512,6 +512,25 @@ async def test_a_replayed_grant_funding_is_204_and_says_it_is_a_replay(api) -> N
     assert "Idempotent-Replayed" not in first.headers and again.headers["Idempotent-Replayed"] == "true"
 
 
+@pytest.mark.parametrize(
+    ("path", "grant_id"),
+    [
+        (f"/v1/admin/applications/default/actors/{'a' * 201}/allocation", "grant_1"),
+        (f"/v1/admin/applications/{'a' * 201}/actors/alice/allocation", "grant_1"),
+        (ALLOCATION, "g" * 201),
+    ],
+    ids=["actor", "application", "grant"],
+)
+async def test_provisioning_an_id_longer_than_the_store_keeps_is_422_before_money_moves(  # type: ignore[no-untyped-def]
+    api, manager: FakeAllocationManager, path: str, grant_id: str
+) -> None:
+    client, _engine, admin, _alice = api
+    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": grant_id, "operation_ref": "p-long"}
+    answer = await client.post(path, json=body, headers=admin)
+    assert answer.status_code == 422, answer.text
+    assert manager.calls == []
+
+
 async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager
 ) -> None:

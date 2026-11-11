@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.common import Contract, StoredText
 
 OperationCommand = Literal[
     "provision",
@@ -27,7 +27,7 @@ OperationCommand = Literal[
     "rotate_access_key",
 ]
 OperationState = Literal["started", "done"]
-OperationRef = Annotated[str, Field(min_length=1, max_length=200)]  # required on every admin command (Q4)
+OperationRef = Annotated[StoredText, Field(min_length=1)]  # required on every admin command (Q4)
 
 
 class OperationRecord(Contract):

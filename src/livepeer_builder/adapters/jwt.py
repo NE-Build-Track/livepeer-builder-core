@@ -47,7 +47,7 @@ class JwtSettings:
     algorithms: tuple[str, ...] = ("RS256", "ES256")
     actor_claim: str = "sub"
     application_claim: str | None = None  # None: every token is in application_id
-    application_id: str = "default"
+    application_id: str = "default"  # at most 200 characters, like a claim (``_identity``)
     scope_claim: str = "scope"
     scope_prefix: str = ""
     admin_scope: str | None = None  # None: no token is an admin credential
@@ -57,6 +57,10 @@ class JwtSettings:
     token_types: tuple[str, ...] = ("at+jwt", "application/at+jwt")  # lower case; "jwt" is the opt-out
     max_lifetime_s: float = 3600.0  # exp - iat
     name_claim: str | None = "preferred_username"  # the display name for the operator's actor list (D48)
+
+    def __post_init__(self) -> None:
+        if len(self.application_id) > 200:  # every record stores it in 200 characters (store.schema.ID)
+            raise ValueError("the JWT application id is longer than 200 characters")
 
     @property
     def strict(self) -> bool:

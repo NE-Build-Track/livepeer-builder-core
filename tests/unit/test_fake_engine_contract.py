@@ -218,6 +218,16 @@ async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -
     assert (before.by_app, before.jobs_pending) == ({}, 0)
 
 
+async def test_the_summary_reads_a_window_with_no_offset_as_utc(side: Side) -> None:
+    """``GET /v1/costs/summary`` still takes a ``start`` or ``end`` with no offset (T25), and the store
+    reads it as UTC. The fake must not answer that query with a ``TypeError``."""
+    async with side() as engine:
+        await engine.jobs.run(ALICE, JobRequest(app=APP))
+        summary = await engine.costs.summary(ALICE, datetime(2000, 1, 1), datetime(2100, 1, 1))
+        before = await engine.costs.summary(ALICE, datetime(2000, 1, 1), datetime(2001, 1, 1))
+    assert (summary.jobs_pending, before.jobs_pending) == (1, 0)
+
+
 async def test_an_auditor_reads_every_actor_and_runs_nothing(side: Side) -> None:
     auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")
     async with side() as engine:

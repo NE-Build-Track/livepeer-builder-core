@@ -4,13 +4,14 @@
 
 - **Owner:** John (engine), per the guide. **Reviewers:** Mike, John. Test-first, one pull request.
 - **Ticket:** ISS-18 ([Network-Engineering-SPE#31](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/31)) (M3).
-  Stays open as **partial**: the versioned events feed is held.
+  Closed by Mike on 2 November 2026 with the cost reports met. The versioned events feed moved to M4 as
+  ISS-46 ([Network-Engineering-SPE#51](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/51)).
 - **Branch:** `tasks/mz/iss-18-cost-reports`, on `tasks/mz/iss-12-payment-failures` at `56ccb27` (PR #78,
   D58, not merged yet). ISS-15 (D59) is built alongside and will be stacked under this branch.
 - **Design:** the cost-reports guide, [iss-18-cost-reports.md](../../design-docs/m3-guides/iss-18-cost-reports.md).
   Q1–Q2 locked by Mike on 30 October.
-- **Progress:** engine built and checked; awaiting review. The tracker comment (the criteria table, the
-  feed held) is drafted, not posted.
+- **Progress:** **done** for the M3 part. Merged into `releases/m3` as [#82](https://github.com/NE-Build-Track/livepeer-builder-core/pull/82) on 2 November 2026.
+  [#102](https://github.com/NE-Build-Track/livepeer-builder-core/pull/102) (11 November) moved the summary's default window into the service, on the engine's clock.
 - **Decision:** D60.
 
 ## Goal
@@ -35,8 +36,10 @@ From the ticket, the 21 October M3 plan and the guide's criteria check:
   `manifest_id`), and that the engine sends none.
 - [x] OpenAPI regenerated; every test in the guide's list is `[x]` or `[=]` with a reason; the
   `AGENTS.md` checks are green.
-- [ ] The tracker carries the criteria table and stays open as partial (drafted; Mike posts it).
-- [ ] Versioned feed with replay and de-duplication: **held** (the 21 October decision, item 4; D60).
+- [x] The tracker carries the criteria (Mike's closing comment, 2 November). It was closed, not left
+  partial: the feed has its own ticket, ISS-46.
+- [ ] Versioned feed with replay and de-duplication: **held** in M3 (the 21 October decision, item 4;
+  D60), and [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4) as ISS-46.
 
 ### Test list
 

@@ -1,6 +1,6 @@
 # Engine contract: discovery, jobs, results, usage
 
-**Ticket:** ISS-02 (streaming: M3, [plan](../exec-plans/active/streaming-jobs.md)) · **Code:** `contracts/discovery.py`,
+**Ticket:** ISS-02 (streaming: M3, [plan](../exec-plans/completed/streaming-jobs.md)) · **Code:** `contracts/discovery.py`,
 `contracts/jobs.py`, `services/discovery.py`, `services/jobs.py` · **Status:** immediate execution and streaming
 implemented; async and persistent reserved.
 

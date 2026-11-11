@@ -1,6 +1,6 @@
 # ISS-15: Job history, inputs and results
 
-**Status:** proposal for discussion, 29 October 2026.\
+**Status:** built and merged ([#81](https://github.com/NE-Build-Track/livepeer-builder-core/pull/81), 2 November 2026). The rules are [D59](../m3-decisions.md). This guide is the proposal they came from, kept as written.\
 **Tracker:** ISS-15 ([Network-Engineering-SPE#28](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/28)).\
 **Owner:** John (engine); Mike for the console change. **Reviewers:** Mike, John.\
 **Verified against:** builder-core `releases/m3` at `d3df806`; the console (`builder-core-mgmt-ui` main).

@@ -29,7 +29,7 @@ builder console `938db3e`, enterprise desk (`enterprise-ui`) `ccbdbd9`.
 ## Current state (verified)
 
 **The DI refactor is done** (all seven steps and both consumers, in the progress log of
-[dependency-injection-refactor.md](../../exec-plans/active/dependency-injection-refactor.md); its
+[dependency-injection-refactor.md](../../exec-plans/completed/dependency-injection-refactor.md); its
 Status block still says "planned … no code has changed", which is stale):
 
 | Piece | Where |

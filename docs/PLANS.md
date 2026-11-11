@@ -31,25 +31,35 @@ When every acceptance item is evidenced and Mike has reviewed it, move the plan 
 | ISS-07 Builds and CI | [completed/iss-07-ci.md](exec-plans/completed/iss-07-ci.md) | John, Mike |
 | Evidence re-run | [completed/m2-attribution-rerun.md](exec-plans/completed/m2-attribution-rerun.md) | John |
 
-## M3 (open)
+## M3: Complete builder journey (closed 9 November 2026)
+
+All 18 M3 tickets (ISS-08 to ISS-25) and the milestone tracker are closed. The tickets with no plan here
+were delivered in the reference app or without an exec plan:
+[milestones.md](product-specs/milestones.md#m3-tickets-and-where-each-is-met) lists every ticket and where
+it is met.
 
 | Ticket | Plan | Owners |
 | --- | --- | --- |
-| Streaming jobs (to be filed) | [active/streaming-jobs.md](exec-plans/active/streaming-jobs.md) | Mike |
-| Dependency-injection refactor (internal, before ISS-32) | [active/dependency-injection-refactor.md](exec-plans/active/dependency-injection-refactor.md) | Mike |
+| Streaming jobs (ISS-14, ISS-20; [#28](https://github.com/NE-Build-Track/livepeer-builder-core/pull/28)) | [completed/streaming-jobs.md](exec-plans/completed/streaming-jobs.md) | Mike |
+| Dependency-injection refactor (internal, before ISS-32) | [completed/dependency-injection-refactor.md](exec-plans/completed/dependency-injection-refactor.md) | Mike |
 | Discovery service, [#45](https://github.com/NE-Build-Track/livepeer-builder-core/issues/45) (ISS-09) | [completed/discovery-service.md](exec-plans/completed/discovery-service.md) | Mike |
-| ISS-08 Standalone credentials and ownership controls | [active/iss-08-standalone-credentials.md](exec-plans/active/iss-08-standalone-credentials.md) | Mike (John reviews) |
+| ISS-08 Standalone credentials and ownership controls | [completed/iss-08-standalone-credentials.md](exec-plans/completed/iss-08-standalone-credentials.md) | Mike (John reviews) |
 | JWT bearer, chosen by `LPB_AUTH` (#49, ISS-33 in M4) | [completed/jwt-bearer.md](exec-plans/completed/jwt-bearer.md) | Mike (John reviews) |
 | Hosted database and preview databases (deployment left this repository, #95) | [completed/neon-preview-branches.md](exec-plans/completed/neon-preview-branches.md) | John |
-| Actor collection and read-only admin (#52) | [active/admin-read-and-actors.md](exec-plans/active/admin-read-and-actors.md) | Mike (John reviews) |
-| ISS-10 Network rates and pricing assumptions | [active/iss-10-rates.md](exec-plans/active/iss-10-rates.md) | John (Mike reviews) |
-| ISS-11 + ISS-14 Repeat-safe commands (idempotency) | [active/iss-11-14-idempotency.md](exec-plans/active/iss-11-14-idempotency.md) | John (Mike reviews) |
-| ISS-12 Distinct payment failures | [active/iss-12-payment-failures.md](exec-plans/active/iss-12-payment-failures.md) | John (Mike reviews) |
-| ISS-15 Owned job history and basic results | [active/iss-15-history-results.md](exec-plans/active/iss-15-history-results.md) | John (Mike reviews) |
-| ISS-18 Cost reports (M3 part; events feed held) | [active/iss-18-cost-reports.md](exec-plans/active/iss-18-cost-reports.md) | John (Mike reviews) |
-| ISS-23 Verification of access, repeated commands and accounting | [active/iss-23-verification.md](exec-plans/active/iss-23-verification.md) | John (Mike reviews) |
+| Actor collection and read-only admin (#52) | [completed/admin-read-and-actors.md](exec-plans/completed/admin-read-and-actors.md) | Mike (John reviews) |
+| ISS-10 Network rates and pricing assumptions | [completed/iss-10-rates.md](exec-plans/completed/iss-10-rates.md) | John (Mike reviews) |
+| ISS-11 + ISS-14 Repeat-safe commands (idempotency) | [completed/iss-11-14-idempotency.md](exec-plans/completed/iss-11-14-idempotency.md) | John (Mike reviews) |
+| ISS-12 Distinct payment failures | [completed/iss-12-payment-failures.md](exec-plans/completed/iss-12-payment-failures.md) | John (Mike reviews) |
+| ISS-15 Owned job history and basic results | [completed/iss-15-history-results.md](exec-plans/completed/iss-15-history-results.md) | John (Mike reviews) |
+| ISS-18 Cost reports (the events feed moved to M4 as ISS-46) | [completed/iss-18-cost-reports.md](exec-plans/completed/iss-18-cost-reports.md) | John (Mike reviews) |
+| ISS-23 Verification of access, repeated commands and accounting | [completed/iss-23-verification.md](exec-plans/completed/iss-23-verification.md) | John (Mike reviews) |
+| Native HTTP transport: bounded raw bodies, operation identity and stream headers ([#55](https://github.com/NE-Build-Track/livepeer-builder-core/pull/55)) | [completed/native-http-transport.md](exec-plans/completed/native-http-transport.md) | Mike |
+
+## M4: Reuse and reliability (open)
+
+No exec plan is active yet. The implementation guides are in
+[design-docs/m4-guides/](design-docs/m4-guides/index.md), and what M3 left open is in
+[milestones.md](product-specs/milestones.md#carried-forward-to-m4). Add a plan to `exec-plans/active/`
+when work on a ticket starts.
 
 Nothing closes without Mike's review. Josh reviews engine code.
-
-- [Native HTTP transport](exec-plans/active/native-http-transport.md): bounded raw bodies,
-  operation identity and stream headers; remaining SDK dependencies are explicit.

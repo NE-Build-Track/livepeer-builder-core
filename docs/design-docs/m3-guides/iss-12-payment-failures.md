@@ -1,6 +1,6 @@
 # ISS-12: Distinct payment failures and no payment key on builder responses
 
-**Status:** proposal for discussion, 29 October 2026.\
+**Status:** built and merged ([#78](https://github.com/NE-Build-Track/livepeer-builder-core/pull/78), 2 November 2026). The rules are [D58](../m3-decisions.md). This guide is the proposal they came from, kept as written.\
 **Tracker:** ISS-12 ([Network-Engineering-SPE#25](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/25)).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
 **Verified against:** builder-core `releases/m3` at `d3df806`; livepeer/node `406b248` (the console stack's

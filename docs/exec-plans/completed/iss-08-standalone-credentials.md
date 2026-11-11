@@ -5,8 +5,8 @@
 - **Owner:** Mike builds it; John reviews. John wrote the gap analysis and plan.
 - **Ticket:** ISS-08, [Network-Engineering-SPE#21](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/21) (M3).
 - **Branch:** `tasks/mz/iss-08-credentials`, off `releases/m3` at `629f1ab`.
-- **Progress:** decisions locked 26 October (D44); built, shown live, and in review (this PR, and console
-  #6).
+- **Progress:** **done.** Decisions locked 26 October (D44); built and shown live. Merged into
+  `releases/m3` as [#48](https://github.com/NE-Build-Track/livepeer-builder-core/pull/48) on 26 October 2026; ISS-08 closed on 27 October.
 - **Plan source:** [John's 20 October plan](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/21#issuecomment-6303045369),
   checked again against `629f1ab` on 26 October. Every gap it names was still open.
 - **Decision:** D44.

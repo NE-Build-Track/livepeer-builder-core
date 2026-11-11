@@ -8,8 +8,10 @@
   (PR #76, D57, not merged yet).
 - **Design:** the payment-failures guide, `docs/design-docs/m3-guides/iss-12-payment-failures.md`
   (29 October; not on this branch yet). Q1–Q3 locked by Mike on 29 October.
-- **Progress:** engine built and checked; awaiting review. The consumer changes (console, ChatLPT,
-  inference gateway, the enterprise UIs) are to do.
+- **Progress:** **done.** Merged into `releases/m3` as [#78](https://github.com/NE-Build-Track/livepeer-builder-core/pull/78) on 2 November 2026; ISS-12 closed the
+  same day. [#79](https://github.com/NE-Build-Track/livepeer-builder-core/pull/79) (10 November) frees the reference when the signer never signed. The console shows
+  each `reason` (builder-core-console #12, 2 November). ChatLPT, the inference gateway and the enterprise
+  UIs have not changed: [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4).
 - **Decision:** D58.
 
 ## Goal
@@ -29,7 +31,8 @@ From the ticket and the 21 October M3 plan:
   in `test_payment_failures_http.py`).
 - [x] `engine.md#failures`, `payments.md` and the OpenAPI schema are updated.
 - [x] Every test in the guide's list is `[x]` or `[=]` with a reason; the `AGENTS.md` checks are green.
-- [ ] The console and the enterprise desks branch on `reason` (separate pull requests in those repos).
+- [x] The console branches on `reason` (builder-core-console #12, 2 November).
+- [ ] The enterprise desks branch on `reason` (their own repos): [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4).
 
 ### Test list
 

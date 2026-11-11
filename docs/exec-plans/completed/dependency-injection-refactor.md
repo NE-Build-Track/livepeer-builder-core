@@ -5,7 +5,7 @@
 - **Owners:** Mike. Josh reviews engine code.
 - **Ticket:** internal; no Build Track board item. It must land before ISS-32 (M4, from 23 November 2026) builds its embedded and service examples.
 - **Branch:** `tasks/mz/dependency-injection-refactor`.
-- **State:** planned. The decision log and the design of all seven steps are agreed (2026-10-23). No code has changed. The prerequisite Swagger fix (decision 12) lands before step 5.
+- **State:** **done.** All seven steps merged into `releases/m3` as [#41](https://github.com/NE-Build-Track/livepeer-builder-core/pull/41) on 23 October 2026. The decision log and the design below are as agreed that day.
 - **Analysis:** [di-review-2026-10-23.md](../../design-docs/di-review-2026-10-23.md) and [di-consumers-and-plan-2026-10-23.md](../../design-docs/di-consumers-and-plan-2026-10-23.md).
 - **Scope:** strict conformance with the python-dependency-injection guide, v0.1.2. Anything else is listed under [Out of scope](#out-of-scope).
 - **Constraints:**

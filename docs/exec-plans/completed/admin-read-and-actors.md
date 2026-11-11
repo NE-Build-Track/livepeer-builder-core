@@ -8,8 +8,9 @@
 - **Branch:** `tasks/mz/actors-and-auditor`, rebuilt on `releases/m3` at `2134e29` (28 October). It
   replaces `tasks/mz/admin-read-actors` ([#53](https://github.com/NE-Build-Track/livepeer-builder-core/pull/53)),
   which was stacked on `tasks/mz/jwt-bearer`.
-- **Progress:** decisions locked 26 October (D46); built and in review.
-- **Decision:** D46.
+- **Progress:** **done.** Decisions locked 26 October (D46, D48). Merged into `releases/m3` as
+  [#69](https://github.com/NE-Build-Track/livepeer-builder-core/pull/69) on 28 October 2026.
+- **Decision:** D46, D48.
 
 ## Goal
 

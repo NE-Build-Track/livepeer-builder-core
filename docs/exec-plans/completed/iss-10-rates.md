@@ -6,8 +6,11 @@
 - **Ticket:** ISS-10 ([Network-Engineering-SPE#23](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/23)).
   Guide: `docs/design-docs/m3-guides/iss-10-rates.md` in [PR #74](https://github.com/NE-Build-Track/livepeer-builder-core/pull/74) (`2e82565`).
 - **Branch:** `tasks/m3/iss-10-rates`, off `releases/m3` at `d3df806`.
-- **State:** built test-first; awaiting review. Mike's review of `53b12d7` is answered on this branch
-  (Progress, 30 October). The console change (Mike) is open.
+- **State:** **done.** Approved by Mike on 31 October and merged into `releases/m3` as [#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77) on
+  2 November 2026; ISS-10 closed the same day.
+- **Changed since:** D63 (10 November, [#96](https://github.com/NE-Build-Track/livepeer-builder-core/pull/96)) replaced `Runner.rate` and `Runner.rate_error` with
+  `price_info` as advertised, and moved the decision whether a price can be paid to
+  `contracts/payments.py`. The text below records ISS-10 as built.
 - **Decision:** D62 (Q1–Q3 locked by Mike, 30 October).
 
 ## Goal
@@ -32,10 +35,12 @@ From the 21 October M3 plan and the guide's "Done when":
 - [x] Tests written first, each seen failing for the right reason; characterization tests proved by
   mutation.
 - [x] `engine.md`, `RELIABILITY.md`, `m3-decisions.md` (D62) and the generated docs.
-- [ ] Mike's review of D62 (Q1–Q3 locked 30 October) and the contract; Josh's review of the engine code.
-- [ ] Console (Mike): show `price_usd`, source, age and the engine's `stale`; drop the G14 note and its
-  own 300 s rule.
-- [ ] The guide amendments below, applied to `iss-10-rates.md` once PR #74 merges.
+- [x] Mike's review of D62 (Q1–Q3 locked 30 October) and the contract: [#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77) approved on 31 October.
+- [ ] Josh's review of the engine code: [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4).
+- [x] Console (Mike): show `price_usd`, source, age and the engine's `stale`. Done in
+  builder-core-console #12 and #13 (2 November); the console's gap G14 is narrowed, not closed.
+- [x] The guide amendments below. The guide keeps its text as the proposal, and since 11 November its
+  status line points here for what was built.
 
 ## Design
 

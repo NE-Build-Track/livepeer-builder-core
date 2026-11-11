@@ -1,6 +1,6 @@
 # Runtime evidence: the stream lifecycle fixes on the network, 20 October 2026
 
-The live rerun for the review fixes D34–D39 ([plan](../../exec-plans/active/streaming-jobs.md#review-fixes-20-october-d34d39)).
+The live rerun for the review fixes D34–D39 ([plan](../../exec-plans/completed/streaming-jobs.md#review-fixes-20-october-d34d39)).
 It covers what the [19 October run](2026-10-19-streaming-live.md) could not: a stream funded in several
 rounds, a stream longer than a cost-sync cycle, a client disconnect through a real server, and
 `complete()`.

@@ -9,9 +9,10 @@
   not merged yet).
 - **Design:** the history-and-results guide, `docs/design-docs/m3-guides/iss-15-history-and-results.md`.
   Q1–Q3 locked by Mike on 30 October.
-- **Progress:** engine and docs built and checked; awaiting review. The console change (image views
-  handle a failed load; the FLUX schnell preset sends `sync_mode: true`) is to do, in the console repo.
-- **Decision:** D59 (PR #77 also numbers a decision D58, so the number may shift at merge).
+- **Progress:** **done.** Merged into `releases/m3` as [#81](https://github.com/NE-Build-Track/livepeer-builder-core/pull/81) on 2 November 2026; ISS-15 closed the
+  same day. The console change (image views handle a failed load; the image preset sends
+  `sync_mode: true`) merged as builder-core-console #12 on 2 November.
+- **Decision:** D59.
 
 ## Goal
 
@@ -33,7 +34,8 @@ From the ticket and the 21 October M3 plan:
   ([engine.md#failures](../../contracts/engine.md#failures), `tests/structure/test_docs.py`).
 - [x] A REST builder guide links the contract ([rest-builder.md](../../guides/rest-builder.md)).
 - [x] Every test in the guide's list is `[x]` or `[=]` with a reason; the `AGENTS.md` checks are green.
-- [ ] The console change is merged, and its journey guide links `rest-builder.md` (console repo).
+- [x] The console change is merged (builder-core-console #12, 2 November), and its journey guide
+  (`docs/guides/m3-journey.md`) links `rest-builder.md`.
 
 ### Test list
 

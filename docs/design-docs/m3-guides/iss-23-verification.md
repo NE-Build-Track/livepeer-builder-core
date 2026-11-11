@@ -1,6 +1,6 @@
 # ISS-23: Verification of access, repeated commands and accounting
 
-**Status:** proposal for discussion, 29 October 2026.\
+**Status:** built and merged ([#83](https://github.com/NE-Build-Track/livepeer-builder-core/pull/83), 2 November 2026). The rules are [D61](../m3-decisions.md). This guide is the proposal they came from, kept as written.\
 **Tracker:** ISS-23 ([Network-Engineering-SPE#36](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/36)).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
 **Verified against:** builder-core `releases/m3` at `d3df806` (1,350 tests collected; the mapped files pass,

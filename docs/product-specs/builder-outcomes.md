@@ -7,7 +7,7 @@ responsibility and its M2 status.
 | --- | --- | --- | --- |
 | 1 | Obtain one credential | `Authenticator` chain; engine API keys; payment keys hidden behind `SecretStore` | API key and JWT bearer (D45) implemented |
 | 2 | Discover capabilities | `DiscoveryService` over livepeer/node's `/discovery` contract, read from `LPB_DISCOVERY_URL` (D63) | Implemented |
-| 3 | Understand the expected rate | `Offering.rate_low` / `rate_high`: each rate as advertised, with unit, currency, `price_usd`, source and age; `rate_status` and `stale` ([engine.md](../contracts/engine.md#rates-iss-10)). The enterprise sets retail price ([payments.md](../contracts/payments.md#wholesale-and-retail)) | Implemented (ISS-10 in review) |
+| 3 | Understand the expected rate | `Offering.rate_low` / `rate_high`: each rate as advertised, with unit, currency, `price_usd`, source and age; `rate_status` and `stale` ([engine.md](../contracts/engine.md#rates-iss-10)). The enterprise sets retail price ([payments.md](../contracts/payments.md#wholesale-and-retail)) | Implemented (ISS-10, closed 2 November) |
 | 4 | Invoke a capability | `JobService.run` (immediate), the same in REST and imported mode | Immediate implemented; async and persistent defined (M4) |
 | 5 | Receive a result or an understandable failure | `JobResult`, `Failure.kind`, `uncertain` state, recovery after restart | Implemented |
 | 6 | Pay without holding crypto | The operator funds the signer; Batteries authorizes per allocation; explicit provisioning | Implemented (per_actor and per_application) |

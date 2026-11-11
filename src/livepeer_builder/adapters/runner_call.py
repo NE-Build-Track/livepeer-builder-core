@@ -257,6 +257,9 @@ class PaidRequest:
                     self._method, self.url, data=self._body, headers=sent, allow_redirects=False
                 )
             except BaseException:
+                # No answer came, and the wait still counts: without a payment it waited for the challenge.
+                unpaid = payment is None and self._signer_url is not None
+                self._events.timer.spent("challenge" if unpaid else "response", started)
                 await stop_funding(funding)
                 raise
             self._events.timer.spent("challenge" if response.status == 402 else "response", started)
@@ -324,9 +327,8 @@ class PaidRequest:
             await self._events.remember(manifest_id)
         except Exception as error:  # fail closed: nothing is signed without the intent on record (D54)
             raise self._events.error("payment", f"could not record payment intent: {error}") from error
-        started = self._events.timer.start()
         try:
-            signed = await session.get_payment()
+            signed = await self._signer_answer(session)
         except SignerRefreshRequired as error:
             await self._events.note_failure(manifest_id, error)
             raise
@@ -338,10 +340,15 @@ class PaidRequest:
             self._events.unknown = True
             self._log_signer_error(manifest_id, error)
             raise
-        finally:
-            self._events.timer.spent("signing", started)
         await self._events.confirmed(manifest_id)
         return signed
+
+    async def _signer_answer(self, session: LivePaymentSession) -> GetPaymentResponse:
+        started = self._events.timer.start()
+        try:
+            return await session.get_payment()
+        finally:  # the signer's answer alone: the store writes that follow a refusal are not signing
+            self._events.timer.spent("signing", started)
 
     def _log_signer_error(self, manifest_id: str | None, error: BaseException) -> None:
         """``detail`` is the SDK's text: the signer URL and its own words, for the operator only (D58).

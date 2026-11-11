@@ -76,8 +76,9 @@ M4. M5 runs from 21 to 31 December 2026.
 | Reference app | Console `docs/guides/m3-journey.md` | It links builder-core **PR #26** rather than `docs/guides/embedded-mode.md`. It clones `builder-core-mgmt-ui`, but the repository is now `builder-core-console` (GitHub redirects) |
 | Interface examples | README, `extending-the-engine.md`, `generated/openapi.json` | No REST walkthrough with `curl`. MCP is ISS-30 |
 
-Stale statements an outside reader would trip on: the README status ("M3 in progress"), `AGENTS.md`
-("milestone M3") and the Access row in `QUALITY_SCORE.md`.
+Stale statements an outside reader would trip on, as found on 29 October: the README status ("M3 in
+progress") and `AGENTS.md` ("milestone M3"), both corrected when M3 closed, and the Access row in
+`QUALITY_SCORE.md`.
 
 ## Decision proposed
 

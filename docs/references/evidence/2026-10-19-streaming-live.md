@@ -1,6 +1,6 @@
 # Runtime evidence: streamed jobs on the network, 19 October 2026
 
-The first live run of `jobs.stream` ([plan](../../exec-plans/active/streaming-jobs.md), branch
+The first live run of `jobs.stream` ([plan](../../exec-plans/completed/streaming-jobs.md), branch
 `tasks/m3/mz/stream-support` at `ebedff1`), against the payment stack the ChatLPT reference app
 runs: Batteries `ca09e47` and node signer `406b248`, exposed on loopback for the check. The engine
 ran in-process with its own SQLite database, in `per_application` mode on ChatLPT's shared

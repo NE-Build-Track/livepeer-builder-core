@@ -38,4 +38,4 @@ Opaque bounded request bytes, runner headers and opt-in HTTP error streams are s
 engine's own runner call (`adapters/runner_call.py`, D53), not by the SDK: the earlier draft
 against NE-Build-Track SDK PR #6 is replaced, and no fork is pinned. Buffered response headers
 and streaming uploads remain outside this slice. Application adapters must filter response
-headers and handle content encoding. See [native HTTP plan](active/native-http-transport.md).
+headers and handle content encoding. See [native HTTP plan](completed/native-http-transport.md).

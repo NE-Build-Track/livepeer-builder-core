@@ -1,6 +1,6 @@
 # ISS-18: Usage and cost reports (events feed held)
 
-**Status:** proposal for discussion, 29 October 2026.\
+**Status:** built and merged ([#82](https://github.com/NE-Build-Track/livepeer-builder-core/pull/82), 2 November 2026). The rules are [D60](../m3-decisions.md). This guide is the proposal they came from, kept as written. The events feed it records as held is ISS-46 in M4.\
 **Tracker:** ISS-18 ([Network-Engineering-SPE#31](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/31)).
 Closes as **partial**: the versioned events feed is held by the M3 decision of 21 October (item 4).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
@@ -14,7 +14,7 @@ task stays open as partial until the hold is lifted.
 ## Criteria check (verified)
 
 As found at `d3df806`, before this work. What ISS-18 changed, criterion by criterion, is in the
-[exec plan](../../exec-plans/active/iss-18-cost-reports.md#acceptance): `by_app` (D60), the Batteries-down
+[exec plan](../../exec-plans/completed/iss-18-cost-reports.md#acceptance): `by_app` (D60), the Batteries-down
 test, and the feed marked held everywhere.
 
 | Criterion | Status | Evidence |

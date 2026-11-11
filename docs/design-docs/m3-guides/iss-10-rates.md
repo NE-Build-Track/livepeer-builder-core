@@ -1,6 +1,6 @@
 # ISS-10: Network rates and pricing assumptions
 
-**Status:** proposal for discussion, 29 October 2026.\
+**Status:** built and merged ([#77](https://github.com/NE-Build-Track/livepeer-builder-core/pull/77), 2 November 2026). The rules are [D62](../m3-decisions.md), later changed by D63, and [engine.md](../../contracts/engine.md#rates-iss-10). This guide is the proposal they came from, kept as written; where the build departed from it is in the [plan](../../exec-plans/completed/iss-10-rates.md#guide-amendments-for-iss-10-ratesmd-once-pr-74-merges).\
 **Tracker:** ISS-10 ([Network-Engineering-SPE#23](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/23)).\
 **Owner:** John (engine); Mike shows it in the console. **Reviewers:** Mike, John.\
 **Verified against:** builder-core `releases/m3` at `d3df806`; livepeer/node `406b248` (the console stack's

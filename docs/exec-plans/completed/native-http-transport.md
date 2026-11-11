@@ -2,8 +2,8 @@
 
 ## Status
 
-Owner: Mike. Rebuilt on the engine's own runner call (D53, D56) after #64; awaiting human review.
-PR targets releases/m3. The SDK fork pin is gone.
+Owner: Mike. **Done:** merged into `releases/m3` as [#55](https://github.com/NE-Build-Track/livepeer-builder-core/pull/55) on 28 October 2026. Rebuilt on the
+engine's own runner call (D53, D56) after #64. The SDK fork pin is gone.
 
 ## Goal
 

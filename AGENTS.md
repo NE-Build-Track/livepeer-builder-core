@@ -7,7 +7,7 @@ This file is a **map**, not a manual. Read the linked documents when a task touc
 `livepeer-builder` is the shared, noncommercial **builder engine** for Livepeer. Applications either
 import it (in-process) or run it as a REST service. It does discovery, paid job execution, access
 control and network-cost reporting. Retail pricing, customers and billing stay in each enterprise
-application. Delivery track: Cloud SPE Build Track, milestone **M3** (target 20 November 2026; M2 closed 19 October).
+application. Delivery track: Cloud SPE Build Track, milestone **M4** (M3 closed 9 November 2026; M2 closed 19 October).
 
 ## Start here
 

@@ -9,9 +9,10 @@ Python gateway SDK, controls access, and reports network cost. Use it in two way
 Retail pricing, customer accounts and billing stay in your application. The engine reports
 wholesale **network** cost and classifies every charge, so you can reconcile what you bill.
 
-> Status: **M3 in progress** (Cloud SPE Build Track; M2 closed 19 October 2026). The contracts are defined; the core paths work.
-> Async jobs, persistent sessions and the events feed are defined but not yet implemented (the feed is
-> held in M3): they answer `501`. See [docs/PLANS.md](docs/PLANS.md).
+> Status: **M3 closed on 9 November 2026**; M4 is next (Cloud SPE Build Track). The first builder journey works
+> end to end: access, discovery, paid jobs, history and network-cost reports.
+> Async jobs, persistent sessions and the events feed are defined but not yet implemented (M4): they
+> answer `501`. See [docs/PLANS.md](docs/PLANS.md).
 
 ## Install
 

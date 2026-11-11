@@ -24,7 +24,7 @@ ISS-35 (#49). **External:** H4 (funded environment).
 | --- | --- | --- |
 | ISS-19 matrix | Dimensions named, rows not chosen: async (ISS-26), persistent (ISS-27), MCP (ISS-30), embedded vs service (ISS-32), enterprise auth (ISS-33), "the second payment configuration (ISS-31)" | console `docs/product-specs/m3-journey.md`, "What M3 covers, and what moves to M4" |
 | ISS-25 method | Agent runs, Mike watches, after a dry run, on merged code; key issued through the console; operator funding shown; costs followed to their final class; **$1 cap** across dry and final runs; expected cost stated before each paid run | M3 decision 8 (`2026-10-21-m3-reference-app-and-scope.md`) |
-| ISS-25 run | Dry run due 13 November, final by 20 November; not yet run | console `docs/exec-plans/active/console-m3.md` |
+| ISS-25 run | Done: the 2 November run counted as the dry run, and the final run was on 9 November | console `docs/references/evidence/2026-11-09-iss-25-funded-journey.md` |
 | Observed prices (21 Oct dev runs) | Chat (Qwen, streamed) $0.000111, one ticket; image (FLUX schnell) $0.003007, one ticket | `m3-journey.md` |
 | Evidence precedent | Markdown per run: component pins table, ids per step, Batteries rows behind each cost, reconciliation, "Not covered" | `docs/references/evidence/2026-10-19-dev-stack-session-log.md` |
 | Evidence collector | **Not found.** Evidence has been assembled by hand from REST and Batteries reads | |

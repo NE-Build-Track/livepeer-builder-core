@@ -8,8 +8,9 @@
   be stacked on the ISS-15 and ISS-18 branches.
 - **Design:** the [verification guide](../../design-docs/m3-guides/iss-23-verification.md) (29 October).
   Q1–Q3 locked by Mike on 30 October.
-- **Progress:** the spec, the doc guard, the gap tests and the live probe are built and checked, and
-  the probe has run live (25 passed); in review as #83.
+- **Progress:** **done.** The spec, the doc guard, the gap tests and the live probe merged into
+  `releases/m3` as [#83](https://github.com/NE-Build-Track/livepeer-builder-core/pull/83) on 2 November 2026; ISS-23 closed the same day. [#103](https://github.com/NE-Build-Track/livepeer-builder-core/pull/103) (11 November)
+  corrected what the probe reports when a check fails.
 - **Decision:** D61.
 
 ## Goal

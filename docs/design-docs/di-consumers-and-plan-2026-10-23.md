@@ -114,7 +114,7 @@ The console's docs present the engine's Swagger UI as the operator's interactive
 
 ## 4. Proposed builder-core DI changes, in order
 
-> **Superseded.** The agreed plan, with a revised order and design, is [dependency-injection-refactor.md](../exec-plans/active/dependency-injection-refactor.md). This section records the proposal as first written.
+> **Superseded.** The agreed plan, with a revised order and design, is [dependency-injection-refactor.md](../exec-plans/completed/dependency-injection-refactor.md). This section records the proposal as first written.
 
 Each change is small on its own; together they make up the refactor.
 
@@ -134,7 +134,7 @@ Each change is small on its own; together they make up the refactor.
 
 ## 5. Decisions
 
-The questions this review raised were decided on 2026-10-23 and are recorded in the plan's decision log ([dependency-injection-refactor.md](../exec-plans/active/dependency-injection-refactor.md#decision-log)):
+The questions this review raised were decided on 2026-10-23 and are recorded in the plan's decision log ([dependency-injection-refactor.md](../exec-plans/completed/dependency-injection-refactor.md#decision-log)):
 
 - API keys become configurable.
 - The embedding surface is the public API.

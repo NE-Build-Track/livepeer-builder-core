@@ -10,7 +10,9 @@
 - **Branch:** `tasks/mz/iss-11-14-idempotency`, off `releases/m3` at `d3df806`.
 - **Design:** the idempotency guide, `docs/design-docs/m3-guides/iss-11-14-idempotency.md` (29 October;
   not on this branch yet). Open questions Q1–Q5 locked by Mike on 29 October.
-- **Progress:** slices 1 to 4 built; the consumer changes (console and the enterprise apps) to do.
+- **Progress:** **done.** Slices 1 to 4 merged into `releases/m3` as [#76](https://github.com/NE-Build-Track/livepeer-builder-core/pull/76) on 29 October 2026; ISS-11
+  and ISS-14 closed on 30 October. The console sends operation references (builder-core-console #10,
+  29 October). The enterprise apps have not changed: [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4).
 - **Decision:** D57.
 
 ## Goal

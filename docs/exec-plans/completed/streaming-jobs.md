@@ -5,8 +5,8 @@
 Owner: Mike. Ticket: Mike is filing it (new M3 ticket; touches ISS-14 immediate execution, ISS-20 REST,
 ISS-28 failure classification). Branch `tasks/m3/mz/stream-support` off `releases/m3`. **Implemented and
 shown live on 19 October; a review on 20 October found two blocking lifecycle bugs, fixed on 20 October
-(D34–D39). Merged to `releases/m3` (PR #28, 21 October). Awaiting Mike's and Josh's review of the
-engine code.** Since the dependency-injection refactor (PR #41), the entry point is the optional
+(D34–D39). Merged to `releases/m3` (PR #28, 21 October). Closed with M3 on 9 November 2026.** Josh's
+review of the engine code is [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4). Since the dependency-injection refactor (PR #41), the entry point is the optional
 capability `jobs.streaming.stream(...)` (`None` when the transport has no `open`, D33), and the stream
 code lives in `services/streams.py`; the items below record the API as first built.
 Requested by the first enterprise reference
@@ -52,7 +52,8 @@ LLM's server-sent events, synthesized audio and ndjson progress all ride the sam
       [m3-decisions.md](../../design-docs/m3-decisions.md) (D29–D33).
 - [x] Unit tests with a scripted streaming transport that yields chunks and fails at chosen points;
       structure tests unchanged; coverage floors hold.
-- [ ] Mike's review; Josh's review of the engine code.
+- [x] Mike's review: M3 closed on 9 November 2026.
+- [ ] Josh's review of the engine code: [carried forward to M4](../../product-specs/milestones.md#carried-forward-to-m4).
 
 ### Review fixes (20 October, D34–D39)
 

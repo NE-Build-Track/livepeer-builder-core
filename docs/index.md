@@ -8,6 +8,7 @@ This directory is the repository's system of record. Agents and humans read the 
 | [contracts/](contracts/index.md) | What every public interface promises, and what is reserved for later |
 | [exec-plans/](../docs/PLANS.md) | Active and completed execution plans, plus the tech-debt tracker |
 | [product-specs/](product-specs/index.md) | The builder outcomes the engine serves |
+| [guides/](guides/index.md) | How to embed the engine in an application |
 | [references/](references/index.md) | Upstream pins, wire formats, and runtime evidence |
 | [generated/](generated/db-schema.md) | Generated schemas and diagrams (`lpb gen-docs`): [DB and ER](generated/db-schema.md), [interfaces](generated/interfaces.md), [contracts](generated/contracts.md), OpenAPI |
 | [PLANS.md](PLANS.md) | How plans work, and the M2 plan index |

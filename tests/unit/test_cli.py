@@ -14,6 +14,7 @@ from livepeer_builder.store import create_engine, upgrade
 def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "engine.db"
     monkeypatch.setenv("LPB_DATABASE_URL", f"sqlite+aiosqlite:///{path}")
+    monkeypatch.setenv("LPB_DISCOVERY_URL", "http://127.0.0.1:9/discovery")
     monkeypatch.setenv("LPB_LOG_JSON", "false")
     monkeypatch.chdir(tmp_path)
     return path
@@ -29,7 +30,7 @@ def output(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
 
 def test_migrate_and_revision(db: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert run("migrate") == 0
-    assert output(capsys) == {"revision": "0004"}
+    assert output(capsys) == {"revision": "0011"}
     assert run("revision") == 0
     assert output(capsys)["up_to_date"] is True
 
@@ -42,7 +43,7 @@ def test_revision_reports_a_database_that_is_behind(db: Path, capsys: pytest.Cap
 
     asyncio.run(at_first_revision())
     assert run("revision") == 2
-    assert output(capsys) == {"database": "0001", "package_head": "0004", "up_to_date": False}
+    assert output(capsys) == {"database": "0001", "package_head": "0011", "up_to_date": False}
 
 
 def test_backup_verify_and_restore(db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -75,7 +76,7 @@ def test_gen_secret_key_smoke_and_purge(db: Path, capsys: pytest.CaptureFixture[
     assert len(capsys.readouterr().out.strip()) == 44  # a Fernet key
     assert run("smoke") == 0
     smoke = output(capsys)
-    assert smoke["ok"] is True and smoke["schema_revision"] == "0004"
+    assert smoke["ok"] is True and smoke["schema_revision"] == "0011"
     assert run("purge") == 0
     assert output(capsys) == {"jobs_deleted": 0, "usage_rows_deleted": 0}
 

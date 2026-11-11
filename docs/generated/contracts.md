@@ -19,6 +19,7 @@ classDiagram
         +enum credential_kind
         +map attributes
         +AuthProvenance? auth
+        +str? display_name
     }
     class AuthProvenance {
         +str method
@@ -36,12 +37,18 @@ classDiagram
         +str path
         +enum method
         +map? payload
-        +str? operation_ref
-        +str? capability
-        +str? model
+        +bytes? raw_body
+        +str? content_type
+        +tuple~str str~[] headers
+        +bool return_http_errors
+        +Annotated? operation_ref
+        +Annotated? capability
+        +Annotated? model
         +enum mode
         +int max_attempts
         +float timeout_s
+        +float first_byte_timeout_s
+        +float? idle_timeout_s
     }
     class Job {
         +UUID id
@@ -72,6 +79,7 @@ classDiagram
         +int? status_code
         +datetime started_at
         +datetime? ended_at
+        +CallTimings? timings
     }
     class Failure {
         +enum kind
@@ -79,6 +87,7 @@ classDiagram
         +int? status_code
         +str? body
         +bool payment_sent
+        +enum? reason
     }
     class ResultRef {
         +enum storage
@@ -102,23 +111,51 @@ classDiagram
     class Runner {
         +str url
         +str app
-        +str? runner_id
         +str? mode
         +str? orchestrator_url
         +int? capacity
+        +int? capacity_used
         +int? capacity_available
-        +NetworkRate? rate
+        +PriceInfo? price_info
+        +datetime? observed_at
+        +str? version
+        +str? metadata
+        +RunnerGPU? gpu
+    }
+    class RunnerGPU {
+        +str? id
+        +str? name
+        +int? vram_mb
+    }
+    class PriceInfo {
+        +Decimal? price
+        +Decimal? price_usd
+        +str? currency
+        +str? unit
     }
     class NetworkRate {
         +Decimal amount
         +str currency
         +str unit
+        +Decimal? price_usd
+        +enum source
+    }
+    class ObservedRate {
+        +Decimal amount
+        +str currency
+        +str unit
+        +Decimal? price_usd
+        +enum source
+        +datetime observed_at
+        +enum observed_by
     }
     class Offering {
         +str app
         +str[] modes
-        +NetworkRate? rate_low
-        +NetworkRate? rate_high
+        +ObservedRate? rate_low
+        +ObservedRate? rate_high
+        +enum rate_status
+        +bool stale
         +int runner_count
         +int ready_count
         +datetime observed_at
@@ -130,6 +167,7 @@ classDiagram
         +AttemptCost[] attempts
         +datetime? first_observed_at
         +datetime? updated_at
+        +Fees billable
     }
     class AttemptCost {
         +int attempt_number
@@ -152,6 +190,7 @@ classDiagram
         +enum status
         +datetime created_at
         +datetime updated_at
+        +str label
     }
     class SecretRef {
         +str ref
@@ -177,10 +216,12 @@ classDiagram
     Job *-- MeasuredUsage : usage
     Job *-- ResultRef : result
     JobCost *-- AttemptCost : attempts
+    JobCost *-- Fees : billable
     JobCost *-- Fees : fees
     JobResult *-- Job : job
-    Offering *-- NetworkRate : rate_high
-    Offering *-- NetworkRate : rate_low
+    Offering *-- ObservedRate : rate_high
+    Offering *-- ObservedRate : rate_low
     ProvisionedActor *-- SecretRef : secret_ref
-    Runner *-- NetworkRate : rate
+    Runner *-- PriceInfo : price_info
+    Runner *-- RunnerGPU : gpu
 ```

@@ -54,10 +54,6 @@ class EncryptedDbSecretStore:
         self._fernet = Fernet(key.encode())
         self._clock = clock
 
-    @staticmethod
-    def generate_key() -> str:
-        return Fernet.generate_key().decode()
-
     async def put(self, name: str, secret: str) -> SecretRef:
         ref = f"{DB_PREFIX}{_random.token_urlsafe(16)}"
         del name  # names are for humans and external stores; refs here are opaque

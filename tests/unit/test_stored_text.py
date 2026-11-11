@@ -11,10 +11,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from livepeer_builder import EngineSettings
-from livepeer_builder.contracts import JobRequest, Money, ProvisionRequest, SecretRef
+from livepeer_builder import EngineSettings, EngineSupply
+from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, SecretRef
 from livepeer_builder.http.bodies import IssueKeyBody, RotateKeyBody
 from livepeer_builder.testing.fakes import MemorySecretStore
+from tests.conftest import EngineFactory
 
 LONG = "x" * 201
 NUL = "a\x00b"
@@ -67,10 +68,22 @@ def test_rotating_a_key_refuses_a_label_the_store_cannot_keep(value: str) -> Non
         RotateKeyBody(label=value, operation_ref="r1")
 
 
-def test_a_secret_ref_is_at_most_what_the_actor_row_keeps() -> None:
-    assert SecretRef(ref="r" * 200)
-    with pytest.raises(ValidationError):
-        SecretRef(ref="r" * 201)
+class VaultSecretStore(MemorySecretStore):
+    """A supplied SecretStore whose reference is a long path, as an external vault's can be."""
+
+    async def put(self, name: str, secret: str) -> SecretRef:
+        ref = f"vault:{name}/{'p' * 300}"
+        self.values[ref] = secret
+        return SecretRef(ref=ref)
+
+
+async def test_an_actor_whose_secret_reference_is_longer_than_200_characters_still_reads(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:  # a SecretRef is opaque (extending-the-engine.md), and SQLite kept longer ones before the caps
+    engine = await make_engine(supply=EngineSupply(secret_store=VaultSecretStore()))
+    await engine.payments.provision(admin, ProvisionRequest(**PROVISION))
+    read = await engine.payments.get_actor(admin, "default", "alice")
+    assert read.secret_ref.ref.startswith("vault:") and len(read.secret_ref.ref) > 200
 
 
 async def test_the_memory_secret_store_s_ref_fits_for_the_longest_actor() -> None:

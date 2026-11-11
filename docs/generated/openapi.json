@@ -2058,7 +2058,6 @@
         "description": "A handle to a secret held by a SecretStore. Databases, records and logs hold only this.",
         "properties": {
           "ref": {
-            "maxLength": 200,
             "minLength": 1,
             "title": "Ref",
             "type": "string"

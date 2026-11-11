@@ -518,8 +518,10 @@ async def test_a_replayed_grant_funding_is_204_and_says_it_is_a_replay(api) -> N
         (f"/v1/admin/applications/default/actors/{'a' * 201}/allocation", "grant_1"),
         (f"/v1/admin/applications/{'a' * 201}/actors/alice/allocation", "grant_1"),
         (ALLOCATION, "g" * 201),
+        ("/v1/admin/applications/default/actors/a%00b/allocation", "grant_1"),
+        ("/v1/admin/applications/a%00b/actors/alice/allocation", "grant_1"),
     ],
-    ids=["actor", "application", "grant"],
+    ids=["actor", "application", "grant", "actor NUL", "application NUL"],
 )
 async def test_provisioning_an_id_longer_than_the_store_keeps_is_422_before_money_moves(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str, grant_id: str

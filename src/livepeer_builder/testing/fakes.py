@@ -221,7 +221,7 @@ class MemorySecretStore:
         self.values: dict[str, str] = {}
 
     async def put(self, name: str, secret: str) -> SecretRef:
-        ref = f"mem:{name[:160]}:{secrets.token_hex(4)}"  # a SecretRef is at most 200 characters
+        ref = f"mem:{name[:160]}:{secrets.token_hex(4)}"  # the actor row keeps a reference in 200 characters
         self.values[ref] = secret
         return SecretRef(ref=ref)
 

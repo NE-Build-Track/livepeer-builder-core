@@ -43,6 +43,7 @@ from livepeer_builder.contracts import (
     SessionRequest,
     SyncReport,
 )
+from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyProvisioned,
@@ -323,8 +324,8 @@ def create_app(
     @app.post(base, response_model=ProvisionedActor, status_code=201)
     async def provision(
         actor: Actor,
-        application_id: Annotated[str, Path(max_length=200)],  # as stored: a 422 before money moves
-        actor_id: Annotated[str, Path(max_length=200)],
+        application_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
+        actor_id: Annotated[StoredText, Path()],
         body: ProvisionBody,
         response: Response,
     ) -> ProvisionedActor:

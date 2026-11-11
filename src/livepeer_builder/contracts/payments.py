@@ -27,7 +27,7 @@ class PaymentCredential(Contract):
 class SecretRef(Contract):
     """A handle to a secret held by a SecretStore. Databases, records and logs hold only this."""
 
-    ref: str = Field(min_length=1, max_length=200)  # as the actor row keeps it
+    ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
 
 class ProvisionRequest(Contract):

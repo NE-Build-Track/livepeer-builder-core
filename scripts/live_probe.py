@@ -138,18 +138,22 @@ async def cross_actor(probe: Probe, a: str, b: str) -> None:
     # for any actor: a job for an advertised app is paid on the POST itself. So none is sent then (#83).
     offered = await probe.call("GET", "/v1/offerings", None, params={"app": app})
     listing = offered.json() if offered.status_code == 200 else None
-    clear = isinstance(listing, list) and not any(item.get("app") == app for item in listing)
+    if not isinstance(listing, list) or not all(isinstance(item, dict) for item in listing):
+        # A catalog that cannot be read is not a catalog that lists the app; either way no job is sent.
+        unread = str(offered.status_code) + (", not a list of offerings" if listing is not None else "")
+        probe.record("FAIL", "the catalog can be read", f"GET /v1/offerings answered {unread}")
+        return
+    clear = not any(item.get("app") == app for item in listing)
     if not probe.record("PASS" if clear else "FAIL", "no runner advertises the probe's app", app):
         return
     job = {"app": app, "operation_ref": f"{probe.run}-job"}
-    first, read = await _unpaid_job(probe, a, job)
-    if not probe.record("PASS" if first else "FAIL", "a job is recorded without payment", str(first)):
+    first, ended = await _unpaid_job(probe, a, job)
+    if not probe.record("PASS" if first else "FAIL", "a job is recorded without payment", first or ended):
         return
-    second, _ = await _unpaid_job(probe, b, job)
+    second, ended = await _unpaid_job(probe, b, job)
     reused = "PASS" if second and second != first else "FAIL"
-    probe.record(reused, "another actor's operation_ref is a new job", str(second))
-    assert read is not None
-    probe.expect("the owner reads the job", read, 200)
+    probe.record(reused, "another actor's operation_ref is a new job", second or ended)
+    probe.expect("the owner reads the job", await probe.call("GET", f"/v1/jobs/{first}", a), 200)
     probe.expect("another actor: GET the job", await probe.call("GET", f"/v1/jobs/{first}", b), 404)
     probe.expect("another actor: GET its cost", await probe.call("GET", f"/v1/jobs/{first}/cost", b), 404)
     listed = await probe.call("GET", "/v1/jobs", b)
@@ -158,19 +162,21 @@ async def cross_actor(probe: Probe, a: str, b: str) -> None:
     probe.record(left_out, "another actor's job list leaves it out", f"{listed.status_code}")
 
 
-async def _unpaid_job(
-    probe: Probe, token: str, job: dict[str, str]
-) -> tuple[str | None, httpx.Response | None]:
-    """Send one probe job and read it back: its id only when it failed ``no_offering`` with nothing paid."""
-    job_id = (await probe.call("POST", "/v1/jobs", token, json=job)).headers.get("livepeer-job-id")
-    read = await probe.call("GET", f"/v1/jobs/{job_id}", token) if job_id else None
-    record = read.json() if read is not None and read.status_code == 200 else {}
+async def _unpaid_job(probe: Probe, token: str, job: dict[str, str]) -> tuple[str | None, str]:
+    """Send one probe job and read it back: its id only when it failed ``no_offering`` with nothing paid,
+    and how it ended, for the line of a check that fails."""
+    posted = await probe.call("POST", "/v1/jobs", token, json=job)
+    job_id = posted.headers.get("livepeer-job-id")
+    if not job_id:
+        return None, f"POST /v1/jobs answered {posted.status_code} with no job id"
+    read = await probe.call("GET", f"/v1/jobs/{job_id}", token)
+    record = read.json() if read.status_code == 200 else {}
     failure, attempts = record.get("failure") or {}, record.get("attempts") or []
-    unpaid = record.get("state") == "failed" and failure.get("kind") == "no_offering"
-    unpaid = (
-        unpaid and not failure.get("payment_sent") and not any(item.get("payment_sent") for item in attempts)
-    )
-    return (job_id if unpaid else None), read
+    paid = bool(failure.get("payment_sent")) or any(item.get("payment_sent") for item in attempts)
+    unpaid = record.get("state") == "failed" and failure.get("kind") == "no_offering" and not paid
+    ended = f"job {job_id}: read {read.status_code}, state {record.get('state')}, "
+    ended += f"failure {failure.get('kind')}, payment_sent {paid}"
+    return (job_id if unpaid else None), ended
 
 
 async def repeated_fund(probe: Probe, *, spend: bool, actor: str | None, amount: str | None) -> None:

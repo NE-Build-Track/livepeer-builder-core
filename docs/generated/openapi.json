@@ -785,11 +785,15 @@
       "IssueKeyBody": {
         "properties": {
           "actor_id": {
+            "maxLength": 200,
+            "minLength": 1,
             "title": "Actor Id",
             "type": "string"
           },
           "application_id": {
             "default": "default",
+            "maxLength": 200,
+            "minLength": 1,
             "title": "Application Id",
             "type": "string"
           },
@@ -806,6 +810,7 @@
           },
           "label": {
             "default": "",
+            "maxLength": 200,
             "title": "Label",
             "type": "string"
           },
@@ -1086,6 +1091,7 @@
         "additionalProperties": false,
         "properties": {
           "app": {
+            "maxLength": 200,
             "minLength": 1,
             "title": "App",
             "type": "string"
@@ -1093,6 +1099,7 @@
           "capability": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -1184,6 +1191,7 @@
           "model": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -1613,6 +1621,7 @@
           },
           "grant_id": {
             "default": "",
+            "maxLength": 200,
             "title": "Grant Id",
             "type": "string"
           },
@@ -1852,6 +1861,7 @@
           "label": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -2525,6 +2535,7 @@
             "name": "application_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Application Id",
               "type": "string"
             }
@@ -2534,6 +2545,7 @@
             "name": "actor_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Actor Id",
               "type": "string"
             }

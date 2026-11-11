@@ -2,12 +2,12 @@
 
 import json
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.common import Contract, StoredText
 from livepeer_builder.contracts.http import request_headers
 
 ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
@@ -20,7 +20,7 @@ PaymentState = Literal["unknown", "paid", "unpaid"]
 
 class JobRequest(Contract):
     model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
-    app: str = Field(min_length=1)  # the runner app a discovery entry advertises
+    app: Annotated[StoredText, Field(min_length=1)]  # the runner app a discovery entry advertises
     path: str = ""  # appended to the runner URL; must start with "/" when set
     method: HttpMethod = "POST"
     payload: dict[str, Any] | None = None
@@ -50,9 +50,9 @@ class JobRequest(Contract):
             raise ValueError("Invalid content type")
         return value
 
-    operation_ref: str | None = Field(default=None, max_length=200)  # the caller's retry key
-    capability: str | None = None  # label only in M2; resolution is a later contract
-    model: str | None = None
+    operation_ref: StoredText | None = None  # the caller's retry key
+    capability: StoredText | None = None  # label only in M2; resolution is a later contract
+    model: StoredText | None = None
     mode: ExecutionMode = "immediate"
     max_attempts: int = Field(default=3, ge=1, le=10)
     timeout_s: float = Field(default=300.0, gt=0, le=3600)  # the whole job, from its start to the last byte

@@ -41,9 +41,9 @@ classDiagram
         +str? content_type
         +tuple~str str~[] headers
         +bool return_http_errors
-        +str? operation_ref
-        +str? capability
-        +str? model
+        +Annotated? operation_ref
+        +Annotated? capability
+        +Annotated? model
         +enum mode
         +int max_attempts
         +float timeout_s

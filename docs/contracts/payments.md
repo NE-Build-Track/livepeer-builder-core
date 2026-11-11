@@ -80,6 +80,13 @@ before payment with `not_provisioned`.
 `admin.allocations` operation (an admin credential). Allocation and key writes carry an idempotency
 key of `base64url(sha256(engine_id:operation:step))`.
 
+Provisioning refuses an `application_id`, `actor_id`, `grant_id` or `label` that is longer than 200
+characters or holds a NUL character (422 over REST), before any provider call: every record stores them
+in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
+The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
+`app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
+`label`.
+
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
 | `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |

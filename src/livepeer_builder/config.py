@@ -75,7 +75,8 @@ class EngineSettings(Contract):
     batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
     batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
     batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
-    shared_allocation_id: str | None = None  # per_application: the allocation behind shared_payment_key
+    # per_application: the allocation behind shared_payment_key; every attempt stores it (200 characters)
+    shared_allocation_id: str | None = Field(default=None, max_length=200)
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
@@ -89,7 +90,7 @@ class EngineSettings(Contract):
     jwt_algorithms: tuple[str, ...] = ("RS256", "ES256")
     jwt_actor_claim: str = Field(default="sub", min_length=1)
     jwt_application_claim: str | None = None  # None: every token is in jwt_application_id
-    jwt_application_id: str = Field(default="default", min_length=1)
+    jwt_application_id: str = Field(default="default", min_length=1, max_length=200)  # as records store it
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential

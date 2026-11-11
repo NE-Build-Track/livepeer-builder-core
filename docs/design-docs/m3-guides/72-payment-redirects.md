@@ -1,12 +1,13 @@
 # #72: Payment renewals and refreshes must not follow redirects
 
 **Status:** superseded, 29 October 2026. John closed #72 as *not planned*: renewal and refresh transport
-belongs to the SDK, and the fix is tracked upstream as
+belongs to the SDK. The fix was raised upstream as
 [livepeer-python-gateway#87](https://github.com/livepeer/livepeer-python-gateway/issues/87) (no redirects on
-renewal and refresh, stop the funding loop on a 3xx). builder-core consumes it through a future SDK pin
-bump and does not own a replacement payment loop. The engine-side design below was built and passed a
+renewal and refresh, stop the funding loop on a 3xx), and the upstream change was rejected. The risk is
+accepted and recorded as [T27](../../exec-plans/tech-debt-tracker.md) (Mike, 10 November 2026).
+builder-core does not own a replacement payment loop. The engine-side design below was built and passed a
 live run (PR [#75](https://github.com/NE-Build-Track/livepeer-builder-core/pull/75), closed; branch
-`tasks/mz/72-payment-redirects`); it is kept for reference only.\
+`tasks/mz/72-payment-redirects`). It is kept for reference only: nothing below is a change to make.\
 **Issue:** [#72](https://github.com/NE-Build-Track/livepeer-builder-core/issues/72) (found by John). Affects
 ISS-12 and ISS-13, and the ISS-25 funded run: the representative chat job is priced per second, so it is
 metered and uses the renewal loop.\

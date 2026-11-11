@@ -37,6 +37,17 @@ def provision_request(
     )
 
 
+@pytest.mark.parametrize("field", ["application_id", "actor_id", "grant_id"])
+def test_an_id_longer_than_the_store_keeps_is_refused_before_any_call(field: str) -> None:
+    """Every record keeps these ids in 200 characters (``store.schema.ID``), and provisioning funds a
+    provider key before it saves the actor. So a longer id is refused when the request is built, not by
+    PostgreSQL after money moved (#32 review)."""
+    request = provision_request().model_dump()
+    assert getattr(ProvisionRequest(**(request | {field: "x" * 200})), field) == "x" * 200
+    with pytest.raises(ValidationError, match=field):
+        ProvisionRequest(**(request | {field: "x" * 201}))
+
+
 async def test_provisioning_is_explicit_and_admin_only(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:

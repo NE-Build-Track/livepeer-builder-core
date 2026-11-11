@@ -1,6 +1,7 @@
 """A runner call says where its time went before the runner answered (#89): the unpaid request until
 its 402, the signer, and the request the runner answered. Run against a loopback runner and signer."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 
@@ -16,6 +17,8 @@ SIGNER_SECONDS = 0.05
 RUNNER_SECONDS = 0.08
 SIGNER_MS = 50
 RUNNER_MS = 80
+STORE_SECONDS = 0.3
+STORE_MS = 300
 
 
 @pytest.fixture
@@ -97,6 +100,73 @@ async def test_a_call_that_keeps_being_challenged_adds_up_each_step(net: Net) ->
     assert timings is not None
     assert timings.signing_ms is not None and timings.signing_ms >= SIGNER_MS
     assert timings.response_ms is None, "only 402s came back"
+
+
+async def test_a_runner_that_never_answers_a_paid_request_keeps_its_response_time(net: Net) -> None:
+    net.replies = [Reply(hang_s=30.0)]
+    with pytest.raises(RunnerCallError) as raised:
+        await SdkRunnerTransport(net.url).call(
+            net.runner(), _request(timeout_s=0.3), "lpg_k", on_signed=_signed
+        )
+    timings = raised.value.timings
+    assert (raised.value.kind, raised.value.payment_sent) == ("timeout", True)
+    assert timings is not None and timings.challenge_ms is not None and timings.signing_ms is not None
+    assert timings.response_ms is not None and timings.response_ms >= 150, "the wait that timed out"
+
+
+async def test_a_connection_dropped_before_the_headers_keeps_its_response_time(net: Net) -> None:
+    net.replies = [Reply(drop_before_headers=True)]
+    with pytest.raises(RunnerCallError) as raised:
+        await SdkRunnerTransport(net.url).call(net.runner(), _request(), "lpg_k", on_signed=_signed)
+    timings = raised.value.timings
+    assert timings is not None and timings.response_ms is not None
+
+
+async def test_a_runner_that_never_sends_its_challenge_keeps_its_challenge_time(net: Net) -> None:
+    async def never() -> None:
+        await net.hang(30.0)
+
+    net.on_challenge = never
+    with pytest.raises(RunnerCallError) as raised:
+        await SdkRunnerTransport(net.url).call(
+            net.runner(), _request(timeout_s=0.3), "lpg_k", on_signed=_signed
+        )
+    timings = raised.value.timings
+    assert (raised.value.kind, raised.value.payment_sent) == ("timeout", False)
+    assert timings is not None and timings.challenge_ms is not None and timings.challenge_ms >= 150
+    assert timings.signing_ms is None and timings.response_ms is None, "nothing was signed or paid"
+
+
+async def test_an_unpaid_call_that_never_answers_has_only_a_response_time(net: Net) -> None:
+    net.paid = False
+    net.replies = [Reply(hang_s=30.0)]
+    with pytest.raises(RunnerCallError) as raised:
+        await SdkRunnerTransport(net.url).call(net.runner(), _request(timeout_s=0.3), None)
+    timings = raised.value.timings
+    assert timings is not None and timings.response_ms is not None
+    assert timings.challenge_ms is None and timings.signing_ms is None
+
+
+class _SlowStore:
+    """A recorder whose write of a refused manifest takes ``STORE_SECONDS``."""
+
+    async def __call__(self, manifest_id: str) -> None:
+        return None
+
+    async def remember(self, manifest_id: str) -> None:
+        return None
+
+    async def refused(self, manifest_id: str) -> None:
+        await asyncio.sleep(STORE_SECONDS)
+
+
+async def test_a_refused_signature_is_timed_without_the_store_write(net: Net) -> None:
+    net.sign = [403]
+    with pytest.raises(RunnerCallError) as raised:
+        await SdkRunnerTransport(net.url).call(net.runner(), _request(), "lpg_k", on_signed=_SlowStore())
+    timings = raised.value.timings
+    assert timings is not None and timings.signing_ms is not None
+    assert timings.signing_ms < STORE_MS, "signing_ms is the signer's answer, not the attempt-row write"
 
 
 async def test_each_call_logs_its_timings(net: Net, caplog: pytest.LogCaptureFixture) -> None:

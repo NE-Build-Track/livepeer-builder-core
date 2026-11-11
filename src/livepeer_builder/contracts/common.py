@@ -1,9 +1,9 @@
 """Base model and shared value types for every contract that crosses the engine boundary."""
 
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 
 class Contract(BaseModel):
@@ -13,6 +13,18 @@ class Contract(BaseModel):
 
 
 Currency = Literal["USD", "ETH"]
+
+
+def _no_nul(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("must not contain a NUL character")
+    return value
+
+
+# Text a record keeps (an id, a label, a reference): at most 200 characters (``store.schema.ID``) and no
+# NUL. SQLite takes anything; PostgreSQL refuses either when the row is written, which for provisioning
+# is after the provider key was funded. So it is refused where the request is parsed.
+StoredText = Annotated[str, Field(max_length=200), AfterValidator(_no_nul)]
 
 
 class Money(Contract):

@@ -155,18 +155,18 @@ async def test_a_probe_app_that_some_runner_advertises_sends_no_job(
     ]
 
 
-class _SecondJobRan(httpx.AsyncBaseTransport):
-    """The engine, except the second job read answers as a job that ran and was paid."""
+class _JobRan(httpx.AsyncBaseTransport):
+    """The engine, except one job read (the second by default) answers as a job that ran and was paid."""
 
-    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
-        self._inner, self._reads = inner, 0
+    def __init__(self, inner: httpx.AsyncBaseTransport, read: int = 2) -> None:
+        self._inner, self._reads, self._read = inner, 0, read
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self._inner.handle_async_request(request)
         path = request.url.path
         if request.method == "GET" and path.startswith("/v1/jobs/") and path.count("/") == 3:
             self._reads += 1
-            if self._reads == 2:
+            if self._reads == self._read:
                 await response.aread()
                 job = json.loads(response.content) | {"state": "succeeded", "failure": None}
                 job["attempts"] = [{"payment_sent": True}]
@@ -179,10 +179,66 @@ async def test_the_second_actor_s_job_must_also_end_unpaid(
 ) -> None:
     """Both probe jobs are read; a second one that ran and paid fails the probe (#83 review)."""
     _, engine, token = stack
-    transport = _SecondJobRan(httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False)))
+    transport = _JobRan(httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False)))
     async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
         assert await SCRIPT["probe"](ProbeSettings("http://engine", token), spend=False, client=client) == 1
     assert "FAIL  another actor's operation_ref is a new job" in capsys.readouterr().out
+
+
+async def test_a_job_that_ran_and_paid_is_named_in_the_failed_check(
+    stack: tuple[httpx.AsyncClient, BuilderEngine, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A paid probe job is the case the catalog check exists to prevent, so the line says which job it
+    was and how it ended, not ``None`` (#32 review)."""
+    _, engine, token = stack
+    transport = _JobRan(httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False)), read=1)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        assert await SCRIPT["probe"](ProbeSettings("http://engine", token), spend=False, client=client) == 1
+    out = capsys.readouterr().out
+    (line,) = [text for text in out.splitlines() if "a job is recorded without payment" in text]
+    (job,) = [job for job in await engine.store.list_jobs("default", None) if job.actor_id.endswith("-a")]
+    assert line.startswith("FAIL") and str(job.id) in line
+    assert "state succeeded" in line and "payment_sent True" in line
+
+
+class _Catalog(httpx.AsyncBaseTransport):
+    """The engine, except ``GET /v1/offerings`` answers as given."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, answer: httpx.Response) -> None:
+        self._inner, self._answer = inner, answer
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/offerings":
+            return self._answer
+        return await self._inner.handle_async_request(request)
+
+
+@pytest.mark.parametrize(
+    ("answer", "said"),
+    [
+        (httpx.Response(503, json={"detail": "down"}), "503"),
+        (httpx.Response(200, json={"offerings": []}), "200, not a list of offerings"),
+        (httpx.Response(200, json=["text-to-image"]), "200, not a list of offerings"),
+    ],
+    ids=["down", "not a list", "not objects"],
+)
+async def test_a_catalog_that_cannot_be_read_is_not_an_advertised_app(
+    stack: tuple[httpx.AsyncClient, BuilderEngine, str],
+    capsys: pytest.CaptureFixture[str],
+    answer: httpx.Response,
+    said: str,
+) -> None:
+    """A failed catalog read fails its own check, with the status, and sends no job (#32 review)."""
+    _, engine, token = stack
+    transport = _Catalog(httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False)), answer)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        assert await SCRIPT["probe"](ProbeSettings("http://engine", token), spend=False, client=client) == 1
+    out = capsys.readouterr().out
+    assert f"FAIL  the catalog can be read: GET /v1/offerings answered {said}" in out
+    assert "no runner advertises the probe's app" not in out
+    assert not [
+        job for job in await engine.store.list_jobs("default", None) if job.actor_id.startswith("lpb-probe-")
+    ]
 
 
 class _BreaksOnJobs(httpx.AsyncBaseTransport):

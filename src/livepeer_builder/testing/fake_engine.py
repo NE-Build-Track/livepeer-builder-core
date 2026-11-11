@@ -64,6 +64,7 @@ from livepeer_builder.testing.scripts import (
     Reply,
     attempt_outcome,
 )
+from livepeer_builder.utils import utc
 
 
 class FakeStreaming:
@@ -361,8 +362,9 @@ class FakeCosts:
             return self._summary
         start, end = summary_window(datetime.now(UTC), start, end)  # the fake's jobs use the wall clock
         ran = self._jobs.in_scope(actor.application_id, target)
+        since, until = utc(start), utc(end)  # as the store: a time with no offset is UTC (T25)
         return summarize(
-            start, end, [(job.app, classify(job, ())) for job in ran if start <= job.created_at < end]
+            start, end, [(job.app, classify(job, ())) for job in ran if since <= utc(job.created_at) < until]
         )
 
 

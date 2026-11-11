@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query, Request, Response, Security
+from fastapi import Depends, FastAPI, Path, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime
@@ -43,6 +43,7 @@ from livepeer_builder.contracts import (
     SessionRequest,
     SyncReport,
 )
+from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyProvisioned,
@@ -322,7 +323,11 @@ def create_app(
 
     @app.post(base, response_model=ProvisionedActor, status_code=201)
     async def provision(
-        actor: Actor, application_id: str, actor_id: str, body: ProvisionBody, response: Response
+        actor: Actor,
+        application_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
+        actor_id: Annotated[StoredText, Path()],
+        body: ProvisionBody,
+        response: Response,
     ) -> ProvisionedActor:
         request = ProvisionRequest(
             application_id=application_id,

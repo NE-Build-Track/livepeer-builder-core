@@ -1,0 +1,96 @@
+"""Text the store keeps is refused at the boundary when the store could not keep it (#32 review).
+
+Ids, labels and references are ``varchar(200)`` (``store.schema.ID``). SQLite ignores the length and
+PostgreSQL refuses a longer value, or one holding a NUL character, when the row is written: for
+provisioning that is after the provider key was funded. So each is checked where the request is parsed.
+"""
+
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from livepeer_builder import EngineSettings, EngineSupply
+from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, SecretRef
+from livepeer_builder.http.bodies import IssueKeyBody, RotateKeyBody
+from livepeer_builder.testing.fakes import MemorySecretStore
+from tests.conftest import EngineFactory
+
+LONG = "x" * 201
+NUL = "a\x00b"
+PROVISION: dict[str, Any] = {
+    "operation_ref": "p1",
+    "application_id": "default",
+    "actor_id": "alice",
+    "amount": Money(amount=Decimal("5"), currency="USD"),
+    "grant_id": "grant_1",
+    "label": "Alice",
+}
+
+
+@pytest.mark.parametrize("field", ["application_id", "actor_id", "grant_id", "label", "operation_ref"])
+@pytest.mark.parametrize("value", [LONG, NUL], ids=["too long", "NUL"])
+def test_provisioning_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        ProvisionRequest(**(PROVISION | {field: value}))
+
+
+@pytest.mark.parametrize("field", ["app", "capability", "model", "operation_ref"])
+@pytest.mark.parametrize("value", [LONG, NUL], ids=["too long", "NUL"])
+def test_a_job_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        JobRequest(**({"app": "example/echo"} | {field: value}))
+
+
+def test_a_job_keeps_text_of_exactly_the_stored_length() -> None:
+    request = JobRequest(app="a" * 200, capability="c" * 200, model="m" * 200, operation_ref="o" * 200)
+    assert len(request.app) == len(request.model or "") == 200
+
+
+@pytest.mark.parametrize("field", ["actor_id", "application_id", "label"])
+@pytest.mark.parametrize("value", [LONG, NUL], ids=["too long", "NUL"])
+def test_issuing_a_key_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        IssueKeyBody(**({"actor_id": "bob", "operation_ref": "k1"} | {field: value}))
+
+
+@pytest.mark.parametrize("field", ["actor_id", "application_id"])
+def test_a_key_needs_an_actor_and_an_application(field: str) -> None:
+    """An empty one was issued, and then every request with that key failed: ``ActorContext`` needs both."""
+    with pytest.raises(ValidationError, match=field):
+        IssueKeyBody(**({"actor_id": "bob", "operation_ref": "k1"} | {field: ""}))
+
+
+@pytest.mark.parametrize("value", [LONG, NUL], ids=["too long", "NUL"])
+def test_rotating_a_key_refuses_a_label_the_store_cannot_keep(value: str) -> None:
+    with pytest.raises(ValidationError, match="label"):
+        RotateKeyBody(label=value, operation_ref="r1")
+
+
+class VaultSecretStore(MemorySecretStore):
+    """A supplied SecretStore whose reference is a long path, as an external vault's can be."""
+
+    async def put(self, name: str, secret: str) -> SecretRef:
+        ref = f"vault:{name}/{'p' * 300}"
+        self.values[ref] = secret
+        return SecretRef(ref=ref)
+
+
+async def test_an_actor_whose_secret_reference_is_longer_than_200_characters_still_reads(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:  # a SecretRef is opaque (extending-the-engine.md), and SQLite kept longer ones before the caps
+    engine = await make_engine(supply=EngineSupply(secret_store=VaultSecretStore()))
+    await engine.payments.provision(admin, ProvisionRequest(**PROVISION))
+    read = await engine.payments.get_actor(admin, "default", "alice")
+    assert read.secret_ref.ref.startswith("vault:") and len(read.secret_ref.ref) > 200
+
+
+async def test_the_memory_secret_store_s_ref_fits_for_the_longest_actor() -> None:
+    ref = await MemorySecretStore().put(f"{'a' * 200}/{'b' * 200}", "lpg_secret")
+    assert len(ref.ref) <= 200
+
+
+def test_a_shared_allocation_id_longer_than_an_attempt_keeps_fails_at_startup() -> None:
+    with pytest.raises(ValidationError, match="shared_allocation_id"):
+        EngineSettings.model_validate({"discovery_url": "http://d/discovery", "shared_allocation_id": LONG})

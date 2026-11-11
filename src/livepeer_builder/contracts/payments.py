@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, SecretStr, computed_field, field_validator
 
-from livepeer_builder.contracts.common import Contract, Currency, Money
+from livepeer_builder.contracts.common import Contract, Currency, Money, StoredText
 from livepeer_builder.contracts.operations import OperationRef
 
 if TYPE_CHECKING:
@@ -27,17 +27,19 @@ class PaymentCredential(Contract):
 class SecretRef(Contract):
     """A handle to a secret held by a SecretStore. Databases, records and logs hold only this."""
 
-    ref: str = Field(min_length=1)
+    ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
 
 class ProvisionRequest(Contract):
     """Explicit, admin-authorized provisioning. There is no automatic provisioning."""
 
-    application_id: str
-    actor_id: str
+    # ``StoredText``: provisioning funds a provider key before it saves the actor, so an id or a label
+    # the store could not keep is refused here, before any provider call.
+    application_id: StoredText
+    actor_id: StoredText
     amount: Money  # may be zero: identity without money; fund later with an explicit command
-    label: str = Field(default="", max_length=200)  # as stored: refused before any provider call
-    grant_id: str = ""  # empty uses the grant of the caller's own allocation
+    label: StoredText = ""
+    grant_id: StoredText = ""  # empty uses the grant of the caller's own allocation
     operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
 
 
@@ -108,7 +110,7 @@ class KnownActor(Contract):
 
 class FundRequest(Contract):
     amount: Money
-    operation_ref: str = Field(min_length=1, max_length=200)  # required: makes a retried fund safe
+    operation_ref: OperationRef  # required: makes a retried fund safe
     grant_id: str = ""  # grant funding only; allocation funding ignores it
 
 

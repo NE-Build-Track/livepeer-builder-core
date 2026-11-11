@@ -3,7 +3,7 @@
 One guide per M4 tracker (M4: reuse and reliability): the architecture, the code areas, the test plan,
 the upstream check and the open questions. Each is a proposal until it is locked in review with Mike and
 John; locked rules move into a decision record. Written 29 October 2026 and verified against
-builder-core `releases/m3` at `d3df806`, livepeer/node `406b248` (our pin) and `a4b68ed`, the SDK at
+builder-core `releases/m3` at `d3df806`, livepeer/node `406b248` (the pin then; `f45d83f` since D63) and `a4b68ed`, the SDK at
 `2017a80`, and Clearinghouse Batteries `ca09e47`. The ISS-46 guide was added on 2 November and verified
 against `releases/m3` at `1514212`.
 

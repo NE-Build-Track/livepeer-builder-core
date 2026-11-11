@@ -38,7 +38,7 @@ Status block still says "planned … no code has changed", which is stale):
 | Service composition root with `supply`, `decorate`, `extend` | `http/server.py` (`build_app`, `serve`, `Extend`); `actor_dependency` for extra routes |
 | Role facades and a shipped fake | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`); `testing/fake_engine.py`, `testing/engine.py` (`make_engine`) |
 | Light import, public API | `tests/structure/test_import_weight.py` (no DB, HTTP, crypto, SDK or server module on `import livepeer_builder`); `tests/structure/test_public_api.py` |
-| Extension examples, tested | `tests/unit/test_extension_examples.py` (SSO header authenticator, team read policy, audited vault, cheapest-ready selection, allow-listed discovery); `tests/unit/test_service_mode_example.py` (the same, served, plus `GET /v1/corp/whoami`); `tests/discovery/test_directory_example.py` |
+| Extension examples, tested | `tests/unit/test_extension_examples.py` (SSO header authenticator, team read policy, audited vault, cheapest-ready selection, allow-listed discovery); `tests/unit/test_service_mode_example.py` (the same, served, plus `GET /v1/corp/whoami`) |
 | Built-in enterprise adapter | `JwtBearerAuthenticator` by configuration (`LPB_AUTH=jwt`, D45, `adapters/jwt.py`) |
 
 **Gaps against the criteria:**
@@ -46,7 +46,7 @@ Status block still says "planned … no code has changed", which is stale):
 | # | Gap | Evidence |
 | --- | --- | --- |
 | E1 | **Examples are repository tests, not consumers of a built package.** They run against the source tree; CI installs the wheel only for `lpb smoke` and `lpb revision` (`ci.yml`, job `build-install`) | `tests/unit/test_extension_examples.py` |
-| E2 | **Examples use non-public names.** `DefaultPolicy` from `livepeer_builder.services.policy` (line 33, used as `TeamReadPolicy`'s fallback, line 83) and `StaticDiscoverySource` from `livepeer_builder.adapters.static` (line 18). Neither module is in `PUBLIC_MODULES` (`test_public_api.py`), and the examples are not in its `APPLICATIONS`. `extending-the-engine.md` tells implementers to delegate to `DefaultPolicy` | `test_public_api.py`, root `__all__` |
+| E2 | **Examples use non-public names.** `DefaultPolicy` from `livepeer_builder.services.policy` (line 33, used as `TeamReadPolicy`'s fallback, line 83). `StaticDiscoverySource` was the second; D63 removed it, and the discovery example now wraps `parts.discovery_source` through `decorate`. `livepeer_builder.services.policy` is not in `PUBLIC_MODULES` (`test_public_api.py`), and the examples are not in its `APPLICATIONS`. `extending-the-engine.md` tells implementers to delegate to `DefaultPolicy` | `test_public_api.py`, root `__all__` |
 | E3 | **No single versioned candidate.** Only `v0.1.0` (19 October) is tagged; `d3df806` is `v0.1.0-147`. Consumers pin four different commits: ChatLPT `2134e29` (`pyproject.toml`), inference-gateway `0d0b532`, the console's images `d3df806`, the enterprise desk's recorded pin `93c8910` (`src/lib/pins.ts`, M2) | `git describe`; consumer files |
 | E4 | **The trusted-backend authenticator is not built.** A `service` credential with `actors.assert` can be issued (`services/keys.py:157`), but nothing honors `Livepeer-Actor` (not found in `src/`). Defined in [access.md](../../contracts/access.md#service-mode), tech debt T7 | `grep` |
 | E5 | **No mock-commerce or reporting fixture.** Not found in `src/`, `tests/` or `docs/` | `grep -i commerce` |
@@ -92,7 +92,7 @@ Each has its own `pyproject.toml` depending on `livepeer-builder[server]`; a new
 installs `dist/*.whl` and each example into a clean venv and runs its tests. `check_docs.py` example
 regions point at `examples/…`. `test_public_api.py` adds the example sources to `APPLICATIONS`, which
 fixes E2 by exporting what an implementer needs: `DefaultPolicy` (root `__all__`, as the base a custom
-policy delegates to) and `StaticDiscoverySource` (from `livepeer_builder.testing`, or the root).
+policy delegates to).
 
 ### 2. Enterprise authentication without a user-facing engine key
 
@@ -151,7 +151,7 @@ record why. `CredentialResolver` and `AllowanceReader` stay non-suppliable (inte
 | `examples/{embedded,service,commerce}/` (new) | the three examples with their tests and `pyproject.toml` |
 | `tests/unit/test_extension_examples.py`, `test_service_mode_example.py` | move to `examples/`; keep thin re-run shims only if needed |
 | `tests/structure/test_public_api.py` | example sources join `APPLICATIONS` |
-| `src/livepeer_builder/__init__.py`, `testing/__init__.py` | export `DefaultPolicy`, `StaticDiscoverySource` |
+| `src/livepeer_builder/__init__.py`, `testing/__init__.py` | export `DefaultPolicy` |
 | `adapters/auth.py`, `runtime/assembly.py`, `config.py` | `ServiceCredentialAuthenticator`, wired when keys are on |
 | `http/app.py` → `http/routes/*.py`, `http/errors.py` | router factories, public `install_error_handlers` (#25) |
 | `.github/workflows/ci.yml`, `scripts/check_docs.py` | `examples` job on the wheel; region paths |

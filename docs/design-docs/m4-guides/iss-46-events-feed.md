@@ -298,8 +298,9 @@ collector raises lag in health; it never blocks a job or another tenant's delive
     name once at registration is not enough: it can resolve elsewhere at delivery (DNS rebinding), and
     an HTTPS answer can redirect to `http://169.254.169.254/`. So the worker:
     - requires HTTPS;
-    - resolves at each delivery and judges **every** address returned with discovery's
-      `public_address` (`discovery/probe.py:47`). It already refuses what a list of ranges misses:
+    - resolves at each delivery and judges **every** address returned as `lpb discovery`'s
+      `public_address` did (`discovery/probe.py:47`; D63 removed that package, so `probe.py` here means
+      `src/livepeer_builder/discovery/probe.py` at `c3d615f`, the last commit that has it). It already refuses what a list of ranges misses:
       IPv4 carried in IPv6 (mapped, NAT64 `64:ff9b::/96`, 6to4, IPv4-compatible), site-local
       `fec0::/10`, and shared CGNAT space, which holds a cloud metadata address (`100.100.100.200`).
       Python's `is_global` alone accepts `64:ff9b::a9fe:a9fe`, which is `169.254.169.254`;

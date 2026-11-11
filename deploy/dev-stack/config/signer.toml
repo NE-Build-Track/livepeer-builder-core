@@ -8,7 +8,7 @@ MaxHourlyPrice = "100"
 MaxFixedPrice = "1"
 AuthWebhookFile = "/run/secrets/webhook-url"
 AuthWebhookHeadersFile = "/run/secrets/webhook-headers"
-# The signer only signs payments. Discovery is livepeer-discovery (config/discovery.toml, D43);
+# The signer only signs payments. Discovery is livepeer-discovery (config/discovery.toml, D63);
 # an Orchestrators list here was never a payment control, so there is none.
 
 [Kafka]

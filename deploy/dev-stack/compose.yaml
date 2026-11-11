@@ -3,7 +3,7 @@
 # Batteries (embedded Kafka) + livepeer/node remote signer + the discovery service + the engine.
 # Orchestrators are assumed to exist on the network: discovery is livepeer/node's
 # livepeer-discovery in static mode (config/discovery.toml), and the signer only signs payments.
-# Upstream sources are pinned to the M2 baseline commits (docs/references/upstream-baseline.md).
+# Upstream sources are pinned to the commits in docs/references/upstream-baseline.md.
 name: livepeer-builder-dev
 
 services:

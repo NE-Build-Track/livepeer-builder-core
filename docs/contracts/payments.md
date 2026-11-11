@@ -31,7 +31,7 @@ network-accounting ledger. The engine projects cost per job and never keeps a se
 ## Who answers what
 
 A payment refusal is decided by Batteries, passed on by the signer, and reported by the engine as
-`Failure.reason` (D58; [engine.md](engine.md#failures)). Verified at livepeer/node `406b248` and
+`Failure.reason` (D58; [engine.md](engine.md#failures)). Verified at livepeer/node `406b248` (the pin on 29 October; `f45d83f` since D63) and
 `e75e5b6` and Batteries `ca09e47`.
 
 | Batteries decides (`internal/store/auth.go`) | The signer answers (`signer/auth.go`) | The engine reports | REST |
@@ -179,7 +179,7 @@ Which commands take a reference:
 | --- | --- |
 | Provision, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
 | Issue access key, rotate access key | **required**: creates a live engine credential |
-| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeat after one finished answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
+| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeated set-status sets the same status at the provider again and answers with the actor in that status; after a revoke it is `404`, as for an actor that is not provisioned. A repeated revoke answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
 
 ## Allowance, signer funding and spending guarantees
 

@@ -161,7 +161,7 @@ wheel by version. The console's `pins.test.ts` may assert that the engine pin eq
 | `deploy/dev-stack/engine/Dockerfile` | Build `FROM` the release image, or is deleted |
 | `scripts/release_check.py` (new) | Version, tag, wheel contents, checksums |
 | `tests/store/test_packaging.py` | Inspect the wheel named by the build, not `sorted(...)[-1]` |
-| `tests/structure/test_release.py` (new) | Workflow and Dockerfile invariants, like `test_deploy.py` |
+| `tests/structure/test_release.py` (new) | Workflow and Dockerfile invariants, like `test_dev_stack.py` |
 | `CHANGELOG.md`, `docs/RELEASING.md`, `docs/references/reuse-and-licenses.md`, `deploy/examples/` (new) | Notes, procedure, H5 record, configuration examples |
 | `docs/index.md`, `AGENTS.md` | Link the new docs |
 
@@ -172,7 +172,7 @@ Structure tests over workflow YAML and Dockerfiles. CI runs as the integration l
 release** (`v0.2.0` or an `rc` tag) kept as a draft, which is the end-to-end test of the procedure.
 
 **Seams.** The version string and the wheel's file list are values; there are no doubles. The workflow
-is tested by reading its YAML (as `test_deploy.py` reads deploy config) and, finally, by the rehearsal.
+is tested by reading its YAML (as `test_dev_stack.py` reads the dev-stack config) and, finally, by the rehearsal.
 
 **Starter test:** `release_version("0.1.1.dev147+gd3df806")` is refused, and `release_version("1.0.0rc1")`
 is accepted.

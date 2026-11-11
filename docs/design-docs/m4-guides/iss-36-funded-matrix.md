@@ -163,7 +163,7 @@ green; the ISS-19 matrix updated with links; open limitations listed for ISS-39.
 
 | Upstream | Needed? | Why / workaround |
 | --- | --- | --- |
-| livepeer/node | No | Pinned `406b248`; payments observed as in M3 |
+| livepeer/node | No | Pinned `f45d83f`; payments observed as in M3 |
 | livepeer-python-gateway | No | The engine owns the paid call (D53) |
 | clearinghouse-batteries | No | Usage reads with a read token; configuration 2 limits per ISS-31 |
 

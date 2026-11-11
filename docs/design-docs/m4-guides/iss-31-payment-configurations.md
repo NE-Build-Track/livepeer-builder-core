@@ -159,7 +159,7 @@ for the arrangement; console `m3-environment.md` and `m3-journey.md` (the "secon
 | `cli.py` | `lpb payments check` |
 | `contracts/health.py`, `services/` health | `payment_operation` on `EngineHealth` |
 | `deploy/separate-operator/` (new) | two compose files, credential template, README |
-| `tests/unit/test_adapters.py`, `test_assembly.py`, `test_payments.py`, `test_cli.py`, `tests/structure/test_deploy.py` | below |
+| `tests/unit/test_adapters.py`, `test_assembly.py`, `test_payments.py`, `test_cli.py`, `tests/structure/test_dev_stack.py` | below |
 
 ## Test plan (test-driven)
 

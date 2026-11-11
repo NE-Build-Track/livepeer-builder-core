@@ -88,7 +88,7 @@ runner-side gaps (G5–G8) are for the runner teams to work around in their own 
 
 - The funding loop (`remote_signer.py:175-197`) stops silently on a 4xx other than 408 and 429, retries
   5xx and network errors forever, and reads any 404 as "released". Renewals and refreshes follow
-  redirects (#72, fixed upstream by livepeer-python-gateway#87, not yet in our pin). builder-core starts
+  redirects (#72; not addressed in builder-core, T27). builder-core starts
   this loop and drops its outcome (T17); `True` from it means released.
 - A 480 refresh calls `_refresh_payment_params`, which swaps only `payment_params` and keeps the challenge's
   manifest and `_state`, so the signer's `StateID` survives the refresh.
@@ -210,7 +210,7 @@ Renewals reuse the stored manifest and are **not** evidence writes; a refresh ke
 missed 3 s renewals), so the ending is `released`. Accept that, or ask for richer funding outcomes
 upstream beside #87. An engine-owned loop is ruled out by #72's closing note.
 
-**Accepted risk until the pin includes #87:** metered renewals and refreshes follow redirects. The paid
+**Accepted risk (T27; Mike, 10 November):** metered renewals and refreshes follow redirects. The paid
 orchestrators come from the deployment's own list or on-chain directory.
 
 **Not pursued (need upstream changes):**
@@ -398,7 +398,7 @@ Recommendations until the guides are locked.
 
 | Item | Category | Guide or placement | State at `d3df806` |
 | --- | --- | --- | --- |
-| #72 renewals and refreshes follow redirects | C2 | Upstream (livepeer-python-gateway#87); SDK pin bump | #72 closed as not planned |
+| #72 renewals and refreshes follow redirects | C2 | Not addressed in builder-core: accepted risk (T27) | #72 closed as not planned |
 | T17 funding outcome dropped | C2 | ISS-28 (streams), ISS-27 (sessions) | Open |
 | P1 jobs reserve persistent runners | C1 | ISS-27 slice 1 | Open bug |
 | #73 P1 alias routes | C7 | ISS-29, if ISS-27 adopts them | Open |

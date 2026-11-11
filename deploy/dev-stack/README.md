@@ -11,7 +11,7 @@ payment side, node's discovery and the engine:
 | `discovery` | livepeer/node's `livepeer-discovery` from that same commit, static mode, on `127.0.0.1:8939`. The list is `config/discovery.toml`. The engine still only reads `GET /discovery` ([contract](../../docs/contracts/discovery.md)) |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from discovery (`LPB_DISCOVERY_URL`) |
 
-Upstream sources are built from the M2 baseline commits
+Upstream sources are built from the pinned commits
 ([upstream-baseline](../../docs/references/upstream-baseline.md)), so the first build takes a while.
 
 ## Prerequisites
@@ -66,7 +66,7 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
 
 Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliation?actor_id=alice`.
 
-## Status (19 October)
+## Status (19 October, at the pins of that day)
 
 - **Session-log attribution works live** on node v1.0.2 and the NE-Build-Track pins: entries
   `matched`, reconciliation `balanced` ([evidence](../../docs/references/evidence/2026-10-19-dev-stack-session-log.md)).

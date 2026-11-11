@@ -1,7 +1,6 @@
 # ISS-11 + ISS-14: Idempotency for job submission and admin commands
 
-**Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
-rules become a decision in [m3-decisions.md](../m3-decisions.md) (numbered then).\
+**Status:** built and merged ([#76](https://github.com/NE-Build-Track/livepeer-builder-core/pull/76), 29 October 2026). The rules are [D57](../m3-decisions.md) and [engine.md#idempotency](../../contracts/engine.md#idempotency); this guide is the proposal they came from, kept as written. Review changed four things, and D57 wins where the text below differs: the closed list of jobs that may run again (D57 (13), (19); `services/operations.py`), a refusal frees the reference only when nothing was applied (D57 (14)), a resumed provision answers with an existing actor only when it holds the key that run recorded (D57 (15), (21)), and a resumed grant create reads one page per run (D57 (22), (23)).\
 **Trackers:** ISS-11 ([Network-Engineering-SPE#24](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/24)),
 ISS-14 ([#27](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/27)). Replaces the interim rules
 of D11 and closes T2.\

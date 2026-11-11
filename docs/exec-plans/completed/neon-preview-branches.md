@@ -24,8 +24,9 @@ that data, migrates it, and the branch is deleted when the PR closes.
   Autoscaling is 0.25–2 CU.
 - [x] Production's previous Postgres restored onto `main`. Alembic revision `0005`. Row counts matched
   at cutover. `GET /livez` on the production engine returns 200, and later usage rows are on Neon.
-- [x] The engine URL is the direct Neon host. The entrypoint maps `sslmode` to asyncpg's `ssl` and
-  drops `channel_binding`. Preview deploys run migrations. Tests cover both.
+- [x] The engine URL is the direct Neon host. The deploy entrypoint mapped `sslmode` to asyncpg's
+  `ssl` and dropped `channel_binding`, and preview deploys ran migrations. That entrypoint and its
+  tests left this repository with #95.
 - [x] A preview database is a Neon branch of production `main`. Since 9 November this repository has
   no preview workflow. Production stays on Neon `main`.
 - [x] `NEON_API_KEY` and `NEON_PROJECT_ID` are set on the GitHub `preview` environment. PR #60

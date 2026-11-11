@@ -77,6 +77,13 @@ From the ticket, the 21 October M3 plan and the guide's criteria check:
   `lpb gen-docs --check` and `lpb smoke` pass. One run under coverage tripped the 40 ms bound in
   `test_stream_lifecycle.py::test_aclose_never_waits_for_the_runner[1.0]` (timing, under a parallel
   load; passes alone and on the rerun; not on the cost path), as in the ISS-12 plan.
+- 2026-11-11: CI on #32 went red with no code change: `test_keys_jobs_usage_and_costs_over_rest` read
+  `GET /v1/costs/summary` with no window, and the route filled it from the wall clock while the engine
+  ran on `FixedClock` (12 October). Thirty days on, the test's job fell out of the window. The default
+  window (`end` = now, `start` = 30 days before) moved from the route into `CostService.summary`, which
+  reads the engine's injected `Clock`; `CostsApi.summary` takes `start` and `end` as optional, and
+  `FakeEngine` shares the same `summary_window` helper. No REST change. New test: the default window
+  follows the engine's clock.
 
 ## Decision log
 

@@ -6,7 +6,7 @@ payment side, node's discovery and the engine:
 
 | Service | What it is |
 | --- | --- |
-| `clearinghouse` | Clearinghouse Batteries `ca09e47`: authorization webhook, management API, embedded Kafka, accounting |
+| `clearinghouse` | Clearinghouse Batteries v0.0.3 (`03bc9fb`): authorization webhook, management API, embedded Kafka, accounting |
 | `signer` | livepeer/node `f45d83f` remote signer (main, 10 commits after v1.0.6). It only signs payments |
 | `discovery` | livepeer/node's `livepeer-discovery` from that same commit, static mode, on `127.0.0.1:8939`. The list is `config/discovery.toml`. The engine still only reads `GET /discovery` ([contract](../../docs/contracts/discovery.md)) |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from discovery (`LPB_DISCOVERY_URL`) |
@@ -91,6 +91,11 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `registry.livepeer.tools`; leave it empty for local-only names. Builds never push; publishing an
   image is an explicit `docker compose push <service>`. Base images (`python`, Go) still come from
   Docker Hub.
+- **Stacks on Batteries `ca09e47` need a rebuild** (`docker compose up -d --build clearinghouse`, then
+  recreate the signer as below). v0.0.3 refuses a non-loopback bind without `unsafe@`, so the old
+  `config/clearinghouse.toml` no longer starts it. On its first start it applies migrations `003` and
+  `004` to the `paid-state` database; `ca09e47` then refuses to start on it ("unknown migration")
+  ([the Batteries pin](../../docs/references/upstream-baseline.md#the-batteries-pin)).
 - **Restarting `clearinghouse` needs the signer recreated.** The signer runs in clearinghouse's network
   namespace (`network_mode: service:clearinghouse`), so after clearinghouse restarts it stays on the old
   namespace and every payment fails `signer_unavailable`. Recreate it: `docker compose up -d

@@ -1,7 +1,7 @@
 # Batteries API (as used by the engine)
 
-Baseline `ca09e47`. Authoritative source: the Batteries `README.md` and
-`internal/app/management.go`.
+Baseline v0.0.3, `03bc9fb` (`internal/app/management.go` is unchanged since `ca09e47`).
+Authoritative source: the Batteries `README.md` and `internal/app/management.go`.
 
 - **Auth:** `Livepeer-Clearinghouse-Token: <management secret>`. A permission covers **every**
   resource of its type. There is no per-grant scoping (that is the [Mode B](../contracts/payments.md#mode-b) gap).

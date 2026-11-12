@@ -5,7 +5,9 @@
 
 ## Store
 
-`EngineStore` (in `protocols/`) is the only persistence interface services see. `SqlStore`
+`EngineStore` (in `protocols/`) is the only persistence interface services see. Its optional
+`maintenance` (`StoreMaintenance`: `purge`, `schema_revision`) is the store's housekeeping; `None`
+means no purge and no reported schema revision. `SqlStore`
 implements it with SQLAlchemy Core (async) for **SQLite (default)** and **PostgreSQL (optional,
 `[postgres]` extra)**. Both run the same store test suite in CI.
 
@@ -34,10 +36,12 @@ like a source checkout. Version table: `lpb_alembic_version`.
 
 | Setting | Effect | Default |
 | --- | --- | --- |
-| `LPB_RETENTION_JOBS_DAYS` | Deletes `succeeded`/`failed` jobs (attempts, auth IDs, projections) completed before the cutoff. **`uncertain` jobs are kept** until resolved | keep forever |
+| `LPB_RETENTION_JOBS_DAYS` | Deletes `succeeded`/`failed` jobs (attempts, payment sessions, projections) completed before the cutoff. **`uncertain` jobs are kept** until resolved | keep forever |
 | `LPB_RETENTION_USAGE_DAYS` | Deletes cached Batteries usage rows older than the cutoff | keep forever |
 
-The purge runs every 6 hours when configured, or on demand with `lpb purge`. Batteries stays the
+The purge runs every `LPB_RETENTION_INTERVAL_S` (default 21600 s, 6 h) when a retention setting is on,
+or on demand with `lpb purge` (it prints a `PurgeReport`). It runs through the store's `maintenance`
+capability, which `SqlStore` provides; a store without one purges nothing. Batteries stays the
 authority for network accounting. Purging the engine cache never changes provider balances.
 
 ## Backup and restore

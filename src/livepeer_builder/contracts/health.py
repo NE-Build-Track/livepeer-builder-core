@@ -1,4 +1,4 @@
-"""Health contract returned by ``BuilderEngine.health()`` and ``GET /readyz``."""
+"""Operational contracts: ``BuilderEngine.health()`` (``GET /readyz``) and ``BuilderEngine.purge()``."""
 
 from datetime import datetime
 
@@ -16,3 +16,10 @@ class EngineHealth(Contract):
     running_jobs: int
     allocation_mode: AllocationMode
     version: str
+
+
+class PurgeReport(Contract):
+    """What a retention purge deleted (docs/contracts/persistence.md#retention)."""
+
+    jobs_deleted: int
+    usage_rows_deleted: int

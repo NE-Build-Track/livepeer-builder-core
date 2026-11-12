@@ -1,0 +1,7 @@
+Listen = "unsafe@0.0.0.0:8939"
+MetricsListen = "127.0.0.1:8940"
+Nodes = [
+  "https://ai1.eliteencoder.net:8936",
+  "https://livepeer-ai.xodeapp.xyz:38935",
+]
+RefreshInterval = "30s"

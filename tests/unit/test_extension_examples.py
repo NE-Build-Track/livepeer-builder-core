@@ -5,6 +5,7 @@ core patches. The tests wire them into a real BuilderEngine and prove the behavi
 starting point; they are examples, not shipped implementations.
 """
 
+import dataclasses
 import hashlib
 import hmac
 from collections.abc import Mapping, Sequence
@@ -13,8 +14,7 @@ from decimal import Decimal
 
 import pytest
 
-from livepeer_builder import BuilderEngine, EngineSettings
-from livepeer_builder.adapters.static import StaticDiscoverySource
+from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
     AuthProvenance,
@@ -27,11 +27,13 @@ from livepeer_builder.contracts import (
     Runner,
     SecretRef,
 )
+from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.errors import AccessDenied, NotAuthenticated, NotFound
 from livepeer_builder.protocols import AccessPolicy, DiscoverySource
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager, FixedClock, ScriptedTransport, runner
+from livepeer_builder.testing.discovery import serve
 
 # -- 1. Authenticator: trust the enterprise SSO gateway, verified by HMAC ----------------------------
 
@@ -130,7 +132,8 @@ class CheapestReadyFirst:
         del request
 
         def key(r: Runner) -> tuple[Decimal, int]:
-            price = r.rate.amount if r.rate else Decimal("Infinity")
+            rate = payable_rate(r.price_info)
+            price = rate.amount if rate else Decimal("Infinity")
             return price, -(r.capacity_available if r.capacity_available is not None else 1)
 
         return sorted(candidates, key=key)
@@ -160,34 +163,62 @@ def priced(url: str, price: str, orchestrator: str = "https://orch.example") -> 
     return runner(url=url, price=price).model_copy(update={"orchestrator_url": orchestrator})
 
 
+# docs:start wiring
+def enterprise_supply() -> EngineSupply:
+    """Replace: parts that substitute a default outright, or that other parts depend on."""
+    return EngineSupply(
+        authenticators=(SignedSsoHeaderAuthenticator(SECRET),),  # tried before the engine's API keys
+        secret_store=AuditedVaultSecretStore(),  # payment keys never touch the engine database
+        selection=CheapestReadyFirst(),
+    )
+
+
+def enterprise_decorations(parts: EngineParts) -> EngineParts:
+    """Decorate: wrap the configured defaults where they are used."""
+    return dataclasses.replace(
+        parts,
+        policy=TeamReadPolicy(DIRECTORY, fallback=parts.policy),
+        discovery_source=ApprovedOrchestratorsOnly(parts.discovery_source, approved={"https://orch.example"}),
+    )
+
+
+# docs:end wiring
+
+
 @pytest.fixture
 async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore[no-untyped-def]
-    vault = AuditedVaultSecretStore()
     transport = ScriptedTransport()
-    discovery = ApprovedOrchestratorsOnly(
-        StaticDiscoverySource(
-            [
-                priced("https://expensive", "0.50"),
-                priced("https://cheap", "0.10"),
-                priced("https://unapproved", "0.01", orchestrator="https://rogue.example"),
-            ]
-        ),
-        approved={"https://orch.example"},
-    )
-    engine = await BuilderEngine.from_settings(
-        EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False),
+    supply = enterprise_supply()
+    vault = supply.secret_store
+    listed = [
+        priced("https://orch.example/expensive", "0.50"),
+        priced("https://orch.example/cheap", "0.10"),
+        priced("https://rogue.example/unapproved", "0.01", orchestrator="https://rogue.example"),
+    ]
+    install, client = serve(listed)
+
+    def decorate(parts: EngineParts) -> EngineParts:
+        return enterprise_decorations(install(parts))
+
+    under_test = dataclasses.replace(
+        supply,
         store=store,
         clock=clock,
-        authenticators=[SignedSsoHeaderAuthenticator(SECRET)],  # tried before the engine's API keys
-        policy=TeamReadPolicy(DIRECTORY),
-        secret_store=vault,
-        selection=CheapestReadyFirst(),
-        discovery_source=discovery,
         transport=transport,
         allocation_manager=FakeAllocationManager(),
     )
+    engine = await BuilderEngine.create(
+        EngineSettings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            log_json=False,
+            discovery_url="http://discovery.test/discovery",
+        ),
+        supply=under_test,
+        decorate=decorate,
+    )
     await engine.discovery.refresh()
     yield engine, vault, transport
+    await client.aclose()
     await engine.stop()
 
 
@@ -217,6 +248,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     await engine.payments.provision(
         admin,
         ProvisionRequest(
+            operation_ref="provision:acme:alice",
             application_id="acme",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
@@ -228,7 +260,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     transport.steps = [ScriptedTransport.ok()]
     result = await engine.jobs.run(alice, JobRequest(app="example/echo"))
     assert (
-        transport.calls[0][0] == "https://cheap"
+        transport.calls[0][0] == "https://orch.example/cheap"
     )  # price-aware routing; the unapproved runner never appears
     assert ("get", "vault:lpg/acme/alice") in vault.audit
 
@@ -242,7 +274,10 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
         await engine.payments.provision(
             bob,
             ProvisionRequest(
-                application_id="acme", actor_id="bob", amount=Money(amount=Decimal(1), currency="USD")
+                operation_ref="provision:acme:bob",
+                application_id="acme",
+                actor_id="bob",
+                amount=Money(amount=Decimal(1), currency="USD"),
             ),
         )  # admin rules still come from the default policy
 
@@ -251,4 +286,4 @@ async def test_offerings_respect_the_allow_list(enterprise_engine) -> None:  # t
     engine, _, _ = enterprise_engine
     alice = await engine.authenticator.authenticate(sso("alice"))
     runners = engine.discovery.runners(alice, "example/echo")
-    assert {r.url for r in runners} == {"https://expensive", "https://cheap"}
+    assert {r.url for r in runners} == {"https://orch.example/expensive", "https://orch.example/cheap"}

@@ -1,4 +1,5 @@
-"""``lpb``: operator commands. Every command reads LPB_* settings (docs/RELIABILITY.md#operations).
+"""``lpb``: operator commands. Every command but ``verify``, ``gen-secret-key`` and ``gen-docs`` reads the
+LPB_* settings (docs/RELIABILITY.md#operations).
 
 lpb migrate            apply packaged migrations (production runs this before start)
 lpb revision           show the database revision and the package head
@@ -10,7 +11,7 @@ lpb bootstrap-admin    issue the first admin key (one time; printed once)
 lpb gen-secret-key     print a new LPB_SECRET_KEY
 lpb smoke              import, migrate, start, health-check, stop (CI install check)
 lpb serve              run the REST service (needs the [server] extra)
-lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md)
+lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
 """
 
 import argparse
@@ -21,8 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from livepeer_builder.config import EngineSettings
-from livepeer_builder.errors import EngineError
+from livepeer_builder import EngineError, EngineSettings, generate_secret_key
 from livepeer_builder.runtime import BuilderEngine, package_version
 from livepeer_builder.store import SqlStore, backup, current_revision, head_revision, restore, upgrade, verify
 
@@ -108,7 +108,7 @@ async def _verify(args: argparse.Namespace) -> None:
 
 
 async def _purge(_: argparse.Namespace) -> None:
-    engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+    engine = await BuilderEngine.create(EngineSettings.from_env())
     try:
         _emit((await engine.purge()).model_dump())
     finally:
@@ -116,8 +116,10 @@ async def _purge(_: argparse.Namespace) -> None:
 
 
 async def _bootstrap(args: argparse.Namespace) -> None:
-    engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+    engine = await BuilderEngine.create(EngineSettings.from_env())
     try:
+        if engine.keys is None:
+            raise SystemExit("API keys are disabled in this deployment")
         issued = await engine.keys.bootstrap_admin(args.label)
         _emit({"key_id": issued.key.key_id, "token": issued.token, "note": "shown once; store it now"})
     finally:
@@ -125,14 +127,12 @@ async def _bootstrap(args: argparse.Namespace) -> None:
 
 
 async def _gen_secret_key(_: argparse.Namespace) -> None:
-    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
-
-    print(EncryptedDbSecretStore.generate_key())
+    print(generate_secret_key())
 
 
 async def _smoke(_: argparse.Namespace) -> int:
     """The CI install check: proves the installed wheel imports, migrates, starts and stops."""
-    engine = await BuilderEngine.from_settings(EngineSettings.from_env())
+    engine = await BuilderEngine.create(EngineSettings.from_env())
     try:
         await engine.start()
         health = engine.health()
@@ -146,21 +146,11 @@ async def _smoke(_: argparse.Namespace) -> int:
 
 async def _serve(_: argparse.Namespace) -> None:
     try:
-        import uvicorn
-
-        from livepeer_builder.http import create_app
+        from livepeer_builder.http import serve
     except ImportError:
         print("the REST service needs: pip install 'livepeer-builder[server]'", file=sys.stderr)
         raise SystemExit(2) from None
-    from livepeer_builder.runtime.logging import configure_logging
-
-    settings = EngineSettings.from_env()
-    configure_logging(json_lines=settings.log_json)
-    app = create_app(await BuilderEngine.from_settings(settings))
-    server = uvicorn.Server(
-        uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
-    )
-    await server.serve()
+    await serve(EngineSettings.from_env())
 
 
 async def _gen_docs(args: argparse.Namespace) -> int:

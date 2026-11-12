@@ -1,4 +1,4 @@
-"""Contracts defined in M2 and implemented later: the events feed (M3) and persistent sessions (M4).
+"""Contracts defined in M2 and implemented later: the events feed (held, D60) and persistent sessions (M4).
 
 They are part of the public contract now so consumers can design against them. Calling the
 services that serve them raises ``NotImplementedInMilestone``. See docs/contracts/events.md and

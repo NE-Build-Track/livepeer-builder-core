@@ -82,15 +82,19 @@ jobs = Table(
     Column("usage", JSON, nullable=True),
     Column("created_at", UTCDateTime, nullable=False),
     Column("completed_at", UTCDateTime, nullable=True),
+    Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # +1 per evidence change
+    # 0009 (D57): a job re-dispatched under its reference after it never reached a runner
+    Column("retry_of", String(36), nullable=True),  # the failed job this one retries
+    Column("superseded_by", String(36), nullable=True),  # the job that retried this one
 )
-Index(
+Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
     jobs.c.application_id,
     jobs.c.actor_id,
     jobs.c.operation_ref,
     unique=True,
-    sqlite_where=text("operation_ref IS NOT NULL"),
-    postgresql_where=text("operation_ref IS NOT NULL"),
+    sqlite_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
+    postgresql_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
 )
 Index("lpb_jobs_owner_created", jobs.c.application_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
@@ -108,6 +112,9 @@ attempts = Table(
     Column("status_code", Integer, nullable=True),
     Column("started_at", UTCDateTime, nullable=False),
     Column("ended_at", UTCDateTime, nullable=True),
+    Column("challenge_ms", Integer, nullable=True),
+    Column("signing_ms", Integer, nullable=True),
+    Column("response_ms", Integer, nullable=True),
 )
 
 payment_sessions = Table(
@@ -119,6 +126,7 @@ payment_sessions = Table(
     Column("manifest_id", String(ID), nullable=False),
     Column("payment_session_id", String(ID), nullable=True),
     Column("match_status", String(16), nullable=False),
+    Column("payment_state", String(16), nullable=False, server_default="paid"),  # D54
     ForeignKeyConstraint(
         ["job_id", "attempt_number"], ["lpb_attempts.job_id", "lpb_attempts.number"], ondelete="CASCADE"
     ),
@@ -141,6 +149,18 @@ actors = Table(
     Column("status", String(16), nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
+    Column("label", String(ID), nullable=False, server_default=""),  # readable beside an opaque actor_id
+)
+
+# People an identity provider signed in as actors, before or after an allocation (#52, D48).
+actor_sightings = Table(
+    "lpb_actor_sightings",
+    metadata,
+    Column("application_id", String(ID), primary_key=True),
+    Column("actor_id", String(ID), primary_key=True),
+    Column("name", String(ID), nullable=False, server_default=""),
+    Column("first_seen_at", UTCDateTime, nullable=False),
+    Column("last_seen_at", UTCDateTime, nullable=False),
 )
 
 secrets = Table(
@@ -190,6 +210,27 @@ cost_projections = Table(
     Column("attempts", JSON, nullable=False, server_default=text("'[]'")),
     Column("first_observed_at", UTCDateTime, nullable=True),
     Column("updated_at", UTCDateTime, nullable=False),
+    Column("evidence_version", Integer, nullable=False, server_default=text("0")),  # the job's, when computed
+)
+
+# -- 0010: the operation ledger (D57, ISS-11) ----------------------------------------------------------
+
+# One repeat-safe admin command per caller scope and reference: the primary key is the unique
+# constraint the reference is stored under. Never a secret in context or result.
+operations = Table(
+    "lpb_operations",
+    metadata,
+    Column("application_id", String(ID), primary_key=True),
+    Column("actor_id", String(ID), primary_key=True),
+    Column("operation_ref", String(ID), primary_key=True),
+    Column("command", String(32), nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    Column("state", String(16), nullable=False),  # started -> done
+    Column("fencing_token", Integer, nullable=False),  # +1 per resume; every later write checks it
+    Column("context", JSON, nullable=False),
+    Column("result", JSON, nullable=True),
+    Column("started_at", UTCDateTime, nullable=False),
+    Column("completed_at", UTCDateTime, nullable=True),
 )
 
 VERSION_TABLE = "lpb_alembic_version"

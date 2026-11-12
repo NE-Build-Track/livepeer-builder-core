@@ -1,6 +1,6 @@
 # livepeer/node signer (as relied on by the engine)
 
-Baseline NE-Build-Track/node `406b248` (v1.0.2; was `f970be6`, and `1432123` before that). Since `f970be6` the signer takes the orchestrator's identity from `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`; payment state and the `orch_address` in events are the recipient. Source: `signer/service.go`, `signer/events.go`, `docs/http-api.md`,
+Baseline livepeer/node `f45d83f` (main, 10 commits after v1.0.6; was `406b248` / v1.0.2, and `f970be6` and `1432123` before that). Since `f970be6` the signer takes the orchestrator's identity from `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`; payment state and the `orch_address` in events are the recipient. Source: `signer/service.go`, `signer/events.go`, `docs/http-api.md`,
 `docs/signer.md`.
 
 - **Authorization webhook:** before signing, the signer POSTs `{headers, state}` to the configured
@@ -15,7 +15,8 @@ Baseline NE-Build-Track/node `406b248` (v1.0.2; was `f970be6`, and `1432123` bef
 - **ManifestID:** an empty `ManifestID` defaults to `OrchestratorInfo.Auth.SessionID`; any other value must
   equal it, or the signer answers 400 `manifest ID does not match payment params` (`service.go:371`).
   The caller supplies both, and the signer doesn't verify them against the orchestrator (D20, T13).
-- **Discovery TLS:** the signer verifies orchestrator certificates and has no opt-out (D27, T12).
+- **Discovery:** the engine does not use the signer for discovery, and the signer contacts no
+  orchestrator (D63; T12 is resolved). It only signs.
 - **Event fields:** `auth_id`, `manifest_id`, `session_id` (state ID), `sequence_number`,
   `num_tickets`, `computed_fee` (wei), `computed_fee_usd`, `billable_secs`, `pixels`,
   `payer_address`, `orch_address`.

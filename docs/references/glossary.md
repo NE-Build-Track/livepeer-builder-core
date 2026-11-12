@@ -20,7 +20,7 @@
 | **`manifest_id`** | The orchestrator's session label from the 402 challenge. The session log uses it, with `allocation_id`, to find the Batteries `payment_session_id`. It is not itself the billing key (D20, T13) |
 | **Mode A / Mode B** | Self-operated payments, or a hosted payment operator (deferred to M4) |
 | **Node key vs recipient** | An orchestrator's operational signing account vs its registered account that tickets pay. Since `f970be6` the node signer pays the recipient and ignores the node address (T10) |
-| **`operation_ref`** | The caller's retry key; one dispatch per (application, actor, ref) |
+| **`operation_ref`** | The caller's retry key; at most one job per (application, actor, ref) reaches a runner (D57) |
 | **`per_actor` / `per_application`** | Allocation modes: one allocation per actor (default), or one shared configured key |
 | **Remote signer** | The livepeer/node service that signs payment tickets for gateways, after Batteries authorizes |
 | **Reserved** | Defined in the contract, implemented in a later milestone; answers 501 |

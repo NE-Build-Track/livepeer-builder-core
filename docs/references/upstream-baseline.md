@@ -8,7 +8,7 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 | --- | --- | --- | --- |
 | Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (12 October baseline); pinned now to `2017a80` on `main` (26 October: [#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), [#80](https://github.com/livepeer/livepeer-python-gateway/pull/80), [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), [#83](https://github.com/livepeer/livepeer-python-gateway/pull/83); was `76a1a1c`, and `3238731` on the NE fork before that) | `adapters/sdk.py` |
 | Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `f45d83fd68f73d195dffe8b45f6cac296d023c49` (main, 10 commits after v1.0.6; was `406b248` / v1.0.2, and `f970be6` and `1432123` before that). The dev stack builds the signer and `livepeer-discovery` from this commit. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery` output, which the discovery reader is tested against; refresh it when this pin moves | dev stack; `HttpDiscoverySource`; [node-signer.md](node-signer.md) |
-| Clearinghouse Batteries | [livepeer/clearinghouse-batteries](https://github.com/livepeer/clearinghouse-batteries) | `ca09e47c067682fb48c3f15425546fb6aa5b6659`. Built from upstream since 28 October, at the same commit: the NE-Build-Track fork has no commits of its own on any branch | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
+| Clearinghouse Batteries | [livepeer/clearinghouse-batteries](https://github.com/livepeer/clearinghouse-batteries) | `03bc9fb5e15b073e68986ec0261e68d7ecd9598b`, the v0.0.3 release (12 November, [#94](https://github.com/NE-Build-Track/livepeer-builder-core/issues/94); was `ca09e47`). Built from upstream since 28 October: the NE-Build-Track fork has no commits of its own on any branch. See [the Batteries pin](#the-batteries-pin) | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
 
 ## The SDK pin
@@ -50,6 +50,33 @@ signer state. `tests/unit/test_sdk_contract.py` holds the copy to the pinned SDK
 - PyPI `livepeer-gateway` 1.0.0 predates `LivePaymentSession.manifest_id`, so the engine still pins a
   commit (T1).
 - Exit condition: tech debt T1 (re-pin to a release that includes #81).
+
+## The Batteries pin
+
+The dev stack builds Batteries from
+[v0.0.3](https://github.com/livepeer/clearinghouse-batteries/releases/tag/v0.0.3) (`03bc9fb`). It
+moved there from `ca09e47` for
+[clearinghouse-batteries#44](https://github.com/livepeer/clearinghouse-batteries/pull/44) (`5f765aa`),
+which replaces Batteries' own bind parser with boa v1.0.4's `HTTPBind`, as livepeer/node `f45d83f`
+already uses. `UnsafeHTTPBind` and `--unsafe-http-bind` are gone, and a leftover `UnsafeHTTPBind`
+key is ignored. A non-loopback or wildcard listener now needs `unsafe@` on that address, or Batteries
+exits at start; `:port` still means loopback. The dev stack's management API is
+`unsafe@0.0.0.0:8081`, and its webhook stays on `:8080`, where the signer calls it.
+`tests/structure/test_dev_stack.py` checks both.
+
+The management routes the engine calls are unchanged: `internal/app/management.go` is identical at
+both commits, and `internal/store/manage.go` only adds metric bookkeeping. Other changes in the
+range affect payments. They are not yet reviewed against the engine's failure mapping, which was
+verified at `ca09e47` ([payments.md](../contracts/payments.md#who-answers-what); tech debt T28):
+
+- **Kafka lag gate** ([#40](https://github.com/livepeer/clearinghouse-batteries/pull/40), `d47d1ff`).
+  The webhook refuses every authorization with `503` while accounting lag reaches `MaxKafkaLag`
+  (default `60s`) or cannot be measured, including at startup.
+- **Fee checked against the balance** ([#30](https://github.com/livepeer/clearinghouse-batteries/pull/30),
+  `b4462c4`). A ticket fee larger than the allocation's balance is a `402`
+  (`insufficient allocation balance`).
+- `KafkaAdvertisedAddr`, an opt-in `EnableMetrics` listener, and migrations `003` and `004`, which
+  `serve` applies on start.
 
 ## Licenses
 

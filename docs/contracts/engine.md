@@ -262,6 +262,11 @@ Final rules (D57; they replace D11's interim 409). A repeat is identified by
 `payload` (or the raw body), `capability`, `model`, `content_type`, `headers` and `return_http_errors`.
 Limits such as `timeout_s` and `max_attempts` may differ between repeats.
 
+A job's `operation_ref` is the admin commands' `OperationRef`: 1 to 200 characters, no NUL. An empty
+string is a 422 that names the field (a `ValidationError` in process), before anything is written
+(#113, C19); it used to count as a reference, so a second empty-reference job of the same actor was
+answered as a repeat of the first. Send a real reference, or leave the field out.
+
 | The reference names a job that… | Answer | Dispatched? |
 | --- | --- | --- |
 | does not exist | Runs it | yes |

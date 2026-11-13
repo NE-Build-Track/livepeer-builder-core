@@ -12,6 +12,10 @@ from livepeer_builder.protocols import Authenticator, KeyRepo
 from livepeer_builder.utils import token_hash
 
 API_KEY_PREFIX = "lpk_"
+# The longest bearer any authenticator is shown (#113, C22). A fixed constant, not a setting: an engine key
+# is 47 characters and an identity provider's access token a few kilobytes, while parsing a longer one
+# only costs the engine (a deeply nested JWT segment made json.loads raise RecursionError).
+MAX_BEARER_LENGTH = 16 * 1024
 
 
 class ApiKeyAuthenticator:
@@ -41,12 +45,19 @@ class ApiKeyAuthenticator:
 
 
 class AuthenticatorChain:
-    """Runs authenticators in order. The first ActorContext wins; NotAuthenticated stops the chain."""
+    """Runs authenticators in order. The first ActorContext wins; NotAuthenticated stops the chain.
+
+    A bearer longer than ``MAX_BEARER_LENGTH`` is refused first, so no authenticator sees it: the API-key
+    path and a deployment's own authenticators included.
+    """
 
     def __init__(self, authenticators: Sequence[Authenticator]) -> None:
         self._authenticators = tuple(authenticators)
 
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
+        token = bearer_token(request)
+        if token is not None and len(token) > MAX_BEARER_LENGTH:
+            raise NotAuthenticated("the bearer token is longer than 16 KiB")
         for authenticator in self._authenticators:
             actor = await authenticator.authenticate(request)
             if actor is not None:

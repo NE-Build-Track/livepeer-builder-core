@@ -50,6 +50,10 @@ class AccessPolicy(Protocol):
 - `AuthenticatorChain` runs the deployment's own authenticators (`EngineSupply.authenticators`) in
   order, then `ApiKeyAuthenticator` when engine API keys are on, and combines their challenges into one
   `WWW-Authenticate` header.
+- **A bearer longer than 16 KiB is refused first (#113, C22).** The chain answers `NotAuthenticated`
+  (401) before any authenticator sees an `Authorization: Bearer` credential longer than 16,384
+  characters, so it also protects the API-key path and a deployment's own authenticators. The cap is a
+  fixed constant (`adapters/auth.py`, `MAX_BEARER_LENGTH`), not a setting.
 - **Imported mode needs no authenticator.** The application builds `ActorContext` itself. The policy
   still applies.
 
@@ -208,8 +212,8 @@ mode, with no code:
 
 | The credential | Answer |
 | --- | --- |
-| Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
-| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, a key the algorithm cannot use or one that is too short, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
+| Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn. A payload that cannot be read, a deeply nested one that makes JSON parsing raise `RecursionError` included, names no issuer (#113, C22) |
+| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, a key the algorithm cannot use or one that is too short, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text) or that cannot be read, a deeply nested one included (`RecursionError`, #113, C22). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
 | The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503) with a fixed message, because no token can be checked. The details are logged |
 
 **Claims become an `ActorContext`:**

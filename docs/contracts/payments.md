@@ -87,6 +87,33 @@ The same limit applies to every id, label and reference a request carries (`Stor
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
 `label`.
 
+**The new key must have somewhere to go (#112, C2).** Provisioning funds the provider key before the
+actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
+checks stop that:
+
+- **At startup.** An engine in `per_actor` mode with a payment provider and the built-in secret store
+  refuses to start when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the
+  error names the setting. The check runs on the parts the engine will run with, after `decorate`: a
+  decorator that turns the provider off, or installs a store of its own, is not refused, and one that
+  adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
+  at boot, such as a sealed vault, still starts and is asked per request.
+- **Per request.** Provisioning and key rotation ask the secret store whether it can write in the step
+  that mints the key, just before the provider is called. The check is the store's optional
+  `writable()` (`WritableSecretStore`); a supplied store that leaves it out is not asked. A `False` is
+  `InvalidRequest` (HTTP 400).
+  - On a first run nothing was sent to the provider and nothing was noted, so the reference stays
+    free and the same command runs once the store can write.
+  - A repeat of a finished command stores nothing and is not asked: it gets the recorded result.
+  - A resume whose key is already stored is not asked either: it goes on, for a rotation to revoke the
+    old key. The stored key must be the one of the provider call about to be sent: the record notes the
+    call's idempotency key beside the secret's reference, and only a match skips the check. A resume
+    after the actor was revoked, or provisioned again, sends another provider call whose key is not
+    stored yet, so it is asked before that call.
+  - A resume that still has a key to store is refused, and the message says that an earlier attempt
+    may have reached the provider. It does not say that nothing was sent, and the refusal does not
+    free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once
+    the store can write.
+
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
 | `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |
@@ -143,7 +170,11 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   rotation's new key stored, then the old key's revoke refused) leaves the record `started`, so a resume
   finishes the command from what the record noted. A timeout, a transport error, a provider 5xx or a
   crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
-  new reference.
+  new reference. A refusal on a *resumed* run never frees the reference either (#112): the attempt it
+  follows ended in an unknown outcome, and a provider call that timed out may have been applied with
+  nothing noted. The record stays `started`, another request on that reference is still 409
+  `operation_conflict`, and the same request resumes again after `LPB_OPERATION_STALE_S`. The one
+  exception is `already_provisioned`, below.
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
   Every later write of the slower run (its context, its result, its abandonment) checks the token and
   is refused, so a run presumed dead that was only slow answers with the recorded result instead. A

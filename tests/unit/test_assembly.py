@@ -11,20 +11,21 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livepeer_builder import BuilderEngine, EngineSettings, generate_secret_key
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.contracts import ActorContext, AuthRequest, Runner
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import DiscoverySource
 from livepeer_builder.runtime.assembly import (
     UNSET,
     ApiKeys,
+    Decorate,
     EngineParts,
     EngineSupply,
     assemble,
     default_parts,
 )
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import FakeAllocationManager, FixedClock
+from livepeer_builder.testing import FakeAllocationManager, FixedClock, MemorySecretStore
 from tests.unit.test_runtime import LOOPS, running_loops
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
@@ -100,6 +101,91 @@ async def test_a_supplied_store_is_used_and_the_configured_database_is_never_ope
     assert (
         await EncryptedDbSecretStore(store, key, clock).get(ref) == "lpg_secret"
     )  # written to the supplied store
+
+
+PROVIDER_SETTINGS = {"batteries_url": "http://127.0.0.1:9", "batteries_token": "t"}
+
+
+@pytest.mark.parametrize("configured", ["supplied", "settings"])
+async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret_key(
+    store: SqlStore, clock: FixedClock, configured: str
+) -> None:
+    """#112 C2: provisioning would fund the allocation, then fail to keep its key. So the engine does not
+    start, and the error names the setting."""
+    supply = EngineSupply(store=store, clock=clock)
+    values: dict[str, object] = {}
+    if configured == "supplied":
+        supply = dataclasses.replace(supply, allocation_manager=FakeAllocationManager())
+    else:
+        values = PROVIDER_SETTINGS
+    with pytest.raises(ValueError, match="LPB_SECRET_KEY"):
+        await BuilderEngine.create(settings(**values), supply=supply)
+
+
+@pytest.mark.parametrize(
+    ("values", "supplied"),
+    [
+        ({**PROVIDER_SETTINGS, "secret_key": generate_secret_key()}, {}),  # the key is set
+        ({}, {}),  # no provider: provisioning is refused before any call
+        ({**PROVIDER_SETTINGS, "allocation_mode": "per_application", "shared_payment_key": "lpg_k"}, {}),
+        (PROVIDER_SETTINGS, {"secret_store": MemorySecretStore()}),  # a plug-in store: asked per request
+    ],
+    ids=["key", "no-provider", "per-application", "plug-in-store"],
+)
+async def test_an_engine_that_can_keep_its_payment_keys_starts(
+    store: SqlStore, clock: FixedClock, values: dict[str, object], supplied: dict[str, object]
+) -> None:
+    supply = dataclasses.replace(EngineSupply(store=store, clock=clock), **supplied)
+    engine = await BuilderEngine.create(settings(**values), supply=supply)
+    await engine.stop()
+
+
+def _without_provider(parts: EngineParts) -> EngineParts:
+    return dataclasses.replace(parts, allocation_manager=None)
+
+
+def _with_plug_in_store(parts: EngineParts) -> EngineParts:
+    return dataclasses.replace(parts, secret_store=MemorySecretStore())
+
+
+def _with_provider(parts: EngineParts) -> EngineParts:
+    return dataclasses.replace(parts, allocation_manager=FakeAllocationManager())
+
+
+@pytest.mark.parametrize(
+    "decorate", [_without_provider, _with_plug_in_store], ids=["removes-the-provider", "plug-in-store"]
+)
+async def test_the_secret_key_check_judges_the_parts_a_decorator_returned(
+    store: SqlStore, clock: FixedClock, decorate: Decorate
+) -> None:
+    """The check ran before ``decorate`` and refused an engine whose final parts were safe (review of
+    #128): a decorator may turn the provider off, or install a store that keeps keys by itself."""
+    supply = EngineSupply(store=store, clock=clock)
+    engine = await BuilderEngine.create(settings(**PROVIDER_SETTINGS), supply=supply, decorate=decorate)
+    await engine.stop()
+
+
+async def test_a_decorator_that_adds_a_provider_needs_the_secret_key_too(
+    store: SqlStore, clock: FixedClock
+) -> None:
+    with pytest.raises(ValueError, match="LPB_SECRET_KEY"):
+        await BuilderEngine.create(
+            settings(), supply=EngineSupply(store=store, clock=clock), decorate=_with_provider
+        )
+
+
+async def test_the_built_in_store_supplied_without_its_database_needs_the_secret_key(
+    store: SqlStore, clock: FixedClock
+) -> None:
+    """The store is asked, whoever built it: the built-in one with no database cannot keep a key."""
+    supply = EngineSupply(
+        store=store,
+        clock=clock,
+        allocation_manager=FakeAllocationManager(),
+        secret_store=RoutingSecretStore(SettingsSecretStore({}), None),
+    )
+    with pytest.raises(ValueError, match="LPB_SECRET_KEY"):
+        await BuilderEngine.create(settings(), supply=supply)
 
 
 async def test_a_decorated_default_discovery_source_is_the_configured_one() -> None:

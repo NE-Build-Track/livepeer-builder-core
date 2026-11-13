@@ -58,6 +58,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain, JwtBearerAuthenticator),
     "AccessPolicy": (DefaultPolicy,),
     "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
+    "WritableSecretStore": (RoutingSecretStore,),
     "DiscoverySource": (HttpDiscoverySource,),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),

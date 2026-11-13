@@ -39,7 +39,14 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
-from livepeer_builder.protocols import AccessPolicy, ActorRepo, AllocationManager, Clock, SecretStore
+from livepeer_builder.protocols import (
+    AccessPolicy,
+    ActorRepo,
+    AllocationManager,
+    Clock,
+    SecretStore,
+    WritableSecretStore,
+)
 from livepeer_builder.services.grants import GrantDesk, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation, TakenOver
 from livepeer_builder.utils import BODY_LIMIT
@@ -162,13 +169,15 @@ class PaymentsService:
         operation = f"provision:{request.application_id}:{request.actor_id}"
         if existing is not None:  # re-provisioning after a revoke is a new operation
             operation += f":{existing.updated_at.isoformat()}"
+        sent_as = idempotency_key(self._engine_id, operation, "api-key")
+        await self._require_writable_secrets(run, sent_as)
         key = await manager.create_key_for_grant(
             grant_id,
             request.label or f"{request.application_id}/{request.actor_id}",
             request.amount,
-            idempotency_key(self._engine_id, operation, "api-key"),
+            sent_as,
         )
-        ref = await self._stored_secret(run, request.application_id, request.actor_id, key)
+        ref = await self._stored_secret(run, request.application_id, request.actor_id, key, sent_as)
         now = self._clock.now()
         provisioned = ProvisionedActor(
             application_id=request.application_id,
@@ -320,13 +329,13 @@ class PaymentsService:
         operation_ref: str,
     ) -> ProvisionedActor:
         actor = await self._require_actor(application_id, actor_id)
+        sent_as = idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key")
+        await self._require_writable_secrets(run, sent_as)
         key = await manager.create_key(  # the provider replays it on a resume
-            actor.allocation_id,
-            f"{application_id}/{actor_id}",
-            idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key"),
+            actor.allocation_id, f"{application_id}/{actor_id}", sent_as
         )
         if actor.api_key_id != key.api_key_id:  # not stored yet
-            ref = await self._stored_secret(run, application_id, actor_id, key)
+            ref = await self._stored_secret(run, application_id, actor_id, key, sent_as)
             actor = actor.model_copy(
                 update={"api_key_id": key.api_key_id, "secret_ref": ref, "updated_at": self._clock.now()}
             )
@@ -340,16 +349,19 @@ class PaymentsService:
         return actor
 
     async def _stored_secret(
-        self, run: RunningOperation, application_id: str, actor_id: str, key: NewAllocationKey
+        self, run: RunningOperation, application_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
     ) -> SecretRef:
         """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
-        key it belongs to, before the actor points at it, so a resume reuses that copy instead of leaving it
-        orphaned. A resume that got another key (a re-provision after a revoke) stores that key's secret."""
+        key it belongs to and the provider operation that returned it (``sent_as``, its idempotency key),
+        before the actor points at it, so a resume reuses that copy instead of leaving it orphaned. A resume
+        that got another key (a re-provision after a revoke) stores that key's secret."""
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             return SecretRef(ref=run.context["new_secret_ref"])
         ref = await self._secrets.put(_secret_name(application_id, actor_id), key.secret.get_secret_value())
         try:
-            await run.remember(new_secret_ref=ref.ref, new_secret_key_id=key.api_key_id)
+            await run.remember(
+                new_secret_ref=ref.ref, new_secret_key_id=key.api_key_id, new_secret_sent_as=sent_as
+            )
         except TakenOver:  # a resume took over: it stores its own copy
             await self._secrets.delete(ref)
             raise
@@ -397,6 +409,29 @@ class PaymentsService:
         if provisioned is None or provisioned.status == "revoked" or not provisioned.grant_id:
             return ""
         return provisioned.grant_id
+
+    async def _require_writable_secrets(self, run: RunningOperation, sent_as: str) -> None:
+        """In the step that mints a key, just before the provider is called: a store that says it cannot
+        keep the new key refuses the command (#112, C2). A store without the optional ``writable`` check
+        is not asked. A run that already stored the key of this same provider operation (``sent_as``, the
+        idempotency key about to be sent) has nothing more to store, so it is not refused: a repeat of a
+        finished command never reaches this step, and a resume goes on to finish. A stored secret from
+        another provider operation excuses nothing: a resume after a revoke or a re-provision sends a new
+        one, whose key is not stored yet."""
+        if "new_secret_ref" in run.context and run.context.get("new_secret_sent_as") == sent_as:
+            return
+        if isinstance(self._secrets, WritableSecretStore) and not await self._secrets.writable():
+            # only a fresh run knows that nothing was sent: a resumed one follows an unknown outcome
+            sent = (
+                "an earlier attempt may have reached the payment provider; repeat this request when the "
+                "store can write"
+                if run.resumed
+                else "nothing was sent to the payment provider"
+            )
+            raise InvalidRequest(
+                "the secret store cannot store a new payment key now (the built-in store needs "
+                f"LPB_SECRET_KEY); {sent}"
+            )
 
     def _require_manager(self) -> AllocationManager:
         if self._manager is None:

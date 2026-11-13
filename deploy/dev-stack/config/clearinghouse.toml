@@ -1,10 +1,10 @@
 # Batteries, from its examples/compose sample. The webhook and Kafka stay on loopback (the signer shares
-# this container's network namespace). The management API binds all interfaces so the engine can reach it.
+# this container's network namespace; `:8080` is 127.0.0.1). The management API binds all interfaces so
+# the engine can reach it, which Batteries v0.0.3 and later accept only with the unsafe@ prefix.
 DBPath = "/data/clearinghouse.db"
 CredsFile = "/run/secrets/clearinghouse.toml"
 EnableAuthWebhook = ":8080"
-EnableManagementAPI = "0.0.0.0:8081"
-UnsafeHTTPBind = true
+EnableManagementAPI = "unsafe@0.0.0.0:8081"
 EnableKafka = true
 EnableAccounting = true
 KafkaBind = "127.0.0.1:9092"

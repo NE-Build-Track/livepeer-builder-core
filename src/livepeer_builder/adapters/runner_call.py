@@ -169,7 +169,7 @@ class PaidRequest:
         self._app = app
         self._signer_url = signer_url
         self._signer_headers = signer_headers or {}
-        self._attempts = (max(0, retries) + 1) * 2
+        self._retries = self._refreshes_left = max(0, retries)  # per call, each (#112, C1)
         self._events = events
         self._rate = rate
         self._payment_type = ""  # set by the first 402: a unit matters only when payment is asked for
@@ -226,7 +226,7 @@ class PaidRequest:
             material = await self._signer_identity(self._signer_url)
             headers[PAYER_ADDRESS_HEADER] = str(material.address)
         challenge: LivePaymentChallenge | None = None
-        for attempt in range(self._attempts):
+        while len(self._events.manifest_ids) <= self._retries:  # signatures, not passes (#112, C1)
             sent = dict(headers)
             payment: LivePaymentSession | None = None
             if challenge is not None and self._signer_url is not None:
@@ -243,9 +243,9 @@ class PaidRequest:
                             "paid": self._events.signed,
                         },
                     )
-                    if attempt + 1 >= self._attempts:
+                    if not self._refreshes_left:  # unsigned requests: the first, then one per refresh
                         raise
-                    challenge = None  # expired params: ask the runner for a fresh challenge
+                    challenge, self._refreshes_left = None, self._refreshes_left - 1  # expired params
                     continue
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""

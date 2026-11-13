@@ -253,6 +253,13 @@ the source of the measured facts.
 - **Admin from a token claim** (ISS-33) changes the JWT settings this guide lists.
 - **Not verified:** how the pinned client and the identity provider send the resource; whether Claude Code
   can sign in to the Keycloak realm with OAuth; which clients extend their timeout on progress.
+- **How the client is registered at the identity provider** (John, review of 13 November). The example
+  realm has two confidential clients and no registration for an MCP host, so an MCP client cannot sign in
+  to it today. Two ways to test in slice 3: enable dynamic client registration (DCR) in the realm, or, as
+  John prefers, register the known clients ahead of time, including those that identify themselves with a
+  client ID metadata document (CIMD). Pre-registration is the conservative choice for an enterprise, which
+  may not allow open registration. To verify then: what the pinned Keycloak release supports for CIMD, and
+  how Claude Code is given a registered client id.
 - **Noted, not decided:** rates arrive mostly in wei with no USD figure, so a model cannot compare a price
   with the USD allowance.
 

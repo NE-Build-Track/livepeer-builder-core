@@ -77,19 +77,23 @@ async def test_management_writes_use_the_documented_routes() -> None:
     assert "Idempotency-Key" not in seen[3].headers  # status changes are naturally repeatable
 
 
-async def test_owned_clients_close_and_empty_bodies_are_fine() -> None:
+async def test_owned_clients_close_and_an_empty_body_is_a_provider_error() -> None:
+    """Batteries answers every management route with a JSON object (v0.0.3, ``managementResult``), so a
+    2xx with no body is an answer the engine cannot read (#114, C21), where it used to pass as ``{}``."""
     client = BatteriesClient("https://b", "t")
     source = BatteriesUsageSource("https://b", "t")
     await client.aclose()
     await source.aclose()
-    _, transport = recording(204)
     quiet = BatteriesClient(
-        "https://b", "t", client=httpx.AsyncClient(base_url="https://b", transport=transport)
+        "https://b",
+        "t",
+        client=httpx.AsyncClient(
+            base_url="https://b", transport=httpx.MockTransport(lambda r: httpx.Response(204))
+        ),
     )
-    quiet._client = httpx.AsyncClient(
-        base_url="https://b", transport=httpx.MockTransport(lambda r: httpx.Response(204))
-    )
-    await quiet.revoke_key("k")
+    with pytest.raises(ProviderError, match="not a JSON object") as unread:
+        await quiet.revoke_key("k")
+    assert unread.value.status_code == 204
 
 
 async def test_usage_feed_errors() -> None:

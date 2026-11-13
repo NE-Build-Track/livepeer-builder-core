@@ -57,35 +57,23 @@ async def test_create_key_for_grant_is_one_idempotent_call() -> None:
     assert seen[0].headers["Idempotency-Key"] == "idem-1"
 
 
-async def test_list_grants_keeps_grant_objects_only() -> None:
+async def test_list_grants_reads_each_grant_object_and_refuses_any_other_item() -> None:
+    """A grant list of objects is read. An item that is not an object, or an answer with no ``items``,
+    used to read as fewer grants or none; each is now a provider error (#114, C21)."""
+    grant = {"id": "grant_1", "name": "ops", "status": "active", "currency": "usd", "total_usd": "10"}
+    answers: list[dict[str, object]] = [{"items": [grant]}, {"items": [grant, "skip"]}, {}]
+
     def listed(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "items": [
-                    {
-                        "id": "grant_1",
-                        "name": "ops",
-                        "status": "active",
-                        "currency": "usd",
-                        "total_usd": "10",
-                    },
-                    "skip",
-                ]
-            },
-        )
+        return httpx.Response(200, json=answers.pop(0))
 
     client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(listed)))
     grants = await client.list_grants()
     assert [(grant.id, grant.name, grant.currency, grant.total) for grant in grants] == [
         ("grant_1", "ops", "USD", "10")
     ]
-
-    def empty(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={})
-
-    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(empty)))
-    assert await client.list_grants() == []
+    for _ in range(2):
+        with pytest.raises(ProviderError, match="items are not a list of objects"):
+            await client.list_grants()
 
 
 async def test_create_grant_returns_the_response_record() -> None:
@@ -466,7 +454,7 @@ async def test_usage_feed_is_unfiltered_by_default() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         seen.append(dict(request.url.params))
-        return httpx.Response(200, json={"items": [], "next_cursor": None})
+        return httpx.Response(200, json={"items": [], "next_cursor": ""})
 
     source = BatteriesUsageSource(
         "https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle))

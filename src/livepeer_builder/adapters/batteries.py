@@ -121,12 +121,10 @@ class BatteriesClient:
         params = {"limit": "1000"}  # Batteries' largest page
         if cursor:
             params["cursor"] = cursor
-        body = await self._request("GET", "/v1/grants", params=params)
-        items = body.get("items")
-        listed = items if isinstance(items, list) else []
-        grants = [grant_from_item(item) for item in listed if isinstance(item, dict)]
-        next_cursor = body.get("next_cursor")
-        return GrantPage(grants=tuple(grants), next_cursor=str(next_cursor) if next_cursor else None)
+        items, next_cursor = list_page(await self._request("GET", "/v1/grants", params=params))
+        return GrantPage(
+            grants=tuple(grant_from_item(item) for item in items), next_cursor=next_cursor or None
+        )
 
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
@@ -164,7 +162,7 @@ class BatteriesClient:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(response.status_code, error_message(response))
-        return dict(response.json()) if response.content else {}
+        return json_object(response)
 
 
 class BatteriesUsageSource:
@@ -200,13 +198,38 @@ class BatteriesUsageSource:
             raise CursorMismatch(message)
         if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
-        body = response.json()
-        read = [read_usage_item(item) for item in body["items"]]
+        items, next_cursor = list_page(json_object(response))
+        read = [read_usage_item(item) for item in items]
         return UsagePage(
             items=tuple(row for row in read if isinstance(row, UsageRow)),
             set_aside=tuple(row for row in read if isinstance(row, SetAsideUsage)),
-            next_cursor=str(body.get("next_cursor") or ""),
+            next_cursor=next_cursor,
         )
+
+
+def json_object(response: httpx.Response) -> dict[str, Any]:
+    """The one reader of every Batteries answer that is not an error status (#114, C21): a JSON object,
+    or a ``ProviderError`` with the answer's own status. That is HTTP 502 to a caller and an unknown outcome
+    to the operation ledger, never a refusal, so a reference stays held. The body is not quoted."""
+    try:
+        body = response.json()
+    except ValueError:  # not JSON, or not UTF-8
+        body = None
+    if not isinstance(body, dict):
+        raise ProviderError(response.status_code, "Batteries answered with a body that is not a JSON object")
+    return body
+
+
+def list_page(body: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """A list answer's items and its cursor, ``""`` on the last page (#114, C21). ``items`` is a list of
+    objects and ``next_cursor`` a string or absent; anything else is a ``ProviderError``. A malformed page
+    never reads as an empty one, which would end a listing early, and one malformed item fails the page."""
+    items, next_cursor = body.get("items"), body.get("next_cursor", "")
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise ProviderError(200, "Batteries answered a list whose items are not a list of objects")
+    if not isinstance(next_cursor, str):
+        raise ProviderError(200, "Batteries answered a list whose next_cursor is not a string")
+    return items, next_cursor
 
 
 def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:

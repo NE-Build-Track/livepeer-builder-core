@@ -1,6 +1,7 @@
 """Read a livepeer/node ``GET /discovery`` document into the runners the engine stores (D63).
 
-A body that is not a JSON array fails the refresh. Each other failure skips that entry or that runner.
+A body that is not a JSON array fails the refresh. Each other failure skips that entry or that runner,
+and a document whose every record was skipped fails the refresh too (#114, C28).
 There is no size cap, no stamp-age filter and no de-duplication. Numbers stay their JSON tokens, never
 binary floats.
 """
@@ -42,6 +43,16 @@ class JsonNumber:
         self.token = token
 
 
+class UnreadableInventory(ValueError):
+    """A document with records and no readable runner (#114, C28): an answer the engine could not read,
+    not an empty inventory. The refresh fails, so the last good snapshot stays."""
+
+    def __init__(self, entries: int, runners: int) -> None:
+        super().__init__(
+            f"discovery response has no readable runner: {entries} entries and {runners} runners skipped"
+        )
+
+
 def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
 
@@ -49,8 +60,9 @@ def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     entry (``nodes``, and no ``address``) yields nothing. A runner needs an ``app`` that is valid text
     (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the clock can
     convert to UTC. Any other text field that is not valid text is absent. One bad record does not drop
-    the rest. ``[]`` is an empty inventory. A number ``Decimal`` cannot hold is still a number: the
-    runner is kept, and ``payable_rate`` reports that its price cannot be paid.
+    the rest. ``[]`` is an empty inventory, and so is a document with no record to skip. A document with
+    skipped records and no runner raises ``UnreadableInventory``. A number ``Decimal`` cannot hold is
+    still a number: the runner is kept, and ``payable_rate`` reports that its price cannot be paid.
     """
     entries = _loads(raw)
     if not isinstance(entries, list):
@@ -81,7 +93,14 @@ def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
                 "runners": skipped_runners,
             },
         )
+        _refuse_nothing_read(runners, skipped_entries, skipped_runners)
     return tuple(runners)
+
+
+def _refuse_nothing_read(runners: list[Runner], entries: int, skipped: int) -> None:
+    """Records were skipped. With no runner read, the document is not an empty inventory (#114, C28)."""
+    if not runners:
+        raise UnreadableInventory(entries, skipped)
 
 
 def _loads(raw: str | bytes | bytearray) -> Any:

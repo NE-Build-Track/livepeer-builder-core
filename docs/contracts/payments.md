@@ -105,9 +105,14 @@ checks stop that:
     free and the same command runs once the store can write.
   - A repeat of a finished command stores nothing and is not asked: it gets the recorded result.
   - A resume whose key is already stored is not asked either: it goes on, for a rotation to revoke the
-    old key.
+    old key. The stored key must be the one of the provider call about to be sent: the record notes the
+    call's idempotency key beside the secret's reference, and only a match skips the check. A resume
+    after the actor was revoked, or provisioned again, sends another provider call whose key is not
+    stored yet, so it is asked before that call.
   - A resume that still has a key to store is refused, and the message says that an earlier attempt
-    may have reached the provider. It does not say that nothing was sent.
+    may have reached the provider. It does not say that nothing was sent, and the refusal does not
+    free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once
+    the store can write.
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
@@ -165,7 +170,11 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   rotation's new key stored, then the old key's revoke refused) leaves the record `started`, so a resume
   finishes the command from what the record noted. A timeout, a transport error, a provider 5xx or a
   crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
-  new reference.
+  new reference. A refusal on a *resumed* run never frees the reference either (#112): the attempt it
+  follows ended in an unknown outcome, and a provider call that timed out may have been applied with
+  nothing noted. The record stays `started`, another request on that reference is still 409
+  `operation_conflict`, and the same request resumes again after `LPB_OPERATION_STALE_S`. The one
+  exception is `already_provisioned`, below.
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
   Every later write of the slower run (its context, its result, its abandonment) checks the token and
   is refused, so a run presumed dead that was only slow answers with the recorded result instead. A

@@ -236,7 +236,6 @@ Locked by Mike on 13 November 2026.
 
 - **Evidence limits to record:** a charge that reaches Batteries with no ticket (builder console issue 19)
   is recorded here as an upstream limit. A public issue in livepeer/node is John's to file.
-- **Josh's review of the engine code** did not happen in M3 and is not planned.
 - **Set-aside usage rows** (#114) are named by `lpb costs verify`, and reconciliation is per allocation
   (#115).
 - **The isolation sweep** runs under API keys and JWT. The trusted-backend authenticator is not built

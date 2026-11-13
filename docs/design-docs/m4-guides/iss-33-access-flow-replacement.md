@@ -197,7 +197,7 @@ Locked by Mike on 13 November 2026.
 
 **Other decisions that touch this guide.**
 
-- **Operators scoped to one application or issuer** is not decided. John raised it on 12 November ("They
+- **Operators scoped to one application or issuer** is not decided; it is the design ticket #126. John raised it on 12 November ("They
   are either an operator or a builder, each should be scoped to application/issuer for multi-tenancy").
   The second application of Q2 will show the limit of engine-wide admin in the evidence.
 - **The trusted-backend authenticator** is not built in M4 (ISS-32).

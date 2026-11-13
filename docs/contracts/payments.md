@@ -109,6 +109,9 @@ checks stop that:
     call's idempotency key beside the secret's reference, and only a match skips the check. A resume
     after the actor was revoked, or provisioned again, sends another provider call whose key is not
     stored yet, so it is asked before that call.
+  - A rotation whose actor already holds the key and secret the record notes is not asked, whatever the
+    record's age: only the old key is left to revoke. This covers a rotation interrupted on a release
+    that did not yet note the idempotency key (v0.2.x) and resumed after the upgrade.
   - A resume that still has a key to store is refused, and the message says that an earlier attempt
     may have reached the provider. It does not say that nothing was sent, and the refusal does not
     free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once

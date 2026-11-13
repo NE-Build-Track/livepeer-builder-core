@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
@@ -394,6 +394,78 @@ async def test_an_interrupted_rotation_finishes_while_the_store_cannot_write(
     rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     assert rotated.api_key_id != before.api_key_id
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
+
+
+async def as_written_before_the_sent_as_note(store: SqlStore, operation_ref: str) -> None:
+    """The record as v0.2.x left it: the secret's reference and key id, and no ``new_secret_sent_as``."""
+    held = t.operations.c.operation_ref == operation_ref
+    async with store.engine.begin() as conn:
+        context = (await conn.execute(select(t.operations.c.context).where(held))).scalar_one()
+        assert "new_secret_ref" in context and "new_secret_sent_as" in context
+        earlier = {name: value for name, value in context.items() if name != "new_secret_sent_as"}
+        await conn.execute(update(t.operations).where(held).values(context=earlier))
+
+
+async def test_a_rotation_interrupted_before_the_upgrade_finishes_while_the_store_cannot_write(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+) -> None:
+    """A record written before ``new_secret_sent_as`` existed cannot match it. When the actor already
+    holds the recorded key there is still nothing left to store, so the resume is not asked: asked, it was
+    refused before the revoke, and both keys stayed live until the store could write (review of #128)."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    before = await engine.payments.provision(admin, provision_request())
+    manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    await as_written_before_the_sent_as_note(store, "rotate-1")
+    vault.sealed = True
+    clock.advance(120)
+    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert rotated.api_key_id != before.api_key_id
+    assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
+    assert len(manager.keys) == 2  # and no third key was minted
+
+
+async def test_such_a_record_is_still_asked_when_the_actor_does_not_hold_its_key(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the actor holding the recorded key shows that the key of this provider call is stored. A
+    record without the note whose actor never got the key says nothing about the call about to be sent."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    before = await engine.payments.provision(admin, provision_request())
+
+    async def lost(*_: object) -> None:
+        raise ConnectionError("the database went away")
+
+    with monkeypatch.context() as losing:
+        # The rotation's write of the actor: save_actor, and set_actor_key once #115 (C4) has merged.
+        for write in ("save_actor", "set_actor_key"):
+            if hasattr(store, write):
+                losing.setattr(store, write, lost)
+        with pytest.raises(ConnectionError):  # the secret is stored; the actor still has the old key
+            await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    await as_written_before_the_sent_as_note(store, "rotate-1")
+    vault.sealed = True
+    clock.advance(120)
+    with pytest.raises(InvalidRequest, match="cannot store"):
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.keys[before.api_key_id][2] is False  # not revoked: the actor still uses it
+    vault.sealed = False
+    clock.advance(120)
+    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.keys[before.api_key_id][2] is True and len(manager.keys) == 2
+    assert rotated.secret_ref.ref in vault.values
 
 
 async def test_a_refusal_on_a_resumed_run_does_not_say_nothing_was_sent(

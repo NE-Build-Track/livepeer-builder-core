@@ -330,7 +330,7 @@ class PaymentsService:
     ) -> ProvisionedActor:
         actor = await self._require_actor(application_id, actor_id)
         sent_as = idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key")
-        await self._require_writable_secrets(run, sent_as)
+        await self._require_writable_secrets(run, sent_as, actor)
         key = await manager.create_key(  # the provider replays it on a resume
             actor.allocation_id, f"{application_id}/{actor_id}", sent_as
         )
@@ -410,15 +410,14 @@ class PaymentsService:
             return ""
         return provisioned.grant_id
 
-    async def _require_writable_secrets(self, run: RunningOperation, sent_as: str) -> None:
+    async def _require_writable_secrets(
+        self, run: RunningOperation, sent_as: str, holder: ProvisionedActor | None = None
+    ) -> None:
         """In the step that mints a key, just before the provider is called: a store that says it cannot
         keep the new key refuses the command (#112, C2). A store without the optional ``writable`` check
-        is not asked. A run that already stored the key of this same provider operation (``sent_as``, the
-        idempotency key about to be sent) has nothing more to store, so it is not refused: a repeat of a
-        finished command never reaches this step, and a resume goes on to finish. A stored secret from
-        another provider operation excuses nothing: a resume after a revoke or a re-provision sends a new
-        one, whose key is not stored yet."""
-        if "new_secret_ref" in run.context and run.context.get("new_secret_sent_as") == sent_as:
+        is not asked. A run with nothing more to store is not refused (``_key_is_stored``): a repeat of a
+        finished command never reaches this step, and a resume goes on to finish."""
+        if self._key_is_stored(run, sent_as, holder):
             return
         if isinstance(self._secrets, WritableSecretStore) and not await self._secrets.writable():
             # only a fresh run knows that nothing was sent: a resumed one follows an unknown outcome
@@ -432,6 +431,23 @@ class PaymentsService:
                 "the secret store cannot store a new payment key now (the built-in store needs "
                 f"LPB_SECRET_KEY); {sent}"
             )
+
+    @staticmethod
+    def _key_is_stored(run: RunningOperation, sent_as: str, holder: ProvisionedActor | None) -> bool:
+        """Whether the key of the provider call about to be sent (``sent_as``, its idempotency key) is
+        stored already. Either the record notes a secret for this same call, or the actor (``holder``, in a
+        rotation) already holds the key and secret the record notes. The second covers a record written
+        before ``new_secret_sent_as`` existed, whose rotation only has the old key left to revoke. A
+        stored secret from another provider call excuses nothing: a resume after a revoke or a
+        re-provision sends a new one, whose key is not stored yet."""
+        ref = run.context.get("new_secret_ref")
+        if ref is None:
+            return False
+        if run.context.get("new_secret_sent_as") == sent_as:
+            return True
+        if holder is None:
+            return False
+        return (holder.api_key_id, holder.secret_ref.ref) == (run.context.get("new_secret_key_id"), ref)
 
     def _require_manager(self) -> AllocationManager:
         if self._manager is None:

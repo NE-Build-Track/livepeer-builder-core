@@ -31,6 +31,9 @@ _HTTP = frozenset({"http", "https"})
 # not be written.
 _NOT_TEXT = r"\x00-\x1f\x7f-\x9f\ud800-\udfff"
 _INVALID_TEXT = re.compile(f"[{_NOT_TEXT}]")
+# An optional field keeps a tab, a newline and a carriage return: they can be stored and served, metadata
+# is often JSON written over several lines, and the rate reader strips a stray newline itself.
+_INVALID_OPTIONAL_TEXT = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff]")
 _UNSENDABLE = re.compile(f"[ {_NOT_TEXT}]")  # a URL: a space too, which the HTTP client cannot send
 _MAX_APP = 200  # a job stores its app as ``store.schema.ID``, and ``JobRequest.app`` takes no longer one
 
@@ -48,7 +51,8 @@ def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
     entry (``nodes``, and no ``address``) yields nothing. A runner needs an ``app`` that is valid text
     (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the clock can
-    convert to UTC. Any other text field that is not valid text is absent. One bad record does not drop
+    convert to UTC. Any other text field that is not valid text is absent; such a field may hold a tab or a
+    line break. One bad record does not drop
     the rest. ``[]`` is an empty inventory. A number ``Decimal`` cannot hold is still a number: the
     runner is kept, and ``payable_rate`` reports that its price cannot be paid.
     """
@@ -125,15 +129,15 @@ def _runner(raw: object, address: str) -> Runner | None:
     return Runner(
         url=url,
         app=app,
-        mode=_text(raw.get("mode")),
+        mode=_optional_text(raw.get("mode")),
         orchestrator_url=address if _origin(address) == _origin(url) else None,
         capacity=_integer(raw.get("capacity")),
         capacity_used=_integer(raw.get("capacity_used")),
         capacity_available=_available(raw),
         price_info=_price_info(raw.get("price_info")),
         observed_at=observed_at,
-        version=_text(raw.get("version")),
-        metadata=_text(raw.get("metadata")),
+        version=_optional_text(raw.get("version")),
+        metadata=_optional_text(raw.get("metadata")),
         gpu=_gpu(gpu) if isinstance(gpu, dict) else None,
     )
 
@@ -184,8 +188,8 @@ def _price_info(value: object) -> PriceInfo | None:
     return PriceInfo(
         price=_decimal(value.get("price")),
         price_usd=_decimal(value.get("price_usd")),
-        currency=_text(value.get("currency")),
-        unit=_text(value.get("unit")),
+        currency=_optional_text(value.get("currency")),
+        unit=_optional_text(value.get("unit")),
     )
 
 
@@ -221,13 +225,18 @@ def _available(raw: dict[str, Any]) -> int | None:
     return 0 if available is None else available
 
 
-def _text(value: object) -> str | None:
+def _text(value: object, invalid: re.Pattern[str] = _INVALID_TEXT) -> str | None:
     """A string of valid Unicode text with no control character, exactly as written; otherwise None.
 
     Nothing is repaired: text with a NUL, another control character or a lone surrogate is not read."""
-    if not isinstance(value, str) or _INVALID_TEXT.search(value):
+    if not isinstance(value, str) or invalid.search(value):
         return None
     return value
+
+
+def _optional_text(value: object) -> str | None:
+    """As ``_text``, for a field a runner may leave out: a tab and a line break are kept (#114, C12)."""
+    return _text(value, _INVALID_OPTIONAL_TEXT)
 
 
 def _stamp(value: object) -> datetime | None:
@@ -251,7 +260,7 @@ def _stamp(value: object) -> datetime | None:
 
 def _gpu(value: dict[str, Any]) -> RunnerGPU:
     return RunnerGPU(
-        id=_text(value.get("id")),
-        name=_text(value.get("name")),
+        id=_optional_text(value.get("id")),
+        name=_optional_text(value.get("name")),
         vram_mb=_integer(value.get("vram_mb")),
     )

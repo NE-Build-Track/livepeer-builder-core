@@ -15,7 +15,9 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   Applications never write them.
 - **Money and fees** are exact decimal strings, summed in Python.
 - **Timestamps** are UTC. Lists that are queried (payment sessions) live in child tables.
-- **Payment keys** are not stored. `lpb_actors.secret_ref` holds a `SecretRef`. The
+- **Payment keys** are not stored. `lpb_actors.secret_ref` holds a `SecretRef`: opaque text of any
+  length, in an unbounded `text` column (migration 0013, #115; it was `varchar(200)`, which PostgreSQL
+  enforced after the provider key was funded), so a supplied secret store may return a long path. The
   encrypted-database `SecretStore` keeps Fernet ciphertext in `lpb_secrets`, with the key outside the
   database.
 - **Default URL:** `sqlite+aiosqlite:///./livepeer-builder.db`. There is no silent in-memory store.

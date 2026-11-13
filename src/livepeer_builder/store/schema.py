@@ -144,7 +144,8 @@ actors = Table(
     Column("grant_id", String(ID), nullable=False),
     Column("allocation_id", String(ID), nullable=False, unique=True),
     Column("api_key_id", String(ID), nullable=False),
-    Column("secret_ref", String(ID), nullable=False),  # a SecretRef, never the key itself
+    # A SecretRef, never the key itself. Opaque text of any length since 0013 (#115): a vault's path.
+    Column("secret_ref", Text, nullable=False),
     Column("currency", String(3), nullable=False),
     Column("status", String(16), nullable=False),
     Column("created_at", UTCDateTime, nullable=False),

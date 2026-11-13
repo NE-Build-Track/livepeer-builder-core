@@ -160,7 +160,8 @@ checks stop that:
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
   ledger records anything and before any provider call. A zero or negative funding or grant amount is
   still the command's own refusal, 400.
-- **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
+- **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
+  which is opaque text of any length (#115): a supplied secret store may return a long path.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
   caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,
   the engine returns 400 `choose a grant`. There is no deployment-wide default. An admin may name any

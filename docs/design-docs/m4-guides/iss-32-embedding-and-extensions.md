@@ -1,11 +1,15 @@
 # ISS-32: Prove package embedding, service consumption, and enterprise extensions
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions (numbered then).\
 **Tracker:** ISS-32 ([Network-Engineering-SPE#46](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/46)).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
 **Verified against:** builder-core `releases/m3` at `d3df806`; ChatLPT `b6f8eb1`, inference-gateway `6e86de3`,
-builder console `938db3e`, enterprise desk (`enterprise-ui`) `ccbdbd9`.
+builder console `938db3e`. The enterprise desk, read then at `ccbdbd9`, was retired on 12 November 2026.
 
 ## Done when
 
@@ -19,7 +23,7 @@ builder console `938db3e`, enterprise desk (`enterprise-ui`) `ccbdbd9`.
 
 ## What "proved" means (proposed)
 
-1. **An installable candidate.** A `v*` tag on the M4 release branch (for example `v0.2.0rc1`); CI builds
+1. **An installable candidate.** A `v*` tag on the M4 release branch (for example `v0.3.0rc1`); CI builds
    its wheel and the examples install **that wheel** into a clean environment, never the source tree.
 2. **Examples run in CI from the wheel**, import only the public API (the same check the CLI and the
    stock server pass), and their documented code is the tested code (`check_docs.py` regions).
@@ -53,7 +57,7 @@ Status block still says "planned … no code has changed", which is stale):
 | E6 | **Event handling has no feed.** `GET /v1/events` answers 501; the feed is ISS-46 ([iss-46-events-feed.md](iss-46-events-feed.md)) | `runtime/assembly.py:261` |
 | E7 | **No "tool" extension point.** MCP (ISS-30) has no code; `extend` covers REST routes only. The [ISS-30 guide](iss-30-mcp.md) mounts `create_mcp_app(engine)` beside `http/` but defines no hook for an enterprise's own tool | `http/server.py` |
 | E8 | **A host app cannot mount part of the REST service.** Every route is a closure in `create_app`; error handlers are private (`_install_error_handlers`) | #25, John's 28 October comment |
-| E9 | **The enterprise desk hands users engine keys.** It signs users in with `lpk_` actor keys and can issue them at signup (`enterprise-ui/README.md`), the "extra user-facing engine key" the criterion rules out | consumer README |
+| E9 | **Retired with the enterprise desk on 12 November 2026.** *Was:* the enterprise desk hands users engine keys. It signs users in with `lpk_` actor keys and can issue them at signup (`enterprise-ui/README.md`), the "extra user-facing engine key" the criterion rules out | consumer README |
 
 **#25 (core/server split), after #41:** the import-weight, layer and public-API tests already deliver
 what the `core/` move was for, so John proposes dropping the move and the `http`→`server` rename. Still
@@ -101,11 +105,11 @@ policy delegates to).
 - **Service, by code:** `examples/service` supplies its authenticator and `api_keys=None`, so the
   stock key routes and `bootstrap-admin` are absent; admin comes from the SSO's group, delegated to
   `DefaultPolicy`.
-- **Backend to engine:** build `ServiceCredentialAuthenticator` (`adapters/auth.py`) as
+- **Backend to engine (not built in M4; Q2, locked):** build `ServiceCredentialAuthenticator` (`adapters/auth.py`) as
   [access.md](../../contracts/access.md#service-mode) defines it: a `service` key with `actors.assert`,
   bound to one `application_id`, names the actor in `Livepeer-Actor`; the header is ignored for any other
   credential; the asserted actor gets the service key's other permissions, never admin. This is the
-  path for the enterprise desk (E9) and any backend that calls the engine for many users.
+  path for any backend that calls the engine for many users.
 - **Ownership holds under each:** the ISS-29 access sweep runs once per authenticator.
 
 ### 3. The mock-commerce and reporting fixture (`examples/commerce`)
@@ -132,9 +136,8 @@ through the facade or REST:
 
 ### 4. One candidate, pinned
 
-Tag `v0.2.0rc1` when ISS-29 and ISS-30 land; the `examples` job runs against it; ChatLPT and
-inference-gateway pin the tag; the console builds its engine image from it; the enterprise desk moves
-from `93c8910`. A table in `docs/references/` (consumer, pin, mode, last verified) is the evidence.
+Tag `v0.3.0rc1` when ISS-29 and ISS-30 land; the `examples` job runs against it; ChatLPT and
+inference-gateway pin the tag; the console builds its engine image from it. A table in `docs/references/` (consumer, pin, mode, last verified) is the evidence.
 
 ### 5. Remaining refactors (from #25 and the DI review)
 
@@ -174,17 +177,17 @@ Public surface
 [ ] each example's tests pass in a clean venv with only the wheel installed
 Enterprise authentication
 [ ] keys off + SSO authenticator: no /v1/admin/keys route, no lpk_ accepted
-[ ] Livepeer-Actor on a service key acts as that actor in the key's application
-[ ] Livepeer-Actor on an actor, admin or JWT credential is ignored (the caller stays itself)
-[ ] a service key cannot assert into another application, nor become admin
-[ ] the ISS-29 access sweep passes under SSO, JWT and the trusted backend
+[-] not built (Q2): Livepeer-Actor on a service key acts as that actor in the key's application
+[-] not built (Q2): Livepeer-Actor on an actor, admin or JWT credential is ignored
+[-] not built (Q2): a service key cannot assert into another application, nor become admin
+[ ] the ISS-29 access sweep passes under SSO and JWT
 Commerce fixture
 [ ] an order runs one job whose operation_ref names the order
 [ ] the same order retried reads the existing job; the transport is called once
 [ ] an invoice line shows retail price and observed network cost side by side
 [ ] a pending cost stays pending on the invoice, never 0
 [ ] events applied twice change nothing (dedupe by id); the cursor survives a restart
-[?] events from /v1/events rather than polling                 (Q4, ISS-46)
+[ ] events from /v1/events, with no polling adapter            (Q4, after ISS-46 slice 3)
 [ ] the fixture opens no engine database and imports nothing from livepeer_builder.store
 [ ] the extra endpoint answers 401 without a credential and 200 with one
 [?] the extra MCP tool goes through the same authenticator     (ISS-30)
@@ -213,7 +216,6 @@ new `examples` job green on the tagged candidate, and every consumer's pin recor
 | ChatLPT | embedded, its own `ActorContext` per user (`src/chatlpt/adapters/engine.py:60`) | Re-pin to the tag. Already on `create` and `decorate` (DI plan) |
 | inference-gateway | embedded, one engine actor for all its users (`backends/livepeer.py:63-67`), retail in its own ledger | Re-pin to the tag; it is the real-world counterpart of the commerce fixture |
 | Builder console | service, stock image by configuration | Engine image from the tag; ISS-33 uses the JWT mode |
-| Enterprise desk | service, `lpk_` keys for users | Move from `93c8910`; sign users in through its own login and call the engine with a service key and `Livepeer-Actor` (E9) |
 
 ## Alternatives considered
 
@@ -223,16 +225,38 @@ new `examples` job green on the tagged candidate, and every consumer's pin recor
 - **Make `ServiceCredentialAuthenticator` an example, not a default.** It guards the `Livepeer-Actor`
   rule that makes the header safe; a copy-pasted version is where that rule gets lost.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** Examples in `examples/` installed from the wheel (recommended) or kept as repository tests?
-- **Q2.** Build the trusted-backend authenticator in ISS-32 (recommended: E9 needs it) or leave it defined?
-- **Q3.** Candidate as a `v0.2.0rcN` tag (recommended) or a commit SHA?
-- **Q4.** Does the fixture wait for the events feed, or poll behind its own port until ISS-46 lands
-  (recommended)?
-- **Q5.** Router factories from #25 in ISS-32 (recommended: mounting part of the service is service
-  consumption) or later?
-- **Q6.** Export `DefaultPolicy` from the root (recommended), or teach only `fallback=parts.policy`?
+Locked by Mike on 13 November 2026. Three answers replace the recommendation.
+
+- **Q1, the examples:** they move to `examples/` and run in CI against the installed wheel.
+- **Q2, the trusted-backend authenticator:** not built in ISS-32. It stays defined in `access.md`, and T7
+  stays open and moves to M5. **This replaces the recommendation.** Its reason was the enterprise desk
+  (E9), which was retired on 12 November. The criterion is met by `LPB_AUTH=jwt` and the SSO example, with
+  the ownership sweep run under each. Slice 3 shrinks to that sweep.
+- **Q3, the candidate:** a release-candidate tag `v0.3.0rcN` on `releases/m4`, assuming M4 releases as
+  `v0.3.0`. The guide's `v0.2.0rc1` was taken by the M3 release. A table in `docs/references/` records
+  each consumer, the tag, its commit and when it was last verified.
+- **Q4, the commerce fixture's events:** it consumes `GET /v1/events` from the start, with no polling
+  adapter, and its event slice follows ISS-46's feed slice. **This replaces the recommendation** (poll
+  first, switch later). If ISS-46 slips, the fallback is the polling adapter.
+- **Q5, the router factories (#25):** they land first, as one tidy-only pull request after the hardening
+  tickets and before ISS-26, with a check that the generated OpenAPI document is unchanged. **This
+  replaces their place in slice 4.** `http/app.py` is 486 lines against a 500-line cap, and three tickets
+  add routes to it. #25 closes when the remaining parts land (server settings, docs generators).
+- **Q6, `DefaultPolicy`:** exported from the package root. The docs keep wrapping `parts.policy` as the
+  first choice, because a `DefaultPolicy()` built by hand would lack configuration the default policy
+  gains later.
+
+**Other decisions that touch this guide.**
+
+- **Three consumers, not four.** The enterprise desk is retired. The consumers are the builder console,
+  ChatLPT and the inference gateway (#116).
+- **The fixture's repeat handling** follows ISS-29: problems are RFC 9457, and the fixture branches on
+  `code`.
+- **The fixture runs embedded or forwards a JWT**, since there is no trusted-backend credential.
+- **The MCP tool extension** (E7) waits for ISS-30, as before.
+- **The builder console's browser test** (ISS-34) is another consumer of the public `testing` package.
 
 ## Delivery slices
 

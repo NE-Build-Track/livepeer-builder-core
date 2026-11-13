@@ -1,5 +1,9 @@
 # ISS-31: Both payment-operation configurations
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-31 ([Network-Engineering-SPE#45](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/45)),
 source task P4. Replaces the "Mode B" gap of D23.\
@@ -190,7 +194,7 @@ naming `LPB_ALLOCATION_MODE`.
 [ ] lpb payments check never sends a non-GET request
 [ ] readyz reports payment_operation
 [ ] the operator credential template allows only allocations.read and usage.read (structure)
-[?] the check also reads GET /v1/api-keys/{id} to close T5                        Q3
+[-] the check also reads GET /v1/api-keys/{id} to close T5: not built (Q3)
 ```
 
 **Definition of done.** Every item `[x]`, `[=]` or `[-]` with a reason; the checks in `AGENTS.md`
@@ -212,7 +216,6 @@ above updated.
 | --- | --- |
 | Console | Reads `payment_operation` from health; in configuration 2 hides Operator money actions, and its direct Batteries pages (Money, Users) need the operator's read token or show "not available" |
 | ChatLPT, inference-gateway | None (they use `per_application` today or embed their own settings) |
-| Enterprise desk | None |
 
 ## Alternatives considered
 
@@ -223,15 +226,30 @@ above updated.
 - **The hosted deployment as the separate operator.** Possible (Batteries and signer already run there),
   but their ports are on a private network today and it shares the payer.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** Is `per_application` only acceptable for configuration 2 in M4 (recommended), or must per-actor
-  caps work under a separate operator (then a Batteries change or a tenant layer is a prerequisite)?
-- **Q2.** Arrangement: two Compose projects on one host (recommended), or the hosted Batteries and signer
-  made public?
-- **Q3.** Close T5 by reading the key's allocation at start (needs `api_keys.read`, a wider grant), or
-  keep `LPB_SHARED_ALLOCATION_ID` by hand (recommended)?
-- **Q4.** Setting name: `LPB_PAYMENT_OPERATION` with `self_operated | separately_operated`?
+Locked by Mike on 13 November 2026.
+
+- **Q1, allocation mode of the second configuration:** `per_application` only in M4. Checked on 13
+  November: Batteries permissions still cover every resource of a type at `v0.0.3` (`03bc9fb`) and at
+  upstream `main` `fb76150`.
+- **Q2, the arrangement:** two Compose projects on one host, under `deploy/separate-operator/`. The hosted
+  Batteries and signer are not opened.
+- **Q3, the allocation id (T5):** `LPB_SHARED_ALLOCATION_ID` stays a setting, and the read token keeps two
+  permissions. A wrong id shows after the first paid job as a cost that stays `pending`, reported in
+  health by the ISS-28 signal. T5 stays open, accepted for this configuration.
+- **Q4, the setting:** `LPB_PAYMENT_OPERATION` with `self_operated` (the default) and
+  `separately_operated`. Health reports the same values. The docs drop "Mode A" and "Mode B".
+
+**Other decisions that touch this guide.**
+
+- **The Batteries pin is `v0.0.3`** (#108, #117). The guide was verified at `ca09e47`.
+- **The grant funding route is renamed** in ISS-29 to `POST /v1/admin/grants/{id}/fund`. The refusal test
+  in this guide names the old path.
+- **Reconciliation is per allocation** (#115), which is what the filtered usage of this configuration
+  needs.
+- **Amounts** on provisioning and funding are validated at the contract (#112), before the refusal of this
+  configuration is reached.
 
 ## Delivery slices
 

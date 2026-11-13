@@ -1,5 +1,9 @@
 # ISS-29: Complete REST coverage across the required execution modes
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions (numbered then).\
 **Tracker:** ISS-29 ([Network-Engineering-SPE#43](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/43)).\
@@ -95,7 +99,7 @@ The aliases proposed in #73 (`/v1/run/{app}`, `/v1/queue/{app}`, `wss` routes) t
 Reserved routes check permission before answering 501 (`ReservedSessions` and `ReservedEventFeed` take
 the policy), matching `JobService.result`.
 
-**3. One error body, with a stable `code`.** Keep `error` (the message) for compatibility and add
+**3. One error body, with a stable `code`.** *(Shape replaced by Q2, locked: RFC 9457. The code table stands.)* Keep `error` (the message) for compatibility and add
 `code` to every problem. Codes per error type: `not_authenticated`, `access_denied`, `not_found`,
 `invalid_request`, `validation_failed` (the 422, which also gets `{"error", "code", "detail"}`),
 `not_provisioned`, `operation_exists`, `operation_in_progress`, `operation_conflict` (idempotency guide),
@@ -106,7 +110,7 @@ An `ErrorBody` model is declared app-wide through FastAPI's `responses=`, so the
 generated types carry it. Codes are an open set: clients must tolerate unknown codes and fields.
 MCP tool errors reuse the same table ([iss-30-mcp.md](iss-30-mcp.md) puts `code` in its error results).
 
-**4. Paging, one convention.** List routes keep returning arrays (no envelope, so no break) and gain
+**4. Paging, one convention.** *(Cursor replaced by Q3, locked: an opaque cursor.)* List routes keep returning arrays (no envelope, so no break) and gain
 keyset paging: `before` (an ISO time, as the ISS-15 guide proposes) on `GET /v1/jobs`,
 `GET /v1/costs/projections` and `GET /v1/admin/actors`, plus an RFC 8288 `Link: <…>; rel="next"` header.
 The store orders by `(created_at, id)`, and the **cursor carries both**: ordering alone does not stop
@@ -190,7 +194,7 @@ Modes (land with ISS-26, ISS-27)
 [ ] async submit is 202 with Location and a queued Job
 [ ] result while running is 409 job_not_finished; after success the stored bytes
 [ ] session open, read, list, close round trip; another actor's session is 404
-[?] events: EventPage and 410 cursor_expired                  (only if the hold lifts, Q1)
+[ ] events: EventPage and 410 cursor_expired                  (lands with ISS-46)
 Compatibility
 [ ] check_api_compat fails on a removed operation and on a new required field
 [ ] check_api_compat passes on an added optional field
@@ -216,7 +220,6 @@ Compatibility
 | Consumer | Change |
 | --- | --- |
 | Builder console | Re-copy the spec and regenerate types; branch on `code` (replace `builder.ts:177`); use `/v1/me` and `before`; record the spec's sha256 in `pins.ts` so `pins.test.ts` proves the copy matches the pin. It exercises 25 of the 31 operations (`web/src/domain/catalog.ts`); not `GET …/allocation`, `/usage`, `/result`, `/v1/events`, `/v1/sessions` or `costs/sync` |
-| Enterprise desk | Probes the reserved 501s (its ISS-04 page); update when they go live |
 | ChatLPT, inference-gateway | None: embedded, no REST |
 
 ## Alternatives considered
@@ -226,17 +229,56 @@ Compatibility
 - **A page envelope `{items, next}`.** Rejected: it breaks every list consumer; `Link` is additive.
 - **oasdiff in CI.** A Go tool for a check of three rules; the script is smaller and testable here.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** Does ISS-29 wait for ISS-46's feed, or close with `/v1/events` documented as not yet built
-  (recommended: close with that recorded, as ISS-18 did)? Both land in M4, so the order is set at planning.
-- **Q2.** `code` beside `error` (recommended) or RFC 9457 now?
-- **Q3.** Keyset paging on `(created_at, id)`, with the cursor carrying both (`before` plus `before_id`,
-  recommended), or an opaque cursor? Either way a time-only `before` keeps D59's equal-time skip.
-  ISS-46's resync after a 410 rebuilds from `GET /v1/jobs`, so it is gap-free only once this lands.
-- **Q4.** `/v1/me` as a facade member (`whoami`, recommended so MCP gets it too) or REST only?
-- **Q5.** Rename `POST /v1/admin/grant/fund` to `POST /v1/admin/grants/{id}/fund` before the M5 release,
-  keeping the old path as an alias until then?
+Locked by Mike on 13 November 2026. Three of the five answers replace the recommendation, and all three
+are breaking changes for REST clients. They need a decision record, and the builder console changes in the
+same release.
+
+- **Q1, waiting for the events feed:** ISS-29 does not wait for ISS-46. The coverage test and the access
+  sweep force any later route into the contract when it lands.
+- **Q2, the error body:** RFC 9457 `application/problem+json`, in M4, with `type`, `title`, `status` and
+  `detail`. The stable `code` is an extension field, and a failed job's problem also carries `job`,
+  `kind`, `reason`, `category` and `recovery`. **This replaces decision 3's shape** (keep `error`, add
+  `code`): `error` is renamed to `detail`, the content type changes, and the 422's list of field errors
+  moves out of `detail` to another field. Open for the pull request: the scheme of the `type` URIs, and
+  the name of the 422's list field.
+- **Q3, the paging cursor:** an opaque `cursor` parameter that only the engine reads, with the `Link:
+  rel="next"` header. Lists stay arrays, ordered by `(created_at, id)`. `before` stays as a plain date
+  filter. **This replaces decision 4's cursor** (`before` plus `before_id`). Open for the pull request:
+  the token's encoding, and the problem code for a bad or stale token.
+- **Q4, "who am I":** `whoami` is a facade member, and `GET /v1/me` calls it. MCP and `FakeEngine` get the
+  same member.
+- **Q5, the grant funding route:** `POST /v1/admin/grant/fund` becomes `POST /v1/admin/grants/{id}/fund`,
+  with no alias. The grant id moves from the body to the path. **This replaces the proposal** to keep the
+  old path as an alias until M5.
+
+**Other decisions that touch this guide.**
+
+- **The router split** (#25: router factories and a public `install_error_handlers`) lands first, as a
+  tidy-only pull request before ISS-26. `http/app.py` is 486 lines against a 500-line cap.
+- **Already built since this guide was written:** three 409 answers carry a `code`, and `GET /v1/jobs`
+  takes `before` (D59). The current-state section and the test list need a pass against `releases/m4`
+  before work starts.
+- **Ids in paths and query strings** become stored text in #113, with a structure test. The catch-all
+  handler stays in slice 1 here.
+- **New routes to cover:** cancel and results (ISS-26), sessions (ISS-27), `GET /v1/events` (ISS-46), and
+  the stretch routes when they land (#118 to #124).
+- **Admin from a token claim** (ISS-33) replaces the admin scope settings, which the access sweep's JWT
+  cases use.
+
+### Where the runner standard plugs in later
+
+Runner contract v1 (ISS-47) is not vetted yet. This ticket therefore routes by app ID, as today, and reads
+no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may move to M5.
+
+- **Working assumption for ISS-48 (12 November):** app IDs stay the routing key; v1 metadata describes a
+  runner and never routes; missing, old or unreadable metadata is ignored and logged; model and profile
+  are filters; no schema check.
+- **Criterion moved to ISS-48 on 13 November:** `GET /v1/capabilities` reads the pinned registry release,
+  and a request is checked against the entry's schema before payment.
+- **The seam to keep:** the coverage table in `rest.md` and its test, which make a new route such as
+  `/v1/capabilities` declare its facade call, permission and problem codes.
 
 ## Delivery slices
 

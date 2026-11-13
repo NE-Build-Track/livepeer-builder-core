@@ -7,6 +7,30 @@ builder-core `releases/m3` at `d3df806`, livepeer/node `406b248` (the pin then; 
 `2017a80`, and Clearinghouse Batteries `ca09e47`. The ISS-46 guide was added on 2 November and verified
 against `releases/m3` at `1514212`.
 
+**Every question was locked on 12 and 13 November 2026.** Each guide now ends with a "Questions locked"
+section that holds Mike's answers, and it says where an answer replaces the guide's recommendation. The
+answers that did:
+
+- **ISS-27:** the engine sends `start` and `end` frames on a relayed socket, as #73 proposes, and a
+  repeated open returns the existing session.
+- **ISS-29:** RFC 9457 problem bodies, an opaque paging cursor, and the grant funding route renamed with no
+  alias. All three are breaking changes for REST clients.
+- **ISS-46:** any event retention is allowed, with no required relation to job retention.
+- **ISS-32:** the trusted-backend authenticator is not built in M4; the commerce fixture consumes the events
+  feed from the start; the router split (#25) lands before ISS-26.
+- **ISS-33:** admin comes from a dedicated token claim, and the scope denylist goes.
+- **ISS-35:** the wrong-match defect is fixed, and a total of purged fees is kept if a test confirms that
+  reconciliation otherwise stops balancing.
+
+**Related tickets, all builder-core issues on the board under M4.** The hardening and upkeep tickets, #112
+to #117, come from the review of the `v0.2.0` release, and the hardening fixes merge before any feature
+work. The stretch tickets, #118 to #124, hold the parts of #73 and #86 that the ISS-27 and ISS-46 guides
+left out; any of them may move to M5.
+
+**The runner standard.** ISS-47 (runner contract v1) is not vetted yet. ISS-48, its adoption in the engine,
+is the last feature of M4 and may move to M5, and it has no guide here yet. ISS-26 to ISS-30 no longer
+depend on it: they route by app ID, as today, and each guide notes where the standard plugs in later.
+
 **No M4 guide needs an upstream change.** ISS-27 vendors two SDK functions (the reserve-response parser
 and `stop_runner_session`), fingerprinted as D53 did. Per-actor allocations under a separately operated
 payment service would need grant-scoped Batteries credentials, which cannot be vendored; ISS-31 works

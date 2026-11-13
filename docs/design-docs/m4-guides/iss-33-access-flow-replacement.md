@@ -1,5 +1,9 @@
 # ISS-33: Demonstrate replacement of the reference application's access flow
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; the
 console's locked rules go to its `docs/design-docs/decisions.md`, engine rules to builder-core's decisions.\
 **Tracker:** ISS-33 ([Network-Engineering-SPE#47](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/47)),
@@ -136,8 +140,8 @@ Isolation
 [ ] alice calls GET /v1/admin/actors: 403
 [ ] alice asking Keycloak for livepeer:admin does not receive it
 [ ] console-reader reads /v1/admin/actors (200) and is refused provisioning (403)
-[?] dave in another application reads alice's job: 404           (Q2)
-[?] console-reader lists only its own application's actors      (Q2)
+[ ] dave in another application reads alice's job: 404
+[ ] console-reader lists only its own application's actors
 Paid path (optional, spends money)
 [ ] operator provisions carol; carol's chat job succeeds; its cost is observed
 Documentation
@@ -163,7 +167,6 @@ Keycloak is a third-party product pinned at 26.8.1, used as an example only.
 | Consumer | Change |
 | --- | --- |
 | Builder console | The probe, the realm change, the guide (this ticket) |
-| Enterprise desk | None here; its user keys are ISS-32's trusted-backend case |
 | ChatLPT, inference-gateway | None: embedded, they build `ActorContext` themselves |
 
 ## Alternatives considered
@@ -175,14 +178,33 @@ Keycloak is a third-party product pinned at 26.8.1, used as an example only.
 - **A second identity provider.** Not required ("not a mandate to implement every identity provider");
   the guide states the provider requirements instead.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** Close ISS-33 on the JWT configuration now (recommended), or wait for ISS-32's examples?
-- **Q2.** Add a second application to the realm (recommended, small), or record single-application as
-  the reference configuration?
-- **Q3.** Run the probe in console CI with Keycloak and an engine but no payment stack, or by hand per
-  release with the evidence committed (recommended for M4)?
-- **Q4.** T19: reopen #58 before M4 ends, or accept the denylist plus role-gated scopes with a decision?
+Locked by Mike on 13 November 2026.
+
+- **Q1, waiting for ISS-32:** ISS-33 does not wait. Its dependency is treated as met by the JWT adapter
+  (D45). The work starts once the builder console is on `v0.2.0` (#116), because the Keycloak stack still
+  runs the engine image at `d3df806` and D63 changed the required settings.
+- **Q2, a second application:** added to the realm. A user attribute maps to a token claim,
+  `LPB_JWT_APPLICATION_CLAIM` is set, and `dave` belongs to another application. The probe gains the two
+  cross-application checks.
+- **Q3, the probe:** run by hand once per release, with the evidence committed. Not in console CI in M4.
+- **Q4, admin by token (T19):** in M4 the engine takes the role from a dedicated token claim. A new
+  setting names the claim, and its value says admin, read-only admin or neither. `LPB_JWT_ADMIN_SCOPE`,
+  `LPB_JWT_ADMIN_READ_SCOPE` and the denylist go. It breaks existing JWT configurations; the only one is
+  this Keycloak stack, which gains one claim mapper. Admin stays engine-wide. **This goes beyond the
+  guide**, which offered only reopening #58 or accepting the denylist.
+
+**Other decisions that touch this guide.**
+
+- **Operators scoped to one application or issuer** is not decided. John raised it on 12 November ("They
+  are either an operator or a builder, each should be scoped to application/issuer for multi-tenancy").
+  The second application of Q2 will show the limit of engine-wide admin in the evidence.
+- **The trusted-backend authenticator** is not built in M4 (ISS-32).
+- **`GET /v1/me`** (ISS-29) lets the builder console show the engine's view of the person.
+- **An empty `LPB_JWT_NAME_CLAIM`** turning recording off (finding C18) lands with slice 3.
+- **Evidence** about the builder console alone stays in its repository. The funded matrix's records go in
+  builder-core (ISS-36).
 
 ## Delivery slices
 

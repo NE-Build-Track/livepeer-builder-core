@@ -233,7 +233,7 @@ def _integer(value: object) -> int | None:
 
 def _available(raw: dict[str, Any]) -> int | None:
     """Free slots. Missing means unknown, which selection treats as one free slot. A value that is present
-    and not an integer is 0, not unknown: a runner that reports its capacity badly is not chosen."""
+    and not an integer is 0, not unknown: a runner that reports its capacity badly is tried last."""
     if "capacity_available" not in raw:
         return None
     available = _integer(raw["capacity_available"])

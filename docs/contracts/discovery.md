@@ -23,7 +23,7 @@ Valid text is a JSON string of valid Unicode with no control character (#114, C1
 
 A URL the engine can call is `http` or `https`, has an ASCII host the engine's HTTP client connects to as written and, if any, a port from 1 to 65535, and holds no whitespace, control character or lone surrogate, which the HTTP client cannot send. aiohttp folds a non-ASCII host, so `https://①27.0.0.1` would reach `127.0.0.1` under a name the payment-origin check never sees; a host written in punycode (`xn--`) is read. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, an `address` whose origin matches that URL becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept. When nothing is left to keep, the refresh fails ([above](#what-the-engine-reads)).
 
-There is no size limit, no stamp-age filter, and no de-duplication. An integer field reads any whole JSON number node accepts (`3`, `3.0`, `3e0`) that fits 64 bits. A price string, a fractional capacity, or any other optional field of the wrong type is absent, and the runner stays. `capacity_available` is the exception: a missing one is unknown, which selection treats as one free slot, but a value that is present and not an integer reads as 0, so that runner is not chosen.
+There is no size limit, no stamp-age filter, and no de-duplication. An integer field reads any whole JSON number node accepts (`3`, `3.0`, `3e0`) that fits 64 bits. A price string, a fractional capacity, or any other optional field of the wrong type is absent, and the runner stays. `capacity_available` is the exception: a missing one is unknown, which selection treats as one free slot, but a value that is present and not an integer reads as 0, so that runner is tried last.
 
 Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), never as binary floats. A token `Decimal` cannot hold still counts as a number: the runner is kept, that field is absent, and the payment layer reports that the price cannot be paid.
 
@@ -48,7 +48,16 @@ Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/
 | --- | --- |
 | Whether a price can be paid: the float bounds, a positive price, wei per `seconds` or `fixed`, and the ceiling | the payment layer: `payable_rate` and the price rules in `contracts/payments.py`, then `max_price` and the signer. The engine never signs without a ceiling |
 | Rate age and `stale` | the catalog (D62 (3), `LPB_RATE_MAX_AGE_S`) |
+| What advertised capacity means for a job | selection ([below](#advertised-capacity)) |
 | Which apps an enterprise will call | a `decorate` wrapper around `HttpDiscoverySource` |
+
+## Advertised capacity
+
+`capacity_available` is a hint, never a gate (#114, C17). It is as old as the discovery snapshot, and a runner that was full then may have room now. A runner that advertises `0` stays in selection: the default policy (`MostCapacityFirst`) orders runners by free capacity, most first, with unknown capacity as one free slot, so a zero-capacity runner is tried after every runner with room. When every runner for an app advertises `0`, the engine tries them anyway, up to the job's `max_attempts`. Before, that job failed `no_capacity` before any attempt.
+
+If every runner tried refuses, the job fails `refused` through the normal failover path: 503 with `Retry-After: 5`, the status and header the `no_capacity` failure had ([engine.md](engine.md#failures)). `no_capacity` now means only that the engine's own admission limits are full. The catalog is unchanged: `ready_count` still counts the runners with unknown or positive capacity, so an app whose every runner advertises `0` shows `ready_count` 0 and can still run a job.
+
+There is no setting for this. An operator who wants zero-capacity runners dropped supplies a `SelectionPolicy` that leaves them out; a job whose policy returns no runner fails `no_offering` ([extending-the-engine.md](../design-docs/extending-the-engine.md#rules-every-implementation-must-keep)).
 
 ## Sources
 
@@ -58,7 +67,7 @@ That process GETs each listed orchestrator at startup and every `RefreshInterval
 
 ## Testing
 
-The reader is tested against the node commit [upstream-baseline.md](../references/upstream-baseline.md) pins, without a copy of node's schema. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery --dump` for ai1 and xodeapp, and every runner in it must read with its exact price. Node's own `discovery/schema_test.go` cases for the fields the engine needs are kept by name in `tests/unit/test_discovery_reader.py`. What the engine does with text it cannot keep is in `tests/unit/test_runner_text.py`, written against the catalog, the runner list and the log, not the reader (#114). When the pin moves, capture the document again with that commit's `livepeer-discovery --dump`.
+The reader is tested against the node commit [upstream-baseline.md](../references/upstream-baseline.md) pins, without a copy of node's schema. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery --dump` for ai1 and xodeapp, and every runner in it must read with its exact price. Node's own `discovery/schema_test.go` cases for the fields the engine needs are kept by name in `tests/unit/test_discovery_reader.py`. What the engine does with text it cannot keep, with an answer it cannot read and with zero advertised capacity is in `tests/unit/test_runner_text.py`, `test_unreadable_discovery_answer.py` and `test_zero_capacity.py`, written against the catalog, the jobs, health and the log, not the reader (#114): they carry into ISS-48. When the pin moves, capture the document again with that commit's `livepeer-discovery --dump`.
 
 `FakeDiscoveryService` (`livepeer_builder.testing`, test-only) serves a node-format document, including `observed_at` by default, through an in-memory HTTP client into the real `HttpDiscoverySource`. `make_engine(runners=…)` keeps that signature and is built on it, so a test runs the same reader as production.
 

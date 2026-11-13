@@ -265,8 +265,8 @@ class JobService:
         candidates = self._discovery.candidates(request.app)
         if not candidates:
             raise await self._fail(job, attempts, "no_offering", f"no runner advertises app {request.app!r}")
-        if all(r.capacity_available is not None and r.capacity_available <= 0 for r in candidates):
-            raise await self._fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
+        # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
+        # tries it last, and if every runner refuses the job fails ``refused`` through failover.
         try:
             credential = await self._credentials.credential(actor)
         except NotProvisioned as exc:

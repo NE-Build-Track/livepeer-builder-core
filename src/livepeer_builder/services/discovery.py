@@ -27,7 +27,8 @@ _CLOCK_SKEW = timedelta(seconds=30)
 
 
 class MostCapacityFirst:
-    """Default SelectionPolicy: most free capacity first; unknown capacity counts as ready."""
+    """Default SelectionPolicy: most free capacity first; unknown capacity counts as one free slot. A
+    runner advertising zero stays, tried last: the hint can lag, so the engine still asks (#114, C17)."""
 
     def order(self, candidates: Sequence[Runner], request: JobRequest) -> Sequence[Runner]:
         del request

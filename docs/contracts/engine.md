@@ -187,6 +187,11 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    - **The charge stays attributed.** A paid attempt the job failed over from keeps its sessions and is
      `failed_after_payment`: the allocation paid it, and it is never `billable`
      ([payments.md](payments.md#cost-classification)).
+   - **Advertised capacity is a hint (#114, C17).** A runner that advertises zero free capacity stays a
+     candidate. The default selection tries it after every runner with room, and when every runner for
+     the app advertises zero the engine tries them anyway: the advertisement is as old as the discovery
+     snapshot. If they all refuse, the job fails `refused` like any other job whose runners all refused
+     ([discovery.md](discovery.md#advertised-capacity)).
    - **Every runner failed over.** The job is `failed` with the last runner's status code and body. A
      404 or 409 is reported as `refused` (503, retry later), so the caller never reads an orchestrator's
      refusal as its own not-found or conflict.
@@ -330,7 +335,7 @@ the last kind alone.
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
 | `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
-| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header, with the same `operation_ref` |
+| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header, with the same `operation_ref`. Runners that advertise zero capacity do not cause it: they are tried, last, and a job they all refuse fails `refused` (#114, C17; [discovery.md](discovery.md#advertised-capacity)). A job stored by an engine before that change may carry this kind for runners that were all busy |
 | `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
 | `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
 | `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |

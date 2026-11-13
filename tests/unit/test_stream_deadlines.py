@@ -3,7 +3,8 @@ before the first chunk, idle_timeout_s between chunks, and the engine's backstop
 ignores its deadline."""
 
 import asyncio
-from collections.abc import AsyncIterator
+import gc
+from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
 
 import pytest
@@ -17,6 +18,19 @@ from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_streaming import APP, collect, provisioned, read_all
+
+
+@pytest.fixture(autouse=True)
+def no_collection_inside_a_deadline() -> Iterator[None]:
+    """These tests measure real time in tenths of a second, and a full garbage collection stops the process
+    for longer: 0.3 s and more late in the suite, about fifty times a run. One that fell inside a deadline
+    failed the test, on whichever commit happened to put one there. The collector is off while a test here
+    runs; what the test makes is collected after it."""
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
 
 
 @pytest.fixture
@@ -173,8 +187,7 @@ async def test_time_spent_opening_counts_against_timeout_s(
     engine = await provisioned(make_engine, admin)
     # 0.6 s to open plus 0.6 s of chunks: within 1 s if the clock started at the first read, not overall.
     # The open must fit in what is left of timeout_s when it begins, so the 0.4 s between them is the
-    # room the engine's own work before the open may take. At a tenth of these times that room was 40 ms,
-    # and a slower CI run used it up: the runner then never answered ("no response") and no chunk was read.
+    # room the engine's own work before the open may take. At a tenth of these times that room was 40 ms.
     transport.opens = [StreamScript(open_delay_s=0.6, events=[b"a", 0.3, b"b", 0.3, b"c"])]
     stream = await engine.jobs.streaming.stream(
         alice, JobRequest(app=APP, timeout_s=1.0, idle_timeout_s=None)

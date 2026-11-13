@@ -185,7 +185,7 @@ class PaidRequest:
                 finally:
                     await stop_funding(funding)
                     response.release()
-        return response.status, body, response.content_type
+        return response.status, body, response.headers.get("Content-Type") or "application/octet-stream"
 
     async def open(self, connect_timeout_s: float) -> "SdkRunnerStream":
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
@@ -405,7 +405,7 @@ class SdkRunnerStream:
 
     @property
     def content_type(self) -> str:
-        return self._response.content_type or "application/octet-stream"
+        return self._response.headers.get("Content-Type") or "application/octet-stream"  # as sent (C27)
 
     @property
     def headers(self) -> tuple[tuple[str, str], ...]:

@@ -208,11 +208,10 @@ def create_app(
                 opened, {JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"}
             )
         result = await engine.jobs.run(actor, body)
-        return Response(
+        return Response(  # the runner's content type as a header: media_type would add a charset (C27)
             content=result.content,
             status_code=result.status_code,
-            media_type=result.content_type,
-            headers={JOB_ID_HEADER: str(result.job.id)},
+            headers={"Content-Type": result.content_type, JOB_ID_HEADER: str(result.job.id)},
         )
 
     @app.get("/v1/jobs", response_model=list[Job])

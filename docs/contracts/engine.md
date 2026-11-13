@@ -126,6 +126,11 @@ and a path that is set must start with `/` (400, as before). The transport then 
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
 longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's).
+The runner URL's own path is encoded by the same rule, so a runner URL may hold a space or a non-ASCII
+character in its path: escapes it already holds are kept, and a `%` that begins none is sent as `%25`.
+Its scheme, host and port go out as written, except a host that is not ASCII, which is sent by its IDNA
+name. A runner URL that cannot be read (a supplied discovery source can return one; the default source
+refuses it earlier) fails that attempt, unpaid, as `invalid runner URL`, like any other runner failure.
 
 | State | Meaning |
 | --- | --- |

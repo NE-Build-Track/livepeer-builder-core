@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import BuilderEngine
+from livepeer_builder.adapters.runner_address import as_built, runner_address
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import RunnerCallError
@@ -172,3 +173,79 @@ async def test_an_address_with_another_host_is_refused_before_any_request(net: N
     with pytest.raises(RunnerCallError, match="runner"):
         await SdkRunnerTransport(None).call(runner, past_the_contract(f"@localhost:{port}/app"), None)
     assert net.log == [] and net.targets == []
+
+
+@pytest.mark.parametrize(
+    ("name", "sent"),
+    [
+        ("my app", "/app/my%20app/run"),  # sent as written, aiohttp put a literal space on the request line
+        ("café", "/app/caf%C3%A9/run"),  # ... and a raw non-ASCII byte
+        ("100%", "/app/100%25/run"),  # a "%" that begins no escape
+        ("a%20b", "/app/a%20b/run"),  # an escape the runner URL already holds is kept
+        ("a%2Fb", "/app/a%2Fb/run"),  # ... and never decoded
+    ],
+)
+async def test_the_runner_s_own_path_is_percent_encoded_too(net: Net, name: str, sent: str) -> None:
+    await call(net, JobRequest(app=APP, path="/run"), runner_name=name)
+    assert net.targets == [sent]
+
+
+@pytest.mark.parametrize("path", ["x", "/../app-2/run"])
+async def test_the_prefix_check_reads_the_encoded_runner_path(net: Net, path: str) -> None:
+    """``/app/my app`` and ``/app/my%20app`` are one runner path once both are encoded."""
+    if path.startswith("/"):
+        await call(net, past_the_contract(path), runner_name="my app")
+        assert net.targets == ["/app/my%20app/../app-2/run"]  # as built, the orchestrator's to refuse
+    else:
+        with pytest.raises(RunnerCallError, match="runner"):
+            await call(net, past_the_contract(path), runner_name="my app")
+        assert net.targets == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::1/app",  # yarl: Invalid IPv6 URL
+        "http://[::1]x/app",
+        "http://host:port/app",
+        "http://host:99999/app",
+    ],
+)
+async def test_a_runner_url_that_cannot_be_read_is_an_unpaid_runner_call_error(net: Net, url: str) -> None:
+    """A supplied discovery source can return one: only the default source checks its runner URLs."""
+    runner = net.runner().model_copy(update={"url": url})
+    with pytest.raises(RunnerCallError, match="invalid runner URL") as refused:
+        await SdkRunnerTransport(None).call(runner, JobRequest(app=APP, path="/run"), None)
+    error = refused.value
+    assert (error.kind, error.payment_sent, error.status_code) == ("http", False, None)
+    assert net.log == [] and net.targets == []
+
+
+def test_a_runner_host_that_is_not_ascii_is_sent_by_its_idna_name() -> None:
+    """As before #113: aiohttp read the address with yarl, which encodes the host. Sent as built, the
+    host must already be encoded, or aiohttp reading it raises a bare ``UnicodeError`` mid-request."""
+    address = runner_address("http://café.example:8936/apps/app-1/app", "/run")
+    assert address == "http://xn--caf-dma.example:8936/apps/app-1/app/run"
+    assert as_built(address).host == "café.example"  # readable, as aiohttp reads it
+
+
+def test_an_ascii_runner_authority_is_left_as_written() -> None:
+    assert runner_address("http://HOST:80/app", "/run") == "http://HOST:80/app/run"
+    assert runner_address("http://[::1]:8936/app/", "/run") == "http://[::1]:8936/app/run"
+
+
+@pytest.mark.parametrize(
+    "url", ["http:///app", "http:/\n/host/app", "http://ho\nst/app", "http://ho st/app", "host/app"]
+)
+def test_a_runner_url_with_no_host_a_request_can_name_is_refused(url: str) -> None:
+    with pytest.raises(RunnerCallError, match="invalid runner URL") as refused:
+        runner_address(url, "/run")
+    assert (refused.value.kind, refused.value.payment_sent) == ("http", False)
+
+
+@pytest.mark.parametrize("path", ["@", "[", "@[::1"])
+def test_a_path_that_makes_the_authority_unreadable_leaves_the_runner(path: str) -> None:
+    """yarl raises its own errors for these (an ``IndexError`` for an authority that ends in ``@``)."""
+    with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
+        runner_address("http://127.0.0.1:8936", path)
+    assert (refused.value.kind, refused.value.payment_sent) == ("http", False)

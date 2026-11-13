@@ -195,7 +195,11 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      (incomplete or expired payment params) and 481 (price above the session ceiling). A
      `SignerRefreshRequired` (HTTP 480) that uses up the payment retry budget is the same refusal:
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
-     challenge and does not fail the attempt. Another orchestrator may succeed.
+     challenge and does not fail the attempt. Another orchestrator may succeed. The budgets are per
+     runner call and separate: at most `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` + 1 signatures (4 at the
+     default of 3), and as many unsigned requests, the first included, so a 480 is never a
+     signature. A runner that answers 402 after the last signature ends the attempt `http` (402),
+     paid, and that last challenge is not signed.
    - **`payment`:** caller- or signer-side refusals: 401 or 403 (`not_authorized`) and 402
      (`allowance_exhausted`). The stored manifest becomes `unpaid` (D54), so it is never matched or
      billed, and the job ends `failed`. They do **not** fail over, because every orchestrator would

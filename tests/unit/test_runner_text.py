@@ -112,6 +112,33 @@ async def test_invalid_text_in_a_price_or_a_gpu_reads_as_absent_and_the_runner_s
     assert "ud800" not in listed.text
 
 
+WHITESPACE = {"tab": "a\tb", "newline": '{\n "model_id": "m"\n}', "carriage return": "a\r\nb"}
+
+
+@pytest.mark.parametrize("field", ["mode", "version", "metadata"])
+@pytest.mark.parametrize("text", WHITESPACE.values(), ids=WHITESPACE.keys())
+async def test_a_tab_or_a_line_break_in_an_optional_text_field_is_kept_as_written(
+    field: str, text: str
+) -> None:
+    """A tab, a newline and a carriage return can be stored and served, so an optional field keeps them:
+    metadata written as JSON over several lines is still metadata. ``app`` and ``url`` stay strict."""
+    async with wire_engine(document(record(**{field: text}))) as engine, rest(engine) as client:
+        listed = await client.get("/v1/runners", params={"app": "good/app"})
+        (kept,) = engine.discovery.runners(ALICE, "good/app")
+    assert listed.status_code == 200
+    assert getattr(kept, field) == text
+    assert listed.json()[0][field] == text
+
+
+async def test_a_rate_whose_currency_ends_in_a_newline_is_still_read() -> None:
+    """The rate reader strips such a stray newline. Reading the field as absent made the runner unpayable."""
+    stray = {"price_info": {"price": 1, "currency": "wei\n", "unit": "fixed"}}
+    async with wire_engine(document(record(**stray))) as engine, rest(engine) as client:
+        catalog = await client.get("/v1/offerings")
+    (offering,) = catalog.json()
+    assert (offering["runner_count"], offering["rate_low"] is not None) == (1, True)
+
+
 async def test_valid_text_is_kept_as_written() -> None:
     """Nothing is rewritten: text outside ASCII, and a space, stay exactly as advertised."""
     advertised = record(app="modèle/图像 v2", mode="single-shot", version="1.2.3 β", metadata='{"名":"é"}')

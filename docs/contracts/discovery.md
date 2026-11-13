@@ -15,9 +15,11 @@ The dev stack points the URL at livepeer/node's `livepeer-discovery`, run in sta
 
 ## How a document is read
 
-The reader takes the fields it stores. An entry is read when `address` is a URL the engine can call and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is a URL the engine can call, `app` is a non-empty string, and `observed_at` is an RFC 3339 timestamp that converts to UTC.
+The reader takes the fields it stores. An entry is read when `address` is a URL the engine can call and `runners` is a list. A metadata entry (`nodes`, and no `address`) yields no runners. A runner is kept when `url` is a URL the engine can call, `app` is valid text of 1 to 200 characters, and `observed_at` is an RFC 3339 timestamp that converts to UTC.
 
-A URL the engine can call is `http` or `https`, has an ASCII host the engine's HTTP client connects to as written and, if any, a port from 1 to 65535, and holds no whitespace or control character, which the HTTP client cannot send. aiohttp folds a non-ASCII host, so `https://①27.0.0.1` would reach `127.0.0.1` under a name the payment-origin check never sees; a host written in punycode (`xn--`) is read. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, an `address` whose origin matches that URL becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
+Valid text is a JSON string of valid Unicode with no control character (#114, C12). A lone surrogate is not valid Unicode: JSON can carry one as `\ud800`, and the catalog could then not be written as JSON, so `GET /v1/offerings` answered 500 for every application. A control character is U+0000 to U+001F or U+007F to U+009F; PostgreSQL refuses the first of them, NUL, in text. A runner whose `app` or `url` is not valid text, or whose `app` is longer than 200 characters (the longest app a job can name and the store can keep), is skipped and counted like any other bad record. Any other text field that is not valid text reads as absent, and the runner stays: `mode`, `version`, `metadata`, the `currency` and `unit` of `price_info`, and the `id` and `name` of `gpu`. A price whose currency or unit is absent cannot be paid. Nothing is rewritten: text is kept exactly as advertised or not read.
+
+A URL the engine can call is `http` or `https`, has an ASCII host the engine's HTTP client connects to as written and, if any, a port from 1 to 65535, and holds no whitespace, control character or lone surrogate, which the HTTP client cannot send. aiohttp folds a non-ASCII host, so `https://①27.0.0.1` would reach `127.0.0.1` under a name the payment-origin check never sees; a host written in punycode (`xn--`) is read. It has no userinfo, query or fragment: the engine appends each request's path to a runner URL, an `address` whose origin matches that URL becomes `orchestrator_url` for the payment-origin check, and error text quotes both. Node's schema allows those three on a runner URL; the engine does not. One bad record is skipped on its own. The skip is logged as `discovery.inventory_skipped` with a count of skipped entries and a count of skipped runners. The rest of the document is kept.
 
 There is no size limit, no stamp-age filter, and no de-duplication. An integer field reads any whole JSON number node accepts (`3`, `3.0`, `3e0`) that fits 64 bits. A price string, a fractional capacity, or any other optional field of the wrong type is absent, and the runner stays. `capacity_available` is the exception: a missing one is unknown, which selection treats as one free slot, but a value that is present and not an integer reads as 0, so that runner is not chosen.
 
@@ -30,7 +32,7 @@ Numbers are read as exact decimal tokens ([RFC 8259](https://www.rfc-editor.org/
 | Schema | `Runner` |
 | --- | --- |
 | entry `address` | `orchestrator_url` when its origin matches `url`; otherwise absent |
-| `url`, `app`, `mode` | the same names |
+| `url`, `app`, `mode` | the same names. `app` is at most 200 characters |
 | `observed_at` | `observed_at`, as UTC. A missing stamp, or one the clock cannot convert, skips the runner |
 | `capacity`, `capacity_used`, `capacity_available` | the same names. There is no `session_ids` fallback |
 | `price_info` | `price_info`, as advertised |
@@ -54,7 +56,7 @@ That process GETs each listed orchestrator at startup and every `RefreshInterval
 
 ## Testing
 
-The reader is tested against the node commit [upstream-baseline.md](../references/upstream-baseline.md) pins, without a copy of node's schema. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery --dump` for ai1 and xodeapp, and every runner in it must read with its exact price. Node's own `discovery/schema_test.go` cases for the fields the engine needs are kept by name in `tests/unit/test_discovery_reader.py`. When the pin moves, capture the document again with that commit's `livepeer-discovery --dump`.
+The reader is tested against the node commit [upstream-baseline.md](../references/upstream-baseline.md) pins, without a copy of node's schema. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery --dump` for ai1 and xodeapp, and every runner in it must read with its exact price. Node's own `discovery/schema_test.go` cases for the fields the engine needs are kept by name in `tests/unit/test_discovery_reader.py`. What the engine does with text it cannot keep is in `tests/unit/test_runner_text.py`, written against the catalog, the runner list and the log, not the reader (#114). When the pin moves, capture the document again with that commit's `livepeer-discovery --dump`.
 
 `FakeDiscoveryService` (`livepeer_builder.testing`, test-only) serves a node-format document, including `observed_at` by default, through an in-memory HTTP client into the real `HttpDiscoverySource`. `make_engine(runners=…)` keeps that signature and is built on it, so a test runs the same reader as production.
 

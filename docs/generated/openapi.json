@@ -686,6 +686,7 @@
           },
           "grant_id": {
             "default": "",
+            "maxLength": 200,
             "title": "Grant Id",
             "type": "string"
           },

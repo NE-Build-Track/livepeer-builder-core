@@ -9,6 +9,8 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
   `allocations.fund`, `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`,
   `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.** `grants.fund` covers every
   grant. The engine sends the grant id on the request, or the grant of the caller's own allocation.
+- **Ids in paths:** every id the engine places in a route below (`{id}`) is percent-encoded as one path
+  segment (`adapters/batteries.py`, `segment`; #113, C10), and an id of only dots is encoded too.
 - **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Optional: without
   it the engine starts with the grant desk off (`list_grants`/`create_grant` and their routes absent).
 

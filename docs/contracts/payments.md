@@ -87,6 +87,15 @@ The same limit applies to every id, label and reference a request carries (`Stor
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
 `label`.
 
+**A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
+`FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
+and the values `.` and `..`, which a client or server would read as another path. It is a 422 over REST (a
+`ValidationError` in process) before the operation ledger records anything or the provider is called, and
+it applies to the allocation fund route too, whose body is a `FundRequest`. It is held to no pattern such
+as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it
+places in a path, whatever its source (a grant, an allocation, a key, a created grant read back), so an id
+the provider itself returned cannot name another resource either.
+
 **The new key must have somewhere to go (#112, C2).** Provisioning funds the provider key before the
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:

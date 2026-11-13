@@ -27,6 +27,20 @@ def _no_nul(value: str) -> str:
 StoredText = Annotated[str, Field(max_length=200), AfterValidator(_no_nul)]
 
 
+def _one_path_segment(value: str) -> str:
+    if value in (".", "..") or any(c in "/\\?#%" or ord(c) < 32 or 127 <= ord(c) < 160 for c in value):
+        raise ValueError(
+            "must not contain '/', '\\', '?', '#', '%' or a control character, or be '.' or '..'"
+        )
+    return value
+
+
+# A grant id: stored text that the payment provider's URL path reads as one segment, whatever a client or
+# server normalizes (#113, C10). The engine places it in ``/v1/grants/{grant_id}/fund``, where ``..`` or a
+# ``/`` would name another resource. It is held to no pattern such as a UUID: the provider chooses its ids.
+GrantId = Annotated[StoredText, AfterValidator(_one_path_segment)]
+
+
 class Money(Contract):
     """An exact amount in one currency. Serialized as a decimal string, never a float."""
 

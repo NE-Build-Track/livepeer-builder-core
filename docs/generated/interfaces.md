@@ -101,6 +101,10 @@ classDiagram
         +async set_actor_key(application_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at) ProvisionedActor?
         +async set_actor_status(application_id, actor_id, allocation_id, status, updated_at, only_from) ProvisionedActor?
     }
+    class UsageOnceRepo {
+        <<interface>>
+        +async set_usage_once(job_id, usage) bool
+    }
     class UsageSetAsideRepo {
         <<interface>>
         +async count_set_aside_usage() int
@@ -176,6 +180,7 @@ classDiagram
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
     ActorCommandRepo <|.. SqlStore
+    UsageOnceRepo <|.. SqlStore
     UsageSetAsideRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
     AllocationCostSnapshot <|.. SqlCostSnapshot
@@ -208,6 +213,7 @@ classDiagram
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
 | `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |
+| `UsageOnceRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `AllocationCostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |

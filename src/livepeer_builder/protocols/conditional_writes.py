@@ -7,8 +7,9 @@ They live here, re-exported from ``livepeer_builder.protocols``, because that mo
 
 from datetime import datetime
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
-from livepeer_builder.contracts import AllocationStatus, ProvisionedActor, SecretRef
+from livepeer_builder.contracts import AllocationStatus, MeasuredUsage, ProvisionedActor, SecretRef
 
 
 @runtime_checkable
@@ -46,4 +47,17 @@ class ActorCommandRepo(Protocol):
         updated_at: datetime,
     ) -> ProvisionedActor | None:
         """Write ``api_key_id``, ``secret_ref`` and ``updated_at``."""
+        ...
+
+
+@runtime_checkable
+class UsageOnceRepo(Protocol):
+    """A job's usage, written once (#115, C20). ``JobRepo.set_usage`` updates unconditionally, so two
+    reports at the same moment both succeeded and the second replaced the first.
+
+    Without it, the engine checks the job it read and calls ``set_usage``, as before: that race remains."""
+
+    async def set_usage_once(self, job_id: UUID, usage: MeasuredUsage) -> bool:
+        """Store ``usage`` only where the job has none and is ``succeeded``, in one statement. ``True`` when
+        it was stored; ``False``, with nothing written, otherwise."""
         ...

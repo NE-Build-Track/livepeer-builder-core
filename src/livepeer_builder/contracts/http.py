@@ -65,7 +65,8 @@ def request_path(value: str) -> str:
     empty segment, a ``.`` or ``..`` segment, literal or percent-encoded (``%2e``, in any case), or an
     encoded separator (``%2F``, ``%5C``): livepeer/node unescapes the path before it forwards it, so
     ``..%2Fother`` would reach the runner as ``../other``. A trailing ``/`` and a query string stay allowed,
-    as written.
+    as written. One thing is kept here and not sent: the ``?`` of an empty query (``/run?``), which the
+    HTTP client leaves out of the request target.
     """
     if "#" in value or "\\" in value or _CONTROL.search(value):
         raise ValueError("path must not contain a fragment, a backslash or a control character")

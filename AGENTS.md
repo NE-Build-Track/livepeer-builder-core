@@ -42,7 +42,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy                              # strict
 uv run python scripts/check_docs.py      # links, anchors, indexes, exec-plan shape
 uv run lpb gen-docs                      # regenerate docs/generated after schema/API changes
-LPB_DISCOVERY_URL=http://127.0.0.1:9/discovery uv run lpb smoke   # import, migrate, start, health, stop
+uv run lpb smoke                         # import, migrate, start, health, stop (a throwaway database)
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these plus a clean-install check of the built wheel.

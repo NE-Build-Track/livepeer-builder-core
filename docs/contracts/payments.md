@@ -127,6 +127,20 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
+- **Amounts the provider takes (#112, C11).** The engine mirrors Batteries' amount format (v0.0.3,
+  `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
+  no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at
+  most 1,000,000,000 (10^9) USD or ETH per command, since the provider's own (256 digits once scaled) is
+  effectively none. Provisioning takes zero or more (`ProvisionAmount`); funding an allocation, funding a
+  grant and creating a grant take an amount within the format and bound (`FundingAmount`) and still need
+  it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
+  `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
+  ledger records anything and before any provider call. A zero or negative funding or grant amount is
+  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
+  **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
+  18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
+  the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
   caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,

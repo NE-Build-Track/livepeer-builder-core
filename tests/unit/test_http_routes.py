@@ -550,6 +550,36 @@ async def test_provisioning_an_id_longer_than_the_store_keeps_is_422_before_mone
     assert manager.calls == []
 
 
+@pytest.mark.parametrize("amount", ["-1", "1E+10", "0.0000000000000000001"])
+async def test_an_amount_the_provider_would_not_take_is_422_before_the_ledger_and_the_provider(  # type: ignore[no-untyped-def]
+    api, manager: FakeAllocationManager, amount: str
+) -> None:
+    """#112 C11: provisioning, funding and grants. Each reference is still free afterwards, so the ledger
+    recorded nothing."""
+    client, _engine, admin, _alice = api
+    bad, good = {"amount": amount, "currency": "USD"}, {"amount": "5", "currency": "USD"}
+    provision = {"grant_id": "grant_1", "operation_ref": "p1"}
+    answer = await client.post(ALLOCATION, json=provision | {"amount": bad}, headers=admin)
+    assert answer.status_code == 422, answer.text
+    assert manager.calls == []
+    assert (
+        await client.post(ALLOCATION, json=provision | {"amount": good}, headers=admin)
+    ).status_code == 201
+    funding = [
+        (ALLOCATION + "/fund", {"operation_ref": "f1"}, 200),
+        ("/v1/admin/grant/fund", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
+        ("/v1/admin/grants", {"operation_ref": "c1", "name": "ops"}, 201),
+    ]
+    if amount.startswith("-"):  # a funding amount stays positive, refused as before (400)
+        funding = []
+    for path, body, accepted in funding:
+        calls = list(manager.calls)
+        answer = await client.post(path, json=body | {"amount": bad}, headers=admin)
+        assert answer.status_code == 422, (path, answer.text)
+        assert manager.calls == calls
+        assert (await client.post(path, json=body | {"amount": good}, headers=admin)).status_code == accepted
+
+
 async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager
 ) -> None:

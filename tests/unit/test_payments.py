@@ -231,6 +231,54 @@ def test_a_provisioning_label_is_capped_where_it_is_stored() -> None:
     )
 
 
+# #112 C11: the provider's amount (Batteries v0.0.3, internal/units/eth.go) is unsigned with at most 18
+# fractional digits, and the engine's bound is 10^9 per command.
+TOO_PRECISE = ["0.0000000000000000001", "1.0000000000000000000"]  # 19 places, whatever their value
+TOO_LARGE = ["1000000000.000000000000000001", "1E+10", "1" + "0" * 30]
+
+
+@pytest.mark.parametrize(
+    ("amount", "rule"),
+    [("-1", "zero or more"), ("-0.5", "zero or more"), ("-0", "zero or more")]
+    + [(amount, "18 decimal places") for amount in TOO_PRECISE]
+    + [(amount, "at most 1000000000") for amount in TOO_LARGE],
+)
+def test_a_provisioning_amount_the_provider_would_not_take_is_refused_when_built(
+    amount: str, rule: str
+) -> None:
+    with pytest.raises(ValidationError, match=rule):
+        provision_request(amount=amount)
+
+
+@pytest.mark.parametrize("amount", ["0", "0.000000000000000001", "5", "12.50", "1000000000"])
+def test_a_provisioning_amount_within_the_providers_format_is_kept(amount: str) -> None:
+    assert provision_request(amount=amount).amount == usd(amount)
+
+
+@pytest.mark.parametrize(
+    ("amount", "rule"),
+    [(amount, "18 decimal places") for amount in TOO_PRECISE]
+    + [(amount, "at most 1000000000") for amount in TOO_LARGE],
+)
+def test_a_funding_amount_the_provider_would_not_take_is_refused_when_built(amount: str, rule: str) -> None:
+    with pytest.raises(ValidationError, match=rule):
+        FundRequest(amount=usd(amount), operation_ref="f", grant_id="g")
+
+
+async def test_a_grant_amount_the_provider_would_not_take_is_refused_before_the_ledger(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    engine = await make_engine()
+    desk = engine.payments.grants
+    assert desk is not None
+    for amount in [*TOO_PRECISE, *TOO_LARGE]:
+        with pytest.raises(ValidationError):
+            await desk.create_grant(admin, "ops", usd(amount), operation_ref="grant-1")
+    assert manager.calls == []
+    created = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")  # the ref is free
+    assert created.total == "5"
+
+
 async def test_funding_a_named_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:

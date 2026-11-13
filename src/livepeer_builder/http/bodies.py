@@ -6,8 +6,8 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from livepeer_builder import contracts
-from livepeer_builder.contracts import AllocationStatus, CredentialKind, Money, OperationRef
-from livepeer_builder.contracts.common import StoredText
+from livepeer_builder.contracts import AllocationStatus, CredentialKind, OperationRef
+from livepeer_builder.contracts.common import FundingAmount, ProvisionAmount, StoredText
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
 
@@ -32,7 +32,7 @@ class IssueKeyBody(BaseModel):
 
 
 class ProvisionBody(BaseModel):
-    amount: Money
+    amount: ProvisionAmount  # as ProvisionRequest: a 422 before money moves (#112, C11)
     label: StoredText = ""  # ProvisionedActor.label; a 422 before money moves
     grant_id: StoredText = ""  # as stored: also a 422 before money moves
     operation_ref: OperationRef  # required (D57, Q4)
@@ -40,7 +40,7 @@ class ProvisionBody(BaseModel):
 
 class GrantBody(BaseModel):
     name: str
-    amount: Money
+    amount: FundingAmount  # a 422 before the ledger and the provider (#112, C11)
     operation_ref: OperationRef  # required (D57, Q4)
 
 

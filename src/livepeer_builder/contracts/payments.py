@@ -7,7 +7,14 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, SecretStr, computed_field, field_validator
 
-from livepeer_builder.contracts.common import Contract, Currency, Money, StoredText
+from livepeer_builder.contracts.common import (
+    Contract,
+    Currency,
+    FundingAmount,
+    Money,
+    ProvisionAmount,
+    StoredText,
+)
 from livepeer_builder.contracts.operations import OperationRef
 
 if TYPE_CHECKING:
@@ -37,7 +44,9 @@ class ProvisionRequest(Contract):
     # the store could not keep is refused here, before any provider call.
     application_id: StoredText
     actor_id: StoredText
-    amount: Money  # may be zero: identity without money; fund later with an explicit command
+    # may be zero: identity without money; fund later with an explicit command. Never negative, and within
+    # the provider's format and the engine's bound (#112, C11)
+    amount: ProvisionAmount
     label: StoredText = ""
     grant_id: StoredText = ""  # empty uses the grant of the caller's own allocation
     operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
@@ -109,7 +118,7 @@ class KnownActor(Contract):
 
 
 class FundRequest(Contract):
-    amount: Money
+    amount: FundingAmount  # the provider's format and the engine's bound (#112, C11)
     operation_ref: OperationRef  # required: makes a retried fund safe
     grant_id: str = ""  # grant funding only; allocation funding ignores it
 

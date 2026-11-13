@@ -68,6 +68,16 @@ the last cost sync and its error, running jobs, the allocation mode and the
 version. Logs are JSON lines; every
 line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 
+`/readyz` needs no credential, so `discovery_error` and `cost_sync_error` are short fixed codes, never
+an exception's text (#113, C7). The text, which can quote a URL, a provider's words or a store error's
+SQL and parameters, goes to the log with the code, in `discovery.failed` and `costs.sync_failed`:
+
+| Code | Meaning |
+| --- | --- |
+| `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with an error status, or raised anything not listed below |
+| `invalid_answer` | It answered with something the engine could not read: not JSON, not the expected shape, a value it cannot convert |
+| `store_error` | Cost sync failed after the usage source answered: writing or matching the usage in the engine's store |
+
 `scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
 `LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).
@@ -88,10 +98,10 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | --- | --- |
 | The engine dies mid-job | On start, `running` jobs become `uncertain` (may have paid) or `failed`. Never re-run |
 | The signer or runner times out after payment | Job `uncertain`; cost classified `uncertain` |
-| Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
+| Batteries unreachable | Cost sync records `cost_sync_error` (`unavailable`); costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
-| Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
+| Discovery fails | The last good snapshot is kept; `discovery_error` is set to a code; it goes stale after three intervals |
 | livepeer/node's `livepeer-discovery` fails a refresh | A TLS failure, a non-200, or a document `Decode` rejects keeps that source's last successful snapshot until `MaxFailedRefreshes` consecutive failures (default 6). The dev stack leaves that default and refreshes every 30s. A source that has never succeeded stays out. A runner with no `observed_at`, or one more than 30s ahead, is skipped inside `Decode` and does not drop the source when another runner in the document is valid. The engine keeps its own last good snapshot ([contract](contracts/discovery.md)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |

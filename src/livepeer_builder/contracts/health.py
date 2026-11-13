@@ -10,9 +10,9 @@ class EngineHealth(Contract):
     ready: bool
     discovery_fresh: bool
     discovery_observed_at: datetime | None
-    discovery_error: str | None
+    discovery_error: str | None  # a code (unavailable, invalid_answer), never an error's text (#113, C7)
     cost_sync_at: datetime | None
-    cost_sync_error: str | None
+    cost_sync_error: str | None  # a code (unavailable, invalid_answer, store_error); the text is logged
     running_jobs: int
     allocation_mode: AllocationMode
     version: str

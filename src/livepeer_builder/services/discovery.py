@@ -18,6 +18,7 @@ from livepeer_builder.contracts import (
 from livepeer_builder.contracts.discovery import ObservedBy
 from livepeer_builder.contracts.payments import is_payable, payable_rate, signable
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
+from livepeer_builder.services.failure_codes import source_failure
 
 _LOG = logging.getLogger(__name__)
 # livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).
@@ -77,9 +78,12 @@ class DiscoveryService:
         try:
             runners = await self._source.fetch()
         except Exception as exc:  # any source failure keeps the last good snapshot
-            _LOG.warning("discovery failed", extra={"event": "discovery.failed", "error": str(exc)})
+            code = source_failure(exc)  # /readyz shows the code; the text is logged (#113, C7)
+            _LOG.warning(
+                "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}
+            )
             self._snapshot = self._snapshot.model_copy(
-                update={"last_attempt_at": attempted, "last_error": str(exc)}
+                update={"last_attempt_at": attempted, "last_error": code}
             )
             return self._snapshot
         self._snapshot = DiscoverySnapshot(

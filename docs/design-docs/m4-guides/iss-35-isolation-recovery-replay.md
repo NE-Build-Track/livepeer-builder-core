@@ -2,7 +2,8 @@
 
 > **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
-> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+> section says which part it replaces. The answers are decision D79 in
+> [m4-decisions.md](../m4-decisions.md).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-35 ([Network-Engineering-SPE#49](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/49)),
@@ -216,21 +217,28 @@ Locked by Mike on 13 November 2026.
 - **Q2, the `corrected` label:** it stays dependent on history and is left out of the rebuild comparison,
   with `revision` and the timestamps. The history of a cost lives in the events feed. Known limit: event
   retention can delete old correction events, after which the first figure is recorded nowhere.
-- **Q3, retention and the cost data:** "option C if R3 is confirmed", otherwise fix R1 and document R2.
-  Each effect is first pinned by a failing test. All need retention switched on, and the default keeps
-  everything.
-  - **R1** is fixed under both outcomes. An ambiguous key is looked at again only within a window after
-    its attempt, and never after rows for that key have been purged.
-  - **R3**, found on 13 November: after a job and later its usage rows are both purged, the fees are
-    counted nowhere in the engine while Batteries still reports them as spent, so reconciliation could
-    never report `balanced` again for that allocation (`services/costs.py`, `store/retention.py`,
-    `store/cost_reads.py`). Read from code, not reproduced.
-  - **If the R3 test confirms the effect:** the engine keeps a running total of fees removed by retention,
-    per allocation. Reconciliation gains a figure, "fees of purged jobs", and can balance after any purge.
-    This fixes R2 and R3, and the builder console changes with it.
-  - **If it does not:** R2 is documented as a limit of retention.
-  - **No startup rule** relating usage retention to job retention. The guide proposed one; it would not
-    fix R1, and it would make R2 happen for every purged job.
+- **Q3, retention and the cost data:** "option C if R3 is confirmed". R3 was confirmed by test on 13
+  November, so option C applies. All of these effects need retention switched on, and the default keeps
+  everything. Each is pinned by a test in `tests/store/test_retention_effects.py` (SQLite; the ledger and
+  the provider's `spent` are faked; PostgreSQL not yet run).
+  - **R1, confirmed.** A purge that leaves one cached ledger session and one engine entry for a key makes
+    the next sync call it `matched`, whoever the two are. A fee was credited to the wrong job in four
+    setups, two of which need only one retention setting. The fix: an ambiguous key is looked at again
+    only within a window after its attempt, and never after rows for that key have been purged.
+  - **R2, confirmed.** After a job purge its fee reads `unattributed`, and the books still balance.
+  - **R3, confirmed.** After a job and later its usage rows are both purged, the fees are counted nowhere
+    in the engine while Batteries still reports them as spent, and `balanced` is false on every later
+    sync.
+  - **The fix for R2 and R3:** the engine keeps a running total of fees removed by retention, per
+    allocation. Reconciliation gains a figure, "fees of purged jobs", and can balance after any purge. The
+    builder console changes with it.
+  - **R4, found by the same tests and still open.** With usage rows purged and the job kept, a later
+    charge on the same session recomputes the job's cost from the rows that remain and stores it lower.
+    Cost sync also reads the ledger's last page again on every sync, so a purged row on that page is
+    cached again, and the total of purged fees must not count it twice. How a job's usage rows are kept
+    while the job needs them is not decided.
+  - **The guide's startup rule** (usage retention not shorter than job retention) is not adopted. It would
+    not fix R1. It does prevent R4, and it is one of the options for that open question.
 
 **Other decisions that touch this guide.**
 

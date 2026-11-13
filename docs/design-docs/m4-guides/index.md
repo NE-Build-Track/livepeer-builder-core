@@ -19,8 +19,8 @@ answers that did:
 - **ISS-32:** the trusted-backend authenticator is not built in M4; the commerce fixture consumes the events
   feed from the start; the router split (#25) lands before ISS-26.
 - **ISS-33:** admin comes from a dedicated token claim, and the scope denylist goes.
-- **ISS-35:** the wrong-match defect is fixed, and a total of purged fees is kept if a test confirms that
-  reconciliation otherwise stops balancing.
+- **ISS-35:** the wrong-match defect is fixed, and a total of purged fees is kept. A test on 13 November
+  confirmed that reconciliation otherwise stops balancing.
 
 **Related tickets, all builder-core issues on the board under M4.** The hardening and upkeep tickets, #112
 to #117, come from the review of the `v0.2.0` release, and the hardening fixes merge before any feature

@@ -2,7 +2,8 @@
 
 > **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
-> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+> section says which part it replaces. The answers are decision D74 in
+> [m4-decisions.md](../m4-decisions.md).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-31 ([Network-Engineering-SPE#45](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/45)),

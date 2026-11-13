@@ -2,7 +2,8 @@
 
 > **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
-> section says which part it replaces. Decision numbers are assigned in the M4 decision record.
+> section says which part it replaces. The answers are decision D71 in
+> [m4-decisions.md](../m4-decisions.md).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\

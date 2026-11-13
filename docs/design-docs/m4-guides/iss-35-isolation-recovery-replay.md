@@ -219,8 +219,9 @@ Locked by Mike on 13 November 2026.
   retention can delete old correction events, after which the first figure is recorded nowhere.
 - **Q3, retention and the cost data:** "option C if R3 is confirmed". R3 was confirmed by test on 13
   November, so option C applies. All of these effects need retention switched on, and the default keeps
-  everything. Each is pinned by a test in `tests/store/test_retention_effects.py` (SQLite; the ledger and
-  the provider's `spent` are faked; PostgreSQL not yet run).
+  everything. The tests that showed them are not merged yet: slice 1 of this ticket adds them
+  (`tests/store/test_retention_effects.py`). They ran on SQLite, with the ledger and the provider's
+  `spent` faked; PostgreSQL has not been run.
   - **R1, confirmed.** A purge that leaves one cached ledger session and one engine entry for a key makes
     the next sync call it `matched`, whoever the two are. A fee was credited to the wrong job in four
     setups, two of which need only one retention setting. The fix: an ambiguous key is looked at again

@@ -120,8 +120,10 @@ missing `payload` as the JSON object `{}` (D41).
 orchestrator, so a path that a client or server would normalize could reach another app. The contract
 refuses a path that is not already normal, with a 422 (a `ValidationError` in process) before anything
 is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
-segment (`//`), and a backslash, a control character or a fragment (`#`) anywhere. A trailing `/` and a
-query string stay allowed; a query's slashes and dots are data. An empty path is the runner URL itself,
+segment (`//`), an encoded separator (`%2F`, `%5C`), and a backslash, a control character or a fragment
+(`#`) anywhere. An encoded separator is refused because livepeer/node unescapes the path before it
+forwards it, so `..%2Fother` would reach the runner as `../other`. A trailing `/` and a query string stay
+allowed; a query's slashes, dots and escapes are data. An empty path is the runner URL itself,
 and a path that is set must start with `/` (400, as before). The transport then sends the address
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no

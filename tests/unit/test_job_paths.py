@@ -47,6 +47,12 @@ REFUSED = [
     "/a\x7f",
     "/a\x85",
     "/a?q=\n",
+    "/a%2Fb",  # an encoded separator: a server that decodes before it routes reads it as one
+    "/a%2fb",
+    "/..%2Fother",
+    "/..%2f..%2Fapp-2/app",
+    "/a%5Cb",
+    "/a%5cb",
     "/a#fragment",  # a fragment
     "/a?q=1#fragment",
     "/a#",
@@ -61,11 +67,12 @@ ALLOWED = [
     "/a..",
     "/...",
     "/.well-known/x",
-    "/a%2Fb",  # an escaped slash is data, not a segment
-    "/a%252e%252e",  # an escaped "%2e" is data too
+    "/a%252e%252e",  # an escaped "%2e" is data
+    "/a%252Fb",  # and so is an escaped "%2F"
     "/a b/é",
     "/run?x=1&y=2",
     "/run?next=/../other",  # a query string stays allowed: its slashes and dots are data
+    "/run?next=%2Fother%5C",  # encoded separators too, in the query
     "/run?u=http://h//x",
     "/run?",
 ]
@@ -98,7 +105,9 @@ async def api(
         yield client, engine, alice.token
 
 
-@pytest.mark.parametrize("path", ["/../../app-2/app", "/%2e%2E/app-2/app", "//x", "/a\\b", "/a#f"])
+@pytest.mark.parametrize(
+    "path", ["/../../app-2/app", "/%2e%2E/app-2/app", "/..%2F..%2Fapp-2/app", "//x", "/a\\b", "/a#f"]
+)
 async def test_rest_refuses_such_a_path_with_422_before_anything_is_written(
     api: tuple[httpx.AsyncClient, BuilderEngine, str], transport: ScriptedStreamTransport, path: str
 ) -> None:

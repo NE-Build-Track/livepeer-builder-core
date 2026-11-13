@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.adapters.secrets import RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.contracts import (
     ActorContext,
     FundRequest,
@@ -16,7 +15,13 @@ from livepeer_builder.contracts import (
     SecretRef,
     SeenActor,
 )
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, NotProvisioned
+from livepeer_builder.errors import (
+    AccessDenied,
+    InvalidRequest,
+    NotFound,
+    NotProvisioned,
+    ProviderUnavailable,
+)
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
@@ -323,23 +328,21 @@ class SealedVault(MemorySecretStore):
         return await super().put(name, secret)
 
 
-@pytest.mark.parametrize("kind", ["plug-in", "built-in"])
 async def test_a_store_that_cannot_write_refuses_provisioning_before_the_provider(
-    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, kind: str
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """#112 C2: provisioning asks the store first. A refusal sends nothing to the provider and records
-    nothing, so the same reference runs once the store can write."""
+    """#112 C2: provisioning asks the store before the provider. A refusal sends nothing to the provider
+    and records nothing, so the same reference runs once the store can write. (The built-in store without
+    its key never gets this far: the engine does not start, see test_assembly.)"""
     vault = SealedVault(sealed=True)
-    secrets = vault if kind == "plug-in" else RoutingSecretStore(SettingsSecretStore({}), None)
-    engine = await make_engine(supply=EngineSupply(secret_store=secrets))
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
     with pytest.raises(InvalidRequest) as refused:
         await engine.payments.provision(admin, provision_request())
     assert manager.calls == [] and manager.allocations == {}  # no allocation was funded
     assert "cannot store" in str(refused.value)
-    if kind == "plug-in":
-        vault.sealed = False
-        actor = await engine.payments.provision(admin, provision_request())
-        assert manager.calls == ["create_key_for_grant"] and actor.secret_ref.ref in vault.values
+    vault.sealed = False
+    actor = await engine.payments.provision(admin, provision_request())
+    assert manager.calls == ["create_key_for_grant"] and actor.secret_ref.ref in vault.values
 
 
 async def test_a_store_that_cannot_write_refuses_rotation_before_the_provider(
@@ -354,6 +357,62 @@ async def test_a_store_that_cannot_write_refuses_rotation_before_the_provider(
     assert manager.calls == ["create_key_for_grant"]  # no new key was minted
     assert "cannot store" in str(refused.value)
     assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == before.api_key_id
+
+
+async def test_a_repeat_of_a_finished_provisioning_gets_its_result_while_the_store_cannot_write(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """The check belongs to the step that stores a key, not to the command: a repeat of a finished
+    provisioning stores nothing. Asked before the ledger, it answered 400 "nothing was sent" for an
+    allocation that was funded (review of #128)."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    first = await engine.payments.provision(admin, provision_request())
+    vault.sealed = True
+    again = await engine.payments.provision(admin, provision_request())  # a lost response, repeated
+    assert again == first
+    assert manager.calls == ["create_key_for_grant"]  # no second provider call
+
+
+async def test_an_interrupted_rotation_finishes_while_the_store_cannot_write(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """A rotation that stored its new key and then failed to revoke the old one has two live keys. Its
+    resume stores nothing, so a store that cannot write must not hold the old key alive."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    before = await engine.payments.provision(admin, provision_request())
+    manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.keys[before.api_key_id][2] is False  # the old key is still live
+    vault.sealed = True
+    clock.advance(120)  # LPB_OPERATION_STALE_S: the first run is presumed dead
+    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert rotated.api_key_id != before.api_key_id
+    assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
+
+
+async def test_a_refusal_on_a_resumed_run_does_not_say_nothing_was_sent(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """A fresh run that is refused sent nothing, and says so. A resumed run cannot know that: its earlier
+    attempt ended in an unknown outcome, so the message must not call a funded allocation untouched."""
+    vault = SealedVault(sealed=True)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    with pytest.raises(InvalidRequest, match="nothing was sent to the payment provider"):
+        await engine.payments.provision(admin, provision_request())
+
+    vault.sealed = False
+    manager.fail_once("create_key_for_grant", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.provision(admin, provision_request("bob"))
+    vault.sealed = True
+    clock.advance(120)
+    with pytest.raises(InvalidRequest) as refused:
+        await engine.payments.provision(admin, provision_request("bob"))
+    assert "nothing was sent" not in str(refused.value)
+    assert "an earlier attempt may have reached the payment provider" in str(refused.value)
 
 
 async def test_a_store_without_the_writable_check_is_not_asked(

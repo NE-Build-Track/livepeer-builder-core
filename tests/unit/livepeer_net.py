@@ -55,6 +55,7 @@ class Net:
     bodies: list[Any] = field(default_factory=list)  # what each runner request carried, as JSON
     raw: list[bytes] = field(default_factory=list)  # ... and as the bytes on the wire
     headers: list[CIMultiDict[str]] = field(default_factory=list)  # ... and its request headers
+    targets: list[str] = field(default_factory=list)  # ... and its request target, as sent (raw_path)
     signer_requests: list[dict[str, Any]] = field(default_factory=list)
     release: asyncio.Event = field(default_factory=asyncio.Event)  # ends every hang at teardown
     on_challenge: Callable[[], Awaitable[None]] | None = None  # runs before each 402 challenge is sent
@@ -129,6 +130,7 @@ class Net:
         raw = await request.read()
         self.raw.append(raw)
         self.headers.append(CIMultiDict(request.headers))
+        self.targets.append(request.raw_path)
         try:
             self.bodies.append(json.loads(raw) if raw else None)
         except (UnicodeDecodeError, json.JSONDecodeError):

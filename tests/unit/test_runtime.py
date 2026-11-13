@@ -432,28 +432,34 @@ async def test_without_auto_migrate_a_supplied_store_with_its_own_revisions_stil
     schema, which ``lpb migrate`` cannot change, so comparing them with this package's head would stop a
     working engine."""
     inner = await SqlStore.connect(await database_at(tmp_path, "head"), migrate=False)
-    store = _OverSql(inner, _OwnRevisions())
-    engine = await BuilderEngine.create(
-        without_auto_migrate(MEMORY),
-        supply=EngineSupply(store=store),  # type: ignore[arg-type]
-    )
-    await engine.start()
     try:
-        assert await engine.schema_revision() == "vault-7"
+        store = _OverSql(inner, _OwnRevisions())
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=store),  # type: ignore[arg-type]
+        )
+        await engine.start()
+        try:
+            assert await engine.schema_revision() == "vault-7"
+        finally:
+            await engine.stop()
     finally:
-        await engine.stop()
+        await inner.close()  # a supplied store is borrowed: the engine never closes it
 
 
 async def test_without_auto_migrate_a_decorated_sql_store_is_still_checked(tmp_path: Path) -> None:
     """A wrapper that keeps the SQL store's own housekeeping still runs on the packaged migrations."""
     inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
-    store = _OverSql(inner, inner.maintenance)
-    engine = await BuilderEngine.create(
-        without_auto_migrate(MEMORY),
-        supply=EngineSupply(store=store),  # type: ignore[arg-type]
-    )
-    with pytest.raises(RuntimeError, match="lpb migrate"):
-        await engine.start()
+    try:
+        store = _OverSql(inner, inner.maintenance)
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=store),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError, match="lpb migrate"):
+            await engine.start()
+    finally:
+        await inner.close()  # borrowed: the failed start closes only what the engine opened
 
 
 def unmigrated() -> EngineSettings:

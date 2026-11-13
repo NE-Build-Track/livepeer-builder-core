@@ -1,5 +1,6 @@
-"""``lpb``: operator commands. Every command but ``verify``, ``gen-secret-key`` and ``gen-docs`` reads the
-LPB_* settings (docs/RELIABILITY.md#operations).
+"""``lpb``: operator commands (docs/RELIABILITY.md#operations). ``migrate``, ``revision``, ``backup`` and
+``restore`` read only ``LPB_DATABASE_URL``; ``purge``, ``bootstrap-admin``, ``smoke`` and ``serve`` read the
+LPB_* settings, and only ``serve`` requires ``LPB_DISCOVERY_URL`` (#112, C23).
 
 lpb migrate            apply packaged migrations (production runs this before start)
 lpb revision           show the database revision and the package head
@@ -9,7 +10,7 @@ lpb verify FILE        integrity-check a backup and print its revision
 lpb purge              apply the configured retention now
 lpb bootstrap-admin    issue the first admin key (one time; printed once)
 lpb gen-secret-key     print a new LPB_SECRET_KEY
-lpb smoke              import, migrate, start, health-check, stop (CI install check)
+lpb smoke              import, migrate, start, health-check, stop, on a throwaway database (CI)
 lpb serve              run the REST service (needs the [server] extra)
 lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
 """
@@ -18,6 +19,7 @@ import argparse
 import asyncio
 import json
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -67,12 +69,27 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Commands that build an engine but serve nothing need no discovery address. Without LPB_DISCOVERY_URL they
+# get this one: purge and bootstrap-admin never poll it, and smoke's one poll is refused (#112, C23).
+NO_DISCOVERY_URL = "http://127.0.0.1:9/discovery"
+
+
 def _emit(payload: Any) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
+def _database_url() -> str:
+    """The store-only commands read this setting and nothing else."""
+    return EngineSettings.database_url_from_env()
+
+
+def _engine_settings() -> EngineSettings:
+    """The LPB_* settings for an engine that serves nothing: the discovery address is optional."""
+    return EngineSettings.from_env(defaults={"discovery_url": NO_DISCOVERY_URL})
+
+
 async def _migrate(_: argparse.Namespace) -> None:
-    store = await SqlStore.connect(EngineSettings.from_env().database_url, migrate=False)
+    store = await SqlStore.connect(_database_url(), migrate=False)
     try:
         await upgrade(store.engine)
         _emit({"revision": await current_revision(store.engine)})
@@ -81,7 +98,7 @@ async def _migrate(_: argparse.Namespace) -> None:
 
 
 async def _revision(_: argparse.Namespace) -> int:
-    store = await SqlStore.connect(EngineSettings.from_env().database_url, migrate=False)
+    store = await SqlStore.connect(_database_url(), migrate=False)
     try:
         current, head = await current_revision(store.engine), head_revision()
     finally:
@@ -91,14 +108,14 @@ async def _revision(_: argparse.Namespace) -> int:
 
 
 async def _backup(args: argparse.Namespace) -> None:
-    _emit({"backup": str(await backup(EngineSettings.from_env().database_url, args.file))})
+    _emit({"backup": str(await backup(_database_url(), args.file))})
 
 
 async def _restore(args: argparse.Namespace) -> int:
     if not args.yes:
         print("restore overwrites the database; stop the engine and pass --yes", file=sys.stderr)
         return 2
-    await restore(EngineSettings.from_env().database_url, args.file)
+    await restore(_database_url(), args.file)
     _emit({"restored_from": str(args.file)})
     return 0
 
@@ -108,7 +125,7 @@ async def _verify(args: argparse.Namespace) -> None:
 
 
 async def _purge(_: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(EngineSettings.from_env())
+    engine = await BuilderEngine.create(_engine_settings())
     try:
         _emit((await engine.purge()).model_dump())
     finally:
@@ -116,7 +133,7 @@ async def _purge(_: argparse.Namespace) -> None:
 
 
 async def _bootstrap(args: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(EngineSettings.from_env())
+    engine = await BuilderEngine.create(_engine_settings())
     try:
         if engine.keys is None:
             raise SystemExit("API keys are disabled in this deployment")
@@ -131,14 +148,21 @@ async def _gen_secret_key(_: argparse.Namespace) -> None:
 
 
 async def _smoke(_: argparse.Namespace) -> int:
-    """The CI install check: proves the installed wheel imports, migrates, starts and stops."""
-    engine = await BuilderEngine.create(EngineSettings.from_env())
-    try:
-        await engine.start()
-        health = engine.health()
-        revision = await engine.schema_revision()
-    finally:
-        await engine.stop()
+    """The CI install check: proves the installed wheel imports, migrates, starts and stops.
+
+    It never opens ``LPB_DATABASE_URL``: starting an engine there would resolve that deployment's running
+    jobs as interrupted. It migrates a throwaway SQLite file instead, removed afterwards (#112, C23)."""
+    with tempfile.TemporaryDirectory(prefix="lpb-smoke-") as directory:
+        database = f"sqlite+aiosqlite:///{Path(directory) / 'smoke.db'}"
+        # Both values are valid by construction, so the copy needs no second validation.
+        settings = _engine_settings().model_copy(update={"database_url": database, "auto_migrate": True})
+        engine = await BuilderEngine.create(settings)
+        try:
+            await engine.start()
+            health = engine.health()
+            revision = await engine.schema_revision()
+        finally:
+            await engine.stop()
     ok = revision == head_revision()
     _emit({"ok": ok, "version": health.version, "schema_revision": revision, "health": health.model_dump()})
     return 0 if ok else 1

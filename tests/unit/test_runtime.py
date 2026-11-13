@@ -383,7 +383,12 @@ async def test_without_auto_migrate_a_database_at_another_revision_stops_startup
     with pytest.raises(RuntimeError) as refused:
         await engine.start()
     message = str(refused.value)
-    assert database in message and head_revision() in message and "lpb migrate" in message
+    assert database in message and head_revision() in message
+    assert str(tmp_path / "engine.db") in message  # the database that was checked, by name
+    if revision == "head":  # ahead: this package cannot migrate it, so it does not say to
+        assert "another release" in message and "run `lpb migrate`" not in message
+    else:  # behind: migrate that database
+        assert "run `lpb migrate`" in message and "LPB_DATABASE_URL" in message
     assert not engine.health().ready  # no discovery snapshot was taken
     with pytest.raises(RuntimeError, match="engine is stopped"):
         await engine.start()
@@ -460,6 +465,36 @@ async def test_without_auto_migrate_a_decorated_sql_store_is_still_checked(tmp_p
             await engine.start()
     finally:
         await inner.close()  # borrowed: the failed start closes only what the engine opened
+
+
+async def test_the_refusal_names_a_supplied_stores_own_database_not_the_configured_one(
+    tmp_path: Path,
+) -> None:
+    """``lpb migrate`` migrates ``LPB_DATABASE_URL``. A supplied SQL store may be another database, so the
+    message names the one that was checked (review of #129)."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
+    try:
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=_OverSql(inner, inner.maintenance)),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError) as refused:
+            await engine.start()
+    finally:
+        await inner.close()
+    message = str(refused.value)
+    assert str(tmp_path / "engine.db") in message and ":memory:" not in message
+
+
+def test_the_database_named_in_the_refusal_hides_its_password() -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from livepeer_builder.store.maintenance import SqlMaintenance
+
+    named = SqlMaintenance(
+        create_async_engine("postgresql+asyncpg://lpb:hunter2@db.internal/engine")
+    ).database
+    assert "hunter2" not in named and "db.internal/engine" in named
 
 
 def unmigrated() -> EngineSettings:

@@ -158,19 +158,14 @@ class BuilderEngine:
         if self.settings.auto_migrate:
             return
         # here: importing the package loads no Alembic
-        from livepeer_builder.store import head_revision
         from livepeer_builder.store.maintenance import SqlMaintenance
 
         maintenance = self.store.maintenance
         if not isinstance(maintenance, SqlMaintenance):
             return
-        database, package = await maintenance.schema_revision(), head_revision()
-        if database != package:
-            raise RuntimeError(
-                f"the database schema is at revision {database or 'none'} and this package needs {package}: "
-                "run `lpb migrate` with this package before starting (LPB_AUTO_MIGRATE is false). A database "
-                "ahead of the package was migrated by a newer release; start that release instead"
-            )
+        mismatch = await maintenance.schema_mismatch()
+        if mismatch is not None:
+            raise RuntimeError(mismatch)
 
     async def _retention_loop(self) -> None:
         if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:

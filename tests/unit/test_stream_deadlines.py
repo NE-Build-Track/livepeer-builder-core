@@ -171,10 +171,13 @@ async def test_time_spent_opening_counts_against_timeout_s(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await provisioned(make_engine, admin)
-    # 60 ms to open plus 60 ms of chunks: within 0.1 s if the clock started at the first read, not overall
-    transport.opens = [StreamScript(open_delay_s=0.06, events=[b"a", 0.03, b"b", 0.03, b"c"])]
+    # 0.6 s to open plus 0.6 s of chunks: within 1 s if the clock started at the first read, not overall.
+    # The open must fit in what is left of timeout_s when it begins, so the 0.4 s between them is the
+    # room the engine's own work before the open may take. At a tenth of these times that room was 40 ms,
+    # and a slower CI run used it up: the runner then never answered ("no response") and no chunk was read.
+    transport.opens = [StreamScript(open_delay_s=0.6, events=[b"a", 0.3, b"b", 0.3, b"c"])]
     stream = await engine.jobs.streaming.stream(
-        alice, JobRequest(app=APP, timeout_s=0.1, idle_timeout_s=None)
+        alice, JobRequest(app=APP, timeout_s=1.0, idle_timeout_s=None)
     )
     with pytest.raises(JobFailed):
         await read_all(stream)

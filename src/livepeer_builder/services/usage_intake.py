@@ -5,8 +5,11 @@ row failed its page on every pass, so the cursor never moved and no later cost a
 checked here, before the store is asked, so the sync does the same on SQLite and on PostgreSQL.
 """
 
+from collections.abc import Sequence
+
 from livepeer_builder.contracts import SetAsideUsage, UsagePage, UsageRow
 from livepeer_builder.contracts.costs import set_aside_record, storable_text
+from livepeer_builder.protocols import UsageSetAsideRepo
 
 # The longest text ``lpb_usage_rows`` keeps in each column (``store/schema.py``): ids are ``ID``, fees
 # are decimal strings of ``AMOUNT``. tests/store/test_usage_set_aside.py fails when the two disagree.
@@ -55,3 +58,29 @@ def _unstorable(row: UsageRow, field: str) -> SetAsideUsage:
         fee_eth=row.computed_fee_eth,
         fee_usd=row.computed_fee_usd,
     )
+
+
+class SetAsideRecorder:
+    """Where the rows left out go. A store that keeps them (``UsageSetAsideRepo``, as the packaged SQL
+    store does) records each once. A supplied store without that still syncs: the ids are remembered for
+    this process, so a row on a page that is read again is reported once."""
+
+    def __init__(self, store: object) -> None:
+        self._store = store
+        self._seen: set[str] = set()
+
+    async def record(self, rows: Sequence[SetAsideUsage]) -> list[SetAsideUsage]:
+        """The rows not recorded before."""
+        if isinstance(self._store, UsageSetAsideRepo):
+            return await self._store.set_aside_usage(rows)
+        new: list[SetAsideUsage] = []
+        for row in rows:
+            if row.id not in self._seen:
+                self._seen.add(row.id)
+                new.append(row)
+        return new
+
+
+async def count_set_aside(store: object) -> int | None:
+    """Every row left out so far, or None when the store keeps no such record."""
+    return await store.count_set_aside_usage() if isinstance(store, UsageSetAsideRepo) else None

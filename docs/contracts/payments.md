@@ -359,6 +359,10 @@ reason, the fees and up to 2000 characters of the row as received. `SyncReport.r
 the rows a sync recorded, and `EngineHealth.cost_sync_set_aside` (`GET /readyz`) the rows left out in
 all, as of the last sync.
 
+Recording the rows is optional for a store (`UsageSetAsideRepo` in `protocols`). The packaged SQL
+store has it. A supplied store without it still syncs: such a row is left out and logged once per
+process, `rows_set_aside` still counts it, and `cost_sync_set_aside` stays `null`.
+
 A set-aside row is in no job's cost and not in `unattributed`: if it was a charge, reconciliation is
 not `balanced` until an operator accounts for it. Nothing reads the table yet; `lpb costs verify`
 (ISS-35) will name these rows ([T29](../exec-plans/tech-debt-tracker.md)). A usage page whose item is

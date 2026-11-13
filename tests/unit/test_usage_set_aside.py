@@ -206,3 +206,37 @@ async def test_the_count_of_set_aside_rows_is_served_in_health_and_the_sync_repo
         "rows_set_aside": 1,
     }
     assert health.json()["cost_sync_set_aside"] == 1
+
+
+class _NoSetAsideTable:
+    """A supplied store from before #114: everything the SQL store does, without the two set-aside calls."""
+
+    def __init__(self, inner: SqlStore) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        if name in ("set_aside_usage", "count_set_aside_usage"):
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+
+async def test_a_store_without_a_set_aside_table_still_syncs_and_the_row_is_logged_once(
+    make_engine: EngineFactory, store: SqlStore, usage: FakeUsageSource, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Recording set-aside rows is optional for a store (``UsageSetAsideRepo``). A supplied store that
+    lacks it keeps syncing: the row is left out, the cursor moves, the row is logged once, and health
+    reports no count."""
+    usage.rows = [usage_row("ok"), usage_row("bad", manifest_id=LONG)]
+    supplied = _NoSetAsideTable(store)
+    engine: BuilderEngine = await make_engine(supply=EngineSupply(store=supplied))  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING, logger="livepeer_builder"):
+        first = await engine.costs.sync_once()
+        second = await engine.costs.sync_once()
+
+    assert (first.rows_new, first.rows_set_aside) == (1, 1)
+    assert second.rows_set_aside == 0  # the same row on the page read again: not counted or logged twice
+    assert await stored_ids(store) == ["ok"]
+    logged = [record for record in caplog.records if getattr(record, "event", "") == "costs.usage_set_aside"]
+    assert len(logged) == 1
+    assert engine.health().cost_sync_set_aside is None

@@ -61,7 +61,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
-from livepeer_builder.services.usage_intake import sort_page
+from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -92,6 +92,7 @@ class CostSyncWorker:
     ) -> None:
         self._source = source
         self._store = store
+        self._aside = SetAsideRecorder(store)
         self._filters = dict(filters or {})
         self.source_error: Exception | None = None  # what the usage source last raised: its health code
 
@@ -135,7 +136,7 @@ class CostSyncWorker:
     async def _set_aside(self, rows: Sequence[SetAsideUsage]) -> int:
         """Record the rows left out (#114, C13). A row is recorded, counted and logged once, however often
         its page is read again; its content goes to the log only."""
-        recorded = await self._store.set_aside_usage(rows) if rows else []
+        recorded = await self._aside.record(rows) if rows else []
         for row in recorded:
             _LOG.warning(
                 "a usage row was set aside: no cost includes it",
@@ -181,7 +182,7 @@ class CostService:
             found = await self._store.job_for_projection(job.id)  # reloaded with its evidence version
             if found is not None:
                 await self._refresh_projection(*found)
-        self.set_aside_rows = await self._store.count_set_aside_usage()
+        self.set_aside_rows = await count_set_aside(self._store)
         self.last_synced_at, self.last_error = self._clock.now(), None
         return report.model_copy(update={"jobs_updated": len(jobs)})
 

@@ -404,6 +404,58 @@ async def test_without_auto_migrate_a_current_database_starts_and_is_checked_onl
         await engine.stop()
 
 
+class _OverSql:
+    """A supplied store over the engine's SQL store: every call goes to it, and ``maintenance`` is its own."""
+
+    def __init__(self, inner: SqlStore, maintenance: object) -> None:
+        self._inner = inner
+        self.maintenance = maintenance
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+
+class _OwnRevisions:
+    """Housekeeping of a store that keeps its own schema: its revisions are not this package's."""
+
+    async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport:
+        return PurgeReport(jobs_deleted=0, usage_rows_deleted=0)
+
+    async def schema_revision(self) -> str | None:
+        return "vault-7"
+
+
+async def test_without_auto_migrate_a_supplied_store_with_its_own_revisions_still_starts(
+    tmp_path: Path,
+) -> None:
+    """The check is for the packaged migrations (#112, C8). A supplied store reports revisions of its own
+    schema, which ``lpb migrate`` cannot change, so comparing them with this package's head would stop a
+    working engine."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "head"), migrate=False)
+    store = _OverSql(inner, _OwnRevisions())
+    engine = await BuilderEngine.create(
+        without_auto_migrate(MEMORY),
+        supply=EngineSupply(store=store),  # type: ignore[arg-type]
+    )
+    await engine.start()
+    try:
+        assert await engine.schema_revision() == "vault-7"
+    finally:
+        await engine.stop()
+
+
+async def test_without_auto_migrate_a_decorated_sql_store_is_still_checked(tmp_path: Path) -> None:
+    """A wrapper that keeps the SQL store's own housekeeping still runs on the packaged migrations."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
+    store = _OverSql(inner, inner.maintenance)
+    engine = await BuilderEngine.create(
+        without_auto_migrate(MEMORY),
+        supply=EngineSupply(store=store),  # type: ignore[arg-type]
+    )
+    with pytest.raises(RuntimeError, match="lpb migrate"):
+        await engine.start()
+
+
 def unmigrated() -> EngineSettings:
     """No tables: ``start()`` refuses the schema (#112, C8) after ``create`` opened the store."""
     return EngineSettings(

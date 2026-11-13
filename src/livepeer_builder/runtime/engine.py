@@ -152,13 +152,19 @@ class BuilderEngine:
     async def _require_current_schema(self) -> None:
         """With ``LPB_AUTO_MIGRATE=false``, the database must be at this package's revision, neither behind
         nor ahead, or the engine would pay and then fail to record (#112, C8). Checked at start only, so a
-        replica already running through a rolling deploy is not stopped. A store that reports no revision
-        (no ``maintenance``) is not checked."""
-        if self.settings.auto_migrate or self.store.maintenance is None:
+        replica already running through a rolling deploy is not stopped. Only the packaged migrations are
+        checked: a supplied store with housekeeping of its own reports revisions of its own schema, which
+        ``lpb migrate`` cannot change, and one with no ``maintenance`` reports none."""
+        if self.settings.auto_migrate:
             return
-        from livepeer_builder.store import head_revision  # here: importing the package loads no Alembic
+        # here: importing the package loads no Alembic
+        from livepeer_builder.store import head_revision
+        from livepeer_builder.store.maintenance import SqlMaintenance
 
-        database, package = await self.store.maintenance.schema_revision(), head_revision()
+        maintenance = self.store.maintenance
+        if not isinstance(maintenance, SqlMaintenance):
+            return
+        database, package = await maintenance.schema_revision(), head_revision()
         if database != package:
             raise RuntimeError(
                 f"the database schema is at revision {database or 'none'} and this package needs {package}: "

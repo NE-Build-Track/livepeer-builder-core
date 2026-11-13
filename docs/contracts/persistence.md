@@ -30,7 +30,9 @@ like a source checkout. Version table: `lpb_alembic_version`.
   revision with the package head before anything else and raises `RuntimeError` on any mismatch,
   behind or ahead, naming both revisions and `lpb migrate` (#112, C8). Otherwise the engine would start
   ready, pay a runner, then fail to record. It checks at start only: a replica already running keeps
-  running while another one migrates. A supplied store with no `maintenance` is not checked.
+  running while another one migrates. Only the packaged migrations are checked: a supplied store whose
+  `maintenance` is its own reports revisions of its own schema and is not compared, and neither is one
+  with no `maintenance`. A wrapper that keeps the SQL store's `maintenance` is still checked.
 - **Check:** `lpb revision` (exit code 2 when behind).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.

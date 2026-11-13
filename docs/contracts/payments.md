@@ -159,7 +159,11 @@ checks stop that:
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
   ledger records anything and before any provider call. A zero or negative funding or grant amount is
-  still the command's own refusal, 400.
+  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
+  **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
+  18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
+  the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
   which is opaque text of any length (#115): a supplied secret store may return a long path.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the

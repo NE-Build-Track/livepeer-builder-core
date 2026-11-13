@@ -7,18 +7,26 @@ import json
 import logging
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 
 import pytest
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
 
-from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply, PurgeReport
+from livepeer_builder import (
+    BuilderEngine,
+    EngineParts,
+    EngineSettings,
+    EngineSupply,
+    PurgeReport,
+    generate_secret_key,
+)
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.http import create_app
 from livepeer_builder.runtime import engine as engine_module
 from livepeer_builder.runtime.assembly import assemble, default_parts
 from livepeer_builder.runtime.logging import JsonFormatter, configure_logging
-from livepeer_builder.store import SqlStore
+from livepeer_builder.store import SqlStore, head_revision, upgrade
 from livepeer_builder.testing import FakeUsageSource, FixedClock
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
@@ -74,6 +82,7 @@ async def test_batteries_without_an_operator_token_starts_without_the_grant_desk
         database_url=MEMORY,
         batteries_url="https://batteries.example",
         batteries_token="t",
+        secret_key=generate_secret_key(),  # per_actor with a provider needs it (#112, C2)
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
     )
@@ -91,6 +100,7 @@ async def test_default_adapters_follow_settings() -> None:
         batteries_url="https://batteries.example",
         batteries_token="t",
         batteries_operator_token="desk",
+        secret_key=generate_secret_key(),
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
     )
@@ -116,6 +126,7 @@ async def test_operator_token_wires_a_separate_grants_client() -> None:
         batteries_url="https://batteries.example",
         batteries_token="actor",
         batteries_operator_token="operator",
+        secret_key=generate_secret_key(),
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
     )
@@ -338,8 +349,156 @@ def record_closes(monkeypatch: pytest.MonkeyPatch) -> list[SqlStore]:
     return closed
 
 
+async def database_at(path: Path, revision: str, stamp: str | None = None) -> str:
+    """A database file migrated to ``revision``; ``stamp`` then records a revision this package lacks."""
+    url = f"sqlite+aiosqlite:///{path / 'engine.db'}"
+    store = await SqlStore.connect(url, migrate=False)
+    try:
+        await upgrade(store.engine, revision)
+        if stamp is not None:  # a newer release migrated it
+            async with store.engine.begin() as conn:
+                await conn.execute(text("UPDATE lpb_alembic_version SET version_num = :v"), {"v": stamp})
+    finally:
+        await store.close()
+    return url
+
+
+def without_auto_migrate(url: str) -> EngineSettings:
+    return EngineSettings(
+        database_url=url, auto_migrate=False, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
+    )
+
+
+@pytest.mark.parametrize(
+    ("revision", "stamp", "database"),
+    [("0010", None, "0010"), ("head", "9999", "9999")],
+    ids=["behind", "ahead"],
+)
+async def test_without_auto_migrate_a_database_at_another_revision_stops_startup(
+    tmp_path: Path, revision: str, stamp: str | None, database: str
+) -> None:
+    """#112 C8: the engine would start ready, pay, then fail to record. It stops at start instead, and the
+    message names both revisions and the command that fixes it."""
+    engine = await BuilderEngine.create(without_auto_migrate(await database_at(tmp_path, revision, stamp)))
+    with pytest.raises(RuntimeError) as refused:
+        await engine.start()
+    message = str(refused.value)
+    assert database in message and head_revision() in message
+    assert str(tmp_path / "engine.db") in message  # the database that was checked, by name
+    if revision == "head":  # ahead: this package cannot migrate it, so it does not say to
+        assert "another release" in message and "run `lpb migrate`" not in message
+    else:  # behind: migrate that database
+        assert "run `lpb migrate`" in message and "LPB_DATABASE_URL" in message
+    assert not engine.health().ready  # no discovery snapshot was taken
+    with pytest.raises(RuntimeError, match="engine is stopped"):
+        await engine.start()
+
+
+async def test_without_auto_migrate_a_current_database_starts_and_is_checked_only_then(
+    tmp_path: Path,
+) -> None:
+    """The check runs at start only: a replica already running keeps running when another one migrates."""
+    url = await database_at(tmp_path, "head")
+    engine = await BuilderEngine.create(without_auto_migrate(url), supply=QUIET)
+    await engine.start()
+    try:
+        await database_at(tmp_path, "head", stamp="9999")  # a newer release migrated the database
+        await engine.discovery.refresh()
+        assert engine.health().ready
+    finally:
+        await engine.stop()
+
+
+class _OverSql:
+    """A supplied store over the engine's SQL store: every call goes to it, and ``maintenance`` is its own."""
+
+    def __init__(self, inner: SqlStore, maintenance: object) -> None:
+        self._inner = inner
+        self.maintenance = maintenance
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+
+class _OwnRevisions:
+    """Housekeeping of a store that keeps its own schema: its revisions are not this package's."""
+
+    async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport:
+        return PurgeReport(jobs_deleted=0, usage_rows_deleted=0)
+
+    async def schema_revision(self) -> str | None:
+        return "vault-7"
+
+
+async def test_without_auto_migrate_a_supplied_store_with_its_own_revisions_still_starts(
+    tmp_path: Path,
+) -> None:
+    """The check is for the packaged migrations (#112, C8). A supplied store reports revisions of its own
+    schema, which ``lpb migrate`` cannot change, so comparing them with this package's head would stop a
+    working engine."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "head"), migrate=False)
+    try:
+        store = _OverSql(inner, _OwnRevisions())
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=store),  # type: ignore[arg-type]
+        )
+        await engine.start()
+        try:
+            assert await engine.schema_revision() == "vault-7"
+        finally:
+            await engine.stop()
+    finally:
+        await inner.close()  # a supplied store is borrowed: the engine never closes it
+
+
+async def test_without_auto_migrate_a_decorated_sql_store_is_still_checked(tmp_path: Path) -> None:
+    """A wrapper that keeps the SQL store's own housekeeping still runs on the packaged migrations."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
+    try:
+        store = _OverSql(inner, inner.maintenance)
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=store),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError, match="lpb migrate"):
+            await engine.start()
+    finally:
+        await inner.close()  # borrowed: the failed start closes only what the engine opened
+
+
+async def test_the_refusal_names_a_supplied_stores_own_database_not_the_configured_one(
+    tmp_path: Path,
+) -> None:
+    """``lpb migrate`` migrates ``LPB_DATABASE_URL``. A supplied SQL store may be another database, so the
+    message names the one that was checked (review of #129)."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
+    try:
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=_OverSql(inner, inner.maintenance)),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError) as refused:
+            await engine.start()
+    finally:
+        await inner.close()
+    message = str(refused.value)
+    assert str(tmp_path / "engine.db") in message and ":memory:" not in message
+
+
+def test_the_database_named_in_the_refusal_hides_its_password() -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from livepeer_builder.store.maintenance import SqlMaintenance
+
+    named = SqlMaintenance(
+        create_async_engine("postgresql+asyncpg://lpb:hunter2@db.internal/engine")
+    ).database
+    assert "hunter2" not in named and "db.internal/engine" in named
+
+
 def unmigrated() -> EngineSettings:
-    """No tables: ``start()`` fails in ``recover_interrupted`` after ``create`` opened the store."""
+    """No tables: ``start()`` refuses the schema (#112, C8) after ``create`` opened the store."""
     return EngineSettings(
         database_url=MEMORY, auto_migrate=False, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
     )
@@ -353,7 +512,7 @@ async def test_a_failed_start_in_async_with_closes_what_create_opened(
 ) -> None:
     closed = record_closes(monkeypatch)
     engine = await BuilderEngine.create(unmigrated(), supply=QUIET)
-    with pytest.raises(OperationalError):
+    with pytest.raises(RuntimeError, match="lpb migrate"):
         async with engine:
             pytest.fail("the block must not run when start() fails")
     assert len(closed) == 1
@@ -367,7 +526,7 @@ async def test_a_failed_start_in_the_http_lifespan_closes_what_create_opened(
     closed = record_closes(monkeypatch)
     engine = await BuilderEngine.create(unmigrated(), supply=QUIET)
     app = create_app(engine)
-    with pytest.raises(OperationalError):
+    with pytest.raises(RuntimeError, match="lpb migrate"):
         async with app.router.lifespan_context(app):
             pytest.fail("the app must not serve when start() fails")
     assert len(closed) == 1

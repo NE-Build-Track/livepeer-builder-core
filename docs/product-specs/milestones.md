@@ -57,7 +57,8 @@ M3 closed on 9 November 2026: the tracker ([#20](https://github.com/Cloud-SPE/Ne
 | ISS-25 Funded seven-outcome journey ([#38](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/38)) | 9 Nov | The final run of 9 November and its evidence, console `docs/references/evidence/2026-11-09-iss-25-funded-journey.md` |
 
 The release is the merge of `releases/m3` into `releases/final`
-([#32](https://github.com/NE-Build-Track/livepeer-builder-core/pull/32)).
+([#32](https://github.com/NE-Build-Track/livepeer-builder-core/pull/32), 11 November 2026), tagged `v0.2.0` and
+`m3-complete-builder-journey`. M4 work lands on `releases/m4`, which starts at that tag.
 
 ## Carried forward to M4
 

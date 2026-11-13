@@ -354,12 +354,32 @@ async def build(
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
+        await _require_storable_payment_keys(settings, parts)  # the final parts, after decoration
         resources = stack.pop_all()  # out of the stack: the caller takes them with the services
     try:
         return assemble(settings, parts), resources
     except BaseException:
         await resources.aclose()  # assemble failed: nothing owns them yet
         raise
+
+
+async def _require_storable_payment_keys(settings: EngineSettings, parts: EngineParts) -> None:
+    """Provisioning would fund an allocation, then fail to keep its key (#112, C2). Judged on the parts the
+    engine will run with, so a decorator that turns the provider off or installs its own store is not
+    refused, and one that adds a provider is. Only the built-in store is asked here: a plug-in store that
+    cannot write at boot (a sealed vault) still starts, and is asked per request."""
+    from livepeer_builder.adapters.secrets import RoutingSecretStore
+
+    if (
+        settings.allocation_mode == "per_actor"
+        and parts.allocation_manager is not None
+        and isinstance(parts.secret_store, RoutingSecretStore)
+        and not await parts.secret_store.writable()
+    ):
+        raise ValueError(
+            "LPB_SECRET_KEY is required in per_actor mode with a payment provider: the built-in secret store "
+            "needs it to keep each actor's payment key (lpb gen-secret-key), or supply a secret_store"
+        )
 
 
 def _configured_secrets(settings: EngineSettings) -> "SettingsSecretStore":

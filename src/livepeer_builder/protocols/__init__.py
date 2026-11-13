@@ -86,6 +86,15 @@ class SecretStore(Protocol):
     async def delete(self, ref: SecretRef) -> None: ...
 
 
+@runtime_checkable
+class WritableSecretStore(SecretStore, Protocol):
+    """A store that can say whether ``put`` would work now. Optional: provisioning and key rotation ask it
+    before the provider is called, and a ``False`` refuses the command with nothing sent (#112, C2). A
+    store that leaves it out is not asked."""
+
+    async def writable(self) -> bool: ...
+
+
 # -- discovery and execution ------------------------------------------------------------------------
 
 

@@ -134,7 +134,7 @@ classDiagram
     class CostsAdminApi {
         <<interface>>
         +async recent(actor, limit) JobCost[]
-        +async reconcile(admin, application_id, actor_id) Reconciliation
+        +async reconcile(admin, application_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
     }
     class AllowanceApi {
@@ -386,7 +386,7 @@ classDiagram
         -worker CostSyncWorker?
         -allowances AllowanceReader
         +async for_job(actor, job_id) JobCost
-        +async reconcile(admin, application_id, actor_id) Reconciliation
+        +async reconcile(admin, application_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
         +async run(stop) None
     }

@@ -429,6 +429,20 @@ class CostSnapshot(Protocol):
     async def unattributed_usage(self, allocation_id: str) -> list[UsageRow]: ...
 
 
+@runtime_checkable
+class AllocationCostSnapshot(CostSnapshot, Protocol):
+    """Optional for a cost snapshot: which allocation paid each attempt (#115, C9). The packaged SQL store
+    has it. Without it reconciliation counts every attempt of the actor against the current allocation,
+    as before, lists no other allocation and knows no earlier one to reconcile."""
+
+    async def attempt_allocations(
+        self, application_id: str, actor_id: str | None
+    ) -> dict[tuple[UUID, int], str]:
+        """(job id, attempt number) -> allocation, for each attempt of the actor's jobs (or, with no actor,
+        the application's) that records one."""
+        ...
+
+
 class SecretRepo(Protocol):
     async def put_secret(self, ref: str, ciphertext: str, created_at: datetime) -> None: ...
 

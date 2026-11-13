@@ -1783,6 +1783,14 @@
             "title": "By Class",
             "type": "object"
           },
+          "other_allocations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Other Allocations",
+            "type": "array"
+          },
           "provider_spent": {
             "anyOf": [
               {
@@ -3254,6 +3262,23 @@
                 }
               ],
               "title": "Actor Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "allocation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allocation Id"
             }
           }
         ],

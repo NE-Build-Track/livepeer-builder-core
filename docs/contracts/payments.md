@@ -415,6 +415,30 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 `pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
 mode it balances exactly per user.
 
+**One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor
+revoked and provisioned again has a new one. The engine side therefore counts only the attempts the
+reconciled allocation paid (each attempt records its allocation when it starts), plus the unattributed
+rows on that allocation. Before, it counted every job the actor ever ran against the current
+allocation, so after a re-provision reconciliation never balanced again.
+
+- **The default** is the actor's current allocation (`allocation_id` in the answer).
+- **An earlier allocation** is reconciled by naming it: `costs.reconcile(admin, application_id,
+  actor_id, allocation_id)`, or `?allocation_id=` on the route (stored text: over 200 characters or a
+  NUL is 422). Batteries still reports `spent_*` for a revoked allocation, late charges after the
+  revocation included (`API.md`, v0.0.3), so an earlier allocation reconciles like the current one.
+- **`other_allocations`** in the answer lists the actor's other allocations, sorted: the current one,
+  and every earlier one that paid an attempt. It is empty for an actor that had one allocation.
+- **An allocation that is not the actor's** (it is not the current one and paid none of the actor's
+  attempts) is 404, so a caller who may read one application never reads what another's allocation
+  spent. An earlier allocation that paid no attempt is not known to the engine: the actor's record
+  keeps only the current one.
+
+Which allocation paid each attempt is an optional read of a store's cost snapshot
+(`AllocationCostSnapshot` in `protocols`: `attempt_allocations`). The packaged SQL store has it. With a
+supplied store without it, reconciliation works as it did before: every attempt of the actor is
+counted against the current allocation, `other_allocations` is empty, and naming an earlier allocation
+is 404.
+
 **Network cost is the expected value at signing.** Tickets the orchestrator rejects after signing are
 still charged, because node has no void event. The operator's wallet loses nothing on-chain, since
 rejected tickets are never redeemed. The engine reports these charges as `failed_after_payment`.

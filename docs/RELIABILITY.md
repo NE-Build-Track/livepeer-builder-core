@@ -47,9 +47,11 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 
 ## Operations
 
-Every command but `gen-secret-key`, `verify` and `gen-docs` loads the settings, so it needs
-`LPB_DISCOVERY_URL` set, as the engine does; the URL is not called by a command that does not start the
-engine.
+`lpb migrate`, `revision`, `backup` and `restore` read only `LPB_DATABASE_URL`, so another setting
+that would not load does not stop them. `lpb purge`, `bootstrap-admin` and `smoke` load every setting but
+do not need `LPB_DISCOVERY_URL`, since they serve nothing. `lpb serve`, and any engine an application
+starts from its settings, still require it (#112, C23). `gen-secret-key`, `verify` and `gen-docs` read
+no setting.
 
 | Command | When |
 | --- | --- |
@@ -57,7 +59,7 @@ engine.
 | `lpb bootstrap-admin` | Once per deployment; prints the first admin key once |
 | `lpb gen-secret-key` | Once; store the key in your secret manager, never in the database |
 | `lpb serve` | Run the REST service (`[server]` extra) |
-| `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install |
+| `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads |
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |
 

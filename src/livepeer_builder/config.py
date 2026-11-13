@@ -228,15 +228,27 @@ class EngineSettings(Contract):
         return self
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "EngineSettings":
-        """Build settings from ``LPB_<FIELD>`` variables; unset variables keep their defaults."""
+    def from_env(
+        cls, env: Mapping[str, str] | None = None, *, defaults: Mapping[str, Any] | None = None
+    ) -> "EngineSettings":
+        """Build settings from ``LPB_<FIELD>`` variables; unset variables keep their defaults. ``defaults``
+        fills fields the environment leaves unset, by field name: the CLI commands that serve nothing give
+        ``discovery_url`` one (#112, C23)."""
         source = os.environ if env is None else env
-        values: dict[str, str] = {}
+        values: dict[str, Any] = dict(defaults or {})
         for name in cls.model_fields:
             raw = source.get(ENV_PREFIX + name.upper())
             if raw is not None and raw != "":
                 values[name] = raw
         return cls.model_validate(values)
+
+    @classmethod
+    def database_url_from_env(cls, env: Mapping[str, str] | None = None) -> str:
+        """``LPB_DATABASE_URL`` alone, read as ``from_env`` reads it: for the commands that open only the
+        store (``lpb migrate``, ``revision``, ``backup``, ``restore``), which need no other setting
+        (#112, C23)."""
+        source = os.environ if env is None else env
+        return source.get(ENV_PREFIX + "DATABASE_URL") or DEFAULT_DATABASE_URL
 
 
 def generate_secret_key() -> str:

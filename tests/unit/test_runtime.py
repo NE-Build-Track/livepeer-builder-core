@@ -452,3 +452,19 @@ async def test_a_failure_in_assemble_closes_what_create_opened(monkeypatch: pyte
             decorate=broken,
         )
     assert len(closed) == 1
+
+
+async def test_a_second_start_on_a_running_engine_is_refused(store: SqlStore, clock: FixedClock) -> None:
+    """#113 C27: it started every loop again, and stop() then cancelled only the second set."""
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+        supply=EngineSupply(store=store, clock=clock),
+    )
+    await engine.start()
+    loops = {task for task in asyncio.all_tasks() if task.get_name() in LOOPS}
+    with pytest.raises(RuntimeError, match="already started"):
+        await engine.start()
+    assert {task for task in asyncio.all_tasks() if task.get_name() in LOOPS} == loops
+    assert engine.health().ready  # the running engine is untouched
+    await engine.stop()
+    assert running_loops() == set()

@@ -52,6 +52,7 @@ class BuilderEngine:
         self._own_authenticators = services.own_authenticators  # the deployment's, tried before API keys
         self._resources = resources or contextlib.AsyncExitStack()
         self._stopped = False
+        self._started = False  # one start() per engine (#113, C27)
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -76,9 +77,13 @@ class BuilderEngine:
 
         If starting fails (a schema that does not match, a store error, or a cancellation), the engine stops:
         what ``create`` opened is closed before the error reaches the caller, and a new engine is needed.
+        A second ``start()`` is refused, and the running engine carries on (#113, C27).
         """
         if self._stopped:
             raise RuntimeError("engine is stopped; create a new one")
+        if self._started:
+            raise RuntimeError("engine is already started; stop() it, then create a new one to start again")
+        self._started = True
         try:
             await self._require_current_schema()
             await self.jobs.recover_interrupted()

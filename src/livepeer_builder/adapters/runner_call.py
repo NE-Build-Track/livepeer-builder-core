@@ -32,6 +32,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Protocol, runtime_checkable
 
@@ -65,6 +66,8 @@ _LOG = logging.getLogger(__name__)
 PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
+MANIFEST_ID_LIMIT = 200  # ``lpb_payment_sessions.manifest_id``
+_NOT_STORED = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]")  # a control character or a lone surrogate
 
 
 @runtime_checkable
@@ -381,9 +384,17 @@ class PaidRequest:
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
                 valid = all(isinstance(value, str) and value for value in fields.values())
                 if valid and origin(str(fields["payment_url"])) in self._payment_origins:
+                    self._refuse_unstorable(str(fields["manifest_id"]))
                     return LivePaymentChallenge(**fields)
         # Malformed, or payment_url names another host: nothing is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
+
+    def _refuse_unstorable(self, manifest_id: str) -> None:
+        """The manifest is stored before the signer is asked (D54), so one the store cannot keep is refused
+        here, unsigned (#114, C13): the orchestrator chose it, and another orchestrator may do the work."""
+        if len(manifest_id) > MANIFEST_ID_LIMIT or _NOT_STORED.search(manifest_id):
+            message = f"{self.url} sent a payment challenge whose manifest id the engine cannot record"
+            raise self._events.error("payment_refused", message, status_code=402)
 
 
 class SdkRunnerStream:

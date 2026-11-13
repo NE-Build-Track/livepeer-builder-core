@@ -39,6 +39,7 @@ from livepeer_builder.contracts import (
     SeenActor,
     Session,
     SessionRequest,
+    SetAsideUsage,
     SyncCheckpoint,
     UsagePage,
     UsageRow,
@@ -368,6 +369,12 @@ class CostRepo(Protocol):
     async def cost_checkpoint(self) -> SyncCheckpoint | None: ...
 
     async def apply_usage(self, rows: Sequence[UsageRow], checkpoint: SyncCheckpoint) -> list[UsageRow]: ...
+
+    async def set_aside_usage(self, rows: Sequence[SetAsideUsage]) -> list[SetAsideUsage]:
+        """Record usage rows cost sync left out, once per id; returns the ones not recorded before."""
+        ...
+
+    async def count_set_aside_usage(self) -> int: ...
 
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]: ...
 

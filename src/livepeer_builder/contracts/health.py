@@ -13,6 +13,9 @@ class EngineHealth(Contract):
     discovery_error: str | None  # a code (unavailable, invalid_answer), never an error's text (#113, C7)
     cost_sync_at: datetime | None
     cost_sync_error: str | None  # a code (unavailable, invalid_answer, store_error); the text is logged
+    # usage rows cost sync could not read or store and left out, in all (#114, C13); None until the first
+    # cost sync of this process
+    cost_sync_set_aside: int | None = None
     running_jobs: int
     allocation_mode: AllocationMode
     version: str

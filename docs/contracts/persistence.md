@@ -44,6 +44,10 @@ like a source checkout. Version table: `lpb_alembic_version`.
 | `LPB_RETENTION_JOBS_DAYS` | Deletes `succeeded`/`failed` jobs (attempts, payment sessions, projections) completed before the cutoff. **`uncertain` jobs are kept** until resolved | keep forever |
 | `LPB_RETENTION_USAGE_DAYS` | Deletes cached Batteries usage rows older than the cutoff | keep forever |
 
+Neither setting deletes from `lpb_operations` (the operation ledger) or from `lpb_usage_set_aside`,
+the record of usage rows cost sync left out (#114, C13; migration 0012;
+[payments.md](payments.md#cost-classification)): each row there is an id, a reason and two fees.
+
 The purge runs every `LPB_RETENTION_INTERVAL_S` (default 21600 s, 6 h) when a retention setting is on,
 or on demand with `lpb purge` (it prints a `PurgeReport`). It runs through the store's `maintenance`
 capability, which `SqlStore` provides; a store without one purges nothing. Batteries stays the

@@ -24,9 +24,11 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     NewAllocationKey,
+    SetAsideUsage,
     UsagePage,
     UsageRow,
 )
+from livepeer_builder.contracts.costs import set_aside_record
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
@@ -199,10 +201,52 @@ class BatteriesUsageSource:
         if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
         body = response.json()
+        read = [read_usage_item(item) for item in body["items"]]
         return UsagePage(
-            items=tuple(usage_row_from_item(item) for item in body["items"]),
+            items=tuple(row for row in read if isinstance(row, UsageRow)),
+            set_aside=tuple(row for row in read if isinstance(row, SetAsideUsage)),
             next_cursor=str(body.get("next_cursor") or ""),
         )
+
+
+def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
+    """The item as a usage row, or the record that sets it aside when it cannot be read (#114, C13): one
+    such item no longer fails its page, which the sync would read again on every pass."""
+    reason = _unreadable(item)
+    if reason is None:
+        return usage_row_from_item(item)
+    return set_aside_record(
+        reason,
+        item,
+        row_id=_row_id(item),
+        fee_eth=_decimal(item.get("computed_fee_eth")),
+        fee_usd=_decimal(item.get("computed_fee_usd")),
+    )
+
+
+def _unreadable(item: dict[str, Any]) -> str | None:
+    """Why the item is no usage row, as a short code; None when it is one."""
+    status = item.get("status")
+    if _row_id(item) is None:
+        return "missing_id"
+    if not isinstance(status, str) or status not in _USAGE_STATUSES:
+        return "unknown_status"
+    return None if _created_at(item) else "unreadable_created_at"
+
+
+def _row_id(item: dict[str, Any]) -> str | None:
+    """The row's id as text: a non-empty string, or a number."""
+    value = item.get("id")
+    usable = isinstance(value, str | int) and not isinstance(value, bool) and value != ""
+    return str(value) if usable else None
+
+
+def _created_at(item: dict[str, Any]) -> datetime | None:
+    """``created_at_ms`` as a time, or None when it is absent, not a number, or past what a clock holds."""
+    try:
+        return datetime.fromtimestamp(int(item["created_at_ms"]) / 1000, tz=UTC)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        return None
 
 
 def usage_row_from_item(item: dict[str, Any]) -> UsageRow:

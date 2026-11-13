@@ -4,15 +4,18 @@ Network cost is the expected value of tickets at signing (docs/contracts/payment
 settlement and not a retail price. Missing evidence is ``pending``, never zero.
 """
 
-from collections.abc import Iterable
+import hashlib
+import json
+import re
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import Field
 
-from livepeer_builder.contracts.common import Contract, Money
+from livepeer_builder.contracts.common import Contract, Money, StoredText
 
 UsageStatus = Literal["applied", "quarantined", "ignored", "duplicate"]
 
@@ -34,9 +37,63 @@ class UsageRow(Contract):
     created_at: datetime
 
 
+class SetAsideUsage(Contract):
+    """A provider usage row the cost sync could not read or store, left out of every cost (#114, C13).
+
+    Kept so reconciliation can name what is missing. ``raw`` is the row as received, for the log only: the
+    store never holds it.
+    """
+
+    # the provider's row id; "sha256:" and a digest of the content when it has none the store can keep
+    id: Annotated[StoredText, Field(min_length=1)]
+    reason: Annotated[str, Field(min_length=1, max_length=64)]  # a short code, such as "unknown_status"
+    computed_fee_eth: Decimal | None = None  # as the provider stated it, whatever the row's status
+    computed_fee_usd: Decimal | None = None
+    raw: str = ""
+
+
+SET_ASIDE_RAW_LIMIT = 2000  # how much of a set-aside row's content the log line keeps
+# PostgreSQL takes no NUL in text; no database takes a lone surrogate, which is not Unicode text.
+_UNSTORABLE = re.compile(r"[\x00\ud800-\udfff]")
+
+
+def storable_text(value: str, limit: int = 200) -> bool:
+    """Whether a text column of ``limit`` characters keeps ``value`` on SQLite and on PostgreSQL."""
+    return len(value) <= limit and _UNSTORABLE.search(value) is None
+
+
+def set_aside_record(
+    reason: str,
+    content: Mapping[str, object],
+    *,
+    row_id: str | None,
+    fee_eth: Decimal | None,
+    fee_usd: Decimal | None,
+) -> SetAsideUsage:
+    """The record of one row left out. ``content`` is the row as received; it must be JSON data.
+
+    The same content always gets the same id, so a page read again records nothing twice. A fee is kept
+    when the table can hold its digits."""
+    raw = json.dumps(content, sort_keys=True, default=str)
+    kept_id = row_id if row_id and storable_text(row_id) else None
+    return SetAsideUsage(
+        id=kept_id or "sha256:" + hashlib.sha256(raw.encode()).hexdigest(),
+        reason=reason,
+        computed_fee_eth=_storable_fee(fee_eth),
+        computed_fee_usd=_storable_fee(fee_usd),
+        raw=raw[:SET_ASIDE_RAW_LIMIT],
+    )
+
+
+def _storable_fee(fee: Decimal | None) -> Decimal | None:
+    """The fee when its digits fit the store's decimal-string column (64 characters); otherwise None."""
+    return fee if fee is None or len(str(fee)) <= 64 else None
+
+
 class UsagePage(Contract):
     items: tuple[UsageRow, ...]
     next_cursor: str = ""
+    set_aside: tuple[SetAsideUsage, ...] = ()  # the page's items its source could not read as a UsageRow
 
 
 class SyncCheckpoint(Contract):
@@ -46,9 +103,10 @@ class SyncCheckpoint(Contract):
 
 class SyncReport(Contract):
     pages: int
-    rows_seen: int
+    rows_seen: int  # every row the provider delivered, set aside or not
     rows_new: int
     jobs_updated: int = 0
+    rows_set_aside: int = 0  # rows this sync left out and had not recorded before (#114, C13)
 
 
 CostClass = Literal["delivered", "failed_after_payment", "uncertain", "pending"]

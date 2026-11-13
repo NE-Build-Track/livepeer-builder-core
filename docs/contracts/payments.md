@@ -123,6 +123,33 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
+- **One command never undoes another on the same actor (#115, C4).** `fund`, `set_status`, `revoke` and
+  `rotate_key` read the actor, call the provider, then write. Each writes only its own columns, with its
+  condition in the SQL statement:
+
+  | Command | Writes | Only where |
+  | --- | --- | --- |
+  | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
+  | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` |
+  | `fund` | `status` = `active`, `updated_at` | the status is `exhausted` |
+
+  Every write also requires the allocation the command acted on, so none lands on an allocation
+  provisioned after a revoke. No command moves an actor out of `revoked`; only a new provisioning gives
+  the actor an allocation again. A fund of an actor that is not `exhausted` writes nothing, `updated_at`
+  included, and answers with the actor as stored. When a revoke finishes while another command is at
+  the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
+  that is not provisioned (the rotation's new key is on a revoked allocation, and its secret is
+  deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
+  deletes the secret of a key a rotation stored meanwhile. Before, each of these commands saved the
+  whole row it had read: a pause during a rotation put back the old key, which the rotation had just
+  revoked, and any of them could put a revoked actor back to `active`. Provisioning still writes the
+  whole row: it is the one command that creates it.
+
+  The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
+  `set_actor_status`, `set_actor_key`). The packaged SQL store has them. With a supplied store without
+  them, the engine reads the actor again after the provider call, checks the same conditions itself and
+  saves the whole row with `save_actor`. The rules above then hold except in the moment between that
+  read and the save, where a second command can still be overwritten, as it could before.
 - **Amounts the provider takes (#112, C11).** The engine mirrors Batteries' amount format (v0.0.3,
   `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
   no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at

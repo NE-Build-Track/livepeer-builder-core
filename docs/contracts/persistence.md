@@ -19,6 +19,13 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   encrypted-database `SecretStore` keeps Fernet ciphertext in `lpb_secrets`, with the key outside the
   database.
 - **Default URL:** `sqlite+aiosqlite:///./livepeer-builder.db`. There is no silent in-memory store.
+- **Optional store protocols.** A store may also implement these; the engine asks with `isinstance`
+  and falls back for a supplied store that does not. `SqlStore` implements all of them.
+
+  | Protocol | Adds | Without it |
+  | --- | --- | --- |
+  | `UsageSetAsideRepo` (#114, C13) | the record of usage rows cost sync left out | the row is left out and logged once per process ([payments.md](payments.md#cost-classification)) |
+  | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`: each admin command writes only its own actor columns, with its condition in the statement | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#provisioning)) |
 
 ## Migrations
 

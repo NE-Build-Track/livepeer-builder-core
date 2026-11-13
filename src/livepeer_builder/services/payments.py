@@ -10,7 +10,6 @@ Every provider write that moves money carries an idempotency key derived from
 """
 
 import logging
-from datetime import datetime
 
 from pydantic import TypeAdapter
 
@@ -47,6 +46,7 @@ from livepeer_builder.protocols import (
     SecretStore,
     WritableSecretStore,
 )
+from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.grants import GrantDesk, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation, TakenOver
 from livepeer_builder.utils import BODY_LIMIT
@@ -76,6 +76,7 @@ class PaymentsService:
     ) -> None:
         self.mode = mode
         self._store = store
+        self._writes = ActorWrites(store, clock)
         self._secrets = secrets
         self._policy = policy
         self._clock = clock
@@ -249,7 +250,7 @@ class PaymentsService:
                     self._engine_id, f"fund:{actor.allocation_id}:{request.operation_ref}", "fund"
                 ),
             )
-            return await self._update_status(actor, "active" if actor.status == "exhausted" else actor.status)
+            return await self._writes.funded(actor)  # exhausted becomes active; nothing else (#115, C4)
 
         target = {"application_id": application_id, "actor_id": actor_id, "amount": request.amount}
         return await self._ledger.run(admin, "fund", request.operation_ref, target, steps, _ACTOR)
@@ -282,7 +283,10 @@ class PaymentsService:
             raise InvalidRequest("status must be active or paused; use revoke to revoke")
         actor = await self._require_actor(application_id, actor_id)
         await self._require_manager().set_allocation_status(actor.allocation_id, status)
-        return await self._update_status(actor, status)
+        written = await self._writes.status(actor, status)
+        if written is None:  # revoked while this command was at the provider: it stays revoked (#115, C4)
+            raise NotFound(f"actor {actor_id!r} is not provisioned")
+        return written
 
     async def revoke(self, admin: ActorContext, application_id: str, actor_id: str) -> ProvisionedActor:
         """Revoke the allocation (unused funds return to the grant) and forget the key.
@@ -296,7 +300,12 @@ class PaymentsService:
         actor = await self._require_actor(application_id, actor_id)
         await self._require_manager().revoke_allocation(actor.allocation_id)
         await self._secrets.delete(actor.secret_ref)
-        return await self._update_status(actor, "revoked")
+        revoked = await self._writes.status(actor, "revoked")
+        if revoked is None:  # another revoke wrote it first: answer as a repeat does
+            return await self._store.get_actor(application_id, actor_id) or actor
+        if revoked.secret_ref != actor.secret_ref:  # a rotation stored a new key meanwhile: forget it too
+            await self._secrets.delete(revoked.secret_ref)
+        return revoked
 
     async def rotate_key(
         self, admin: ActorContext, application_id: str, actor_id: str, operation_ref: str
@@ -336,10 +345,7 @@ class PaymentsService:
         )
         if actor.api_key_id != key.api_key_id:  # not stored yet
             ref = await self._stored_secret(run, application_id, actor_id, key)
-            actor = actor.model_copy(
-                update={"api_key_id": key.api_key_id, "secret_ref": ref, "updated_at": self._clock.now()}
-            )
-            await self._store.save_actor(actor)
+            actor = await self._pointed_at(actor, key.api_key_id, ref)
         previous_key = run.context["previous_api_key_id"]
         if previous_key != key.api_key_id:  # never the live key (B1)
             await manager.revoke_key(previous_key)  # repeat-safe upstream
@@ -390,10 +396,15 @@ class PaymentsService:
             raise NotFound(f"actor {actor_id!r} is not provisioned")
         return actor
 
-    async def _update_status(self, actor: ProvisionedActor, status: AllocationStatus) -> ProvisionedActor:
-        updated = actor.model_copy(update={"status": status, "updated_at": self._now()})
-        await self._store.save_actor(updated)
-        return updated
+    async def _pointed_at(self, actor: ProvisionedActor, api_key_id: str, ref: SecretRef) -> ProvisionedActor:
+        """The actor now holding the rotation's key: only those columns are written, so a status another
+        command set meanwhile stays (#115, C4). An actor revoked meanwhile stays revoked: the new key is on
+        a revoked allocation, so its secret is dropped."""
+        written = await self._writes.key(actor, api_key_id, ref)
+        if written is None:
+            await self._secrets.delete(ref)
+            raise NotFound(f"actor {actor.actor_id!r} is not provisioned")
+        return written
 
     async def _resolved_grant(self, actor: ActorContext, requested: str) -> str:
         """The grant on the request, or the grant of this caller's own allocation."""
@@ -420,9 +431,6 @@ class PaymentsService:
         if self._manager is None:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
-
-    def _now(self) -> datetime:
-        return self._clock.now()
 
 
 def _secret_name(application_id: str, actor_id: str) -> str:

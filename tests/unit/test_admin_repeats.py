@@ -313,13 +313,13 @@ async def test_a_rotation_resumed_after_its_secret_was_stored_keeps_one_copy_of_
     ledger's context, instead of writing a second copy of the live key that nothing points to."""
     engine = await make_engine()
     await engine.payments.provision(admin, provision_request())
-    save_actor = store.save_actor
+    set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object) -> None:
+        monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "set_actor_key", lost)
     with pytest.raises(ConnectionError):
         await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     clock.advance(120)

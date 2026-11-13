@@ -1,0 +1,30 @@
+# Merges to releases/m4 fire a repository_dispatch in NE-Build-Track/deployments,
+# whose Deploy workflow deploys the preview Railway environment at this commit.
+name: deploy trigger
+
+on:
+  push:
+    branches:
+      - releases/m4
+
+# repository_dispatch requires repo scope on the token.
+permissions:
+  contents: read
+  repo: write
+
+jobs:
+  trigger-deployments:
+    name: trigger the deployments preview deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire a repository_dispatch on NE-Build-Track/deployments
+        id: dispatch
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ref=${GITHUB_SHA}
+          curl -fsS -X POST "https://api.github.com/repos/NE-Build-Track/deployments/dispatches" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"event_type\": \"deploy\", \"client_payload\": {\"engine_ref\": \"${ref}\"}"
+          echo "dispatched the NE-Build-Track/deployments Deploy workflow for ${ref}" >> "$GITHUB_STEP_SUMMARY"

@@ -15,15 +15,19 @@ concurrency:
 
 env:
   UV_PYTHON: "3.12"
+  # Tests and SonarQube must use the same source revision for coverage.
+  CI_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   checks:
     name: lint, types, docs, tests (SQLite)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # hatch-vcs derives the dev version from git history
+          persist-credentials: false
+          ref: ${{ env.CI_CHECKOUT_SHA }}
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-extras --frozen
       - run: uv run ruff check .
@@ -121,6 +125,7 @@ jobs:
 
   sonarqube:
     name: SonarQube Quality Gate
+    needs: checks
     # GitHub does not provide analysis credentials to external fork PRs.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -130,11 +135,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-extras --frozen
-      - name: Generate Python coverage for SonarQube
-        run: uv run --frozen pytest -q --cov --cov-report=xml
+          ref: ${{ env.CI_CHECKOUT_SHA }}
+      - name: Download Python coverage from checks
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage
+      - name: Verify the coverage report is present
+        run: test -s coverage.xml
       - name: Restore SonarQube scanner cache
         id: sonar-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -157,7 +164,7 @@ jobs:
             -Dsonar.scanner.javaExePath=${{ env.JAVA_HOME }}/bin/java
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
-            -Dsonar.scm.revision=${{ github.event.pull_request.head.sha || github.sha }}
+            -Dsonar.scm.revision=${{ env.CI_CHECKOUT_SHA }}
       - name: Save SonarQube scanner cache
         if: always() && steps.sonar-cache.outcome == 'success' && steps.sonar-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

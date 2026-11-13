@@ -39,7 +39,14 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
-from livepeer_builder.protocols import AccessPolicy, ActorRepo, AllocationManager, Clock, SecretStore
+from livepeer_builder.protocols import (
+    AccessPolicy,
+    ActorRepo,
+    AllocationManager,
+    Clock,
+    SecretStore,
+    WritableSecretStore,
+)
 from livepeer_builder.services.grants import GrantDesk, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation, TakenOver
 from livepeer_builder.utils import BODY_LIMIT
@@ -125,6 +132,7 @@ class PaymentsService:
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
         manager = self._require_manager()  # refused before the ledger: nothing was sent
+        await self._require_writable_secrets()
 
         async def steps(run: RunningOperation) -> ProvisionedActor:
             return await self._provision(run, admin, manager, request)
@@ -302,6 +310,7 @@ class PaymentsService:
         actor = await self._require_actor(application_id, actor_id)
         previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
         manager = self._require_manager()
+        await self._require_writable_secrets()
 
         async def steps(run: RunningOperation) -> ProvisionedActor:
             return await self._rotate(run, manager, application_id, actor_id, operation_ref)
@@ -397,6 +406,15 @@ class PaymentsService:
         if provisioned is None or provisioned.status == "revoked" or not provisioned.grant_id:
             return ""
         return provisioned.grant_id
+
+    async def _require_writable_secrets(self) -> None:
+        """Before the ledger and the provider: a store that says it cannot keep the new key refuses the
+        command with nothing sent (#112, C2). A store without the optional ``writable`` check is not asked."""
+        if isinstance(self._secrets, WritableSecretStore) and not await self._secrets.writable():
+            raise InvalidRequest(
+                "the secret store cannot store a new payment key now (the built-in store needs "
+                "LPB_SECRET_KEY); nothing was sent to the payment provider"
+            )
 
     def _require_manager(self) -> AllocationManager:
         if self._manager is None:

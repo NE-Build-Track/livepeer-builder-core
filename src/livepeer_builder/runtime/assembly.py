@@ -205,6 +205,16 @@ async def default_parts(
         allocation_manager = client
     else:
         allocation_manager = None
+    if (
+        isinstance(supply.secret_store, _Unset)
+        and not settings.secret_key
+        and settings.allocation_mode == "per_actor"
+        and allocation_manager is not None
+    ):  # provisioning would fund an allocation, then fail to keep its key (#112, C2)
+        raise ValueError(
+            "LPB_SECRET_KEY is required in per_actor mode with a payment provider: the built-in secret store "
+            "needs it to keep each actor's payment key (lpb gen-secret-key), or supply a secret_store"
+        )
 
     operator = (
         settings.batteries_operator_token.get_secret_value() if settings.batteries_operator_token else None

@@ -24,7 +24,7 @@ from livepeer_builder.runtime.assembly import (
     default_parts,
 )
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import FakeAllocationManager, FixedClock
+from livepeer_builder.testing import FakeAllocationManager, FixedClock, MemorySecretStore
 from tests.unit.test_runtime import LOOPS, running_loops
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
@@ -100,6 +100,43 @@ async def test_a_supplied_store_is_used_and_the_configured_database_is_never_ope
     assert (
         await EncryptedDbSecretStore(store, key, clock).get(ref) == "lpg_secret"
     )  # written to the supplied store
+
+
+PROVIDER_SETTINGS = {"batteries_url": "http://127.0.0.1:9", "batteries_token": "t"}
+
+
+@pytest.mark.parametrize("configured", ["supplied", "settings"])
+async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret_key(
+    store: SqlStore, clock: FixedClock, configured: str
+) -> None:
+    """#112 C2: provisioning would fund the allocation, then fail to keep its key. So the engine does not
+    start, and the error names the setting."""
+    supply = EngineSupply(store=store, clock=clock)
+    values: dict[str, object] = {}
+    if configured == "supplied":
+        supply = dataclasses.replace(supply, allocation_manager=FakeAllocationManager())
+    else:
+        values = PROVIDER_SETTINGS
+    with pytest.raises(ValueError, match="LPB_SECRET_KEY"):
+        await BuilderEngine.create(settings(**values), supply=supply)
+
+
+@pytest.mark.parametrize(
+    ("values", "supplied"),
+    [
+        ({**PROVIDER_SETTINGS, "secret_key": generate_secret_key()}, {}),  # the key is set
+        ({}, {}),  # no provider: provisioning is refused before any call
+        ({**PROVIDER_SETTINGS, "allocation_mode": "per_application", "shared_payment_key": "lpg_k"}, {}),
+        (PROVIDER_SETTINGS, {"secret_store": MemorySecretStore()}),  # a plug-in store: asked per request
+    ],
+    ids=["key", "no-provider", "per-application", "plug-in-store"],
+)
+async def test_an_engine_that_can_keep_its_payment_keys_starts(
+    store: SqlStore, clock: FixedClock, values: dict[str, object], supplied: dict[str, object]
+) -> None:
+    supply = dataclasses.replace(EngineSupply(store=store, clock=clock), **supplied)
+    engine = await BuilderEngine.create(settings(**values), supply=supply)
+    await engine.stop()
 
 
 async def test_a_decorated_default_discovery_source_is_the_configured_one() -> None:

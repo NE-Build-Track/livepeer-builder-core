@@ -87,6 +87,20 @@ The same limit applies to every id, label and reference a request carries (`Stor
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
 `label`.
 
+**The new key must have somewhere to go (#112, C2).** Provisioning funds the provider key before the
+actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
+checks stop that:
+
+- **At startup.** An engine in `per_actor` mode with a payment provider (`LPB_BATTERIES_URL` and
+  `LPB_BATTERIES_TOKEN`, or a supplied `allocation_manager`) and the built-in secret store refuses to
+  start without `LPB_SECRET_KEY`, and the error names it.
+- **Per request.** Provisioning and key rotation ask the secret store whether it can write before the
+  ledger records anything and before the provider is called. The check is the store's optional
+  `writable()` (`WritableSecretStore`); the built-in store answers `False` without `LPB_SECRET_KEY`. A
+  `False` is `InvalidRequest` (HTTP 400) with nothing sent to the provider, and the reference stays
+  free, so the same command runs once the store can write. A supplied store that leaves `writable` out
+  is not asked.
+
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
 | `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |

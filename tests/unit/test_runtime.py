@@ -11,7 +11,14 @@ from importlib.metadata import PackageNotFoundError
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply, PurgeReport
+from livepeer_builder import (
+    BuilderEngine,
+    EngineParts,
+    EngineSettings,
+    EngineSupply,
+    PurgeReport,
+    generate_secret_key,
+)
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.http import create_app
@@ -74,6 +81,7 @@ async def test_batteries_without_an_operator_token_starts_without_the_grant_desk
         database_url=MEMORY,
         batteries_url="https://batteries.example",
         batteries_token="t",
+        secret_key=generate_secret_key(),  # per_actor with a provider needs it (#112, C2)
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
     )
@@ -91,6 +99,7 @@ async def test_default_adapters_follow_settings() -> None:
         batteries_url="https://batteries.example",
         batteries_token="t",
         batteries_operator_token="desk",
+        secret_key=generate_secret_key(),
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
     )
@@ -116,6 +125,7 @@ async def test_operator_token_wires_a_separate_grants_client() -> None:
         batteries_url="https://batteries.example",
         batteries_token="actor",
         batteries_operator_token="operator",
+        secret_key=generate_secret_key(),
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
     )

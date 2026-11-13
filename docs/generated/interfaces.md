@@ -24,6 +24,13 @@ classDiagram
         +async get(ref) str
         +async put(name, secret) SecretRef
     }
+    class WritableSecretStore {
+        <<interface>>
+        +async delete(ref) None
+        +async get(ref) str
+        +async put(name, secret) SecretRef
+        +async writable() bool
+    }
     class DiscoverySource {
         <<interface>>
         +async fetch() Runner[]
@@ -137,6 +144,7 @@ classDiagram
     SecretStore <|.. RoutingSecretStore
     SecretStore <|.. SettingsSecretStore
     SecretStore <|.. EncryptedDbSecretStore
+    WritableSecretStore <|.. RoutingSecretStore
     DiscoverySource <|.. HttpDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
@@ -165,6 +173,7 @@ classDiagram
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
+| `WritableSecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |

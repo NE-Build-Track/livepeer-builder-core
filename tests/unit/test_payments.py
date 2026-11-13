@@ -6,12 +6,21 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionRequest, SeenActor
+from livepeer_builder import EngineSupply
+from livepeer_builder.adapters.secrets import RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.contracts import (
+    ActorContext,
+    FundRequest,
+    Money,
+    ProvisionRequest,
+    SecretRef,
+    SeenActor,
+)
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, NotProvisioned
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
-from livepeer_builder.testing import FakeAllocationManager, FixedClock
+from livepeer_builder.testing import FakeAllocationManager, FixedClock, MemorySecretStore
 from tests.conftest import EngineFactory
 
 
@@ -296,6 +305,65 @@ async def test_repeating_a_rotation_with_the_same_ref_keeps_the_new_key_live(
     assert manager.keys[before.api_key_id][2] is True
     assert len(manager.keys) == 2  # provisioning's key and one rotation: one key minted
     assert (await engine.payments.credential(alice)).token == manager.keys[first.api_key_id][1]
+
+
+class SealedVault(MemorySecretStore):
+    """A plug-in store with the optional ``writable`` check: it cannot store a key while sealed."""
+
+    def __init__(self, *, sealed: bool) -> None:
+        super().__init__()
+        self.sealed = sealed
+
+    async def writable(self) -> bool:
+        return not self.sealed
+
+    async def put(self, name: str, secret: str) -> SecretRef:
+        if self.sealed:
+            raise InvalidRequest("the vault is sealed")
+        return await super().put(name, secret)
+
+
+@pytest.mark.parametrize("kind", ["plug-in", "built-in"])
+async def test_a_store_that_cannot_write_refuses_provisioning_before_the_provider(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, kind: str
+) -> None:
+    """#112 C2: provisioning asks the store first. A refusal sends nothing to the provider and records
+    nothing, so the same reference runs once the store can write."""
+    vault = SealedVault(sealed=True)
+    secrets = vault if kind == "plug-in" else RoutingSecretStore(SettingsSecretStore({}), None)
+    engine = await make_engine(supply=EngineSupply(secret_store=secrets))
+    with pytest.raises(InvalidRequest) as refused:
+        await engine.payments.provision(admin, provision_request())
+    assert manager.calls == [] and manager.allocations == {}  # no allocation was funded
+    assert "cannot store" in str(refused.value)
+    if kind == "plug-in":
+        vault.sealed = False
+        actor = await engine.payments.provision(admin, provision_request())
+        assert manager.calls == ["create_key_for_grant"] and actor.secret_ref.ref in vault.values
+
+
+async def test_a_store_that_cannot_write_refuses_rotation_before_the_provider(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    before = await engine.payments.provision(admin, provision_request())
+    vault.sealed = True
+    with pytest.raises(InvalidRequest) as refused:
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.calls == ["create_key_for_grant"]  # no new key was minted
+    assert "cannot store" in str(refused.value)
+    assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == before.api_key_id
+
+
+async def test_a_store_without_the_writable_check_is_not_asked(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """``writable`` is optional: a plug-in store that leaves it out provisions as before."""
+    engine = await make_engine(supply=EngineSupply(secret_store=MemorySecretStore()))
+    await engine.payments.provision(admin, provision_request())
+    await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.calls == ["create_key_for_grant", "create_key"]
 
 
 async def test_per_application_mode_uses_the_configured_key(

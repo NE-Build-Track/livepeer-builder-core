@@ -26,6 +26,11 @@ Alembic migrations are **package data** (`store/migrations/`), so an installed w
 like a source checkout. Version table: `lpb_alembic_version`.
 
 - **Apply:** `lpb migrate`. Settings `auto_migrate=true` (the default) also migrate on start.
+- **Refuse a mismatch:** with `auto_migrate=false`, `BuilderEngine.start()` compares the store's
+  revision with the package head before anything else and raises `RuntimeError` on any mismatch,
+  behind or ahead, naming both revisions and `lpb migrate` (#112, C8). Otherwise the engine would start
+  ready, pay a runner, then fail to record. It checks at start only: a replica already running keeps
+  running while another one migrates. A supplied store with no `maintenance` is not checked.
 - **Check:** `lpb revision` (exit code 2 when behind).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.

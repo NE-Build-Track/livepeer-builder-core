@@ -7,9 +7,10 @@ import json
 import logging
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 
 import pytest
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
 
 from livepeer_builder import (
     BuilderEngine,
@@ -25,7 +26,7 @@ from livepeer_builder.http import create_app
 from livepeer_builder.runtime import engine as engine_module
 from livepeer_builder.runtime.assembly import assemble, default_parts
 from livepeer_builder.runtime.logging import JsonFormatter, configure_logging
-from livepeer_builder.store import SqlStore
+from livepeer_builder.store import SqlStore, head_revision, upgrade
 from livepeer_builder.testing import FakeUsageSource, FixedClock
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
@@ -348,8 +349,63 @@ def record_closes(monkeypatch: pytest.MonkeyPatch) -> list[SqlStore]:
     return closed
 
 
+async def database_at(path: Path, revision: str, stamp: str | None = None) -> str:
+    """A database file migrated to ``revision``; ``stamp`` then records a revision this package lacks."""
+    url = f"sqlite+aiosqlite:///{path / 'engine.db'}"
+    store = await SqlStore.connect(url, migrate=False)
+    try:
+        await upgrade(store.engine, revision)
+        if stamp is not None:  # a newer release migrated it
+            async with store.engine.begin() as conn:
+                await conn.execute(text("UPDATE lpb_alembic_version SET version_num = :v"), {"v": stamp})
+    finally:
+        await store.close()
+    return url
+
+
+def without_auto_migrate(url: str) -> EngineSettings:
+    return EngineSettings(
+        database_url=url, auto_migrate=False, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
+    )
+
+
+@pytest.mark.parametrize(
+    ("revision", "stamp", "database"),
+    [("0010", None, "0010"), ("head", "9999", "9999")],
+    ids=["behind", "ahead"],
+)
+async def test_without_auto_migrate_a_database_at_another_revision_stops_startup(
+    tmp_path: Path, revision: str, stamp: str | None, database: str
+) -> None:
+    """#112 C8: the engine would start ready, pay, then fail to record. It stops at start instead, and the
+    message names both revisions and the command that fixes it."""
+    engine = await BuilderEngine.create(without_auto_migrate(await database_at(tmp_path, revision, stamp)))
+    with pytest.raises(RuntimeError) as refused:
+        await engine.start()
+    message = str(refused.value)
+    assert database in message and head_revision() in message and "lpb migrate" in message
+    assert not engine.health().ready  # no discovery snapshot was taken
+    with pytest.raises(RuntimeError, match="engine is stopped"):
+        await engine.start()
+
+
+async def test_without_auto_migrate_a_current_database_starts_and_is_checked_only_then(
+    tmp_path: Path,
+) -> None:
+    """The check runs at start only: a replica already running keeps running when another one migrates."""
+    url = await database_at(tmp_path, "head")
+    engine = await BuilderEngine.create(without_auto_migrate(url), supply=QUIET)
+    await engine.start()
+    try:
+        await database_at(tmp_path, "head", stamp="9999")  # a newer release migrated the database
+        await engine.discovery.refresh()
+        assert engine.health().ready
+    finally:
+        await engine.stop()
+
+
 def unmigrated() -> EngineSettings:
-    """No tables: ``start()`` fails in ``recover_interrupted`` after ``create`` opened the store."""
+    """No tables: ``start()`` refuses the schema (#112, C8) after ``create`` opened the store."""
     return EngineSettings(
         database_url=MEMORY, auto_migrate=False, log_json=False, discovery_url="http://127.0.0.1:9/discovery"
     )
@@ -363,7 +419,7 @@ async def test_a_failed_start_in_async_with_closes_what_create_opened(
 ) -> None:
     closed = record_closes(monkeypatch)
     engine = await BuilderEngine.create(unmigrated(), supply=QUIET)
-    with pytest.raises(OperationalError):
+    with pytest.raises(RuntimeError, match="lpb migrate"):
         async with engine:
             pytest.fail("the block must not run when start() fails")
     assert len(closed) == 1
@@ -377,7 +433,7 @@ async def test_a_failed_start_in_the_http_lifespan_closes_what_create_opened(
     closed = record_closes(monkeypatch)
     engine = await BuilderEngine.create(unmigrated(), supply=QUIET)
     app = create_app(engine)
-    with pytest.raises(OperationalError):
+    with pytest.raises(RuntimeError, match="lpb migrate"):
         async with app.router.lifespan_context(app):
             pytest.fail("the app must not serve when start() fails")
     assert len(closed) == 1

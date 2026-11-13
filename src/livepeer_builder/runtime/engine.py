@@ -71,14 +71,16 @@ class BuilderEngine:
         return cls(settings, services, resources)
 
     async def start(self) -> None:
-        """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops.
+        """Check the schema, resolve jobs a restart interrupted, take one discovery snapshot, then start
+        background loops.
 
-        If starting fails (a store error, or a cancellation), the engine stops: what ``create`` opened is
-        closed before the error reaches the caller, and a new engine is needed.
+        If starting fails (a schema that does not match, a store error, or a cancellation), the engine stops:
+        what ``create`` opened is closed before the error reaches the caller, and a new engine is needed.
         """
         if self._stopped:
             raise RuntimeError("engine is stopped; create a new one")
         try:
+            await self._require_current_schema()
             await self.jobs.recover_interrupted()
             await self.discovery.refresh()
         except BaseException:
@@ -146,6 +148,23 @@ class BuilderEngine:
     async def schema_revision(self) -> str | None:
         maintenance = self.store.maintenance
         return None if maintenance is None else await maintenance.schema_revision()
+
+    async def _require_current_schema(self) -> None:
+        """With ``LPB_AUTO_MIGRATE=false``, the database must be at this package's revision, neither behind
+        nor ahead, or the engine would pay and then fail to record (#112, C8). Checked at start only, so a
+        replica already running through a rolling deploy is not stopped. A store that reports no revision
+        (no ``maintenance``) is not checked."""
+        if self.settings.auto_migrate or self.store.maintenance is None:
+            return
+        from livepeer_builder.store import head_revision  # here: importing the package loads no Alembic
+
+        database, package = await self.store.maintenance.schema_revision(), head_revision()
+        if database != package:
+            raise RuntimeError(
+                f"the database schema is at revision {database or 'none'} and this package needs {package}: "
+                "run `lpb migrate` with this package before starting (LPB_AUTO_MIGRATE is false). A database "
+                "ahead of the package was migrated by a newer release; start that release instead"
+            )
 
     async def _retention_loop(self) -> None:
         if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:

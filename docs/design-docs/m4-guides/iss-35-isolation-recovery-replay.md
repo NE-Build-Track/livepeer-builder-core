@@ -233,13 +233,15 @@ Locked by Mike on 13 November 2026.
   - **The fix for R2 and R3:** the engine keeps a running total of fees removed by retention, per
     allocation. Reconciliation gains a figure, "fees of purged jobs", and can balance after any purge. The
     builder console changes with it.
-  - **R4, found by the same tests and still open.** With usage rows purged and the job kept, a later
-    charge on the same session recomputes the job's cost from the rows that remain and stores it lower.
-    Cost sync also reads the ledger's last page again on every sync, so a purged row on that page is
-    cached again, and the total of purged fees must not count it twice. How a job's usage rows are kept
-    while the job needs them is not decided.
-  - **The guide's startup rule** (usage retention not shorter than job retention) is not adopted. It would
-    not fix R1. It does prevent R4, and it is one of the options for that open question.
+  - **R4, found by the same tests.** With usage rows purged and the job kept, a later charge on the same
+    session recomputes the job's cost from the rows that remain and stores it lower. **Locked by Mike on
+    13 November:** the usage purge skips rows that a kept job still uses. It deletes a row only when its
+    job is already purged, or when the row matches no job and is past the cutoff. This also protects
+    `uncertain` jobs, which are never purged.
+  - **A constraint on both fixes.** Cost sync reads the ledger's last page again on every sync, so a
+    purged row on that page is cached again. The total of purged fees must not count such a row twice.
+  - **The guide's startup rule** (usage retention not shorter than job retention) is not adopted. The
+    purge rule above covers what it was for.
 
 **Other decisions that touch this guide.**
 

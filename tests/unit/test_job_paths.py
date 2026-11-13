@@ -15,7 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.adapters.runner_address import as_built, runner_address
+from livepeer_builder.adapters.runner_address import as_built, origin, runner_address
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
 from livepeer_builder.errors import RunnerCallError
@@ -68,7 +68,7 @@ ALLOWED = [
     "/run?x=1&y=2",
     "/run?next=/../other",  # a query string stays allowed: its slashes and dots are data
     "/run?u=http://h//x",
-    "/run?",
+    "/run?",  # kept by the contract; the "?" of an empty query is not sent (see below)
 ]
 
 
@@ -249,3 +249,33 @@ def test_a_path_that_makes_the_authority_unreadable_leaves_the_runner(path: str)
     with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
         runner_address("http://127.0.0.1:8936", path)
     assert (refused.value.kind, refused.value.payment_sent) == ("http", False)
+
+
+@pytest.mark.parametrize("host", ["café.example", "CAFÉ.example", "straße.example"])
+def test_the_payment_origin_check_reads_a_host_that_is_not_ascii_in_one_form(host: str) -> None:
+    """The runner is dialed by its IDNA name, and a 402 may name the same host as the runner URL wrote it.
+    Compared as written, the two differed, and a valid challenge was refused as an invalid one (review of
+    #134). ``origin`` names every host the way yarl dials it."""
+    dialed = origin(runner_address(f"https://{host}/app", "/run"))
+    assert dialed is not None and dialed.isascii() and "xn--" in dialed
+    assert origin(f"https://{host}/payment") == dialed
+    assert origin(f"https://{host}:443/") == dialed
+
+
+def test_an_ascii_host_s_origin_is_unchanged() -> None:
+    assert origin("https://Orch.Example:8936/app") == "https://orch.example:8936"
+    assert origin("http://[::1]:8936/app") == "http://::1:8936"
+    assert origin("http://xn--caf-dma.example/app") == "http://xn--caf-dma.example:80"
+
+
+@pytest.mark.parametrize(
+    ("path", "sent"),
+    [
+        ("/run?", "/app/app-1/run"),  # the one thing not sent: the HTTP client omits an empty query's "?"
+        ("/run?x=", "/app/app-1/run?x="),
+        ("/run?&", "/app/app-1/run?&"),
+    ],
+)
+async def test_an_empty_query_s_delimiter_is_not_sent(net: Net, path: str, sent: str) -> None:
+    await call(net, JobRequest(app=APP, path=path))
+    assert net.targets == [sent]

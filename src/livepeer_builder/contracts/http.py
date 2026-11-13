@@ -62,7 +62,8 @@ def request_path(value: str) -> str:
 
     Refused: a fragment, a backslash or a control character anywhere, and in the part before the query an
     empty segment or a ``.`` or ``..`` segment, literal or percent-encoded (``%2e``, in any case). A trailing
-    ``/`` and a query string stay allowed, as written.
+    ``/`` and a query string stay allowed, as written. One thing is kept here and not sent: the ``?`` of an
+    empty query (``/run?``), which the HTTP client leaves out of the request target.
     """
     if "#" in value or "\\" in value or _CONTROL.search(value):
         raise ValueError("path must not contain a fragment, a backslash or a control character")

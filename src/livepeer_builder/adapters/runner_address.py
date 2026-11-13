@@ -89,10 +89,15 @@ def origin(url: str) -> str | None:
     """``scheme://host:port``, or ``None`` when the URL or its port is not one aiohttp would request.
 
     An empty port is the scheme default. A stated port counts only in ``1..65535``: ``0`` is not ``443``.
+    A host that is not ASCII is named as it is dialed, by its IDNA name, so a runner address (already
+    converted by ``runner_address``) and a URL that still writes the host in Unicode (an orchestrator URL,
+    a 402's ``payment_url``) have one origin.
     """
     try:
         parts = urlsplit(url)
         scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
+        if host and not host.isascii():
+            host = yarl.URL.build(host=host).raw_host  # yarl's name for it: the one aiohttp dials
     except (ValueError, UnicodeError):
         return None
     if port is None:

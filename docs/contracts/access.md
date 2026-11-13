@@ -87,6 +87,14 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 2. **Then ownership.** Another actor's or application's job, and a job that does not exist, are both
    `NotFound` (404).
 
+**An id no record can hold is a 422 (#113, C26).** Every id a route reads from its path or query string
+(an application, actor or key id, `app`, a filter such as `actor_id`) is stored text: at most 200
+characters and no NUL, as every record keeps it. A longer one, or one holding a NUL, is a 422 when the
+request is parsed, after authentication (401) and before the permission check and any query, as a job id
+that is not a UUID already was. Such a lookup used to answer 404 (an empty 200 for a list filter or the
+catalog, 400 for a key's rotate or revoke), and a NUL was a 500 on PostgreSQL. `tests/structure/test_route_params.py` fails when a
+route declares a plain string path or query parameter.
+
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |

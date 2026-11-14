@@ -199,6 +199,59 @@ async def test_the_rest_route_takes_the_allocation_as_a_typed_query_id(
     assert unknown.status_code == 404 and long.status_code == 422
 
 
+async def test_an_empty_allocation_id_is_refused_not_read_as_the_current_allocation(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
+    usage: FakeUsageSource, manager: FakeAllocationManager,
+) -> None:  # fmt: skip
+    """``?allocation_id=`` named an allocation, the empty one, and got the current one reconciled with a
+    200, while every other value that is not the actor's is refused. It is a 422 on the route, as its
+    other parameter errors are, and not found for a caller of the engine."""
+    engine = await make_engine(default_currency="ETH")
+    await two_allocations(engine, admin, alice, transport, usage, manager)
+    with pytest.raises(NotFound, match="never paid"):
+        await engine.costs.reconcile(admin, "default", "alice", "")
+    key = await engine.keys.bootstrap_admin()
+    app = create_app(engine, manage_lifecycle=False)
+    headers = {"Authorization": f"Bearer {key.token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+        empty = await client.get(
+            "/v1/admin/reconciliation", params={"actor_id": "alice", "allocation_id": ""}, headers=headers
+        )
+    assert empty.status_code == 422, empty.text
+    assert empty.json()["detail"][0]["loc"] == ["query", "allocation_id"]
+
+
+async def test_without_an_actor_a_named_allocation_reconciles_over_the_application(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
+    transport: ScriptedTransport, usage: FakeUsageSource, manager: FakeAllocationManager,
+) -> None:  # fmt: skip
+    """``per_actor`` with no ``actor_id``: no allocation is the current one, so one must be named. Any
+    allocation that paid an attempt in the application reconciles, with no actor in the answer and every
+    other such allocation listed."""
+    engine = await make_engine(default_currency="ETH")
+    first, second = await two_allocations(engine, admin, alice, transport, usage, manager)
+    bobs = (
+        await engine.payments.provision(
+            admin, provision("provision-bob").model_copy(update={"actor_id": "bob"})
+        )
+    ).allocation_id
+    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-3",))]
+    await engine.jobs.run(bob, JobRequest(app=APP))
+    usage.rows.append(row("4", "0.7", bobs, "m-3"))
+    await engine.costs.sync_once()
+    manager.allocations[bobs].spent = Decimal("0.7")
+
+    with pytest.raises(NotFound, match="no allocation pays"):
+        await engine.costs.reconcile(admin, "default", None)
+    report = await engine.costs.reconcile(admin, "default", None, bobs)
+    assert (report.actor_id, report.allocation_id) == (None, bobs)
+    assert report.other_allocations == tuple(sorted((first, second)))
+    assert counted(report) == (Decimal("0.7"), Decimal("0")) and report.balanced is True
+    earlier = await engine.costs.reconcile(admin, "default", None, first)
+    assert earlier.actor_id is None and counted(earlier) == (Decimal("0.2"), Decimal("0"))
+    assert earlier.balanced is True
+
+
 # -- a supplied store whose cost snapshot cannot say which allocation paid an attempt ----------------------
 
 

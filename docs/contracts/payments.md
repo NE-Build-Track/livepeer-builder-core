@@ -85,11 +85,15 @@ characters or holds a NUL character (422 over REST), before any provider call: e
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
-`label`.
+`label`. Stored text also refuses a lone surrogate, half of a UTF-16 pair, which JSON can write
+(`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
+because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
 `FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
-and the values `.` and `..`, which a client or server would read as another path. It is a 422 over REST (a
+and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
+id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
+`..`, `" grant_1"` is used as `grant_1`, and an id of only whitespace is no grant chosen. It is a 422 over REST (a
 `ValidationError` in process) before the operation ledger records anything or the provider is called, and
 it applies to the allocation fund route too, whose body is a `FundRequest`. It is held to no pattern such
 as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it
@@ -100,15 +104,28 @@ the provider itself returned cannot name another resource either.
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:
 
-- **At startup.** An engine in `per_actor` mode with a payment provider (`LPB_BATTERIES_URL` and
-  `LPB_BATTERIES_TOKEN`, or a supplied `allocation_manager`) and the built-in secret store refuses to
-  start without `LPB_SECRET_KEY`, and the error names it.
-- **Per request.** Provisioning and key rotation ask the secret store whether it can write before the
-  ledger records anything and before the provider is called. The check is the store's optional
-  `writable()` (`WritableSecretStore`); the built-in store answers `False` without `LPB_SECRET_KEY`. A
-  `False` is `InvalidRequest` (HTTP 400) with nothing sent to the provider, and the reference stays
-  free, so the same command runs once the store can write. A supplied store that leaves `writable` out
-  is not asked.
+- **At startup.** An engine in `per_actor` mode with a payment provider and the built-in secret store
+  refuses to start when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the
+  error names the setting. The check runs on the parts the engine will run with, after `decorate`: a
+  decorator that turns the provider off, or installs a store of its own, is not refused, and one that
+  adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
+  at boot, such as a sealed vault, still starts and is asked per request.
+- **Per request.** Provisioning and key rotation ask the secret store whether it can write in the step
+  that mints the key, just before the provider is called. The check is the store's optional
+  `writable()` (`WritableSecretStore`); a supplied store that leaves it out is not asked. A `False` is
+  `InvalidRequest` (HTTP 400).
+  - On a first run nothing was sent to the provider and nothing was noted, so the reference stays
+    free and the same command runs once the store can write.
+  - A repeat of a finished command stores nothing and is not asked: it gets the recorded result.
+  - A resume whose key is already stored is not asked either: it goes on, for a rotation to revoke the
+    old key. The stored key must be the one of the provider call about to be sent: the record notes the
+    call's idempotency key beside the secret's reference, and only a match skips the check. A resume
+    after the actor was revoked, or provisioned again, sends another provider call whose key is not
+    stored yet, so it is asked before that call.
+  - A resume that still has a key to store is refused, and the message says that an earlier attempt
+    may have reached the provider. It does not say that nothing was sent, and the refusal does not
+    free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once
+    the store can write.
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
@@ -123,33 +140,92 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
-- **One command never undoes another on the same actor (#115, C4).** `fund`, `set_status`, `revoke` and
-  `rotate_key` read the actor, call the provider, then write. Each writes only its own columns, with its
-  condition in the SQL statement:
+- **One command never undoes another on the same actor (#115, C4).** `provision`, `fund`, `set_status`,
+  `revoke` and `rotate_key` read the actor, call the provider, then write. Each writes only its own
+  columns, with its condition in the SQL statement:
 
   | Command | Writes | Only where |
   | --- | --- | --- |
   | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
-  | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` |
+  | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
   | `fund` | `status` = `active`, `updated_at` | the status is `exhausted` |
+  | `provision` | the whole row | the actor is as provisioning read it: it has no row, or it still has the `revoked` row being replaced |
 
   Every write also requires the allocation the command acted on, so none lands on an allocation
-  provisioned after a revoke. No command moves an actor out of `revoked`; only a new provisioning gives
-  the actor an allocation again. A fund of an actor that is not `exhausted` writes nothing, `updated_at`
-  included, and answers with the actor as stored. When a revoke finishes while another command is at
+  provisioned after a revoke. A key rotation also notes the allocation in its record when it begins:
+  resumed after the actor was revoked and provisioned again, it is refused before any provider call,
+  404 with the two allocations named, and keeps its reference
+  ([refused or unknown](#repeat-safe-commands)). The old key its record names belongs to the revoked
+  allocation, so on the new one it would mint a key and leave the key that allocation had live. A
+  record written before the allocation was noted is not checked.
+
+  No command moves an actor out of `revoked`; only a new provisioning gives the actor an allocation
+  again. A fund of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
+  with the actor as stored. When a revoke finishes while another command is at
   the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
   that is not provisioned (the rotation's new key is on a revoked allocation, and its secret is
   deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
   deletes the secret of a key a rotation stored meanwhile. Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
-  revoked, and any of them could put a revoked actor back to `active`. Provisioning still writes the
-  whole row: it is the one command that creates it.
+  revoked, and any of them could put a revoked actor back to `active`.
+
+  **A provisioning that another command overtook.** Provisioning is the one command that writes the
+  whole row, so it writes only where the actor is still as it read it. Two provisionings of one actor
+  under two references send the same provider operation (its idempotency key is derived from the
+  actor, under one `LPB_ENGINE_ID`), so both get one allocation and one key, and the first to write
+  stores them. The other then writes nothing, whatever was done to the actor since, deletes its own
+  copy of the key's secret, and answers from the actor as stored:
+
+  | The actor as stored | Answer |
+  | --- | --- |
+  | holds the allocation and the key this provisioning got | the actor, with the status it has now (a pause that finished meanwhile stays) |
+  | holds that allocation, `revoked` | the actor, `revoked`: the allocation was funded and then revoked, and it stays revoked, as for a fund |
+  | holds that allocation with another key (rotated meanwhile), or another allocation (revoked and provisioned again) | 409 `already_provisioned`, as below |
+  | holds another allocation, `revoked` | 404: revoked while this provisioning was at the provider. The record stays `started`; repeated after `LPB_OPERATION_STALE_S` it is a resumed provisioning of a revoked actor |
+
+  Before, it saved the row it had built from its first read: `active` on an allocation revoked or
+  paused meanwhile, or the key a rotation had just revoked.
+
+  **Two rotations of one actor's key.** A rotation writes its key only over the key it began from. When
+  another rotation gave the actor a key first, whether it ran to its end while this one was at the
+  provider or finished between this one's interrupted run and its resume, this one writes nothing and
+  leaves nothing of its own live:
+
+  1. it revokes its own new key, then deletes that key's secret. The revoke comes first, so a key that
+     is still live still has its secret stored; when the revoke fails, the record stays `started` and a
+     repeat, which gets the same key replayed, does it again;
+  2. it revokes the key it began from and deletes that key's secret, unless the actor holds them. The
+     actor no longer does, and for a rotation that stored its key, failed to revoke the old one and was
+     then replaced by a newer rotation, no other command would;
+  3. it notes in its record the key the actor holds, and answers `InvalidRequest` (HTTP 400): another
+     key rotation finished after this one began.
+
+  The refusal never frees the reference: under a free reference the provider would replay the revoked
+  key to a new rotation. The record stays `started` with that note. A repeat inside
+  `LPB_OPERATION_STALE_S` is 409 `operation_in_progress`; a later one is refused in the same words
+  before any provider call. To replace the key again, rotate under a new reference. Before, the key
+  write asked only for the same allocation: the slower rotation overwrote the finished one, whose key
+  stayed live with its secret stored and nothing pointing at it, and a resumed rotation put back a key
+  the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
+
+  **What the guarantee covers, and the known gap.** It covers commands that write different columns,
+  and the cases named above: a revoke, two rotations, a provisioning that another command overtook.
+  Two status commands at the same moment (a pause and an activate) write the same column, and the last
+  write wins at the provider and in the store separately. Each sets the status at the provider and
+  then stores it, so when a pause is at the provider while an activate runs to its end, the provider
+  ends `paused` then `active` and the store `active` then `paused`: the stored status is the opposite
+  of the provider's. Closing this needs a version on the row or a read-back of the provider's status,
+  and #115 adds neither. Until then, send the status you want again: a repeated `set_status` sets it
+  at the provider and in the store.
 
   The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
-  `set_actor_status`, `set_actor_key`). The packaged SQL store has them. With a supplied store without
-  them, the engine reads the actor again after the provider call, checks the same conditions itself and
-  saves the whole row with `save_actor`. The rules above then hold except in the moment between that
-  read and the save, where a second command can still be overwritten, as it could before.
+  `set_actor_status`, `set_actor_key`, `provision_actor`). The packaged SQL store has them; a supplied
+  store has all three or is treated as having none. With a supplied store without them, the engine
+  reads the actor again after the provider call, checks the same conditions itself and saves the whole
+  row with `save_actor`. The rules above then hold except in the moment between that read and the
+  save, where a second command can still be overwritten, as it could before: for such a store two
+  rotations that write at the same moment can still leave the slower one's key on the actor, and a
+  provisioning can still save over a command that wrote in that moment.
 - **Amounts the provider takes (#112, C11).** The engine mirrors Batteries' amount format (v0.0.3,
   `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
   no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at
@@ -159,7 +235,11 @@ checks stop that:
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
   ledger records anything and before any provider call. A zero or negative funding or grant amount is
-  still the command's own refusal, 400.
+  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
+  **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
+  18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
+  the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
   caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,
@@ -203,15 +283,35 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   rotation's new key stored, then the old key's revoke refused) leaves the record `started`, so a resume
   finishes the command from what the record noted. A timeout, a transport error, a provider 5xx or a
   crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
-  new reference. So does a provider answer the engine cannot read (below).
+  new reference. So does a provider answer the engine cannot read (below). A refusal on a *resumed*
+  run never frees the reference either (#112): the attempt it follows ended in an unknown outcome, and
+  a provider call that timed out may have been applied with nothing noted. The record stays `started`,
+  another request on that reference is still 409 `operation_conflict`, and the same request resumes
+  again after `LPB_OPERATION_STALE_S`. The one exception is `already_provisioned`, below.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
-  answer that is not an error status. It must be a JSON object. A list page must have `items` as a list
-  of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
+  answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
+  nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
+  a list of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
   `ProviderError`: HTTP 502 from the REST service, `invalid_answer` as `cost_sync_error`, and an unknown
   outcome to the ledger, so the reference stays held. Before, a 2xx that was not a JSON object answered
   500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is
-  now refused too, since Batteries answers every management route with a JSON object. A malformed page
-  never reads as an empty one, and one malformed item fails its page. The error does not quote the
+  now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
+  is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
+  with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
+  never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
+  cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
+  resumed create's search and cost sync alike: before, the engine asked for that page again without end,
+  and `GET /v1/admin/grants` and `POST /v1/admin/costs/sync` never answered. A longer cycle (a cursor that
+  comes back after other pages) is not detected. A grant, in a list or read alone,
+  must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
+  strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
+  JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
+  (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
+  not create. The same holds for every value a command's result is built from: the `id` a grant create
+  answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
+  be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
+  `null` there was recorded as the text `"None"` in a finished command (provisioning answered 201 with
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
@@ -227,10 +327,12 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   engine refuses to start unless `LPB_OPERATION_STALE_S` is at least four of them, so the longest
   ordinary command (two calls) fits in a run's half. Its limit is a process paused
   longer than the window, which only a provider idempotency key on grant creation would close.
-- **Rotating the payment key** records the old key's id and secret reference when it begins, and every
-  step reads them from there, never from the actor as it is now. A resume after the new key was stored
+- **Rotating the payment key** records the old key's id and secret reference when it begins, with the
+  allocation, and every step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
-  reference is recorded before the actor points at it, so a resume reuses that copy.
+  reference is recorded before the actor points at it, so a resume reuses that copy. A rotation that
+  another rotation of the same actor overtook, or that is resumed on an allocation provisioned since
+  it began, is refused and keeps its reference ([two rotations](#provisioning)).
 - **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
   409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor
@@ -245,7 +347,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   resumed create reads the grants page by page, oldest first, and adopts the one carrying its tag instead
   of creating a second. It records the list cursor after each page, so a resume that runs out of its
   budget in a slow catalog leaves the next one to go on from there; pages already read lacked the tag,
-  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and the resume created a second grant. Grant names stay free-form: two references may create two grants with one name.
+  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`, or the grant with its `metadata` as `null` or as an object) read as a grant with no tag, and the resume created a second grant. A read-back of the new grant that the engine cannot read is an unknown outcome too (503, the reference held), never the command's result. Grant names stay free-form: two references may create two grants with one name.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.
@@ -382,19 +484,29 @@ records it and moves the cursor:
 
 | Reason | The row |
 | --- | --- |
-| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a number) |
+| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a whole number; a whole number is kept as its digits) |
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
-| `unreadable_created_at` | has no `created_at_ms`, or one that is not a number or that no clock holds |
-| `unstorable_<field>` | has a text the store's column cannot keep in `<field>`: longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), a NUL, or a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
+| `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
+| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
+| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
+| `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
-The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
-`computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A row
-with no id the table can keep is recorded under `sha256:` and a digest of its content. A row is
-recorded, counted and logged once, however often its page is read again; the first record of an id is
-kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id, the
-reason, the fees and up to 2000 characters of the row as received. `SyncReport.rows_set_aside` counts
-the rows a sync recorded, and `EngineHealth.cost_sync_set_aside` (`GET /readyz`) the rows left out in
-all, as of the last sync.
+Each value is judged as it was received, and that value is the one stored: apart from a whole-number
+`id`, the engine turns no number, list or object into text.
+
+The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
+where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
+`computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
+that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
+table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
+differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
+A row is recorded, counted and logged once, however often its page is read again; the first record of
+an id is kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id,
+the reason, the fees and up to 2000 characters of the row as received (for a row another `UsageSource`
+delivered as a `UsageRow` and the store cannot keep, the row as that source read it).
+`SyncReport.rows_set_aside` counts the rows a sync recorded, and `EngineHealth.cost_sync_set_aside`
+(`GET /readyz`) the rows left out in all, as of the last sync, including one that failed after it set
+rows aside.
 
 Recording the rows is optional for a store (`UsageSetAsideRepo` in `protocols`). The packaged SQL
 store has it. A supplied store without it still syncs: such a row is left out and logged once per
@@ -424,7 +536,8 @@ allocation, so after a re-provision reconciliation never balanced again.
 - **The default** is the actor's current allocation (`allocation_id` in the answer).
 - **An earlier allocation** is reconciled by naming it: `costs.reconcile(admin, application_id,
   actor_id, allocation_id)`, or `?allocation_id=` on the route (stored text: over 200 characters or a
-  NUL is 422). Batteries still reports `spent_*` for a revoked allocation, late charges after the
+  NUL is 422, and so is an empty value, which names no allocation and is not read as the current
+  one). Batteries still reports `spent_*` for a revoked allocation, late charges after the
   revocation included (`API.md`, v0.0.3), so an earlier allocation reconciles like the current one.
 - **`other_allocations`** in the answer lists the actor's other allocations, sorted: the current one,
   and every earlier one that paid an attempt. It is empty for an actor that had one allocation.
@@ -432,6 +545,11 @@ allocation, so after a re-provision reconciliation never balanced again.
   attempts) is 404, so a caller who may read one application never reads what another's allocation
   spent. An earlier allocation that paid no attempt is not known to the engine: the actor's record
   keeps only the current one.
+- **Without `actor_id` in `per_actor` mode** no allocation is the current one, so the call is 404
+  unless it names one. Any allocation that paid an attempt in the application can be named: the answer
+  is 200 with `actor_id: null`, it counts the attempts that allocation paid, and `other_allocations`
+  lists every other allocation that paid an attempt in the application. There is still no single
+  figure for a whole application: each allocation reconciles on its own.
 
 Which allocation paid each attempt is an optional read of a store's cost snapshot
 (`AllocationCostSnapshot` in `protocols`: `attempt_allocations`). The packaged SQL store has it. With a
@@ -488,7 +606,7 @@ Units, on every field:
 | `fee_usd` | USD, an exact `Decimal`. `null` when an applied row lacks a USD price; `0` when there are no rows |
 | `row_count` | Applied Batteries usage rows counted in the fees |
 | `MeasuredUsage.quantities` | The app's own units (`tokens`, `seconds`, ...), integers, per job; never summed across apps |
-| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end` |
+| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end`. Over REST a `start` or `end` is converted to UTC when the request is parsed (one with no offset is read as UTC) and answered in UTC; one that UTC cannot hold is a 422 |
 | `jobs_with_cost`, `jobs_pending` | Jobs: `observed` or `corrected`, and `pending` |
 
 **The summary** (`GET /v1/costs/summary`) totals the jobs in its window and scope (an actor's own; an

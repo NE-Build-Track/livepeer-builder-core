@@ -25,12 +25,17 @@ UNREADABLE = {
     "one record, not a runner": document(7),
     "every entry unreadable": json.dumps([None, {"address": "ftp://orch.example", "runners": [record()]}]),
     "runners is not a list": json.dumps([{"address": ORCHESTRATOR, "runners": {"url": "x"}}]),
+    # ``nodes`` and no ``address``, as a metadata entry has, but with records no address can read
+    "nodes with runners": json.dumps([{"nodes": [], "runners": [NO_STAMP, record()]}]),
+    "nodes with runners, not a list": json.dumps([{"nodes": [], "runners": {"url": "x"}}]),
 }
 COUNTS = {
     "every runner unreadable": (0, 2),
     "one record, not a runner": (0, 1),
     "every entry unreadable": (2, 0),
     "runners is not a list": (1, 0),
+    "nodes with runners": (1, 0),
+    "nodes with runners, not a list": (1, 0),
 }
 EMPTY = {
     "an empty list": b"[]",
@@ -38,6 +43,7 @@ EMPTY = {
         [{"nodes": [{"url": ORCHESTRATOR, "queried_at": "2026-10-22T17:05:00Z"}]}]
     ),
     "an orchestrator with no runners": document(),
+    "a metadata entry with an empty runners list": json.dumps([{"nodes": [], "runners": []}]),
 }
 
 

@@ -1,5 +1,10 @@
 # ISS-27: Persistent application endpoints (sessions)
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D70 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions, numbered when they are locked.\
 **Tracker:** ISS-27 ([Network-Engineering-SPE#41](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/41)).
@@ -106,8 +111,8 @@ clients only see `proxy_path`.** #73's P4 and P2 inside the reserved contract; n
    `app_url + path` with the caller's body and allowed headers (the `contracts/http.py` rules, plus
    `sec-websocket-*`), streaming both ways; the same path accepts a WebSocket upgrade and relays frames
    verbatim (text as text, binary as binary) with bounded queues. Every request is authenticated and owned.
-   The job id rides the `101`/response as `Livepeer-Job-Id`; the ending is a WebSocket close code and
-   reason, not an injected frame (Q2).
+   The engine sends a first frame `{type: "start", job_id, session_id}` and a last frame
+   `{type: "end", job_id, reason}`, as #73 proposes (Q2, locked). Every other frame is the runner's.
 4. **Limits and endings:** `max_duration_s`, `idle_timeout_s` (traffic through the proxy resets it),
    `LPB_MAX_SESSIONS`, `LPB_MAX_SESSIONS_PER_ACTOR`, refused with `NoCapacity` **before** payment. Endings:
    `closed`, `idle`, `max_duration`, `released`, `funding_stopped`, `engine_stopped`, `interrupted`,
@@ -146,7 +151,7 @@ owner-redacted manifests), add the session rules to `payments.md`, the sequence 
 | `services/sessions.py` (new) | `SessionService`: state machine, limit and idle watchers, endings, close, recovery, drain. `services/jobs.py` is at 493 lines: keep sessions out of it |
 | `services/jobs.py`, `services/discovery.py` | P1: jobs skip persistent runners |
 | `services/admission.py` | Key the limiter by any string so a second instance caps sessions per actor |
-| `store/` | Migration `0009`: `lpb_sessions` (job_id, state, limits, `control_secret_ref`, opened/closed/last_activity, ending); `SessionRepo` port; matching change if Q7 |
+| `store/` | A new migration (numbered when written): `lpb_sessions` (job_id, state, limits, `control_secret_ref`, opened/closed/last_activity, ending); `SessionRepo` port; matching change if Q7 |
 | `http/sessions.py` (new), `http/app.py` | `POST /v1/sessions`, `GET /v1/sessions[/{id}]`, `POST /v1/sessions/{id}/close`, `ANY` + WebSocket on `/v1/sessions/{id}/app/{path}` |
 | `runtime/assembly.py`, `runtime/engine.py` | Wire `SessionService` in place of `ReservedSessions`; supervise per-session tasks; drain on stop |
 | `config.py` | `LPB_MAX_SESSIONS`, `LPB_MAX_SESSIONS_PER_ACTOR`, `LPB_SESSION_DRAIN_TIMEOUT_S`, ceilings on duration and idle |
@@ -173,7 +178,7 @@ runner request (P1; red on `releases/m3`).
 ```text
 Defects (red first)
 [ ] P1 jobs.run on a persistent-only app: no_offering, no request sent, no signing
-[ ] P2 a non-admin job read of a session attempt shows no raw manifest_id     [?] Q6
+[ ] P2 a non-admin job read of a session attempt shows no raw manifest_id
 Open
 [ ] open on a free persistent runner: Session open, job running, proxy_path set, no app_url anywhere
 [ ] open stores the manifest as unknown before signing; a failed intent write signs nothing (D54)
@@ -182,17 +187,18 @@ Open
 [ ] signer refusal: job failed, unpaid, no failover
 [ ] reply missing session_id/app_url/control_url after payment: stop sent, failed_after_payment
 [ ] session admission full: NoCapacity before any request; job slots unaffected
-[ ] repeated operation_ref follows the ISS-14 table                         [?] Q5
+[ ] repeated operation_ref returns the existing Session (200, Idempotent-Replayed); a different body is 409
 Traffic
 [ ] HTTP call through proxy_path reaches app_url+path; body and allowed headers pass, Livepeer-* do not
 [ ] SSE through proxy_path arrives chunk by chunk
 [ ] WebSocket relay: binary and text frames both ways, unchanged; runner close code reaches the client
+[ ] WebSocket relay: the first frame is the engine's start frame and the last is its end frame (Q2)
 [ ] another actor's proxy_path is 404; a revoked key mid-session is refused on the next request
 Funding and endings
 [ ] renewals continue while open; no evidence write per renewal
 [ ] renewal 404: ending released, job succeeded, client socket closed with the ending
 [ ] renewal 403/409: ending funding_stopped; stop sent
-[ ] renewal 5xx: retried each cycle; the session ends only on release        [?] Q8
+[ ] renewal 5xx: retried each cycle; the session ends only on release
 [ ] close: funding stopped, POST control_url/stop once, ending closed
 [ ] idle_timeout and max_duration fire on the virtual clock
 [ ] engine.stop closes open sessions after the drain window
@@ -200,7 +206,7 @@ Funding and endings
 [ ] no log line or record contains app_url or control_url (structural scan)
 Cost
 [ ] JobCost pending while open; projected after close
-[?] several Batteries payment sessions for one manifest still match           Q7
+[ ] several Batteries payment sessions for one manifest still match (built only if a live run shows the split, Q7)
 Parity
 [ ] FakeEngine sessions match every row above that the facade exposes
 ```
@@ -222,8 +228,8 @@ PostgreSQL; docs above updated; an evidence page in `docs/references/evidence/` 
 
 ## Consumer impact
 
-None breaks. The console may add a sessions view; ChatLPT, inference-gateway and the enterprise desk do
-not open sessions. The Mux and media-runner teams are the first users, through the embedded `SessionManager`.
+None breaks. The console may add a sessions view; ChatLPT and inference-gateway do not open sessions.
+Ziply.io and the media-runner teams are the first users, through the embedded `SessionManager`.
 
 ## Alternatives considered
 
@@ -231,26 +237,63 @@ not open sessions. The Mux and media-runner teams are the first users, through t
 - **`delivery: "direct"` in M4** (#73 P3): it hands out a capability equal to the reservation (P2). Later.
 - **`wss /v1/realtime/{app}` opening on upgrade** (#73 P1): opens a paid session on a GET; alias later.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1. Scope.** ISS-27 = session core + proxy (HTTP, SSE, WebSocket) + one representative endpoint
-  (recommended). #73's alias routes, per-message socket, tokens, CORS, Trickle bridge, `MediaStore` and the
-  client wheel become their own tickets (the wheel decided with #25).
-- **Q2. Engine frames in the relay.** #73 injects `start`/`end` JSON frames; that collides with runner
-  frames and writes into the stream (against D29/D37's spirit). Recommend a header plus close codes.
-- **Q3. Permission.** Reuse `jobs.run` (recommended, as #73 says) or a new `sessions.open`?
-- **Q4. Representative endpoint.** `realtime-transcription` (needs a GPU) for the live evidence, plus the
-  loopback fake in CI (recommended); confirm with ISS-19.
-- **Q5. `ExecutionMode` and repeats.** Add `session` to the job mode (recommended); a repeated
-  `operation_ref` on open is 409 `OperationExists` like a job.
-- **Q6. Redaction.** Keyed hash of `manifest_id` for non-admin reads (recommended), or drop sessions from
-  non-admin reads?
-- **Q7. Matching.** If refreshes split Batteries sessions, accept many per key with one log entry
-  (recommended) instead of `ambiguous`.
-- **Q8. Funding failures.** The SDK loop retries 5xx and network errors every cycle until the
-  orchestrator releases the session, and reports only "released or not". Accept that (recommended: the
-  ending is `released`, and node releases within about two missed renewals), or ask for richer funding
-  outcomes upstream next to #87? An engine-owned loop is ruled out (#72's closing note).
+Locked by Mike on 12 and 13 November 2026.
+
+- **Q1, scope:** as recommended, with a change. ISS-27 is the session core, the proxy for HTTP, SSE and
+  WebSocket, `realtime-transcription` and the embedded `SessionManager`. The other #73 items are M4
+  stretch tickets that may move to M5: #118 (alias routes), #119 (per-message socket), #120 (tokens and
+  CORS), #121 (Trickle bridge), #122 (`MediaStore`), #123 (the client wheel).
+- **Q2, engine frames in the relay:** the engine sends the two frames #73 proposes, a first `{type:
+  "start", job_id, session_id}` and a last `{type: "end", job_id, reason}`. Every other frame is the
+  runner's, relayed unchanged. **This replaces the recommendation** (a header and close codes only), so
+  step 3 of the decision and the relay tests follow #73. The HTTP and SSE proxy still writes nothing into
+  the stream.
+- **Q3, permission:** `jobs.run` opens a session and `jobs.read` reads one. No `sessions.open`.
+- **Q4, the representative endpoint:** `realtime-transcription`, with the loopback fake in CI. John
+  arranges the GPU runner, which is needed only for slice 5. Agreed fallback: if no GPU runner is
+  available then, the live evidence uses a small CPU-only WebSocket runner, and the
+  `realtime-transcription` run follows when a runner exists. Either run confirms the cost matching (Q7)
+  and the node's release behaviour.
+- **Q5, the job mode and a repeated open:** the job has mode `session`. A second `POST /v1/sessions` with
+  the same `operation_ref` returns the existing `Session` in any state, with 200 and `Idempotent-Replayed:
+  true`, and never opens a second reservation. A different body is 409 `OperationConflict`. **This
+  replaces the recommendation** (409 `OperationExists`) and follows the async rule of ISS-26.
+- **Q6, redaction:** a keyed hash replaces `manifest_id` on non-admin reads of session jobs, and the
+  discovery address replaces the session address. The implementation names a key source for installs
+  without `LPB_SECRET_KEY`. Checked on 13 November: defect P2 still holds on livepeer/node `2364436`.
+- **Q7, matching:** the fallback rule is decided now and built only if a live run shows several Batteries
+  payment sessions for one manifest. Several sessions for one key match when the engine has exactly one
+  entry for that key. Slice 2 looks for the split on its first funded reserve.
+- **Q8, funding failures:** accept what the SDK loop reports. A renewal 404 ends the session `released`;
+  any other 4xx except 408 and 429 ends it `funding_stopped`; 5xx and network errors are retried by the
+  SDK and are not visible to the engine. The idle limit and maximum duration bound a session whose
+  orchestrator is unreachable. Checked on 13 November: the loop is unchanged on SDK `7dc2a07`.
+
+**Other decisions that touch this guide.**
+
+- **Defect P1** (a job sent to a persistent runner reserves a paid session) is fixed in slice 1 of this
+  ticket, not ahead of it. Until then the defect is present.
+- **Migration numbers.** The guide names migration `0009`. It is numbered when it is written.
+  Secret-reference columns are unbounded text (#115).
+- **The node pin moves** to a commit at or after `2364436` (#117). The node facts in this guide were read
+  at `406b248` and need a second look at the new pin.
+- **The builder console** runs the session from an audio file, with the socket on its server side
+  (ISS-34).
+
+### Where the runner standard plugs in later
+
+Runner contract v1 (ISS-47) is not vetted yet. This ticket therefore routes by app ID, as today, and reads
+no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may move to M5.
+
+- **Working assumption for ISS-48 (12 November):** app IDs stay the routing key; v1 metadata describes a
+  runner and never routes; missing, old or unreadable metadata is ignored and logged; model and profile
+  are filters; no schema check.
+- **Criterion moved to ISS-48 on 13 November:** persistent endpoints come from the runner's v1 session
+  declaration (start and stop paths, channels, idle and drain timeouts) and its registry entry.
+- **The seam to keep:** `adapters/reservation.py` is the one place that knows how a session starts and
+  stops, so a declared start path can replace the reserve route there.
 
 ## Delivery slices
 

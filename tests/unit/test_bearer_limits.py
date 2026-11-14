@@ -109,3 +109,33 @@ async def test_the_engine_refuses_an_oversized_api_key_before_the_key_store(
     with pytest.raises(NotAuthenticated, match="16 KiB"):
         await engine.authenticator.authenticate(bearer("lpk_" + "x" * MAX_BEARER_LENGTH))
     assert looked_up == []
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Bearer\t"
+        + "x" * 40_000,  # a tab: no bearer to the engine, one to an authenticator that splits on any space
+        "Bearer\x0b" + "x" * 40_000,
+        "bearer  " + "x" * (MAX_BEARER_LENGTH + 1),
+        "Basic " + "x" * 40_000,  # any scheme: a supplied authenticator may read another
+        "x" * 40_000,
+        " " * 40_000 + "Bearer x",
+    ],
+    ids=["tab", "vertical tab", "two spaces", "another scheme", "no scheme", "leading spaces"],
+)
+async def test_the_cap_is_on_the_whole_header_so_no_spelling_of_it_gets_past(header: str) -> None:
+    """The cap was on the engine's own reading of the header (one space after ``Bearer``), so a credential
+    it did not read as a bearer went on to a supplied authenticator at any length."""
+    supplied = Recording()
+    request = AuthRequest(method="GET", path="/v1/jobs", headers={"authorization": header})
+    with pytest.raises(NotAuthenticated, match="16 KiB"):
+        await AuthenticatorChain([supplied]).authenticate(request)
+    assert supplied.seen == []
+
+
+async def test_a_short_header_of_another_scheme_still_reaches_a_supplied_authenticator() -> None:
+    supplied = Recording()
+    request = AuthRequest(method="GET", path="/v1/jobs", headers={"authorization": "Basic dXNlcjpwYXNz"})
+    assert await AuthenticatorChain([supplied]).authenticate(request) == ActorContext(actor_id="someone")
+    assert supplied.seen == ["Basic dXNlcjpwYXNz"]

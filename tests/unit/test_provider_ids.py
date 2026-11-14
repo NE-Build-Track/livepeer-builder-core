@@ -37,7 +37,22 @@ REFUSED = [
     "a\x85b",
     ".",
     "..",
+    " ..",  # whitespace around it is removed first, so these are "." and ".." too
+    ".. ",
+    "\u00a0..",
+    "\u2028..",
+    "\t..\n",
+    " .",
+    " a/b ",
     "g" * 201,
+    " " + "g" * 201,
+]
+PADDED = [
+    (" grant_1", "grant_1"),
+    ("grant_1\n", "grant_1"),
+    ("\u00a0grant_1\u2028", "grant_1"),
+    ("   ", ""),  # no grant chosen
+    (" " * 50 + "g" * 200, "g" * 200),  # the limit is on what is kept
 ]
 ALLOWED = ["", "grant_1", "550e8400-e29b-41d4-a716-446655440000", "grant.v2", "...", ".hidden", "g" * 200]
 
@@ -64,6 +79,17 @@ def test_any_other_grant_id_is_kept_as_written(grant_id: str) -> None:
     assert request.grant_id == grant_id
 
 
+@pytest.mark.parametrize(("written", "used"), PADDED)
+def test_whitespace_around_a_grant_id_is_removed_where_the_request_is_read(written: str, used: str) -> None:
+    """The value checked is the value the engine uses: it stripped the id only after the check."""
+    assert FundRequest(amount=USD, operation_ref="f1", grant_id=written).grant_id == used
+    request = ProvisionRequest(
+        application_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1"
+    )
+    assert request.grant_id == used
+    assert ProvisionBody(amount=USD, grant_id=written, operation_ref="p1").grant_id == used
+
+
 @pytest.fixture
 async def admin_client(make_engine: EngineFactory) -> AsyncIterator[tuple[httpx.AsyncClient, dict[str, str]]]:
     engine = await make_engine()
@@ -77,7 +103,7 @@ ALLOCATION = "/v1/admin/applications/default/actors/alice/allocation"
 AMOUNT = {"amount": "5", "currency": "USD"}
 
 
-@pytest.mark.parametrize("grant_id", ["../allocations/a1", "a/b", "..", "a%2F"])
+@pytest.mark.parametrize("grant_id", ["../allocations/a1", "a/b", "..", "a%2F", " ..", "..\u00a0", " ."])
 async def test_rest_refuses_such_a_grant_id_with_422_before_the_ledger_and_the_provider(
     admin_client: tuple[httpx.AsyncClient, dict[str, str]], manager: FakeAllocationManager, grant_id: str
 ) -> None:
@@ -97,6 +123,22 @@ async def test_rest_refuses_such_a_grant_id_with_422_before_the_ledger_and_the_p
         retried = await client.post(path, json=body | {"grant_id": "grant_1"}, headers=admin)
         assert retried.status_code == accepted, (path, retried.text)
         assert "Idempotent-Replayed" not in retried.headers
+
+
+async def test_rest_uses_a_padded_grant_id_without_its_padding(
+    admin_client: tuple[httpx.AsyncClient, dict[str, str]], manager: FakeAllocationManager
+) -> None:
+    client, admin = admin_client
+    body = {"operation_ref": "g1", "amount": AMOUNT, "grant_id": " grant_1\n"}
+    funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    assert funded.status_code == 204, funded.text
+    assert [grant for grant, _, _ in manager.funded_grants] == ["grant_1"]
+    provisioned = await client.post(
+        ALLOCATION,
+        json={"operation_ref": "p1", "amount": AMOUNT, "grant_id": "\u00a0grant_1 "},
+        headers=admin,
+    )
+    assert (provisioned.status_code, provisioned.json()["grant_id"]) == (201, "grant_1")
 
 
 # -- the adapter -------------------------------------------------------------------------------------------

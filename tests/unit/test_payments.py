@@ -1,13 +1,13 @@
 """ISS-04: allocation modes, explicit provisioning, idempotent money moves, key custody and rotation."""
 
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.adapters.secrets import RoutingSecretStore, SettingsSecretStore
 from livepeer_builder.contracts import (
     ActorContext,
     FundRequest,
@@ -16,7 +16,15 @@ from livepeer_builder.contracts import (
     SecretRef,
     SeenActor,
 )
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, NotProvisioned
+from livepeer_builder.errors import (
+    AccessDenied,
+    InvalidRequest,
+    NotFound,
+    NotProvisioned,
+    OperationConflict,
+    ProviderUnavailable,
+)
+from livepeer_builder.protocols import NewAllocationKey
 from livepeer_builder.services.payments import idempotency_key
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
@@ -371,23 +379,21 @@ class SealedVault(MemorySecretStore):
         return await super().put(name, secret)
 
 
-@pytest.mark.parametrize("kind", ["plug-in", "built-in"])
 async def test_a_store_that_cannot_write_refuses_provisioning_before_the_provider(
-    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, kind: str
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """#112 C2: provisioning asks the store first. A refusal sends nothing to the provider and records
-    nothing, so the same reference runs once the store can write."""
+    """#112 C2: provisioning asks the store before the provider. A refusal sends nothing to the provider
+    and records nothing, so the same reference runs once the store can write. (The built-in store without
+    its key never gets this far: the engine does not start, see test_assembly.)"""
     vault = SealedVault(sealed=True)
-    secrets = vault if kind == "plug-in" else RoutingSecretStore(SettingsSecretStore({}), None)
-    engine = await make_engine(supply=EngineSupply(secret_store=secrets))
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
     with pytest.raises(InvalidRequest) as refused:
         await engine.payments.provision(admin, provision_request())
     assert manager.calls == [] and manager.allocations == {}  # no allocation was funded
     assert "cannot store" in str(refused.value)
-    if kind == "plug-in":
-        vault.sealed = False
-        actor = await engine.payments.provision(admin, provision_request())
-        assert manager.calls == ["create_key_for_grant"] and actor.secret_ref.ref in vault.values
+    vault.sealed = False
+    actor = await engine.payments.provision(admin, provision_request())
+    assert manager.calls == ["create_key_for_grant"] and actor.secret_ref.ref in vault.values
 
 
 async def test_a_store_that_cannot_write_refuses_rotation_before_the_provider(
@@ -402,6 +408,152 @@ async def test_a_store_that_cannot_write_refuses_rotation_before_the_provider(
     assert manager.calls == ["create_key_for_grant"]  # no new key was minted
     assert "cannot store" in str(refused.value)
     assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == before.api_key_id
+
+
+async def test_a_repeat_of_a_finished_provisioning_gets_its_result_while_the_store_cannot_write(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> None:
+    """The check belongs to the step that stores a key, not to the command: a repeat of a finished
+    provisioning stores nothing. Asked before the ledger, it answered 400 "nothing was sent" for an
+    allocation that was funded (review of #128)."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    first = await engine.payments.provision(admin, provision_request())
+    vault.sealed = True
+    again = await engine.payments.provision(admin, provision_request())  # a lost response, repeated
+    assert again == first
+    assert manager.calls == ["create_key_for_grant"]  # no second provider call
+
+
+async def test_an_interrupted_rotation_finishes_while_the_store_cannot_write(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """A rotation that stored its new key and then failed to revoke the old one has two live keys. Its
+    resume stores nothing, so a store that cannot write must not hold the old key alive."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    before = await engine.payments.provision(admin, provision_request())
+    manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert manager.keys[before.api_key_id][2] is False  # the old key is still live
+    vault.sealed = True
+    clock.advance(120)  # LPB_OPERATION_STALE_S: the first run is presumed dead
+    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert rotated.api_key_id != before.api_key_id
+    assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
+
+
+async def test_a_refusal_on_a_resumed_run_does_not_say_nothing_was_sent(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh run that is refused sent nothing, and says so. A resumed run cannot know that: its earlier
+    attempt ended in an unknown outcome, so the message must not call a funded allocation untouched, and
+    the refusal must not free the reference (review of #128): freed, the next repeat ran as new and said
+    "nothing was sent", and another request on the same reference was accepted and silently dropped."""
+    vault = SealedVault(sealed=True)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    with pytest.raises(InvalidRequest, match="nothing was sent to the payment provider"):
+        await engine.payments.provision(admin, provision_request())
+
+    vault.sealed = False
+    create_key_for_grant = manager.create_key_for_grant
+
+    async def applied_then_lost(*call: Any) -> NewAllocationKey:
+        monkeypatch.setattr(manager, "create_key_for_grant", create_key_for_grant)
+        await create_key_for_grant(*call)  # the provider funds the allocation, and the answer is lost
+        raise ProviderUnavailable("Batteries unreachable: timed out")
+
+    monkeypatch.setattr(manager, "create_key_for_grant", applied_then_lost)
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.provision(admin, provision_request("bob"))
+    assert list(manager.allocations) == ["alloc_1"]
+    vault.sealed = True
+    clock.advance(120)
+    with pytest.raises(InvalidRequest) as refused:
+        await engine.payments.provision(admin, provision_request("bob"))
+    assert "nothing was sent" not in str(refused.value)
+    assert "an earlier attempt may have reached the payment provider" in str(refused.value)
+
+    # The record is still held. Another request on the reference is a conflict, not a new command ...
+    with pytest.raises(OperationConflict):
+        await engine.payments.provision(admin, provision_request("bob", amount="9"))
+    # ... and the same request resumes once the store can write, and gets the allocation it funded.
+    vault.sealed = False
+    clock.advance(120)
+    actor = await engine.payments.provision(admin, provision_request("bob"))
+    assert actor.allocation_id == "alloc_1" and list(manager.allocations) == ["alloc_1"]
+    assert manager.allocations["alloc_1"].granted == Decimal("5")
+
+
+async def test_a_resumed_provisioning_asks_the_store_again_before_another_provider_operation(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored secret excuses the check only for the provider operation it came from (review of #128).
+    Re-provisioning after a revoke is a new provider operation with a new key, so a resume that would send
+    it must ask the store first: skipped, it funded a second allocation and only then failed to store."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    save_actor = store.save_actor
+
+    async def lost(actor: object) -> None:
+        monkeypatch.setattr(store, "save_actor", save_actor)  # only the first save is lost
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "save_actor", lost)
+    with pytest.raises(ConnectionError):  # the secret is stored and remembered; the actor is not saved
+        await engine.payments.provision(admin, provision_request())
+    second = provision_request().model_copy(update={"operation_ref": "provision-again"})
+    saved = await engine.payments.provision(admin, second)  # the provider replays the same key
+    await engine.payments.revoke(admin, "default", "alice")
+    vault.sealed = True
+    clock.advance(120)
+    with pytest.raises(InvalidRequest, match="cannot store"):
+        await engine.payments.provision(admin, provision_request())  # resumed: now a new provider operation
+    assert list(manager.allocations) == [saved.allocation_id]  # no second allocation was funded
+    assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]
+
+
+async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_operation(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rotation's provider operation is named by the allocation, which a re-provision replaces."""
+    vault = SealedVault(sealed=False)
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    await engine.payments.provision(admin, provision_request())
+    save_actor = store.save_actor
+
+    async def lost(actor: object) -> None:
+        monkeypatch.setattr(store, "save_actor", save_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "save_actor", lost)
+    with pytest.raises(ConnectionError):  # the new key's secret is stored and remembered
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    await engine.payments.revoke(admin, "default", "alice")
+    again = provision_request().model_copy(update={"operation_ref": "provision-again"})
+    replaced = await engine.payments.provision(admin, again)
+    minted = len(manager.keys)
+    vault.sealed = True
+    clock.advance(120)
+    with pytest.raises(InvalidRequest, match="cannot store"):
+        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert len(manager.keys) == minted  # no key was minted on the new allocation
+    assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == replaced.api_key_id
 
 
 async def test_a_store_without_the_writable_check_is_not_asked(

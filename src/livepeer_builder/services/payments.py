@@ -435,16 +435,18 @@ class PaymentsService:
     @staticmethod
     def _key_is_stored(run: RunningOperation, sent_as: str, holder: ProvisionedActor | None) -> bool:
         """Whether the key of the provider call about to be sent (``sent_as``, its idempotency key) is
-        stored already. Either the record notes a secret for this same call, or the actor (``holder``, in a
-        rotation) already holds the key and secret the record notes. The second covers a record written
-        before ``new_secret_sent_as`` existed, whose rotation only has the old key left to revoke. A
-        stored secret from another provider call excuses nothing: a resume after a revoke or a
-        re-provision sends a new one, whose key is not stored yet."""
+        stored already. A record that notes the call its secret came from (``new_secret_sent_as``) answers
+        by that note alone: a stored secret from another provider call excuses nothing, since a resume
+        after a revoke or a re-provision, or under another ``LPB_ENGINE_ID``, sends a new one, whose key
+        is not stored yet. Only a record without the note, written before it existed, is answered by the
+        actor (``holder``, in a rotation): when it holds the key and secret the record notes, the provider
+        call is still sent, replays that key, and leaves nothing to store."""
         ref = run.context.get("new_secret_ref")
         if ref is None:
             return False
-        if run.context.get("new_secret_sent_as") == sent_as:
-            return True
+        noted = run.context.get("new_secret_sent_as")
+        if noted is not None:
+            return noted == sent_as
         if holder is None:
             return False
         return (holder.api_key_id, holder.secret_ref.ref) == (run.context.get("new_secret_key_id"), ref)

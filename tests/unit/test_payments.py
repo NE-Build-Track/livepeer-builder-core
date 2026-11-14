@@ -468,6 +468,29 @@ async def test_such_a_record_is_still_asked_when_the_actor_does_not_hold_its_key
     assert rotated.secret_ref.ref in vault.values
 
 
+async def test_a_record_noting_another_provider_call_is_asked_though_the_actor_holds_its_key(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """The holder rule is only for a record without the note. A record that notes the provider call its
+    secret came from says, by itself, whether this call's key is stored: a resume under another
+    ``LPB_ENGINE_ID`` sends another call, which mints a third key. Skipped because the actor held the
+    recorded key, the check let the provider mint a key the store could not keep (review of #155)."""
+    vault = SealedVault(sealed=False)
+    first = await make_engine(supply=EngineSupply(secret_store=vault), engine_id="one")
+    await first.payments.provision(admin, provision_request())
+    manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):  # the actor holds the new key; the old one is still live
+        await first.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    held = await first.payments.get_actor(admin, "default", "alice")
+    vault.sealed = True
+    clock.advance(120)
+    second = await make_engine(supply=EngineSupply(secret_store=vault), engine_id="two")
+    with pytest.raises(InvalidRequest, match="cannot store"):
+        await second.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    assert len(manager.keys) == 2 and manager.calls.count("create_key") == 1  # no third key was minted
+    assert (await second.payments.get_actor(admin, "default", "alice")).api_key_id == held.api_key_id
+
+
 async def test_a_refusal_on_a_resumed_run_does_not_say_nothing_was_sent(
     make_engine: EngineFactory,
     admin: ActorContext,

@@ -203,9 +203,14 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
   is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
   with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
-  never reads as an empty one, and one malformed item fails its page. The error does not quote the
-  body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
-  sense: it is set aside ([cost classification](#cost-classification)).
+  never reads as an empty one, and one malformed item fails its page. A grant, in a list or read alone,
+  must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
+  strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
+  JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
+  (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
+  not create. The error does not quote the body. A usage item that is an object the engine cannot read
+  as a usage row is not malformed in this sense: it is set aside
+  ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
   Every later write of the slower run (its context, its result, its abandonment) checks the token and
   is refused, so a run presumed dead that was only slow answers with the recorded result instead. A
@@ -237,7 +242,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   resumed create reads the grants page by page, oldest first, and adopts the one carrying its tag instead
   of creating a second. It records the list cursor after each page, so a resume that runs out of its
   budget in a slow catalog leaves the next one to go on from there; pages already read lacked the tag,
-  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and the resume created a second grant. Grant names stay free-form: two references may create two grants with one name.
+  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`, or the grant with its `metadata` as `null` or as an object) read as a grant with no tag, and the resume created a second grant. A read-back of the new grant that the engine cannot read is an unknown outcome too (503, the reference held), never the command's result. Grant names stay free-form: two references may create two grants with one name.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.

@@ -299,22 +299,44 @@ def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
 
 
 def grant_from_item(item: dict[str, Any]) -> GrantRecord:
-    currency = str(item.get("currency", "")).lower()
+    """A grant as Batteries serves it, in a list or alone: ``id`` a non-empty string, and ``name``,
+    ``status``, ``currency``, the total and ``metadata`` strings where present. Any other object is an
+    answer the engine cannot read (#114, C21), never a grant with no tag: a resumed create would read
+    "no such grant" and create a second one."""
+    currency = _optional(item, "currency").lower()
     total_key = "total_usd" if currency == "usd" else "total_eth"
     return GrantRecord(
-        id=str(item.get("id", "")),
-        name=str(item.get("name", "")),
-        status=str(item.get("status", "")),
+        id=_required(item, "id"),
+        name=_optional(item, "name"),
+        status=_optional(item, "status"),
         currency=currency.upper() or "USD",
-        total=str(item.get(total_key, "")),
-        metadata=_metadata(item.get("metadata")),
+        total=_optional(item, total_key),
+        metadata=_metadata(_optional(item, "metadata")),
     )
 
 
-def _metadata(raw: Any) -> dict[str, str]:
+def _required(body: dict[str, Any], key: str) -> str:
+    """A value the answer has to carry: a non-empty string, as Batteries serves every id. Anything else
+    is an answer the engine cannot read (#114, C21): a ``ProviderError`` that is no refusal and quotes
+    no value."""
+    value = body.get(key)
+    if not isinstance(value, str) or not value:
+        raise ProviderError(200, f"Batteries answered with no usable {key}")
+    return value
+
+
+def _optional(body: dict[str, Any], key: str) -> str:
+    """A text the answer may leave out, ``""`` then. One that is no string is never turned into text."""
+    value = body.get(key, "")
+    if not isinstance(value, str):
+        raise ProviderError(200, f"Batteries answered with a {key} that is not a string")
+    return value
+
+
+def _metadata(raw: str) -> dict[str, str]:
     """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {}."""
     try:
-        parsed = json.loads(raw) if isinstance(raw, str) and raw else None
+        parsed = json.loads(raw) if raw else None
     except ValueError:
         return {}
     if not isinstance(parsed, dict):

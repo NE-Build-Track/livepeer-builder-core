@@ -14,8 +14,9 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import select
 
-from livepeer_builder import EngineSupply
+from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.contracts import ActorContext, Money
 from livepeer_builder.errors import OperationInProgress, ProviderError, ProviderUnavailable
@@ -23,6 +24,7 @@ from livepeer_builder.http import create_app
 from livepeer_builder.services.failure_codes import source_failure
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
+from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FixedClock
 from tests.conftest import EngineFactory
 
@@ -271,6 +273,141 @@ async def test_a_resumed_grant_create_never_creates_a_second_grant_over_a_malfor
     clock.advance(120)
     adopted = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # the list answers
     assert (adopted.id, len(batteries.grants)) == ("grant_1", 1)
+
+
+TAGGED = GRANT | {"metadata": '{"lpb_operation": "tag-1"}'}
+# what the list serves in place of a grant: an object the engine cannot read as one
+UNREADABLE_GRANTS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "no fields": lambda grant: {},
+    "an error": lambda grant: {"error": "overloaded"},
+    "metadata an object": lambda grant: grant | {"metadata": json.loads(grant["metadata"])},
+    "metadata null": lambda grant: grant | {"metadata": None},
+    "metadata a number": lambda grant: grant | {"metadata": 7},
+    "no id": lambda grant: {key: value for key, value in grant.items() if key != "id"},
+    "id null": lambda grant: grant | {"id": None},
+    "id empty": lambda grant: grant | {"id": ""},
+    "id a number": lambda grant: grant | {"id": 7},
+    "name null": lambda grant: grant | {"name": None},
+    "status an object": lambda grant: grant | {"status": {"is": "active"}},
+    "currency a number": lambda grant: grant | {"currency": 840},
+    "total a number": lambda grant: grant | {"total_usd": 10},
+}
+
+
+@pytest.mark.parametrize("item", UNREADABLE_GRANTS)
+async def test_a_grant_the_engine_cannot_read_is_a_provider_error_never_a_grant_with_no_tag(
+    item: str,
+) -> None:
+    page = {"items": [GRANT, UNREADABLE_GRANTS[item](TAGGED)], "next_cursor": ""}
+    client = BatteriesClient(BASE, "t", client=answering(page))
+    with pytest.raises(ProviderError) as refused:
+        await client.grant_page(None)
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert "tag-1" not in str(refused.value) and "overloaded" not in str(refused.value)  # no body quoted
+    with pytest.raises(ProviderError):
+        await client.list_grants()
+
+
+@pytest.mark.parametrize(
+    ("metadata", "read"),
+    [
+        (..., {}),
+        ("", {}),
+        ("ops team, Q4", {}),
+        ('["a"]', {}),
+        ('{"lpb_operation": "tag-1", "n": 1}', {"lpb_operation": "tag-1"}),
+    ],
+    ids=["absent", "empty", "free text", "a JSON list", "an object"],
+)
+async def test_a_grant_whose_metadata_is_text_is_read_and_only_an_object_of_strings_is_a_tag(
+    metadata: Any, read: dict[str, str]
+) -> None:
+    """Batteries keeps metadata as text, ``""`` for a grant with none: such a grant is not the engine's."""
+    item = GRANT if metadata is ... else GRANT | {"metadata": metadata}
+    page = await BatteriesClient(BASE, "t", client=answering({"items": [item]})).grant_page(None)
+    assert [(grant.id, grant.metadata) for grant in page.grants] == [("grant_1", read)]
+
+
+@pytest.mark.parametrize("item", UNREADABLE_GRANTS)
+async def test_a_resumed_grant_create_never_creates_a_second_grant_over_a_grant_it_cannot_read(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock, item: str
+) -> None:
+    """The list answers with its envelope intact and, in place of the grant the resume looks for, an
+    object the engine cannot read as a grant. That read as a grant with no tag, so "no such grant", and
+    the resume created a second one."""
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.grants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+    assert len(batteries.grants) == 1
+
+    clock.advance(120)
+    batteries.list_answers = [{"items": [UNREADABLE_GRANTS[item](batteries.grants[0])], "next_cursor": ""}]
+    try:
+        resumed: object = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+    except ProviderError as unknown:
+        resumed = unknown
+    assert len(batteries.grants) == 1, "the resume created a second grant"
+    assert isinstance(resumed, ProviderError) and not definite_refusal(resumed)
+    with pytest.raises(OperationInProgress):  # the reference is still held
+        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+
+    clock.advance(120)
+    adopted = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # the list answers
+    assert (adopted.id, len(batteries.grants)) == ("grant_1", 1)
+
+
+async def ledger(store: SqlStore) -> list[tuple[str, str]]:
+    """(operation_ref, state) of every admin command the ledger holds."""
+    async with store.engine.connect() as conn:
+        return [
+            tuple(row)
+            for row in await conn.execute(select(t.operations.c.operation_ref, t.operations.c.state))
+        ]
+
+
+def rest(engine: BuilderEngine, token: str) -> httpx.AsyncClient:
+    transport = httpx.ASGITransport(
+        app=create_app(engine, manage_lifecycle=False), raise_app_exceptions=False
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    return httpx.AsyncClient(transport=transport, base_url="http://engine", headers=headers)
+
+
+READ_BACKS: dict[str, dict[str, Any]] = {
+    "an error in a 2xx": {"error": "overloaded"},
+    "an empty object": {},
+    "null fields": {"id": None, "name": None, "status": None, "currency": None, "total_usd": None},
+    "a name that is a number": GRANT | {"name": 7},
+}
+
+
+@pytest.mark.parametrize("read_back", READ_BACKS)
+async def test_a_grant_read_back_the_engine_cannot_read_is_an_unknown_outcome_not_a_created_grant(
+    make_engine: EngineFactory, store: SqlStore, read_back: str
+) -> None:
+    """The create answered with an id and the read-back with an object that is no grant. That was recorded
+    as the finished command, a grant of empty fields or of ``"None"``, and replayed on every repeat."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "grant_1"})
+        return httpx.Response(200, json=READ_BACKS[read_back])
+
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    key = await engine.keys.bootstrap_admin()
+    body = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"}
+    async with rest(engine, key.token) as http:
+        created = await http.post("/v1/admin/grants", json=body)
+        again = await http.post("/v1/admin/grants", json=body)
+    assert (created.status_code, again.status_code) == (503, 409)  # the grant exists: unknown, and held
+    assert "overloaded" not in created.text
+    assert await ledger(store) == [("grant-1", "started")]
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])

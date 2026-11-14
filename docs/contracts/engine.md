@@ -121,8 +121,12 @@ orchestrator, so a path that a client or server would normalize could reach anot
 refuses a path that is not already normal, with a 422 (a `ValidationError` in process) before anything
 is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
 segment (`//`), an encoded separator (`%2F`, `%5C`), and a backslash, a control character or a fragment
-(`#`) anywhere. An encoded separator is refused because livepeer/node unescapes the path before it
-forwards it, so `..%2Fother` would reach the runner as `../other`. A trailing `/` and a query string stay
+(`#`) anywhere. An encoded separator is refused because livepeer/node decodes the path before it
+forwards it, so `%2F` reaches the runner as a separator: `/a%2F%2Fb` arrives as `/a//b` and `/a%2F.%2Fb`
+as `/a/./b`, the empty and `.` segments this rule refuses as written. `..%2Fother` is not the reason: the
+node answers any decoded `..` segment with 400 `invalid path` before it routes, so it reaches no runner.
+The node passes `%5C` on as `%5C`; it is refused because it decodes to the backslash, which the contract
+refuses as written. A trailing `/` and a query string stay
 allowed; a query's slashes, dots and escapes are data. An empty path is the runner URL itself,
 and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets that
 400, whatever its segments (`run`, `a//b`, `../run` and `a%2Fb` alike); only a backslash, a control

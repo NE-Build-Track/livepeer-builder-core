@@ -501,6 +501,17 @@
             ],
             "title": "Cost Sync Error"
           },
+          "cost_sync_set_aside": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync Set Aside"
+          },
           "discovery_error": {
             "anyOf": [
               {
@@ -2281,6 +2292,11 @@
           },
           "rows_seen": {
             "title": "Rows Seen",
+            "type": "integer"
+          },
+          "rows_set_aside": {
+            "default": 0,
+            "title": "Rows Set Aside",
             "type": "integer"
           }
         },

@@ -137,6 +137,7 @@ async def test_readyz_without_a_credential_serves_codes_not_exception_text(
         "discovery_error",
         "cost_sync_at",
         "cost_sync_error",
+        "cost_sync_set_aside",  # a count (#114, C13)
         "running_jobs",
         "allocation_mode",
         "version",
@@ -202,13 +203,7 @@ def usage_page(created_at_ms: float) -> httpx.Response:
     )
 
 
-@pytest.mark.parametrize(
-    ("answer", "code"),
-    [*NO_ANSWER, (usage_page(1.5e300), "invalid_answer")],  # a time no clock holds
-)
-async def test_the_batteries_usage_source_s_failures_get_the_documented_code(
-    store: SqlStore, clock: FixedClock, answer: Answer, code: str
-) -> None:
+async def synced_once(store: SqlStore, clock: FixedClock, answer: Answer) -> CostService:
     stop = asyncio.Event()
     async with answering(answer) as client:
         source = BatteriesUsageSource("http://provider.example", "token", client=client)
@@ -221,7 +216,24 @@ async def test_the_batteries_usage_source_s_failures_get_the_documented_code(
         source.page = one_pass  # type: ignore[method-assign]
         costs = CostService(store, DefaultPolicy(), clock, CostSyncWorker(source, store))
         await costs.run(stop)
-    assert costs.last_error == code
+    return costs
+
+
+@pytest.mark.parametrize(("answer", "code"), NO_ANSWER)
+async def test_the_batteries_usage_source_s_failures_get_the_documented_code(
+    store: SqlStore, clock: FixedClock, answer: Answer, code: str
+) -> None:
+    assert (await synced_once(store, clock, answer)).last_error == code
+
+
+@pytest.mark.parametrize("created_at_ms", [10**20, 1.5e300])
+async def test_a_usage_row_whose_time_no_clock_holds_is_set_aside_and_fails_no_sync(
+    store: SqlStore, clock: FixedClock, created_at_ms: float
+) -> None:
+    """Such a row failed its page with ``unavailable`` (an OSError or an OverflowError), as if Batteries
+    were down. It is set aside (#114, C13), so the sync has no error to show."""
+    costs = await synced_once(store, clock, usage_page(created_at_ms))
+    assert (costs.last_error, costs.set_aside_rows) == (None, 1)
 
 
 # -- the codes are a type: the schema publishes them and nothing else fits ----------------------------

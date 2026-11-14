@@ -137,6 +137,7 @@ class BuilderEngine:
             discovery_error=snapshot.last_error,
             cost_sync_at=self.costs.last_synced_at,
             cost_sync_error=self.costs.last_error,
+            cost_sync_set_aside=self.costs.set_aside_rows,
             running_jobs=self.admission.running,
             allocation_mode=self.payments.mode,
             version=package_version(),

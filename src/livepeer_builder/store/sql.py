@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import and_, delete, event, insert, select, update
+from sqlalchemy import and_, delete, event, func, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SeenActor,
+    SetAsideUsage,
     SyncCheckpoint,
     UsageRow,
 )
@@ -263,6 +264,29 @@ class SqlStore(SqlKeys, SqlOperations):
                 await conn.execute(insert(t.cost_cursor).values(id=1, **cursor))
         return new
 
+    async def set_aside_usage(self, rows: Sequence[SetAsideUsage]) -> list[SetAsideUsage]:
+        """Record rows cost sync left out, once per id (#114, C13). Returns the ones not recorded before;
+        the first record of an id is kept. ``raw`` is not stored."""
+        new: list[SetAsideUsage] = []
+        table, at = t.usage_set_aside, datetime.now(UTC)
+        async with self.engine.begin() as conn:
+            known: set[str] = set()
+            for chunk in chunks([row.id for row in rows]):
+                known.update((await conn.execute(select(table.c.id).where(table.c.id.in_(chunk)))).scalars())
+            for row in (row for row in rows if row.id not in known):
+                known.add(row.id)  # the same id later on this page is the same row
+                fees = _fee_text(row)
+                values = {"id": row.id, "reason": row.reason, "set_aside_at": at}
+                await conn.execute(
+                    insert(table).values(values | {"computed_fee_eth": fees[0], "computed_fee_usd": fees[1]})
+                )
+                new.append(row)
+        return new
+
+    async def count_set_aside_usage(self) -> int:
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(select(func.count()).select_from(t.usage_set_aside))).scalar_one())
+
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]:
         """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute, and bumps their
         evidence versions in the same transaction."""
@@ -422,7 +446,7 @@ def _attempt_values(attempt: Attempt) -> dict[str, Any]:
     return values | attempt.timings.model_dump() if attempt.timings else values
 
 
-def _fee_text(row: UsageRow) -> tuple[str | None, str | None]:
+def _fee_text(row: UsageRow | SetAsideUsage) -> tuple[str | None, str | None]:
     """A row's fees as the store holds them, to compare a later copy of the same id against."""
     eth, usd = row.computed_fee_eth, row.computed_fee_usd
     return (None if eth is None else str(eth), None if usd is None else str(usd))

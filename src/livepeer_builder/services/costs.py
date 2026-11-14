@@ -21,6 +21,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -42,6 +43,7 @@ from livepeer_builder.contracts import (
     Operation,
     Reconciliation,
     ResourceRef,
+    SetAsideUsage,
     SyncCheckpoint,
     SyncReport,
     UsagePage,
@@ -61,6 +63,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
+from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -91,13 +94,14 @@ class CostSyncWorker:
     ) -> None:
         self._source = source
         self._store = store
+        self._aside = SetAsideRecorder(store)
         self._filters = dict(filters or {})
         self.source_error: Exception | None = None  # what the usage source last raised: its health code
 
     async def sync_once(self) -> tuple[SyncReport, list[UsageRow]]:
         checkpoint = await self._store.cost_checkpoint()
         cursor = checkpoint.resume_cursor if checkpoint and checkpoint.filters == self._filters else None
-        pages = rows_seen = 0
+        pages = rows_seen = set_aside = 0
         new_rows: list[UsageRow] = []
         restarted = False
         while True:
@@ -109,14 +113,19 @@ class CostSyncWorker:
                 restarted, cursor = True, None
                 await self._store.apply_usage((), SyncCheckpoint(resume_cursor=None, filters=self._filters))
                 continue
+            rows, aside = sort_page(page)  # a row the engine cannot read or store never stops the sync
+            set_aside += await self._set_aside(aside)  # recorded before the cursor moves past it
             resume = page.next_cursor or cursor  # an empty cursor means "re-read this page next time"
             new_rows += await self._store.apply_usage(
-                page.items, SyncCheckpoint(resume_cursor=resume, filters=self._filters)
+                rows, SyncCheckpoint(resume_cursor=resume, filters=self._filters)
             )
             pages += 1
-            rows_seen += len(page.items)
+            rows_seen += len(rows) + len(aside)
             if not page.next_cursor:
-                return SyncReport(pages=pages, rows_seen=rows_seen, rows_new=len(new_rows)), new_rows
+                report = SyncReport(
+                    pages=pages, rows_seen=rows_seen, rows_new=len(new_rows), rows_set_aside=set_aside
+                )
+                return report, new_rows
             cursor = page.next_cursor
 
     async def _page(self, cursor: str | None) -> UsagePage:
@@ -125,6 +134,24 @@ class CostSyncWorker:
         except Exception as error:
             self.source_error = error
             raise
+
+    async def _set_aside(self, rows: Sequence[SetAsideUsage]) -> int:
+        """Record the rows left out (#114, C13). A row is recorded, counted and logged once, however often
+        its page is read again; its content goes to the log only."""
+        recorded = await self._aside.record(rows) if rows else []
+        for row in recorded:
+            _LOG.warning(
+                "a usage row was set aside: no cost includes it",
+                extra={
+                    "event": "costs.usage_set_aside",
+                    "row_id": row.id,
+                    "reason": row.reason,
+                    "fee_eth": None if row.computed_fee_eth is None else str(row.computed_fee_eth),
+                    "fee_usd": None if row.computed_fee_usd is None else str(row.computed_fee_usd),
+                    "raw": row.raw,
+                },
+            )
+        return len(recorded)
 
 
 class CostService:
@@ -145,11 +172,18 @@ class CostService:
         self._interval_s = interval_s
         self.last_synced_at: datetime | None = None
         self.last_error: FailureCode | None = None
+        self.set_aside_rows: int | None = None  # every usage row left out so far, as of the last sync
 
     async def sync_once(self) -> SyncReport:
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
-        report, new_rows = await self._worker.sync_once()
+        try:
+            report, new_rows = await self._worker.sync_once()
+        except Exception:  # the pages before the failure may have set rows aside: the table has them
+            with contextlib.suppress(Exception):  # the sync's own failure is the one to raise
+                self.set_aside_rows = await count_set_aside(self._store)
+            raise
+        self.set_aside_rows = await count_set_aside(self._store)  # before a later step can fail
         affected = await self._store.match_sessions(new_rows)
         jobs = await self._store.jobs_for_projection(list(affected))
         for job in jobs:

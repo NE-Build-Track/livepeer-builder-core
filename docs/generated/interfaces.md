@@ -96,6 +96,11 @@ classDiagram
         +async purge(now, jobs_days, usage_days) PurgeReport
         +async schema_revision() str?
     }
+    class UsageSetAsideRepo {
+        <<interface>>
+        +async count_set_aside_usage() int
+        +async set_aside_usage(rows) SetAsideUsage[]
+    }
     class CostSnapshot {
         <<interface>>
         +async job_with_projection(job_id) tuple~Job JobCost?~?
@@ -156,6 +161,7 @@ classDiagram
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
+    UsageSetAsideRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
     EventFeed <|.. ReservedEventFeed
@@ -185,6 +191,7 @@ classDiagram
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
+| `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |
 | `EventFeed` | `ReservedEventFeed` | `livepeer_builder.services.reserved` |

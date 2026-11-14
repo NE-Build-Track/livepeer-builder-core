@@ -64,8 +64,8 @@ no setting.
 | `lpb purge` | Apply retention now |
 
 Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors,
-the last cost sync and its error, running jobs, the allocation mode and the
-version. Logs are JSON lines; every
+the last cost sync, its error and the count of usage rows it has set aside (`cost_sync_set_aside`),
+running jobs, the allocation mode and the version. Logs are JSON lines; every
 line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 
 `/readyz` needs no credential, so `discovery_error` and `cost_sync_error` are short fixed codes, never
@@ -105,6 +105,8 @@ exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is 
 | The signer or runner times out after payment | Job `uncertain`; cost classified `uncertain` |
 | Batteries unreachable | Cost sync records `cost_sync_error` (`unavailable`); costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
+| Batteries delivers a usage row the engine cannot read or store | The row is set aside and the sync goes on: an unknown status, no id or timestamp, a fee that is not a finite number, or a text the store's column cannot keep (too long, a NUL, a lone surrogate). Its id, the reason and its fees are one row of `lpb_usage_set_aside`; a WARNING `costs.usage_set_aside` carries its content, once. `cost_sync_set_aside` in `/readyz` counts the rows left out in all, and `rows_set_aside` in the sync report the new ones. No job's cost includes the row, so reconciliation may not balance until it is accounted for (#114, C13; [payments.md](contracts/payments.md#cost-classification)) |
+| An orchestrator's payment challenge has a manifest id the store cannot keep | Refused before signing (`payment_refused`): nothing stored or paid, and the job fails over (#114, C13) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set to a code; it goes stale after three intervals |
 | Discovery answers with records and no readable runner | A failed refresh, not an empty inventory: the last good snapshot is kept and goes stale after three intervals; `discovery_error` is `invalid_answer`; `discovery.inventory_skipped` and `discovery.failed` carry the counts of skipped entries and runners. An empty answer (`[]`) still empties the catalog (#114, C28) |

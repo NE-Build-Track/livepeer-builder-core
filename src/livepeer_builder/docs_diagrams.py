@@ -70,6 +70,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "AllowanceReader": (PaymentsService,),
     "EngineStore": (SqlStore,),
     "StoreMaintenance": (SqlMaintenance,),
+    "UsageSetAsideRepo": (SqlStore,),
     "CostSnapshot": (SqlCostSnapshot,),
     "Clock": (SystemClock,),
     "EventFeed": (ReservedEventFeed,),

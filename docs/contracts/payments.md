@@ -341,6 +341,14 @@ with the allocation's volume: about 1% by 10,000 sessions. The match then turns 
 for an older entry that had matched (T13, T16,
 [livepeer-python-gateway#74](https://github.com/livepeer/livepeer-python-gateway/issues/74)).
 
+**A manifest id the engine cannot record is never signed for (#114, C13).** The orchestrator chooses
+the `manifest_id` of its payment challenge, and the engine stores it before the signer is asked (D54).
+A challenge whose `manifest_id` is longer than 200 characters, or holds a NUL, another control
+character (U+0000 to U+001F, U+007F to U+009F) or a lone surrogate, is refused before signing as
+`payment_refused`: nothing is stored, signed or paid, and the job fails over to another orchestrator.
+Before, PostgreSQL refused the intent write and the job ended `payment` with no failover, and SQLite
+stored the id and paid.
+
 ## Cost classification
 
 Each attempt that opened a payment session is classified:
@@ -354,6 +362,46 @@ Each attempt that opened a payment session is classified:
 
 Only `applied` usage rows count. **Rows on an allocation that match no recorded attempt are
 `unattributed`.**
+
+**Usage rows cost sync sets aside (#114, C13).** One usage row the engine cannot read or store no
+longer stops the sync. Such a row failed its page on every pass, so the cursor never moved and no later
+cost arrived; on PostgreSQL one long or NUL-bearing id was enough. The sync now leaves the row out,
+records it and moves the cursor:
+
+| Reason | The row |
+| --- | --- |
+| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a whole number; a whole number is kept as its digits) |
+| `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
+| `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
+| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
+| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
+| `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
+
+Each value is judged as it was received, and that value is the one stored: apart from a whole-number
+`id`, the engine turns no number, list or object into text.
+
+The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
+where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
+`computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
+that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
+table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
+differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
+A row is recorded, counted and logged once, however often its page is read again; the first record of
+an id is kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id,
+the reason, the fees and up to 2000 characters of the row as received (for a row another `UsageSource`
+delivered as a `UsageRow` and the store cannot keep, the row as that source read it).
+`SyncReport.rows_set_aside` counts the rows a sync recorded, and `EngineHealth.cost_sync_set_aside`
+(`GET /readyz`) the rows left out in all, as of the last sync, including one that failed after it set
+rows aside.
+
+Recording the rows is optional for a store (`UsageSetAsideRepo` in `protocols`). The packaged SQL
+store has it. A supplied store without it still syncs: such a row is left out and logged once per
+process, `rows_set_aside` still counts it, and `cost_sync_set_aside` stays `null`.
+
+A set-aside row is in no job's cost and not in `unattributed`: if it was a charge, reconciliation is
+not `balanced` until an operator accounts for it. Nothing reads the table yet; `lpb costs verify`
+(ISS-35) will name these rows ([T29](../exec-plans/tech-debt-tracker.md)). A usage page whose item is
+not a JSON object still fails the page.
 
 **`JobCost.fees` and `JobCost.billable`.** `fees` is what every attempt of the job cost the allocation.
 `billable` is only the `delivered` attempts' fees: what the enterprise bills its user for. A job that

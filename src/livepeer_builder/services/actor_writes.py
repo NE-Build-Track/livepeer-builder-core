@@ -66,7 +66,7 @@ class ActorWrites:
                 api_key_id,
                 secret_ref,
                 self._clock.now(),
-                only_from=only_from,
+                only_from,
             )
             return written or await self._held(actor)  # nothing written: read why
         current = await self._held(actor)

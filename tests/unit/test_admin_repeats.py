@@ -345,7 +345,7 @@ async def test_a_rotation_resumed_after_its_secret_was_stored_keeps_one_copy_of_
     await engine.payments.provision(admin, provision_request())
     set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(*_: object, **__: object) -> None:
+    async def lost(*_: object) -> None:
         monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 

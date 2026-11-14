@@ -59,7 +59,6 @@ class SqlActorCommands:
         api_key_id: str,
         secret_ref: SecretRef,
         updated_at: datetime,
-        *,
         only_from: str,
     ) -> ProvisionedActor | None:
         # the key the rotation began from, or its own key already: any other is a finished rotation's

@@ -46,7 +46,6 @@ class ActorCommandRepo(Protocol):
         api_key_id: str,
         secret_ref: SecretRef,
         updated_at: datetime,
-        *,
         only_from: str,
     ) -> ProvisionedActor | None:
         """Write ``api_key_id``, ``secret_ref`` and ``updated_at``, only where the stored key is

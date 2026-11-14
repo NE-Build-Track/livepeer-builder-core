@@ -8,14 +8,12 @@ docs/generated/openapi.json and checked for drift in CI.
 
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime
 
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
@@ -72,7 +70,7 @@ from livepeer_builder.http.bodies import (
     UsageBody,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
-from livepeer_builder.http.params import PathId, QueryId
+from livepeer_builder.http.params import PathId, QueryId, QueryInstant, QueryTime
 from livepeer_builder.http.streaming import stream_response
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
@@ -217,7 +215,7 @@ def create_app(
 
     @app.get("/v1/jobs", response_model=list[Job])
     async def list_jobs(
-        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: AwareDatetime | None = None
+        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: QueryInstant = None
     ) -> list[Job]:
         """Newest first; ``before`` (an ISO-8601 time with its offset) is the last page's oldest
         ``created_at``, for the next page (D59)."""
@@ -247,8 +245,8 @@ def create_app(
     @app.get("/v1/costs/summary", response_model=CostSummary)
     async def cost_summary(
         actor: Actor,
-        start: datetime | None = None,
-        end: datetime | None = None,
+        start: QueryTime = None,
+        end: QueryTime = None,
         actor_id: QueryId = None,
     ) -> CostSummary:
         return await engine.costs.summary(actor, start, end, actor_id)  # the engine's clock fills the window

@@ -95,6 +95,11 @@ that is not a UUID already was. Such a lookup used to answer 404 (an empty 200 f
 catalog, 400 for a key's rotate or revoke), and a NUL was a 500 on PostgreSQL. `tests/structure/test_route_params.py` fails when a
 route declares a plain string path or query parameter.
 
+A time in a query string (`before` on `GET /v1/jobs`, `start` and `end` on `GET /v1/costs/summary`) is
+converted to UTC when the request is parsed. One that UTC cannot hold, because its offset puts it before
+year 1 or after year 9999 (`0001-01-01T00:00:00+14:00`), is a 422 at the same point; it was a 500. The
+same test fails when a route declares a plain `datetime` query parameter.
+
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |

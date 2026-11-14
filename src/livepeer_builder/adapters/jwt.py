@@ -314,7 +314,7 @@ class JwtBearerAuthenticator:
             return None  # not a JWT, or another issuer's: another authenticator's credential
         try:  # ours from here: a header PyJWT refuses (an unknown crit, a kid that is not text) is a 401
             header = jwt.get_unverified_header(token)
-        except jwt.PyJWTError as exc:
+        except (jwt.PyJWTError, RecursionError) as exc:  # a nested header is unreadable too (#113, C22)
             raise NotAuthenticated(f"the token's header is invalid: {type(exc).__name__}") from exc
         claims = await self._verified(token, header)
         return self._actor(claims)
@@ -464,7 +464,7 @@ def _unverified_issuer(token: str) -> object:
     Read without PyJWT so a header it refuses cannot make our token look like someone else's."""
     try:
         claims = json.loads(jwt.utils.base64url_decode(token.split(".")[1]))
-    except (binascii.Error, ValueError):
+    except (binascii.Error, ValueError, RecursionError):  # a nested payload is unreadable too (#113, C22)
         return None
     return claims.get("iss") if isinstance(claims, dict) else None
 

@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from livepeer_builder.contracts import (
     Allowance,
@@ -33,6 +33,7 @@ from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnava
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _USAGE_STATUSES = frozenset({"applied", "quarantined", "ignored", "duplicate"})
+_NO_FEE = ("", "[error]")  # what Batteries serves, with null, for a fee it has not or could not convert
 
 
 def batteries_http_client(base_url: str, token: str, *, timeout_s: float) -> httpx.AsyncClient:
@@ -214,7 +215,10 @@ def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
     such item no longer fails its page, which the sync would read again on every pass."""
     reason = _unreadable(item)
     if reason is None:
-        return usage_row_from_item(item)
+        try:
+            return usage_row_from_item(item)
+        except ValidationError:  # the backstop: whatever the checks miss, the row never fails its page
+            reason = "unreadable_row"
     return set_aside_record(
         reason,
         item,
@@ -231,7 +235,19 @@ def _unreadable(item: dict[str, Any]) -> str | None:
         return "missing_id"
     if not isinstance(status, str) or status not in _USAGE_STATUSES:
         return "unknown_status"
-    return None if _created_at(item) else "unreadable_created_at"
+    if _created_at(item) is None:
+        return "unreadable_created_at"
+    fees = (item.get("computed_fee_eth"), item.get("computed_fee_usd"))
+    return "unreadable_fee" if any(_unreadable_fee(fee) for fee in fees) else None
+
+
+def _unreadable_fee(value: Any) -> bool:
+    """Whether a fee is stated and is no finite decimal: ``NaN``, ``Infinity``, or no number at all. Such
+    a fee is never read as no fee, which an applied row would then cost."""
+    if value is None or value in _NO_FEE:
+        return False
+    amount = _decimal(value)
+    return amount is None or not amount.is_finite()
 
 
 def _row_id(item: dict[str, Any]) -> str | None:
@@ -344,7 +360,7 @@ def _text(value: Any) -> str | None:
 
 
 def _decimal(value: Any) -> Decimal | None:
-    if value is None or value in ("", "[error]"):
+    if value is None or value in _NO_FEE:
         return None
     try:
         return Decimal(str(value))

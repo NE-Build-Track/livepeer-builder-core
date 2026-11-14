@@ -45,7 +45,8 @@ def batteries(*pages: Sequence[dict[str, Any]]) -> BatteriesUsageSource:
     def handle(request: httpx.Request) -> httpx.Response:
         index = int(request.url.params.get("cursor", "p0")[1:])
         following = f"p{index + 1}" if index + 1 < len(pages) else ""
-        return httpx.Response(200, json={"items": list(pages[index]), "next_cursor": following})
+        body = json.dumps({"items": list(pages[index]), "next_cursor": following})  # a NaN literal too
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
 
     client = httpx.AsyncClient(base_url="https://batteries.test", transport=httpx.MockTransport(handle))
     return BatteriesUsageSource("https://batteries.test", "t", client=client)
@@ -130,6 +131,81 @@ async def test_a_usage_row_with_no_id_is_set_aside_under_a_digest_of_its_content
     [(key, reason, fee_eth, fee_usd)] = await set_aside(store)
     assert key.startswith("sha256:") and len(key) == 71
     assert (reason, fee_eth, fee_usd) == ("missing_id", "0.5", "0.25")
+
+
+UNREADABLE_FEES = {
+    "NaN": ({"computed_fee_usd": "NaN"}, ("0.5", None)),
+    "Infinity": ({"computed_fee_eth": "Infinity"}, (None, "0.25")),
+    "-Infinity": ({"computed_fee_eth": "-Infinity"}, (None, "0.25")),
+    "a NaN literal": ({"computed_fee_usd": float("nan")}, ("0.5", None)),
+    "sNaN": ({"computed_fee_usd": "sNaN"}, ("0.5", None)),
+    "words": ({"computed_fee_eth": "abc"}, (None, "0.25")),
+    "an object": ({"computed_fee_eth": {"wei": "5"}}, (None, "0.25")),
+    "a decimal comma": ({"computed_fee_usd": "0,5"}, ("0.5", None)),
+    "true": ({"computed_fee_eth": True}, (None, "0.25")),
+    "both": ({"computed_fee_eth": "NaN", "computed_fee_usd": "abc"}, (None, None)),
+}
+
+
+@pytest.mark.parametrize("name", UNREADABLE_FEES)
+async def test_a_usage_row_whose_fee_is_stated_and_is_no_finite_number_is_set_aside_and_the_cursor_moves(
+    make_engine: EngineFactory, store: SqlStore, caplog: pytest.LogCaptureFixture, name: str
+) -> None:
+    """``NaN`` and ``Infinity`` failed the page on every pass: neither a usage row nor a set-aside record
+    takes one. A fee that is no number at all was stored as no fee, and an applied row then cost nothing."""
+    fees, kept = UNREADABLE_FEES[name]
+    source = batteries([item("u1")], [item("u-bad", **fees), item("u2")])
+    engine = await make_engine(supply=EngineSupply(usage_source=source))
+    with caplog.at_level(logging.WARNING):
+        report = await engine.costs.sync_once()
+    assert (report.pages, report.rows_seen, report.rows_new, report.rows_set_aside) == (2, 3, 2, 1)
+    assert await stored_ids(store) == ["u1", "u2"]
+    checkpoint = await store.cost_checkpoint()
+    assert checkpoint is not None and checkpoint.resume_cursor == "p1"
+    assert await set_aside(store) == [("u-bad", "unreadable_fee", *kept)]  # the fee it could read is kept
+    [line] = logged(caplog.records)
+    assert (line.row_id, line.reason, line.fee_eth, line.fee_usd) == ("u-bad", "unreadable_fee", *kept)  # type: ignore[attr-defined]
+    assert '"id": "u-bad"' in line.raw  # type: ignore[attr-defined]
+    again = await engine.costs.sync_once()
+    assert (again.rows_new, again.rows_set_aside, engine.health().cost_sync_set_aside) == (0, 0, 1)
+
+
+@pytest.mark.parametrize("fee", [..., None, "", "[error]"], ids=["absent", "null", "empty", "[error]"])
+async def test_a_usage_row_that_states_no_fee_is_stored_with_no_fee(
+    make_engine: EngineFactory, store: SqlStore, fee: Any
+) -> None:
+    """Batteries serves ``null``, ``""`` or ``"[error]"`` for a fee it has not: that is no fee, not a bad one."""
+    quiet = item("u-quiet", status="ignored", computed_fee_eth=fee, computed_fee_usd=fee)
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([quiet, item("u1")])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (2, 0)
+    columns = t.usage_rows.c
+    query = select(columns.computed_fee_eth, columns.computed_fee_usd).where(columns.id == "u-quiet")
+    async with store.engine.connect() as conn:
+        assert [tuple(row) for row in await conn.execute(query)] == [(None, None)]
+
+
+async def test_a_row_set_aside_for_another_reason_is_recorded_without_a_fee_that_is_no_finite_number(
+    make_engine: EngineFactory, store: SqlStore
+) -> None:
+    """The record takes no ``NaN`` either: before, such a row could be neither stored nor set aside."""
+    bad = item("u-bad", status="mystery", computed_fee_usd="sNaN", computed_fee_eth="Infinity")
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([bad, item("u1")])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (1, 1)
+    assert await set_aside(store) == [("u-bad", "unknown_status", None, None)]
+
+
+async def test_a_usage_row_the_checks_pass_and_the_row_type_refuses_is_set_aside(
+    make_engine: EngineFactory, store: SqlStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backstop: whatever a check misses, a row that is no ``UsageRow`` never fails its page."""
+    monkeypatch.setattr("livepeer_builder.adapters.batteries._unreadable", lambda item: None)
+    source = batteries([item("u1")], [item("u-bad", computed_fee_usd="NaN"), item("u2")])
+    engine = await make_engine(supply=EngineSupply(usage_source=source))
+    report = await engine.costs.sync_once()
+    assert (report.pages, report.rows_new, report.rows_set_aside) == (2, 2, 1)
+    assert await set_aside(store) == [("u-bad", "unreadable_row", "0.5", None)]
 
 
 LONG = "x" * 201

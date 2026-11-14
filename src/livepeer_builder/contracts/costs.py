@@ -73,7 +73,7 @@ def set_aside_record(
     """The record of one row left out. ``content`` is the row as received; it must be JSON data.
 
     The same content always gets the same id, so a page read again records nothing twice. A fee is kept
-    when the table can hold its digits."""
+    when it is a finite number and the table can hold its digits."""
     raw = json.dumps(content, sort_keys=True, default=str)
     kept_id = row_id if row_id and storable_text(row_id) else None
     return SetAsideUsage(
@@ -86,8 +86,9 @@ def set_aside_record(
 
 
 def _storable_fee(fee: Decimal | None) -> Decimal | None:
-    """The fee when its digits fit the store's decimal-string column (64 characters); otherwise None."""
-    return fee if fee is None or len(str(fee)) <= 64 else None
+    """The fee when it is finite and its digits fit the store's decimal-string column (64 characters);
+    otherwise None. The record takes no ``NaN`` or ``Infinity``, so no fee stops a row being set aside."""
+    return fee if fee is not None and fee.is_finite() and len(str(fee)) <= 64 else None
 
 
 class UsagePage(Contract):

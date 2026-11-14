@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
 
 import pytest
+from livepeer_gateway.remote_signer import get_signer_info
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.contracts import ActorContext, Runner
@@ -35,6 +36,15 @@ def no_collection_inside_a_test() -> Iterator[None]:
         yield
     finally:
         gc.enable()
+
+
+@pytest.fixture(autouse=True)
+def no_signer_identity_from_an_earlier_test() -> None:
+    """The payment SDK remembers a signer's identity per URL for the life of the process. A test's fake
+    signer listens on a port the system picks, and when that is a port an earlier test's signer had, the
+    SDK does not ask who the signer is: a test that lists the calls it expects then fails, about once in
+    some dozens of runs. Every test starts with nothing remembered."""
+    get_signer_info.cache_clear()  # type: ignore[attr-defined]
 
 
 @pytest.fixture

@@ -187,7 +187,11 @@ class BatteriesUsageSource:
         if cursor:
             params["cursor"] = cursor
         try:
-            response = await self._client.get("/v1/usage", params=params)
+            async with self._client.stream("GET", "/v1/usage", params=params) as response:
+                try:
+                    await response.aread()
+                except httpx.DecodingError as exc:  # it answered: the status says what that was (#113, C7)
+                    raise ProviderError(response.status_code, f"the body did not decode: {exc}") from exc
         except httpx.TransportError as exc:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         message = error_message(response) if response.status_code >= 400 else ""

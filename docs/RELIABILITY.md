@@ -75,7 +75,7 @@ SQL and parameters, goes to the log with the code, in `discovery.failed` and `co
 | Code | Meaning |
 | --- | --- |
 | `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with a status that is not 2xx (an error, or a redirect), or raised anything not listed below |
-| `invalid_answer` | It answered 2xx with something the engine could not read: not JSON, not the expected shape, a value it cannot convert |
+| `invalid_answer` | It answered 2xx with something the engine could not read: a content encoding that does not decode, not JSON, not the expected shape, a value it cannot convert |
 | `store_error` | Cost sync failed after the usage source answered: writing or matching the usage in the engine's store |
 
 The codes are a closed set in the contract (`SourceFailureCode` for `discovery_error`, `FailureCode` for

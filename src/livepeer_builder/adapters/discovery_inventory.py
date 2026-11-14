@@ -109,7 +109,10 @@ def _refuse_nothing_read(runners: list[Runner], entries: int, skipped: int) -> N
 
 def _loads(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with every number kept as its token. ``NaN`` and ``Infinity`` are not JSON."""
-    return json.loads(raw, parse_int=JsonNumber, parse_float=JsonNumber, parse_constant=_not_json)
+    try:
+        return json.loads(raw, parse_int=JsonNumber, parse_float=JsonNumber, parse_constant=_not_json)
+    except RecursionError as error:  # no ValueError, though the body is what could not be read
+        raise ValueError("discovery response is nested too deeply to read") from error
 
 
 def _not_json(token: str) -> Any:

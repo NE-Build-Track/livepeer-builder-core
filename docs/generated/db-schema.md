@@ -31,7 +31,7 @@ erDiagram
         string grant_id
         string allocation_id
         string api_key_id
-        string secret_ref
+        text secret_ref
         string currency
         string status
         datetime created_at
@@ -183,7 +183,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `grant_id` | VARCHAR(200) | no |  |
 | `allocation_id` | VARCHAR(200) | no | unique |
 | `api_key_id` | VARCHAR(200) | no |  |
-| `secret_ref` | VARCHAR(200) | no |  |
+| `secret_ref` | TEXT | no |  |
 | `currency` | VARCHAR(3) | no |  |
 | `status` | VARCHAR(16) | no |  |
 | `created_at` | DATETIME | no |  |

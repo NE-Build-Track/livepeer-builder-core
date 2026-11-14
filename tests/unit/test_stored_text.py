@@ -4,6 +4,7 @@ Ids, labels and references are ``varchar(200)`` (``store.schema.ID``). SQLite ig
 PostgreSQL refuses a longer value, or one holding a NUL character, when the row is written: for
 provisioning that is after the provider key was funded. So each is checked where the request is parsed.
 A lone surrogate is refused there too: no store, hash or response can encode it.
+An actor's secret reference is the exception: opaque text of any length (migration 0013, #115).
 """
 
 import json
@@ -120,7 +121,7 @@ class VaultSecretStore(MemorySecretStore):
 
 async def test_an_actor_whose_secret_reference_is_longer_than_200_characters_still_reads(
     make_engine: EngineFactory, admin: ActorContext
-) -> None:  # a SecretRef is opaque (extending-the-engine.md), and SQLite kept longer ones before the caps
+) -> None:  # a SecretRef is opaque text of any length (#115; tests/store/test_secret_ref_text.py)
     engine = await make_engine(supply=EngineSupply(secret_store=VaultSecretStore()))
     await engine.payments.provision(admin, ProvisionRequest(**PROVISION))
     read = await engine.payments.get_actor(admin, "default", "alice")

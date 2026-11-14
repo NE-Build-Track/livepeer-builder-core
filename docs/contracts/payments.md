@@ -240,7 +240,8 @@ checks stop that:
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
   the ledger is read, so it can no longer be replayed or resumed through that request.
-- **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
+- **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
+  which is opaque text of any length (#115): a supplied secret store may return a long path.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
   caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,
   the engine returns 400 `choose a grant`. There is no deployment-wide default. An admin may name any

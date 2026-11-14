@@ -124,7 +124,9 @@ segment (`//`), an encoded separator (`%2F`, `%5C`), and a backslash, a control 
 (`#`) anywhere. An encoded separator is refused because livepeer/node unescapes the path before it
 forwards it, so `..%2Fother` would reach the runner as `../other`. A trailing `/` and a query string stay
 allowed; a query's slashes, dots and escapes are data. An empty path is the runner URL itself,
-and a path that is set must start with `/` (400, as before). The transport then sends the address
+and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets that
+400, whatever its segments (`run`, `a//b`, `../run` and `a%2Fb` alike); only a backslash, a control
+character or a fragment in it is a 422. The transport then sends the address
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
 longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's).

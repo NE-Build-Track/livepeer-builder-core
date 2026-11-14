@@ -67,14 +67,19 @@ def request_path(value: str) -> str:
     ``..%2Fother`` would reach the runner as ``../other``. A trailing ``/`` and a query string stay allowed,
     as written. One thing is kept here and not sent: the ``?`` of an empty query (``/run?``), which the
     HTTP client leaves out of the request target.
+
+    The segments of a path with no leading ``/`` are not read here: the job service refuses every such path
+    with one answer (400), whatever its segments, and the transport refuses it again.
     """
     if "#" in value or "\\" in value or _CONTROL.search(value):
         raise ValueError("path must not contain a fragment, a backslash or a control character")
     target = value.partition("?")[0]
+    if not target.startswith("/"):
+        return value
     if _ENCODED_SEPARATOR.search(target):
         raise ValueError("path must not contain an encoded separator (%2F or %5C)")
-    segments = target.split("/")[1:] if target.startswith("/") else target.split("/")
-    if segments and segments[-1] == "":  # a trailing slash, or no path at all
+    segments = target.split("/")[1:]
+    if segments and segments[-1] == "":  # a trailing slash
         segments.pop()
     for segment in segments:
         if not segment or unquote(segment) in (".", ".."):

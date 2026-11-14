@@ -65,7 +65,9 @@ when other parts depend on it, or **decorate** the configured default
 (discovery refresh, cost sync, retention). Call `await engine.stop()` on shutdown. `stop()` is safe to call
 twice and closes everything the engine opened; an engine is single-use, so after `stop()` create a new one.
 A second `start()` on a running engine raises `RuntimeError` and changes nothing: the loops run once
-(#113, C27).
+(#113, C27). The REST app's lifespan is such a second start: `create_app(engine)` on an engine you
+already started fails at startup and leaves the engine running. To serve an engine you start and stop
+yourself, pass `create_app(engine, manage_lifecycle=False)`.
 If construction fails part-way, whatever it had already opened is closed before the error reaches you. So
 is a failed `start()` (a store error, or a cancellation): the engine stops, which also covers
 `async with engine:`, whose exit does not run when entry fails.
@@ -189,7 +191,7 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   engine, it records an attempt on the first runner for the app, ends a stream once (read to the end
   or `complete()`: `succeeded`; `aclose()`, `break`, `return` or an error: `abandoned`; a cancellation:
   the runner's settle window, as on the engine), and rejects a repeated
-  `operation_ref`. It does not model admission, failover or payment.
+  `operation_ref` and a path with no leading `/`. It does not model admission, failover or payment.
 - **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
   fakes (`async with make_engine(runners=[...]) as engine:`).
 

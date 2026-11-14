@@ -7,13 +7,13 @@ in CI, on PostgreSQL, where one such row used to fail its page on every pass.
 
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, get_args
 
 from sqlalchemy import String, inspect, select
 
-from livepeer_builder.contracts import SetAsideUsage, UsageRow
+from livepeer_builder.contracts import SetAsideReason, SetAsideUsage, UsageRow
+from livepeer_builder.contracts.costs import USAGE_ROW_LIMITS as LIMITS
 from livepeer_builder.services.costs import CostSyncWorker
-from livepeer_builder.services.usage_intake import LIMITS
 from livepeer_builder.store import SqlStore, create_engine, purge, upgrade
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.migrate import downgrade
@@ -120,6 +120,17 @@ def test_the_intake_limits_are_the_usage_table_columns() -> None:
         for column in t.usage_rows.c
         if isinstance(column.type, String) and column.name != "status"  # a UsageStatus: four fixed words
     }
-    assert lengths == LIMITS, "services/usage_intake.py LIMITS must list every text column of lpb_usage_rows"
+    assert lengths == LIMITS, (
+        "contracts/costs.py USAGE_ROW_LIMITS must list every text column of lpb_usage_rows"
+    )
     assert t.usage_set_aside.c.id.type.length == LIMITS["id"]
     assert t.usage_set_aside.c.computed_fee_eth.type.length == LIMITS["computed_fee_eth"]
+
+
+def test_the_unstorable_reasons_are_the_intake_limits() -> None:
+    """``unstorable_<field>`` is built from ``USAGE_ROW_LIMITS``; ``SetAsideReason`` has to list every one."""
+    listed = {code for code in get_args(SetAsideReason) if code.startswith("unstorable_")}
+    built = {f"unstorable_{field}" for field in LIMITS}
+    assert listed == built, (
+        "contracts/costs.py SetAsideReason must list unstorable_<field> for every USAGE_ROW_LIMITS field"
+    )

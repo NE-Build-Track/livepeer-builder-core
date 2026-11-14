@@ -85,11 +85,15 @@ characters or holds a NUL character (422 over REST), before any provider call: e
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
-`label`.
+`label`. Stored text also refuses a lone surrogate, half of a UTF-16 pair, which JSON can write
+(`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
+because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
 `FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
-and the values `.` and `..`, which a client or server would read as another path. It is a 422 over REST (a
+and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
+id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
+`..`, `" grant_1"` is used as `grant_1`, and an id of only whitespace is no grant chosen. It is a 422 over REST (a
 `ValidationError` in process) before the operation ledger records anything or the provider is called, and
 it applies to the allocation fund route too, whose body is a `FundRequest`. It is held to no pattern such
 as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it
@@ -231,7 +235,11 @@ checks stop that:
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
   ledger records anything and before any provider call. A zero or negative funding or grant amount is
-  still the command's own refusal, 400.
+  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
+  **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
+  18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
+  the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
   caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,
@@ -281,13 +289,29 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   another request on that reference is still 409 `operation_conflict`, and the same request resumes
   again after `LPB_OPERATION_STALE_S`. The one exception is `already_provisioned`, below.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
-  answer that is not an error status. It must be a JSON object. A list page must have `items` as a list
-  of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
+  answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
+  nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
+  a list of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
   `ProviderError`: HTTP 502 from the REST service, `invalid_answer` as `cost_sync_error`, and an unknown
   outcome to the ledger, so the reference stays held. Before, a 2xx that was not a JSON object answered
   500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is
-  now refused too, since Batteries answers every management route with a JSON object. A malformed page
-  never reads as an empty one, and one malformed item fails its page. The error does not quote the
+  now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
+  is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
+  with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
+  never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
+  cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
+  resumed create's search and cost sync alike: before, the engine asked for that page again without end,
+  and `GET /v1/admin/grants` and `POST /v1/admin/costs/sync` never answered. A longer cycle (a cursor that
+  comes back after other pages) is not detected. A grant, in a list or read alone,
+  must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
+  strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
+  JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
+  (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
+  not create. The same holds for every value a command's result is built from: the `id` a grant create
+  answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
+  be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
+  `null` there was recorded as the text `"None"` in a finished command (provisioning answered 201 with
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
@@ -323,7 +347,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   resumed create reads the grants page by page, oldest first, and adopts the one carrying its tag instead
   of creating a second. It records the list cursor after each page, so a resume that runs out of its
   budget in a slow catalog leaves the next one to go on from there; pages already read lacked the tag,
-  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and the resume created a second grant. Grant names stay free-form: two references may create two grants with one name.
+  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`, or the grant with its `metadata` as `null` or as an object) read as a grant with no tag, and the resume created a second grant. A read-back of the new grant that the engine cannot read is an unknown outcome too (503, the reference held), never the command's result. Grant names stay free-form: two references may create two grants with one name.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.
@@ -460,19 +484,29 @@ records it and moves the cursor:
 
 | Reason | The row |
 | --- | --- |
-| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a number) |
+| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a whole number; a whole number is kept as its digits) |
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
-| `unreadable_created_at` | has no `created_at_ms`, or one that is not a number or that no clock holds |
-| `unstorable_<field>` | has a text the store's column cannot keep in `<field>`: longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), a NUL, or a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
+| `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
+| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
+| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
+| `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
-The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
-`computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A row
-with no id the table can keep is recorded under `sha256:` and a digest of its content. A row is
-recorded, counted and logged once, however often its page is read again; the first record of an id is
-kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id, the
-reason, the fees and up to 2000 characters of the row as received. `SyncReport.rows_set_aside` counts
-the rows a sync recorded, and `EngineHealth.cost_sync_set_aside` (`GET /readyz`) the rows left out in
-all, as of the last sync.
+Each value is judged as it was received, and that value is the one stored: apart from a whole-number
+`id`, the engine turns no number, list or object into text.
+
+The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
+where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
+`computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
+that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
+table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
+differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
+A row is recorded, counted and logged once, however often its page is read again; the first record of
+an id is kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id,
+the reason, the fees and up to 2000 characters of the row as received (for a row another `UsageSource`
+delivered as a `UsageRow` and the store cannot keep, the row as that source read it).
+`SyncReport.rows_set_aside` counts the rows a sync recorded, and `EngineHealth.cost_sync_set_aside`
+(`GET /readyz`) the rows left out in all, as of the last sync, including one that failed after it set
+rows aside.
 
 Recording the rows is optional for a store (`UsageSetAsideRepo` in `protocols`). The packaged SQL
 store has it. A supplied store without it still syncs: such a row is left out and logged once per
@@ -542,7 +576,7 @@ Units, on every field:
 | `fee_usd` | USD, an exact `Decimal`. `null` when an applied row lacks a USD price; `0` when there are no rows |
 | `row_count` | Applied Batteries usage rows counted in the fees |
 | `MeasuredUsage.quantities` | The app's own units (`tokens`, `seconds`, ...), integers, per job; never summed across apps |
-| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end` |
+| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end`. Over REST a `start` or `end` is converted to UTC when the request is parsed (one with no offset is read as UTC) and answered in UTC; one that UTC cannot hold is a 422 |
 | `jobs_with_cost`, `jobs_pending` | Jobs: `observed` or `corrected`, and `pending` |
 
 **The summary** (`GET /v1/costs/summary`) totals the jobs in its window and scope (an actor's own; an

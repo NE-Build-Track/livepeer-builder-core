@@ -47,6 +47,7 @@ from livepeer_gateway.remote_signer import (
 
 from livepeer_builder.adapters.call_timer import CallTimer
 from livepeer_builder.adapters.runner_address import as_built, origin
+from livepeer_builder.adapters.runner_content_type import content_type_as_sent
 from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
 from livepeer_builder.adapters.signer_failures import (
     classify,
@@ -185,7 +186,7 @@ class PaidRequest:
                 finally:
                     await stop_funding(funding)
                     response.release()
-        return response.status, body, response.headers.get("Content-Type") or "application/octet-stream"
+        return response.status, body, content_type_as_sent(response.raw_headers)
 
     async def open(self, connect_timeout_s: float) -> "SdkRunnerStream":
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
@@ -405,7 +406,7 @@ class SdkRunnerStream:
 
     @property
     def content_type(self) -> str:
-        return self._response.headers.get("Content-Type") or "application/octet-stream"  # as sent (C27)
+        return content_type_as_sent(self._response.raw_headers)
 
     @property
     def headers(self) -> tuple[tuple[str, str], ...]:

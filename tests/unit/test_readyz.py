@@ -9,7 +9,7 @@ shape, and the version, the running-job count and the allocation mode stay publi
 import asyncio
 import dataclasses
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 
 import httpx
 import pytest
@@ -148,23 +148,38 @@ async def test_readyz_without_a_credential_serves_codes_not_exception_text(
 # -- the shipped adapters: the code an operator sees, read where the answer is read -------------------
 
 
-def answering(answer: httpx.Response | Exception) -> httpx.AsyncClient:
+class NotGzip(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"this is not gzip"
+
+
+def undecodable(status_code: int) -> Callable[[], httpx.Response]:
+    """An answer that says gzip over a body that is not. Its body reads once, so each request builds one."""
+    return lambda: httpx.Response(status_code, headers={"Content-Encoding": "gzip"}, stream=NotGzip())
+
+
+Answer = httpx.Response | Exception | Callable[[], httpx.Response]
+
+
+def answering(answer: Answer) -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
         del request
         if isinstance(answer, Exception):
             raise answer
-        return answer
+        return answer if isinstance(answer, httpx.Response) else answer()
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://provider.example")
 
 
-NO_ANSWER = [
+NO_ANSWER: list[tuple[Answer, str]] = [
     (httpx.Response(302, headers={"Location": "/login"}), "unavailable"),  # a redirect is no answer
     (httpx.Response(503, text="down"), "unavailable"),
+    (undecodable(503), "unavailable"),  # the status decides before the body is read
     (httpx.ConnectError("refused"), "unavailable"),
     (httpx.ReadTimeout("slow"), "unavailable"),
     (httpx.Response(200, text="<html>"), "invalid_answer"),
     (httpx.Response(200, json={"unexpected": 1}), "invalid_answer"),
+    (undecodable(200), "invalid_answer"),  # httpx's DecodingError is no ValueError
 ]
 
 
@@ -173,7 +188,7 @@ NO_ANSWER = [
     [*NO_ANSWER, (httpx.Response(200, text="[" * 100_000), "invalid_answer")],  # nested past reading
 )
 async def test_the_http_discovery_source_s_failures_get_the_documented_code(
-    clock: FixedClock, answer: httpx.Response | Exception, code: str
+    clock: FixedClock, answer: Answer, code: str
 ) -> None:
     async with answering(answer) as client:
         source = HttpDiscoverySource("http://provider.example/discovery", client=client)
@@ -192,7 +207,7 @@ def usage_page(created_at_ms: float) -> httpx.Response:
     [*NO_ANSWER, (usage_page(1.5e300), "invalid_answer")],  # a time no clock holds
 )
 async def test_the_batteries_usage_source_s_failures_get_the_documented_code(
-    store: SqlStore, clock: FixedClock, answer: httpx.Response | Exception, code: str
+    store: SqlStore, clock: FixedClock, answer: Answer, code: str
 ) -> None:
     stop = asyncio.Event()
     async with answering(answer) as client:

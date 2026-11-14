@@ -25,8 +25,7 @@ from livepeer_builder.protocols import ActorCommandRepo, ActorRepo, Clock
 
 class ActorWrites:
     """A command's write to the actor it read. ``None`` means the condition did not hold and nothing was
-    written: the actor was revoked, or revoked and provisioned again, since the command read it, or (a
-    key write) another rotation gave it a key."""
+    written: the actor was revoked, or revoked and provisioned again, since the command read it."""
 
     def __init__(self, store: ActorRepo, clock: Clock) -> None:
         self._store = store
@@ -54,9 +53,11 @@ class ActorWrites:
         self, actor: ProvisionedActor, api_key_id: str, secret_ref: SecretRef, *, only_from: str
     ) -> ProvisionedActor | None:
         """Point the actor at a new payment key, only where it still holds the key ``only_from`` (the one
-        the rotation began from) or holds the new key already."""
+        the rotation began from) or holds the new key already. An actor that holds another key got it
+        from a rotation that finished first: nothing is written, and the answer is the actor as stored,
+        holding that key."""
         if isinstance(self._store, ActorCommandRepo):
-            return await self._store.set_actor_key(
+            written = await self._store.set_actor_key(
                 actor.application_id,
                 actor.actor_id,
                 actor.allocation_id,
@@ -65,9 +66,10 @@ class ActorWrites:
                 self._clock.now(),
                 only_from=only_from,
             )
+            return written or await self._held(actor)  # nothing written: read why
         current = await self._held(actor)
         if current is None or current.api_key_id not in (only_from, api_key_id):
-            return None
+            return current
         return await self._saved(current, {"api_key_id": api_key_id, "secret_ref": secret_ref})
 
     async def funded(self, actor: ProvisionedActor) -> ProvisionedActor:

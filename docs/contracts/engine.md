@@ -436,7 +436,8 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   send fails or is cancelled, however the server reports it (D40), the send of the response headers
   included (#113, C27). An app serving a stream over its own HTTP layer should do the same; without it,
   a closed iterator is the caller stopping.
-- **The runner's `Content-Type` goes out unchanged**, streamed or buffered (#113, C27): its parameters
+- **The runner's `Content-Type` goes out unchanged**, streamed, buffered or read back as a stored
+  result (`GET /v1/jobs/{id}/result`, 501 until ISS-26) (#113, C27): its parameters
   (`charset`, `profile`, `boundary`) are kept, and the engine adds none, not even a `charset` to a
   `text/` type. A runner that sends none is `application/octet-stream`. `RunnerReply.content_type`,
   `JobStream.content_type` and the stored `ResultRef.content_type` are that same header value.

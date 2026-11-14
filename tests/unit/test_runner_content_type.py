@@ -12,13 +12,14 @@ transport keeps the header's bytes read as Latin-1, which goes back out as the s
 import asyncio
 from collections.abc import AsyncIterator
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, Runner
+from livepeer_builder.contracts import ActorContext, JobRequest, JobResult, Money, ProvisionRequest, Runner
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript, runner
 from tests.conftest import EngineFactory
@@ -110,6 +111,29 @@ async def test_rest_answers_with_the_runner_s_content_type_unchanged(
     transport.opens = [StreamScript(events=[], content_type=reported)]  # an empty streamed body
     empty = await client.post("/v1/jobs?stream=true", json={"app": APP}, headers=alice)
     assert (empty.status_code, content_type_bytes(empty)) == (200, sent)
+
+
+@pytest.mark.parametrize("content_type", TYPES)
+async def test_a_stored_result_answers_with_its_content_type_unchanged(
+    make_engine: EngineFactory, admin: ActorContext, monkeypatch: pytest.MonkeyPatch, content_type: str
+) -> None:
+    """``GET /v1/jobs/{id}/result`` answers 501 until results are stored (ISS-26), so the service method is
+    replaced here by one that returns a result. The route built its answer with ``media_type=``."""
+    engine = await make_engine()
+    key = await engine.keys.bootstrap_admin()
+    stored = kept(content_type.encode())
+
+    async def result(actor: ActorContext, job_id: UUID) -> JobResult:
+        return JobResult.model_construct(status_code=200, content=b"hello", content_type=stored)
+
+    monkeypatch.setattr(engine.jobs, "result", result)
+    app = create_app(engine, manage_lifecycle=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+        answer = await client.get(
+            f"/v1/jobs/{uuid4()}/result", headers={"Authorization": f"Bearer {key.token}"}
+        )
+    assert (answer.status_code, content_type_bytes(answer)) == (200, content_type.encode())
+    assert answer.content == b"hello"
 
 
 # -- through the real transport --------------------------------------------------------------------------

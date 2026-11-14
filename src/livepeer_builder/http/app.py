@@ -229,7 +229,8 @@ def create_app(
     @app.get("/v1/jobs/{job_id}/result", status_code=200)
     async def get_result(actor: Actor, job_id: UUID) -> Response:
         result = await engine.jobs.result(actor, job_id)
-        return Response(content=result.content, media_type=result.content_type)
+        # as the job route: the stored content type as a header, since media_type would add a charset (C27)
+        return Response(content=result.content, headers={"Content-Type": result.content_type})
 
     @app.post("/v1/jobs/{job_id}/usage", response_model=Job)
     async def report_usage(actor: Actor, job_id: UUID, body: UsageBody) -> Job:

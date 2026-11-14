@@ -451,8 +451,21 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   resets the stream). `GET /v1/jobs/{id}` carries the outcome. The engine writes nothing into the
   stream itself, because it does not know the format. uvicorn logs one line for the abort.
 - A client disconnect gets the settle window: the REST layer calls `JobStream.disconnected()` when a
-  send fails or is cancelled, however the server reports it (D40). An app serving a stream over its
-  own HTTP layer should do the same; without it, a closed iterator is the caller stopping.
+  send fails or is cancelled, however the server reports it (D40), the send of the response headers
+  included (#113, C27). An app serving a stream over its own HTTP layer should do the same; without it,
+  a closed iterator is the caller stopping.
+- **The runner's `Content-Type` goes out unchanged**, streamed, buffered or read back as a stored
+  result (`GET /v1/jobs/{id}/result`, 501 until ISS-26) (#113, C27): its parameters
+  (`charset`, `profile`, `boundary`) are kept, and the engine adds none, not even a `charset` to a
+  `text/` type. A runner that sends none is `application/octet-stream`. `RunnerReply.content_type`,
+  `JobStream.content_type` and the stored `ResultRef.content_type` are that same header value.
+  Unchanged means byte for byte. The SDK transport reads the header's bytes as Latin-1, the encoding an
+  HTTP server writes a header in, so a value that is not ASCII goes out as the bytes the runner sent,
+  whatever encoding the runner meant. In those three fields such a value is its bytes read as Latin-1: a
+  parameter the runner wrote in UTF-8 (`title="é"`, bytes `C3 A9`) reads there as `Ã©`. A value that
+  holds a control character, which a header may not, is replaced by `application/octet-stream`. The only
+  length limit is the HTTP client's for one header, 8190 bytes; a longer one fails the call as a runner
+  error.
 
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
 transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and

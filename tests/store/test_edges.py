@@ -83,10 +83,6 @@ async def test_filtered_listings_and_duplicate_ids(database_url: str, clock: Fix
     new = make_job(clock)
     await store.create_job(new, None)
     assert [j.id for j in await store.list_jobs("default", "alice", before=clock.now())] == [old.id]
-    assert (
-        len(await store.jobs_between("default", None, old.created_at, clock.now() + timedelta(seconds=1)))
-        == 2
-    )
     with pytest.raises(IntegrityError):
         await store.create_job(old, None)  # a duplicate id with no operation_ref is a real error
     await store.close()

@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
-from starlette.types import Send
+from starlette.types import Message, Send
 
 from livepeer_builder.api import JobStreamApi
 from livepeer_builder.errors import JobFailed
@@ -32,28 +32,34 @@ class _AbortableStreamingResponse(StreamingResponse):
         self._job_stream = stream
 
     async def stream_response(self, send: Send) -> None:
-        await send({"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers})
+        start = {"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers}
         try:
+            await self._send(send, start)  # guarded too: a disconnect before the headers settles (#113, C27)
             async for chunk in self.body_iterator:
-                try:
-                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                except (Exception, asyncio.CancelledError):  # a 2.4 send raises; 2.3 is cancelled
-                    await self._job_stream.disconnected()  # settle, not the abandon of a closed iterator
-                    raise
+                await self._send(send, {"type": "http.response.body", "body": chunk, "more_body": True})
         except _Aborted:
             return  # the server closes the connection; the job record says what happened
         finally:
             await self.body_iterator.aclose()  # a disconnect ends the job stream now, not at collection
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
+    async def _send(self, send: Send, message: Message) -> None:
+        try:
+            await send(message)
+        except (Exception, asyncio.CancelledError):  # a 2.4 send raises; 2.3 is cancelled
+            await self._job_stream.disconnected()  # settle, not the abandon of a closed iterator
+            raise
+
 
 async def stream_response(stream: JobStreamApi, headers: dict[str, str]) -> Response:
-    """Wait for the first chunk (JobFailed before it propagates), then stream the rest."""
+    """Wait for the first chunk (JobFailed before it propagates), then stream the rest. The runner's content
+    type goes out as a header, unchanged: ``media_type`` would add a charset to a ``text/`` type (C27)."""
+    headers = {"Content-Type": stream.content_type, **headers}
     chunks = stream.__aiter__()
     try:
         first = await chunks.__anext__()
     except StopAsyncIteration:  # the runner answered with an empty body
-        return Response(b"", status_code=stream.status_code, media_type=stream.content_type, headers=headers)
+        return Response(b"", status_code=stream.status_code, headers=headers)
 
     async def body() -> AsyncGenerator[bytes, None]:
         try:
@@ -65,6 +71,4 @@ async def stream_response(stream: JobStreamApi, headers: dict[str, str]) -> Resp
         finally:
             await chunks.aclose()
 
-    return _AbortableStreamingResponse(
-        stream, body(), status_code=stream.status_code, media_type=stream.content_type, headers=headers
-    )
+    return _AbortableStreamingResponse(stream, body(), status_code=stream.status_code, headers=headers)

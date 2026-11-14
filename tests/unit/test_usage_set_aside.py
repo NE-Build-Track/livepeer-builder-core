@@ -87,6 +87,16 @@ UNREADABLE = {
     "no timestamp": (item("u-bad", created_at_ms=...), "unreadable_created_at"),
     "a timestamp that is not a number": (item("u-bad", created_at_ms="soon"), "unreadable_created_at"),
     "a timestamp no clock can hold": (item("u-bad", created_at_ms=10**30), "unreadable_created_at"),
+    "a timestamp in a string": (item("u-bad", created_at_ms=str(CREATED_MS)), "unreadable_created_at"),
+    "a timestamp of true": (item("u-bad", created_at_ms=True), "unreadable_created_at"),
+    "a manifest id that is a number": (item("u-bad", manifest_id=12), "unstorable_manifest_id"),
+    "a manifest id that is an object": (item("u-bad", manifest_id={"x": "y"}), "unstorable_manifest_id"),
+    "an allocation id that is a number": (item("u-bad", allocation_id=7), "unstorable_allocation_id"),
+    "a session id that is a list": (item("u-bad", payment_session_id=["s"]), "unstorable_payment_session_id"),
+    "an event id of true": (item("u-bad", event_id=True), "unstorable_event_id"),
+    "a request id that is a fraction": (item("u-bad", request_id=1.5), "unstorable_request_id"),
+    "a pipeline that is an object": (item("u-bad", pipeline={"a": 1}), "unstorable_pipeline"),
+    "a currency that is a number": (item("u-bad", currency=840), "unstorable_currency"),
 }
 
 
@@ -120,7 +130,10 @@ async def test_a_usage_row_the_engine_cannot_read_is_set_aside_and_the_cursor_mo
     assert logged(caplog.records) == []
 
 
-@pytest.mark.parametrize("row_id", [..., None, "", ["u1"]], ids=["absent", "null", "empty", "a list"])
+NO_ID = {"absent": ..., "null": None, "empty": "", "a list": ["u1"], "a fraction": 1.5, "true": True}
+
+
+@pytest.mark.parametrize("row_id", NO_ID.values(), ids=NO_ID)
 async def test_a_usage_row_with_no_id_is_set_aside_under_a_digest_of_its_content(
     make_engine: EngineFactory, store: SqlStore, row_id: Any
 ) -> None:
@@ -226,6 +239,43 @@ def test_the_contract_lists_every_set_aside_reason() -> None:
     }
     missing = sorted(code for code in reasons if f"| `{code}` |" not in table)
     assert not missing, f"add a row for {missing} to the reasons table in docs/contracts/payments.md"
+
+
+async def test_a_usage_row_with_a_whole_number_id_is_stored_under_its_digits(
+    make_engine: EngineFactory, store: SqlStore
+) -> None:
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([item("u1", id=12345)])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (1, 0)
+    assert await stored_ids(store) == ["12345"]
+
+
+BATTERIES_UNSTORABLE = {
+    "a long manifest id": ({"manifest_id": "x" * 201}, "unstorable_manifest_id", "u-bad"),
+    "a NUL in the pipeline": ({"pipeline": "p\x00"}, "unstorable_pipeline", "u-bad"),
+    "a long id": ({"id": "i" * 201}, "unstorable_id", None),
+    "a long fee": ({"computed_fee_usd": "0." + "1" * 64}, "unstorable_computed_fee_usd", "u-bad"),
+}
+
+
+@pytest.mark.parametrize("name", BATTERIES_UNSTORABLE)
+async def test_a_batteries_row_the_store_cannot_keep_is_logged_as_received(
+    make_engine: EngineFactory, store: SqlStore, caplog: pytest.LogCaptureFixture, name: str
+) -> None:
+    """The log line is what an operator takes to Batteries: the row as it was served, with the fields the
+    engine keeps no column for. Before, it was the row as the engine had read it."""
+    fields, reason, kept_id = BATTERIES_UNSTORABLE[name]
+    bad = item("u-bad", topic="usage", partition=3, offset=41, error="", **fields)
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([bad, item("u1")])))
+    with caplog.at_level(logging.WARNING):
+        report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (1, 1)
+    assert await stored_ids(store) == ["u1"]
+    [line] = logged(caplog.records)
+    assert json.loads(line.raw) == bad  # type: ignore[attr-defined]
+    assert line.reason == reason  # type: ignore[attr-defined]
+    [(key, _, fee_eth, _)] = await set_aside(store)
+    assert (key == kept_id or key.startswith("sha256:")) and fee_eth == "0.5"
 
 
 LONG = "x" * 201

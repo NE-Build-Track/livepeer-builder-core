@@ -10,7 +10,7 @@ import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from pydantic import Field
@@ -20,7 +20,7 @@ from livepeer_builder.contracts.common import Contract, Money, StoredText
 UsageStatus = Literal["applied", "quarantined", "ignored", "duplicate"]
 
 # Why cost sync set a usage row aside (#114, C13): a closed set, listed in docs/contracts/payments.md. An
-# ``unstorable_<field>`` names a text column of ``lpb_usage_rows`` (``services/usage_intake.py``, ``LIMITS``;
+# ``unstorable_<field>`` names a text column of ``lpb_usage_rows`` (``USAGE_ROW_LIMITS`` below;
 # tests/store/test_usage_set_aside.py fails when the two disagree).
 SetAsideReason = Literal[
     "missing_id",
@@ -81,6 +81,36 @@ _UNSTORABLE = re.compile(r"[\x00\ud800-\udfff]")
 def storable_text(value: str, limit: int = 200) -> bool:
     """Whether a text column of ``limit`` characters keeps ``value`` on SQLite and on PostgreSQL."""
     return len(value) <= limit and _UNSTORABLE.search(value) is None
+
+
+# The longest text ``lpb_usage_rows`` keeps in each column (``store/schema.py``): ids are ``ID``, fees
+# are decimal strings of ``AMOUNT``. tests/store/test_usage_set_aside.py fails when the two disagree.
+USAGE_ROW_LIMITS: dict[str, int] = {
+    "id": 200,
+    "event_id": 200,
+    "manifest_id": 200,
+    "allocation_id": 200,
+    "payment_session_id": 200,
+    "request_id": 200,
+    "pipeline": 200,
+    "computed_fee_eth": 64,
+    "computed_fee_usd": 64,
+    "currency": 8,
+}
+
+
+def unstorable_field(row: UsageRow) -> str | None:
+    """The first field of ``row`` the store cannot keep, or None when it keeps the row."""
+    for name, limit in USAGE_ROW_LIMITS.items():
+        value = getattr(row, name)
+        if value is not None and not storable_text(str(value), limit):
+            return name
+    return None
+
+
+def unstorable_reason(field: str) -> SetAsideReason:
+    """The reason for a row whose ``field`` (one of ``USAGE_ROW_LIMITS``) the store cannot keep."""
+    return cast(SetAsideReason, f"unstorable_{field}")
 
 
 def set_aside_record(

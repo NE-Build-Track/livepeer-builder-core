@@ -345,23 +345,27 @@ records it and moves the cursor:
 
 | Reason | The row |
 | --- | --- |
-| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a number) |
+| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a whole number; a whole number is kept as its digits) |
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
-| `unreadable_created_at` | has no `created_at_ms`, or one that is not a number or that no clock holds |
+| `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
 | `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
 | `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
-| `unstorable_<field>` | has a text the store's column cannot keep in `<field>`: longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), a NUL, or a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
+| `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
+
+Each value is judged as it was received, and that value is the one stored: apart from a whole-number
+`id`, the engine turns no number, list or object into text.
 
 The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
 where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
 `computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
-that is not a finite number, or longer than the column, is recorded as `null`. A row
-with no id the table can keep is recorded under `sha256:` and a digest of its content. A row is
-recorded, counted and logged once, however often its page is read again; the first record of an id is
-kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id, the
-reason, the fees and up to 2000 characters of the row as received. `SyncReport.rows_set_aside` counts
-the rows a sync recorded, and `EngineHealth.cost_sync_set_aside` (`GET /readyz`) the rows left out in
-all, as of the last sync.
+that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
+table can keep is recorded under `sha256:` and a digest of its content. A row is recorded, counted and
+logged once, however often its page is read again; the first record of an id is kept. The row's content
+goes only to the log: one WARNING `costs.usage_set_aside` with the id, the reason, the fees and up to
+2000 characters of the row as received (for a row another `UsageSource` delivered as a `UsageRow` and
+the store cannot keep, the row as that source read it). `SyncReport.rows_set_aside` counts the rows a
+sync recorded, and `EngineHealth.cost_sync_set_aside` (`GET /readyz`) the rows left out in all, as of
+the last sync.
 
 Recording the rows is optional for a store (`UsageSetAsideRepo` in `protocols`). The packaged SQL
 store has it. A supplied store without it still syncs: such a row is left out and logged once per

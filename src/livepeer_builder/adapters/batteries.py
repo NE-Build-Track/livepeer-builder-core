@@ -198,7 +198,11 @@ class BatteriesUsageSource:
         if cursor:
             params["cursor"] = cursor
         try:
-            response = await self._client.get("/v1/usage", params=params)
+            async with self._client.stream("GET", "/v1/usage", params=params) as response:
+                try:
+                    await response.aread()
+                except httpx.DecodingError as exc:  # it answered: the status says what that was (#113, C7)
+                    raise ProviderError(response.status_code, f"the body did not decode: {exc}") from exc
         except httpx.TransportError as exc:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         message = error_message(response) if response.status_code >= 400 else ""
@@ -343,7 +347,8 @@ def allowance_from_body(body: dict[str, Any]) -> Allowance:
 
 def segment(value: str) -> str:
     """An id as one path segment, whatever its source (#113, C10): every reserved character is
-    percent-encoded, and so is an id of only dots, which httpx would remove as a dot segment."""
+    percent-encoded, and so are the ids ``.`` and ``..`` (``%2E``, ``%2E%2E``), which httpx would remove
+    as a dot segment. ``...`` is no dot segment and goes out as written."""
     return "%2E" * len(value) if value in (".", "..") else quote(value, safe="")
 
 

@@ -31,7 +31,7 @@ from livepeer_builder import (
     OperationInProgress,
 )
 from livepeer_builder.contracts import AttemptOutcome, FailureKind, Fees, PaymentReason, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, NotFound, RunnerCallError
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
     FakeEngine,
@@ -289,6 +289,18 @@ async def test_health_is_ready_after_a_discovery_snapshot(side: Side) -> None:
         assert engine.health().ready
 
 
+async def test_a_second_start_on_a_running_engine_is_refused(side: Side) -> None:
+    """#113 C27: an application that starts its engine twice hears of it from the fake too."""
+    async with side() as engine:
+        await engine.start()
+        with pytest.raises(RuntimeError, match="engine is already started"):
+            await engine.start()
+        assert engine.health().ready  # the running engine carries on
+        await engine.stop()
+        with pytest.raises(RuntimeError, match="engine is stopped"):
+            await engine.start()
+
+
 async def test_run_returns_the_parsed_body_as_data(side: Side) -> None:
     async with side(data={"answer": 42}) as engine:
         result = await engine.jobs.run(ALICE, JobRequest(app=APP))
@@ -331,6 +343,25 @@ async def test_a_failure_mid_stream_raises_job_failed_after_the_earlier_chunks(s
     assert job.state == "uncertain" and job.failure is not None and job.failure.payment_sent
     assert (job.failure.kind, job.failure.status_code) == ("runner_error", None)
     assert (job.attempts[-1].outcome, job.attempts[-1].status_code) == ("http", 200)  # the stream's status
+
+
+@pytest.mark.parametrize("path", ["run", "../run", "a//b"])
+async def test_a_path_with_no_leading_slash_is_an_invalid_request_after_the_permission_check(
+    side: Side, path: str
+) -> None:
+    """#113, C3: the engine refuses every such path with one answer, before anything is written."""
+    request = JobRequest(app=APP, path=path, operation_ref="op-1")
+    no_run = ALICE.model_copy(update={"permissions": ALICE.permissions - {"jobs.run"}})
+    async with side(chunks=(b"a",)) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        with pytest.raises(InvalidRequest, match="path must start with '/'"):
+            await engine.jobs.run(ALICE, request)
+        with pytest.raises(InvalidRequest, match="path must start with '/'"):
+            await streaming.stream(ALICE, request)
+        with pytest.raises(AccessDenied):
+            await engine.jobs.run(no_run, request)
+        assert await engine.jobs.list_jobs(ALICE) == []  # no job, so the reference is still free
 
 
 async def test_a_repeated_operation_ref_raises_operation_exists_or_conflict(side: Side) -> None:

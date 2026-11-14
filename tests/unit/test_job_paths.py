@@ -7,6 +7,7 @@ not already normal, with a 422 before anything is written. The transport sends t
 re-normalizing it, and checks that it still begins with the runner's.
 """
 
+import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
@@ -54,6 +55,8 @@ REFUSED = [
     "/..%2f..%2Fapp-2/app",
     "/a%5Cb",
     "/a%5cb",
+    "/a\ud800b",  # a lone surrogate, which no request target can encode
+    "/a?q=\udfff",
     "/a#fragment",  # a fragment
     "/a?q=1#fragment",
     "/a#",
@@ -167,6 +170,37 @@ async def test_rest_still_answers_422_for_what_no_path_may_hold(
     answer = await client.post("/v1/jobs", json=body, headers={"Authorization": f"Bearer {token}"})
     assert answer.status_code == 422, answer.text
     assert transport.calls == []
+
+
+@pytest.mark.parametrize("path", ["/a\ud800b", "/run?q=\udfff", "a\ud800b"])
+async def test_rest_refuses_a_lone_surrogate_with_422_before_anything_is_written(
+    api: tuple[httpx.AsyncClient, BuilderEngine, str], transport: ScriptedStreamTransport, path: str
+) -> None:
+    """JSON can write one (``"\\ud800"``), and the runner address cannot be encoded with it: a 500, and a
+    job left ``uncertain`` (review of #134)."""
+    client, engine, token = api
+    transport.steps = [ScriptedStreamTransport.ok()]  # what a runner would answer, were it reached
+    body = json.dumps({"app": APP, "path": path, "operation_ref": "order-1"}).encode()  # ASCII: "\ud800"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    answer = await client.post("/v1/jobs", content=body, headers=headers)
+    assert answer.status_code == 422, answer.text
+    refusal = answer.json()["detail"][0]
+    assert (refusal["loc"], refusal["input"]) == (["body", "path"], path)
+    assert answer.content.isascii()  # the 422 repeats the surrogate as the escape it came in as
+    alice = ActorContext(actor_id="alice", permissions=frozenset({"jobs.read"}))
+    assert await engine.jobs.list_jobs(alice) == []  # no job, so the reference is still free
+    assert transport.calls == []
+
+
+async def test_a_422_still_repeats_any_other_input_as_utf_8(
+    api: tuple[httpx.AsyncClient, BuilderEngine, str],
+) -> None:
+    client, _, token = api
+    body = {"app": APP, "path": "/é#", "operation_ref": "order-1"}
+    answer = await client.post("/v1/jobs", json=body, headers={"Authorization": f"Bearer {token}"})
+    assert answer.status_code == 422, answer.text
+    assert answer.headers["content-type"] == "application/json"
+    assert '"input":"/é#"'.encode() in answer.content  # as FastAPI writes it: not escaped
 
 
 # -- the transport ---------------------------------------------------------------------------------------
@@ -304,6 +338,22 @@ def test_a_path_that_makes_the_authority_unreadable_leaves_the_runner(path: str)
     with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
         runner_address("http://127.0.0.1:8936", path)
     assert (refused.value.kind, refused.value.payment_sent) == ("http", False)
+
+
+@pytest.mark.parametrize("path", ["/a\ud800b", "/run?q=\udfff", "a\ud800b"])
+def test_a_path_that_cannot_be_encoded_leaves_the_runner(path: str) -> None:
+    """A lone surrogate that got past the contract: ``quote`` raises a ``UnicodeEncodeError`` for it."""
+    with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
+        runner_address("http://127.0.0.1:8936/app/app-1", path)
+    assert (refused.value.kind, refused.value.payment_sent) == ("http", False)
+
+
+async def test_the_transport_refuses_a_path_that_cannot_be_encoded_before_any_request(net: Net) -> None:
+    with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
+        await call(net, past_the_contract("/a\ud800b"))
+    error = refused.value
+    assert (error.kind, error.payment_sent, error.status_code) == ("http", False, None)
+    assert net.log == [] and net.targets == []
 
 
 @pytest.mark.parametrize("runner_url", ["http://127.0.0.1:8936", "http://127.0.0.1:8936/app/app-1/"])

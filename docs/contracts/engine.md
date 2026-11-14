@@ -120,20 +120,22 @@ missing `payload` as the JSON object `{}` (D41).
 orchestrator, so a path that a client or server would normalize could reach another app. The contract
 refuses a path that is not already normal, with a 422 (a `ValidationError` in process) before anything
 is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
-segment (`//`), an encoded separator (`%2F`, `%5C`), and a backslash, a control character or a fragment
-(`#`) anywhere. An encoded separator is refused because livepeer/node decodes the path before it
-forwards it, so `%2F` reaches the runner as a separator: `/a%2F%2Fb` arrives as `/a//b` and `/a%2F.%2Fb`
-as `/a/./b`, the empty and `.` segments this rule refuses as written. `..%2Fother` is not the reason: the
-node answers any decoded `..` segment with 400 `invalid path` before it routes, so it reaches no runner.
-The node passes `%5C` on as `%5C`; it is refused because it decodes to the backslash, which the contract
-refuses as written. A trailing `/` and a query string stay
-allowed; a query's slashes, dots and escapes are data. An empty path is the runner URL itself,
-and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets that
-400, whatever its segments (`run`, `a//b`, `../run` and `a%2Fb` alike); only a backslash, a control
-character or a fragment in it is a 422. The transport then sends the address
+segment (`//`), an encoded separator (`%2F`, `%5C`), and a backslash, a control character, a lone
+surrogate or a fragment (`#`) anywhere. An encoded separator is refused because livepeer/node decodes the
+path before it forwards it, so `%2F` reaches the runner as a separator: `/a%2F%2Fb` arrives as `/a//b`
+and `/a%2F.%2Fb` as `/a/./b`, the empty and `.` segments this rule refuses as written. `..%2Fother` is
+not the reason: the node answers any decoded `..` segment with 400 `invalid path` before it routes, so it
+reaches no runner. The node passes `%5C` on as `%5C`; it is refused because it decodes to the backslash,
+which the contract refuses as written. A lone surrogate is half of a UTF-16 pair, which JSON can write
+(`"\ud800"`) and no request target can encode; the 422 repeats it as that escape. A trailing `/` and a
+query string stay allowed; a query's slashes, dots and escapes are data. An empty path is the runner URL
+itself, and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets
+that 400, whatever its segments (`run`, `a//b`, `../run` and `a%2Fb` alike); only a backslash, a control
+character, a lone surrogate or a fragment in it is a 422. The transport then sends the address
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
-longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's).
+longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's)
+or that it cannot encode (a lone surrogate that got past the contract).
 The one exception is the `?` of an empty query: `/run?` is accepted, and the runner receives `/run`,
 because the HTTP client leaves an empty query out of the request target (`/run?x=` and `/run?&` arrive
 as written).
@@ -205,9 +207,14 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      `failed_after_payment`: the allocation paid it, and it is never `billable`
      ([payments.md](payments.md#cost-classification)).
    - **Advertised capacity is a hint (#114, C17).** A runner that advertises zero free capacity stays a
-     candidate. The default selection tries it after every runner with room, and when every runner for
-     the app advertises zero the engine tries them anyway: the advertisement is as old as the discovery
-     snapshot. If they all refuse, the job fails `refused` like any other job whose runners all refused
+     candidate. The default selection tries it after every runner with room: the advertisement is as
+     old as the discovery snapshot. On a job that pays, "after" holds within the runners the signer can
+     pay (and free ones) and within the rest, since those are moved ahead of the rest: a priced
+     zero-capacity runner is tried before a runner with room and no payable price. When every runner for the app advertises zero, the engine tries only
+     the runners an attempt signs no payment for, which on an unpaid job is all of them. The node asks
+     for payment before it checks capacity, so an attempt on a full priced runner costs a ticket. If
+     the runners tried all refuse, the job fails `refused` like any other job whose runners all refused.
+     A job that would pay every one of them fails `no_capacity` before any attempt, with nothing signed
      ([discovery.md](discovery.md#advertised-capacity)).
    - **Every runner failed over.** The job is `failed` with the last runner's status code and body. A
      404 or 409 is reported as `refused` (503, retry later), so the caller never reads an orchestrator's
@@ -231,11 +238,15 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      #114, C13; [payments.md](payments.md#correlation)). A
      `SignerRefreshRequired` (HTTP 480) that uses up the payment retry budget is the same refusal:
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
-     challenge and does not fail the attempt. Another orchestrator may succeed. The budgets are per
-     runner call and separate: at most `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` + 1 signatures (4 at the
-     default of 3), and as many unsigned requests, the first included, so a 480 is never a
-     signature. A runner that answers 402 after the last signature ends the attempt `http` (402),
-     paid, and that last challenge is not signed.
+     challenge and does not fail the attempt. Another orchestrator may succeed.
+     The runner's HTTP 402 payment challenge flow has two separate budgets per call.
+     It can sign at most `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` + 1 challenge payments
+     (4 at the default of 3) and send at most the same number of unsigned requests,
+     including the initial request. A signer HTTP 480 uses the unsigned-request
+     budget when it triggers a fresh challenge request. If the runner returns HTTP
+     402 after the last permitted challenge payment, the attempt ends as paid with
+     `http` (402), and the final challenge remains unsigned. Metered live sessions
+     sign renewal payments separately, outside the challenge signature cap.
    - **`payment`:** caller- or signer-side refusals: 401 or 403 (`not_authorized`) and 402
      (`allowance_exhausted`). The stored manifest becomes `unpaid` (D54), so it is never matched or
      billed, and the job ends `failed`. They do **not** fail over, because every orchestrator would
@@ -352,7 +363,7 @@ the last kind alone.
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
 | `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
-| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header, with the same `operation_ref`. Runners that advertise zero capacity do not cause it: they are tried, last, and a job they all refuse fails `refused` (#114, C17; [discovery.md](discovery.md#advertised-capacity)). A job stored by an engine before that change may carry this kind for runners that were all busy |
+| `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: the node asks for payment before it checks capacity, so an attempt on a full priced runner costs a ticket (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written |
 | `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
 | `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
 | `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
@@ -461,10 +472,18 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   send fails or is cancelled, however the server reports it (D40), the send of the response headers
   included (#113, C27). An app serving a stream over its own HTTP layer should do the same; without it,
   a closed iterator is the caller stopping.
-- **The runner's `Content-Type` goes out unchanged**, streamed or buffered (#113, C27): its parameters
+- **The runner's `Content-Type` goes out unchanged**, streamed, buffered or read back as a stored
+  result (`GET /v1/jobs/{id}/result`, 501 until ISS-26) (#113, C27): its parameters
   (`charset`, `profile`, `boundary`) are kept, and the engine adds none, not even a `charset` to a
   `text/` type. A runner that sends none is `application/octet-stream`. `RunnerReply.content_type`,
   `JobStream.content_type` and the stored `ResultRef.content_type` are that same header value.
+  Unchanged means byte for byte. The SDK transport reads the header's bytes as Latin-1, the encoding an
+  HTTP server writes a header in, so a value that is not ASCII goes out as the bytes the runner sent,
+  whatever encoding the runner meant. In those three fields such a value is its bytes read as Latin-1: a
+  parameter the runner wrote in UTF-8 (`title="é"`, bytes `C3 A9`) reads there as `Ã©`. A value that
+  holds a control character, which a header may not, is replaced by `application/octet-stream`. The only
+  length limit is the HTTP client's for one header, 8190 bytes; a longer one fails the call as a runner
+  error.
 
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
 transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and
@@ -529,7 +548,7 @@ should handle a failed load ("the provider no longer serves this file") instead 
 or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
 (default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
 ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
-is 422. Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
+is 422, and so is one that UTC cannot hold ([access.md](access.md#answers)). Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
 them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job, or a missing one, is
 404.
 

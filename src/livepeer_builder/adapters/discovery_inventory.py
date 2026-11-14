@@ -9,6 +9,7 @@ binary floats.
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -16,7 +17,14 @@ from urllib.parse import urlsplit
 
 import yarl
 
-from livepeer_builder.contracts.discovery import PriceInfo, Runner, RunnerGPU
+from livepeer_builder.contracts.discovery import (
+    NOT_TEXT,
+    PriceInfo,
+    Runner,
+    RunnerGPU,
+    is_optional_text,
+    is_text,
+)
 
 _LOG = logging.getLogger(__name__)
 _FRACTION = re.compile(r"(\.\d{6})\d+")
@@ -27,12 +35,9 @@ _RFC3339 = re.compile(
 )
 _INT64 = 1 << 63
 _HTTP = frozenset({"http", "https"})
-# Text the engine cannot keep or serve (#114, C12): a control character (NUL among them, which PostgreSQL
-# refuses), or a lone surrogate, which JSON can carry as ``\udXXX`` and UTF-8 cannot, so the catalog could
-# not be written.
-_NOT_TEXT = r"\x00-\x1f\x7f-\x9f\ud800-\udfff"
-_INVALID_TEXT = re.compile(f"[{_NOT_TEXT}]")
-_UNSENDABLE = re.compile(f"[ {_NOT_TEXT}]")  # a URL: a space too, which the HTTP client cannot send
+# A URL holds none of what is not text (``contracts.discovery``, #114, C12), and no space, which the HTTP
+# client cannot send.
+_UNSENDABLE = re.compile(f"[ {NOT_TEXT}]")
 _MAX_APP = 200  # a job stores its app as ``store.schema.ID``, and ``JobRequest.app`` takes no longer one
 
 
@@ -57,12 +62,14 @@ def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
 
     An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
-    entry (``nodes``, and no ``address``) yields nothing. A runner needs an ``app`` that is valid text
-    (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the clock can
-    convert to UTC. Any other text field that is not valid text is absent. One bad record does not drop
-    the rest. ``[]`` is an empty inventory, and so is a document with no record to skip. A document with
-    skipped records and no runner raises ``UnreadableInventory``. A number ``Decimal`` cannot hold is
-    still a number: the runner is kept, and ``payable_rate`` reports that its price cannot be paid.
+    entry (``nodes``, no ``address`` and no ``runners``) yields nothing. A runner needs an ``app`` that is
+    valid text (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the
+    clock can convert to UTC. Any other text field that is not valid text is absent; such a field may hold
+    a tab or a line break. One bad record does not drop the rest. ``[]`` is an empty inventory, and so is a
+    document with no record to skip. A document with skipped records and no runner raises
+    ``UnreadableInventory``.
+    A number ``Decimal`` cannot hold is still a number: the runner is kept, and ``payable_rate`` reports
+    that its price cannot be paid.
     """
     entries = _loads(raw)
     if not isinstance(entries, list):
@@ -105,7 +112,10 @@ def _refuse_nothing_read(runners: list[Runner], entries: int, skipped: int) -> N
 
 def _loads(raw: str | bytes | bytearray) -> Any:
     """``json.loads`` with every number kept as its token. ``NaN`` and ``Infinity`` are not JSON."""
-    return json.loads(raw, parse_int=JsonNumber, parse_float=JsonNumber, parse_constant=_not_json)
+    try:
+        return json.loads(raw, parse_int=JsonNumber, parse_float=JsonNumber, parse_constant=_not_json)
+    except RecursionError as error:  # no ValueError, though the body is what could not be read
+        raise ValueError("discovery response is nested too deeply to read") from error
 
 
 def _not_json(token: str) -> Any:
@@ -113,7 +123,11 @@ def _not_json(token: str) -> Any:
 
 
 def _metadata(entry: object) -> bool:
-    return isinstance(entry, dict) and "nodes" in entry and "address" not in entry
+    """``nodes``, no ``address`` and no ``runners``, as node writes one. With records under it the entry is
+    one no address can read: skipped and counted, not an empty answer (#114, C28)."""
+    return (
+        isinstance(entry, dict) and "nodes" in entry and "address" not in entry and not entry.get("runners")
+    )
 
 
 def _entry(entry: object) -> tuple[str, list[Any]] | None:
@@ -144,15 +158,15 @@ def _runner(raw: object, address: str) -> Runner | None:
     return Runner(
         url=url,
         app=app,
-        mode=_text(raw.get("mode")),
+        mode=_optional_text(raw.get("mode")),
         orchestrator_url=address if _origin(address) == _origin(url) else None,
         capacity=_integer(raw.get("capacity")),
         capacity_used=_integer(raw.get("capacity_used")),
         capacity_available=_available(raw),
         price_info=_price_info(raw.get("price_info")),
         observed_at=observed_at,
-        version=_text(raw.get("version")),
-        metadata=_text(raw.get("metadata")),
+        version=_optional_text(raw.get("version")),
+        metadata=_optional_text(raw.get("metadata")),
         gpu=_gpu(gpu) if isinstance(gpu, dict) else None,
     )
 
@@ -163,10 +177,11 @@ def _http_url(value: object) -> str | None:
     aiohttp, which makes every runner call, reads the URL with yarl. yarl must connect to the host
     ``urlsplit`` names, the one the payment-origin check compares, on a port from 1 to 65535. yarl folds
     a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
-    The URL holds no whitespace, control character or lone surrogate, which aiohttp cannot send. It has no
-    userinfo, query or fragment: the engine appends each request's path to a runner URL, an ``address``
-    whose origin matches that URL becomes ``orchestrator_url`` for the payment-origin check, and error
-    text quotes both.
+    The URL holds no ASCII space, control character or lone surrogate (``_UNSENDABLE``): it is valid
+    text, and a space would split the request line. Another space character, such as U+00A0 or U+2028,
+    is kept and percent-encoded when sent (``runner_address``). It has no userinfo, query or fragment:
+    the engine appends each request's path to a runner URL, an ``address`` whose origin matches that URL
+    becomes ``orchestrator_url`` for the payment-origin check, and error text quotes both.
     """
     if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
         return None
@@ -203,8 +218,8 @@ def _price_info(value: object) -> PriceInfo | None:
     return PriceInfo(
         price=_decimal(value.get("price")),
         price_usd=_decimal(value.get("price_usd")),
-        currency=_text(value.get("currency")),
-        unit=_text(value.get("unit")),
+        currency=_optional_text(value.get("currency")),
+        unit=_optional_text(value.get("unit")),
     )
 
 
@@ -240,13 +255,18 @@ def _available(raw: dict[str, Any]) -> int | None:
     return 0 if available is None else available
 
 
-def _text(value: object) -> str | None:
+def _text(value: object, valid: Callable[[str], bool] = is_text) -> str | None:
     """A string of valid Unicode text with no control character, exactly as written; otherwise None.
 
     Nothing is repaired: text with a NUL, another control character or a lone surrogate is not read."""
-    if not isinstance(value, str) or _INVALID_TEXT.search(value):
+    if not isinstance(value, str) or not valid(value):
         return None
     return value
+
+
+def _optional_text(value: object) -> str | None:
+    """As ``_text``, for a field a runner may leave out: a tab and a line break are kept (#114, C12)."""
+    return _text(value, is_optional_text)
 
 
 def _stamp(value: object) -> datetime | None:
@@ -270,7 +290,7 @@ def _stamp(value: object) -> datetime | None:
 
 def _gpu(value: dict[str, Any]) -> RunnerGPU:
     return RunnerGPU(
-        id=_text(value.get("id")),
-        name=_text(value.get("name")),
+        id=_optional_text(value.get("id")),
+        name=_optional_text(value.get("name")),
         vram_mb=_integer(value.get("vram_mb")),
     )

@@ -37,11 +37,12 @@ def runner_address(runner_url: str, path: str) -> str:
         runner = _read(base)
     except (ValueError, UnicodeError) as error:
         raise RunnerCallError("http", f"invalid runner URL {runner_url!r}", payment_sent=False) from error
-    address = base + _as_sent(path)
     leaves = RunnerCallError("http", f"the path {path!r} leaves the runner {runner_url}", payment_sent=False)
     try:
+        address = base + _as_sent(path)
         sent = _read(address)
-    except (ValueError, UnicodeError) as error:  # the path changed the authority into one yarl refuses
+    except (ValueError, UnicodeError) as error:
+        # the path cannot be encoded (a lone surrogate), or changed the authority into one yarl refuses
         raise leaves from error
     under = runner.raw_path.rstrip("/")
     same_host = (sent.scheme, sent.raw_authority) == (runner.scheme, runner.raw_authority)

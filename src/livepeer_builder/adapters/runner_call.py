@@ -32,6 +32,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Protocol, runtime_checkable
 
@@ -185,7 +186,7 @@ class PaidRequest:
                 finally:
                     await stop_funding(funding)
                     response.release()
-        return response.status, body, response.headers.get("Content-Type") or "application/octet-stream"
+        return response.status, body, response_content_type(response)
 
     async def open(self, connect_timeout_s: float) -> "SdkRunnerStream":
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
@@ -405,7 +406,7 @@ class SdkRunnerStream:
 
     @property
     def content_type(self) -> str:
-        return self._response.headers.get("Content-Type") or "application/octet-stream"  # as sent (C27)
+        return response_content_type(self._response)
 
     @property
     def headers(self) -> tuple[tuple[str, str], ...]:
@@ -470,6 +471,22 @@ async def stop_funding(task: asyncio.Task[Any] | None) -> None:
     await asyncio.wait([task])
     if not task.cancelled():
         task.exception()  # retrieved, so asyncio does not warn about it
+
+
+# What a header value may hold (RFC 9110): a tab, a space, visible ASCII and the bytes 0x80 to 0xFF.
+# aiohttp's parser lets other control characters through, and an HTTP server may refuse to send one.
+_HEADER_VALUE = re.compile(rb"[\t\x20-\x7e\x80-\xff]+")
+
+
+def response_content_type(response: aiohttp.ClientResponse) -> str:
+    """The runner's ``Content-Type`` as sent (#113, C27): the header's bytes read as Latin-1, as an HTTP
+    server writes them back. aiohttp's ``response.headers`` reads them as UTF-8 and writes a byte that is
+    not as a lone surrogate, which can be neither sent (a 500 after the job ran) nor read back once
+    stored. ``application/octet-stream`` for no header, or for one that holds a control character."""
+    for name, value in response.raw_headers:
+        if name.lower() == b"content-type":
+            return value.decode("latin-1") if _HEADER_VALUE.fullmatch(value) else "application/octet-stream"
+    return "application/octet-stream"
 
 
 def json_object(body: bytes, content_type: str) -> dict[str, Any] | None:

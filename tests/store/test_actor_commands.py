@@ -47,7 +47,9 @@ async def test_a_key_write_changes_the_key_its_reference_and_the_time_only(
 ) -> None:
     later = clock.now() + timedelta(minutes=1)
     await sql.set_actor_status("default", "alice", "a1", "paused", clock.now())
-    written = await sql.set_actor_key("default", "alice", "a1", "k2", SecretRef(ref="db:2"), later)
+    written = await sql.set_actor_key(
+        "default", "alice", "a1", "k2", SecretRef(ref="db:2"), later, only_from="k1"
+    )
     changes = {"api_key_id": "k2", "secret_ref": SecretRef(ref="db:2"), "updated_at": later}
     assert written == actor.model_copy(update=changes | {"status": "paused"})
     assert await sql.get_actor("default", "alice") == written
@@ -79,7 +81,8 @@ async def test_no_write_applies_to_a_revoked_actor(
     assert await sql.set_actor_status("default", "alice", "a1", "active", later) is None
     assert await sql.set_actor_status("default", "alice", "a1", "revoked", later) is None
     assert await sql.set_actor_status("default", "alice", "a1", "active", later, only_from="revoked") is None
-    assert await sql.set_actor_key("default", "alice", "a1", "k2", SecretRef(ref="db:2"), later) is None
+    key = ("default", "alice", "a1", "k2", SecretRef(ref="db:2"), later)
+    assert await sql.set_actor_key(*key, only_from="k1") is None
     assert await sql.get_actor("default", "alice") == revoked  # nothing was written
 
 
@@ -88,10 +91,49 @@ async def test_no_write_applies_to_another_allocation_or_an_unknown_actor(
 ) -> None:
     """A command that acted on an allocation since revoked never writes onto the one provisioned after."""
     assert await sql.set_actor_status("default", "alice", "a0", "paused", clock.now()) is None
-    assert await sql.set_actor_key("default", "alice", "a0", "k2", SecretRef(ref="db:2"), clock.now()) is None
+    key = ("default", "alice", "a0", "k2", SecretRef(ref="db:2"), clock.now())
+    assert await sql.set_actor_key(*key, only_from="k1") is None
     assert await sql.set_actor_status("default", "bob", "a1", "paused", clock.now()) is None
     assert await sql.set_actor_status("other", "alice", "a1", "paused", clock.now()) is None
     assert await sql.get_actor("default", "alice") == actor
+
+
+async def test_a_key_write_applies_only_over_the_key_the_rotation_began_from(
+    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+) -> None:
+    """Two rotations that both began from ``k1``: the first write wins, and the second finds a key that
+    is neither the one it began from nor its own, so it writes nothing. A repeat of the first still applies."""
+    later = clock.now() + timedelta(minutes=1)
+    first = await sql.set_actor_key(
+        "default", "alice", "a1", "k2", SecretRef(ref="db:2"), later, only_from="k1"
+    )
+    assert first is not None and first.api_key_id == "k2"
+    lost = ("default", "alice", "a1", "k3", SecretRef(ref="db:3"), later)
+    assert await sql.set_actor_key(*lost, only_from="k1") is None
+    assert await sql.get_actor("default", "alice") == first  # nothing was written
+    again = await sql.set_actor_key(
+        "default", "alice", "a1", "k2", SecretRef(ref="db:2"), later, only_from="k1"
+    )
+    assert again == first
+
+
+async def test_two_key_writes_from_one_key_at_the_same_time_leave_one(
+    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+) -> None:
+    for round_ in range(1, 11):
+        began_from = (await sql.get_actor("default", "alice")).api_key_id  # type: ignore[union-attr]
+        rivals = [
+            (f"k{round_}a", SecretRef(ref=f"db:{round_}a")),
+            (f"k{round_}b", SecretRef(ref=f"db:{round_}b")),
+        ]
+        wrote = await asyncio.gather(
+            *(
+                sql.set_actor_key("default", "alice", "a1", key, ref, clock.now(), only_from=began_from)
+                for key, ref in rivals
+            )
+        )
+        won = [written for written in wrote if written is not None]
+        assert len(won) == 1 and await sql.get_actor("default", "alice") == won[0]
 
 
 async def test_a_status_write_and_a_key_write_at_the_same_time_both_last(
@@ -103,7 +145,7 @@ async def test_a_status_write_and_a_key_write_at_the_same_time_both_last(
         key, ref = f"k{round_ + 1}", SecretRef(ref=f"db:{round_ + 1}")
         wrote = await asyncio.gather(
             sql.set_actor_status("default", "alice", "a1", status, clock.now()),  # type: ignore[arg-type]
-            sql.set_actor_key("default", "alice", "a1", key, ref, clock.now()),
+            sql.set_actor_key("default", "alice", "a1", key, ref, clock.now(), only_from=f"k{round_}"),
         )
         assert None not in wrote
         stored = await sql.get_actor("default", "alice")

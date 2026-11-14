@@ -98,7 +98,7 @@ classDiagram
     }
     class ActorCommandRepo {
         <<interface>>
-        +async set_actor_key(application_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at) ProvisionedActor?
+        +async set_actor_key(application_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ProvisionedActor?
         +async set_actor_status(application_id, actor_id, allocation_id, status, updated_at, only_from) ProvisionedActor?
     }
     class UsageSetAsideRepo {

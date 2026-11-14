@@ -17,7 +17,13 @@ import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionedActor, ProvisionRequest
-from livepeer_builder.errors import NotFound, NotProvisioned
+from livepeer_builder.errors import (
+    InvalidRequest,
+    NotFound,
+    NotProvisioned,
+    OperationInProgress,
+    ProviderUnavailable,
+)
 from livepeer_builder.protocols import ActorCommandRepo
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager, FixedClock, MemorySecretStore
@@ -215,6 +221,115 @@ async def test_a_status_command_writes_the_status_and_the_time_only(desk: Desk, 
     assert await desk.payments.get_actor(desk.admin, "default", "alice") == paused
 
 
+# -- two rotations of one actor's key ---------------------------------------------------------------------
+
+
+def live_keys(manager: FakeAllocationManager) -> list[str]:
+    return [key_id for key_id, (_, _, revoked) in manager.keys.items() if not revoked]
+
+
+async def rotate_2(desk: Desk) -> ProvisionedActor:
+    return await desk.payments.rotate_key(desk.admin, "default", "alice", "rotate-2")
+
+
+async def holds_only_the_key_of(
+    desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
+) -> ProvisionedActor:
+    """The actor as stored, after checking that its key is the only live one and its secret the only one
+    stored: no rotation left a key live, or a secret stored, that nothing references."""
+    stored = await desk.payments.get_actor(desk.admin, "default", "alice")
+    assert live_keys(manager) == [stored.api_key_id]
+    assert list(vault.values) == [stored.secret_ref.ref]
+    assert (await desk.payments.credential(alice)).token == manager.keys[stored.api_key_id][1]
+    return stored
+
+
+async def test_a_key_rotation_does_not_undo_a_rotation_that_finished_meanwhile(
+    desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
+) -> None:
+    """Before, the key write asked only for the same allocation and an actor not revoked, so the slower
+    rotation wrote its key over the finished one: that one had answered with a key the actor no longer
+    held, and its key stayed live with its secret stored and nothing pointing at it."""
+    await desk.payments.provision(desk.admin, provision_request())
+    finished: list[ProvisionedActor] = []
+
+    async def other() -> None:
+        finished.append(await rotate_2(desk))
+
+    during(manager, "create_key", other)  # rotate-1 has minted its key; rotate-2 runs to its end
+    with pytest.raises(InvalidRequest, match="another key rotation"):
+        await desk.rotate()
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0]
+
+
+async def test_a_rotation_resumed_after_a_newer_one_finished_does_not_put_its_own_key_back(
+    desk: Desk,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    vault: MemorySecretStore,
+    clock: FixedClock,
+) -> None:
+    """rotate-1 stored its key and timed out revoking the old one; rotate-2 then replaced rotate-1's key,
+    revoked it and deleted its secret. Before, the resume of rotate-1 found the actor without its key and
+    wrote it again: a revoked key and the reference of a deleted secret, so the actor could not pay. Now
+    it leaves the actor alone and still revokes the key it began from, which nothing else would."""
+    before = await desk.payments.provision(desk.admin, provision_request())
+    manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await desk.rotate()
+    second = await rotate_2(desk)
+    assert manager.keys[before.api_key_id][2] is False  # rotate-1's old key: its revoke never got through
+    clock.advance(120)  # LPB_OPERATION_STALE_S: rotate-1's first run is presumed dead
+    with pytest.raises(InvalidRequest, match="another key rotation"):
+        await desk.rotate()
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == second
+
+
+async def test_a_rotation_that_lost_keeps_its_reference_and_answers_the_same_again(
+    desk: Desk, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """The reference is never freed: the provider replays the revoked key to any rotation under it. The
+    record notes what happened, so a repeat is refused in the same words before any provider call."""
+    await desk.payments.provision(desk.admin, provision_request())
+    during(manager, "create_key", lambda: rotate_2(desk))
+    with pytest.raises(InvalidRequest, match="another key rotation") as lost:
+        await desk.rotate()
+    with pytest.raises(OperationInProgress):  # the record is still held
+        await desk.rotate()
+    third = await desk.payments.rotate_key(desk.admin, "default", "alice", "rotate-3")
+    calls = list(manager.calls)
+    clock.advance(120)
+    with pytest.raises(InvalidRequest) as again:
+        await desk.rotate()
+    assert str(again.value) == str(lost.value) and manager.calls == calls
+    assert await desk.payments.get_actor(desk.admin, "default", "alice") == third
+
+
+async def test_a_rotation_that_lost_and_could_not_revoke_its_own_key_finishes_on_a_repeat(
+    desk: Desk,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    vault: MemorySecretStore,
+    clock: FixedClock,
+) -> None:
+    """The losing rotation revokes its own key before it deletes that key's secret. When the revoke does
+    not get through, the key is still live, so its secret is still stored and the record still open."""
+    await desk.payments.provision(desk.admin, provision_request())
+
+    async def other() -> None:
+        await rotate_2(desk)
+        manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
+
+    during(manager, "create_key", other)
+    with pytest.raises(ProviderUnavailable):
+        await desk.rotate()
+    assert len(live_keys(manager)) == 2 and len(vault.values) == 2  # the losing key, with its secret
+    clock.advance(120)
+    with pytest.raises(InvalidRequest, match="another key rotation"):
+        await desk.rotate()
+    await holds_only_the_key_of(desk, alice, manager, vault)
+
+
 # -- a supplied store without the conditional writes ------------------------------------------------------
 
 
@@ -296,3 +411,19 @@ async def test_a_store_without_the_column_writes_keeps_a_pause_through_a_fund(
     await desk.payments.provision(desk.admin, provision_request("0"))
     during(manager, "fund_allocation", desk.pause)
     assert (await desk.fund()).status == "paused"
+
+
+async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_meanwhile(
+    whole_row_desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
+) -> None:
+    desk = whole_row_desk
+    await desk.payments.provision(desk.admin, provision_request())
+    finished: list[ProvisionedActor] = []
+
+    async def other() -> None:
+        finished.append(await rotate_2(desk))
+
+    during(manager, "create_key", other)
+    with pytest.raises(InvalidRequest, match="another key rotation"):
+        await desk.rotate()
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0]

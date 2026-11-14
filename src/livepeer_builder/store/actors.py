@@ -57,11 +57,15 @@ class SqlActorCommands:
         api_key_id: str,
         secret_ref: SecretRef,
         updated_at: datetime,
+        *,
+        only_from: str,
     ) -> ProvisionedActor | None:
-        values = {"api_key_id": api_key_id, "secret_ref": secret_ref.ref, "updated_at": updated_at}
-        return await self._write(
-            _held(application_id, actor_id, allocation_id), application_id, actor_id, values
+        # the key the rotation began from, or its own key already: any other is a finished rotation's
+        held = and_(
+            _held(application_id, actor_id, allocation_id), t.actors.c.api_key_id.in_((only_from, api_key_id))
         )
+        values = {"api_key_id": api_key_id, "secret_ref": secret_ref.ref, "updated_at": updated_at}
+        return await self._write(held, application_id, actor_id, values)
 
     async def _write(
         self, held: ColumnElement[bool], application_id: str, actor_id: str, values: dict[str, Any]

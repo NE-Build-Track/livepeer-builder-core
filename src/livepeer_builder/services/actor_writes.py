@@ -5,7 +5,8 @@ used to save the whole row from that read, so a command that finished in between
 rotation's new key by a pause, a pause by a rotation, a revoke by any of them. Now:
 
 - a status command writes ``status`` and ``updated_at``;
-- a key rotation writes ``api_key_id``, ``secret_ref`` and ``updated_at``;
+- a key rotation writes ``api_key_id``, ``secret_ref`` and ``updated_at``, and only over the key it began
+  from: an actor holding another key got it from a rotation that finished first;
 - a fund moves ``exhausted`` to ``active`` and writes nothing else;
 - no write applies to a ``revoked`` actor, or to an allocation other than the one the command acted on
   (one provisioned after a revoke).
@@ -24,7 +25,8 @@ from livepeer_builder.protocols import ActorCommandRepo, ActorRepo, Clock
 
 class ActorWrites:
     """A command's write to the actor it read. ``None`` means the condition did not hold and nothing was
-    written: the actor was revoked, or revoked and provisioned again, since the command read it."""
+    written: the actor was revoked, or revoked and provisioned again, since the command read it, or (a
+    key write) another rotation gave it a key."""
 
     def __init__(self, store: ActorRepo, clock: Clock) -> None:
         self._store = store
@@ -49,9 +51,10 @@ class ActorWrites:
         return await self._saved(current, {"status": status})
 
     async def key(
-        self, actor: ProvisionedActor, api_key_id: str, secret_ref: SecretRef
+        self, actor: ProvisionedActor, api_key_id: str, secret_ref: SecretRef, *, only_from: str
     ) -> ProvisionedActor | None:
-        """Point the actor at a new payment key."""
+        """Point the actor at a new payment key, only where it still holds the key ``only_from`` (the one
+        the rotation began from) or holds the new key already."""
         if isinstance(self._store, ActorCommandRepo):
             return await self._store.set_actor_key(
                 actor.application_id,
@@ -60,9 +63,10 @@ class ActorWrites:
                 api_key_id,
                 secret_ref,
                 self._clock.now(),
+                only_from=only_from,
             )
         current = await self._held(actor)
-        if current is None:
+        if current is None or current.api_key_id not in (only_from, api_key_id):
             return None
         return await self._saved(current, {"api_key_id": api_key_id, "secret_ref": secret_ref})
 

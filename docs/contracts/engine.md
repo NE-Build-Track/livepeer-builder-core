@@ -189,7 +189,9 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      ([payments.md](payments.md#cost-classification)).
    - **Advertised capacity is a hint (#114, C17).** A runner that advertises zero free capacity stays a
      candidate. The default selection tries it after every runner with room: the advertisement is as
-     old as the discovery snapshot. When every runner for the app advertises zero, the engine tries only
+     old as the discovery snapshot. On a job that pays, "after" holds within the runners the signer can
+     pay (and free ones) and within the rest, since those are moved ahead of the rest: a priced
+     zero-capacity runner is tried before a runner with room and no payable price. When every runner for the app advertises zero, the engine tries only
      the runners an attempt signs no payment for, which on an unpaid job is all of them. The node asks
      for payment before it checks capacity, so an attempt on a full priced runner costs a ticket. If
      the runners tried all refuse, the job fails `refused` like any other job whose runners all refused.

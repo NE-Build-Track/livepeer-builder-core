@@ -404,7 +404,8 @@ class FakeAllowance:
 
 
 class FakeEngine:
-    """Implements ``ActorApi``; ``streaming=False`` gives an engine whose transport cannot stream."""
+    """Implements ``ActorApi``; ``streaming=False`` gives an engine whose transport cannot stream.
+    Like the engine, it refuses a second ``start()``, and a ``start()`` after ``stop()``."""
 
     def __init__(
         self,
@@ -442,6 +443,8 @@ class FakeEngine:
     async def start(self) -> None:
         if self.stopped:
             raise RuntimeError("engine is stopped; create a new one")
+        if self.started:  # as the engine (#113, C27)
+            raise RuntimeError("engine is already started; stop() it, then create a new one to start again")
         self.started = True
 
     async def stop(self) -> None:

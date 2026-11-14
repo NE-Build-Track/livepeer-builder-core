@@ -56,7 +56,7 @@ async def test_no_route_declares_a_plain_string_path_or_query_parameter(make_eng
             if not is_text(field.field_info.annotation):
                 continue
             checked += 1
-            for bad in ("x" * 201, "a\x00b"):
+            for bad in ("x" * 201, "a\x00b", "a\ud800b"):
                 _, errors = field.validate(bad, {}, loc=(kind, field.alias))
                 if not errors:
                     plain.append(f"{sorted(route.methods)} {route.path}: {kind} parameter {field.alias!r}")

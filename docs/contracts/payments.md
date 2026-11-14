@@ -85,7 +85,9 @@ characters or holds a NUL character (422 over REST), before any provider call: e
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
-`label`.
+`label`. Stored text also refuses a lone surrogate, half of a UTF-16 pair, which JSON can write
+(`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
+because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
 `FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters

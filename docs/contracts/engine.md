@@ -541,6 +541,9 @@ succeeded and the second replaced the first.
 | the same quantities (a retry after a lost answer, or the slower of two identical reports) | 200 with the job and the **stored** usage, its `reported_at` included. Nothing is written |
 | other quantities | refused as before: `InvalidRequest` (HTTP 400), "usage was already reported for this job". The stored usage stays |
 
+`FakeEngine` (`livepeer_builder.testing`) answers by the same rule, from the engine's own function:
+it keeps the usage on its job and answers a repeat as the table says.
+
 The conditional write is optional for a store (`UsageOnceRepo.set_usage_once` in `protocols`). The
 packaged SQL store has it. With a supplied store without it, the engine checks the job it read and
 calls `set_usage`, which updates unconditionally: a repeat is answered as in the table, but two reports

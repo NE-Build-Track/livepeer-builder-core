@@ -5,7 +5,8 @@ the engine for the API's *shape*: run a job, read it back, stream it, see costs 
 Like the engine, a run records an attempt on the first runner for the app, a repeated
 ``operation_ref`` follows the engine's rules (D57): ``OperationConflict`` for a different request,
 ``OperationInProgress`` while its stream is open, a new job after a failure that never reached a
-runner, ``OperationExists`` otherwise; and a stream that fails part-way leaves the job ``uncertain``.
+runner, ``OperationExists`` otherwise; a stream that fails part-way leaves the job ``uncertain``; and a
+job's usage is stored once, a repeat answered by its quantities (#115, C20).
 It does not model the money rules (admission, failover, payment); script those outcomes with
 ``Fails`` and ``Raises``, or use ``make_engine`` when they matter. A contract test runs the same
 actor-API assertions against both.
@@ -55,6 +56,7 @@ from livepeer_builder.services.operations import retry_of
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.request_identity import request_fingerprint
+from livepeer_builder.services.usage_reports import usage_to_store
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
@@ -314,13 +316,14 @@ class FakeJobs:
         return self._results[job_id]
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
+        """Stored once on the job, by the engine's own rule (#115, C20): the same quantities again get the
+        stored usage back, and any other report is refused. ``usage_reports`` lists each report answered."""
         job = self.owned(actor, Operation.JOBS_RUN, job_id)
-        if job.state != "succeeded":
-            raise InvalidRequest("usage can only be reported for a succeeded job")
-        if any(value < 0 for value in quantities.values()):
-            raise InvalidRequest("usage quantities must be non-negative")
+        usage = usage_to_store(job, quantities, datetime.now(UTC))
         self.usage_reports.append((job_id, dict(quantities)))
-        return job
+        if usage is not None:
+            self._jobs[job_id] = job.model_copy(update={"usage": usage})
+        return self._jobs[job_id]
 
 
 class FakeCosts:

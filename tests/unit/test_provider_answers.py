@@ -21,6 +21,7 @@ from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageS
 from livepeer_builder.contracts import ActorContext, Money
 from livepeer_builder.errors import OperationInProgress, ProviderError, ProviderUnavailable
 from livepeer_builder.http import create_app
+from livepeer_builder.services.costs import CostSyncWorker
 from livepeer_builder.services.failure_codes import source_failure
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
@@ -491,6 +492,81 @@ async def test_a_grant_create_answer_without_a_usable_id_is_a_provider_error_and
         await BatteriesClient(BASE, "t", client=client).create_grant("ops", USD)
     assert refused.value.status_code == 200 and not definite_refusal(refused.value)
     assert asked == ["POST /v1/grants"]  # no read-back of a grant named "None" or "7"
+
+
+def stuck(item: dict[str, Any], asked: list[str | None]) -> httpx.AsyncClient:
+    """A Batteries whose list always answers ``next_cursor`` ``c1``, whatever cursor it is asked with. It
+    goes away after five pages, so a loop that never ends fails its test instead of hanging it."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params.get("cursor"))
+        if len(asked) > 5:
+            raise httpx.ConnectError("the list never ended")
+        return httpx.Response(200, json={"items": [item], "next_cursor": "c1"})
+
+    return httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+
+
+USAGE_ITEM = {"id": "u1", "status": "applied", "created_at_ms": 1760270400000}
+
+
+async def test_a_grant_list_whose_cursor_does_not_advance_is_a_provider_error_not_an_endless_loop() -> None:
+    asked: list[str | None] = []
+    client = BatteriesClient(BASE, "t", client=stuck(GRANT, asked))
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await client.list_grants()
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert asked == [None, "c1"]  # the page asked with c1 answered c1: asking again would never end
+
+
+async def test_a_usage_feed_whose_cursor_does_not_advance_fails_the_sync_as_an_invalid_answer(
+    store: SqlStore,
+) -> None:
+    asked: list[str | None] = []
+    worker = CostSyncWorker(BatteriesUsageSource(BASE, "t", client=stuck(USAGE_ITEM, asked)), store)
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await worker.sync_once()
+    assert asked == [None, "c1"]
+    assert worker.source_error is refused.value and source_failure(refused.value) == "invalid_answer"
+    checkpoint = await store.cost_checkpoint()
+    assert checkpoint is not None and checkpoint.resume_cursor == "c1"  # the next sync asks for it again
+
+
+async def test_the_rest_service_answers_a_list_that_never_advances_with_502(
+    make_engine: EngineFactory,
+) -> None:
+    """``GET /v1/admin/grants`` and ``POST /v1/admin/costs/sync`` asked for the same page without end and
+    never answered."""
+    desk = BatteriesClient(BASE, "t", client=stuck(GRANT, []))
+    usage = BatteriesUsageSource(BASE, "t", client=stuck(USAGE_ITEM, []))
+    engine = await make_engine(supply=EngineSupply(grants_manager=desk, usage_source=usage))
+    key = await engine.keys.bootstrap_admin()
+    async with rest(engine, key.token) as http:
+        listed = await http.get("/v1/admin/grants")
+        synced = await http.post("/v1/admin/costs/sync")
+    assert (listed.status_code, synced.status_code) == (502, 502)
+
+
+async def test_a_resumed_grant_create_over_a_list_that_never_advances_is_an_unknown_outcome(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock
+) -> None:
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.grants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    batteries.list_answers = [{"items": [], "next_cursor": "c1"}] * 5  # then the real list
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+    assert not definite_refusal(refused.value) and len(batteries.list_answers) == 3  # two pages asked
+    assert len(batteries.grants) == 1  # never "no such grant"
+    with pytest.raises(OperationInProgress):  # the reference is still held
+        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])

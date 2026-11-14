@@ -106,7 +106,8 @@ class BatteriesClient:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{segment(allocation_id)}"))
 
     async def list_grants(self) -> list[GrantRecord]:
-        """Every grant, page by page."""
+        """Every grant, page by page. A page that answers the cursor it was asked with is an answer the
+        engine cannot read: asking again would never end."""
         grants: list[GrantRecord] = []
         cursor: str | None = None
         while True:
@@ -114,6 +115,8 @@ class BatteriesClient:
             grants += page.grants
             if page.next_cursor is None:
                 return grants
+            if page.next_cursor == cursor:
+                raise ProviderError(200, "Batteries answered a grant list whose cursor did not advance")
             cursor = page.next_cursor
 
     async def grant_page(self, cursor: str | None) -> GrantPage:

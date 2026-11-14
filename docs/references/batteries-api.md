@@ -34,7 +34,8 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
   holds every answer to that: a 2xx that is not a JSON object, `items` that is not a list of objects, or
   a `next_cursor` that is not a string is a `ProviderError` (502), never an empty answer (#114, C21;
   `adapters/batteries.py`, `json_object` and `list_page`). The engine also takes a list with no
-  `next_cursor` as a last page. A grant's `id`, `name`, `status`, `currency`, total and `metadata` are
+  `next_cursor` as a last page, and a page that answers the cursor it was asked with as that
+  `ProviderError`: Batteries' cursor is the last row's `seq`, so it always advances. A grant's `id`, `name`, `status`, `currency`, total and `metadata` are
   strings: `metadata` is `""` for a grant with none, never `null` (`TEXT NOT NULL DEFAULT ''` in
   `migrations/001_initial.sql`). A grant with no `id`, or with one of these that is not a string, is the
   same `ProviderError` (`grant_from_item`); the engine takes a grant with no `metadata` key as one with

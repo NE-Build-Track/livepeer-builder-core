@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import ActorContext, Currency, GrantRecord, Money, Operation
 from livepeer_builder.contracts.common import FundingAmount
-from livepeer_builder.errors import InvalidRequest
+from livepeer_builder.errors import InvalidRequest, ProviderError
 from livepeer_builder.protocols import AccessPolicy, AllocationManager
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 
@@ -84,7 +84,8 @@ class GrantDesk:
         """The grant an earlier run created, found by its tag, page by page from where the last resume
         stopped: the cursor is recorded after each page, so a resume that runs out of its budget in a slow
         catalog leaves the next one less to read. Pages already read lacked the tag, and a grant created
-        later is always on a later page (Batteries lists oldest first)."""
+        later is always on a later page (Batteries lists oldest first). A page that answers the cursor it
+        was asked with fails the search as an unknown outcome: asking again would never end."""
         cursor = run.context.get("grant_list_cursor")
         while True:
             page = await self._manager.grant_page(cursor)
@@ -93,5 +94,7 @@ class GrantDesk:
                     return grant
             if page.next_cursor is None:
                 return None
+            if page.next_cursor == cursor:
+                raise ProviderError(200, "the grant list's cursor did not advance")
             cursor = page.next_cursor
             await run.remember(grant_list_cursor=cursor)

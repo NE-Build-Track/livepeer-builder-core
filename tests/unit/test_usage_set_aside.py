@@ -11,15 +11,17 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from pathlib import Path
+from typing import Any, get_args
 
 import httpx
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesUsageSource
-from livepeer_builder.contracts import ActorContext, UsageRow
+from livepeer_builder.contracts import ActorContext, SetAsideReason, SetAsideUsage, UsageRow
 from livepeer_builder.http import create_app
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
@@ -206,6 +208,24 @@ async def test_a_usage_row_the_checks_pass_and_the_row_type_refuses_is_set_aside
     report = await engine.costs.sync_once()
     assert (report.pages, report.rows_new, report.rows_set_aside) == (2, 2, 1)
     assert await set_aside(store) == [("u-bad", "unreadable_row", "0.5", None)]
+
+
+def test_a_set_aside_reason_is_one_of_the_codes_the_engine_produces() -> None:
+    """The reason is a closed set (``SetAsideReason``), so a misspelt code is refused where it is written."""
+    reason = SetAsideUsage.model_json_schema()["properties"]["reason"]
+    assert set(reason["enum"]) == set(get_args(SetAsideReason))
+    with pytest.raises(ValidationError):
+        SetAsideUsage(id="u-1", reason="unknown_stauts")  # type: ignore[arg-type]
+
+
+def test_the_contract_lists_every_set_aside_reason() -> None:
+    """docs/contracts/payments.md is where an operator looks a reason up."""
+    table = Path(__file__).parents[2].joinpath("docs/contracts/payments.md").read_text()
+    reasons = {
+        "unstorable_<field>" if code.startswith("unstorable_") else code for code in get_args(SetAsideReason)
+    }
+    missing = sorted(code for code in reasons if f"| `{code}` |" not in table)
+    assert not missing, f"add a row for {missing} to the reasons table in docs/contracts/payments.md"
 
 
 LONG = "x" * 201

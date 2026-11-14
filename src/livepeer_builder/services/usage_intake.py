@@ -6,8 +6,9 @@ checked here, before the store is asked, so the sync does the same on SQLite and
 """
 
 from collections.abc import Sequence
+from typing import cast
 
-from livepeer_builder.contracts import SetAsideUsage, UsagePage, UsageRow
+from livepeer_builder.contracts import SetAsideReason, SetAsideUsage, UsagePage, UsageRow
 from livepeer_builder.contracts.costs import set_aside_record, storable_text
 from livepeer_builder.protocols import UsageSetAsideRepo
 
@@ -52,7 +53,7 @@ def sort_page(page: UsagePage) -> tuple[list[UsageRow], list[SetAsideUsage]]:
 
 def _unstorable(row: UsageRow, field: str) -> SetAsideUsage:
     return set_aside_record(
-        f"unstorable_{field}",
+        cast(SetAsideReason, f"unstorable_{field}"),  # one per LIMITS field, which a test holds to
         row.model_dump(mode="json"),
         row_id=row.id,
         fee_eth=row.computed_fee_eth,

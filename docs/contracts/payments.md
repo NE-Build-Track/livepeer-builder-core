@@ -349,10 +349,11 @@ records it and moves the cursor:
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
 | `unreadable_created_at` | has no `created_at_ms`, or one that is not a number or that no clock holds |
 | `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
-| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it |
+| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
 | `unstorable_<field>` | has a text the store's column cannot keep in `<field>`: longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), a NUL, or a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
-The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
+The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
+where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
 `computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
 that is not a finite number, or longer than the column, is recorded as `null`. A row
 with no id the table can keep is recorded under `sha256:` and a digest of its content. A row is

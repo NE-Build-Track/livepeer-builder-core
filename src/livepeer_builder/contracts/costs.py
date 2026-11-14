@@ -19,6 +19,27 @@ from livepeer_builder.contracts.common import Contract, Money, StoredText
 
 UsageStatus = Literal["applied", "quarantined", "ignored", "duplicate"]
 
+# Why cost sync set a usage row aside (#114, C13): a closed set, listed in docs/contracts/payments.md. An
+# ``unstorable_<field>`` names a text column of ``lpb_usage_rows`` (``services/usage_intake.py``, ``LIMITS``;
+# tests/store/test_usage_set_aside.py fails when the two disagree).
+SetAsideReason = Literal[
+    "missing_id",
+    "unknown_status",
+    "unreadable_created_at",
+    "unreadable_fee",
+    "unreadable_row",
+    "unstorable_id",
+    "unstorable_event_id",
+    "unstorable_manifest_id",
+    "unstorable_allocation_id",
+    "unstorable_payment_session_id",
+    "unstorable_request_id",
+    "unstorable_pipeline",
+    "unstorable_computed_fee_eth",
+    "unstorable_computed_fee_usd",
+    "unstorable_currency",
+]
+
 
 class UsageRow(Contract):
     """One Batteries ``GET /v1/usage`` item. Batteries remains the authority; this is a cached copy."""
@@ -46,7 +67,7 @@ class SetAsideUsage(Contract):
 
     # the provider's row id; "sha256:" and a digest of the content when it has none the store can keep
     id: Annotated[StoredText, Field(min_length=1)]
-    reason: Annotated[str, Field(min_length=1, max_length=64)]  # a short code, such as "unknown_status"
+    reason: SetAsideReason
     computed_fee_eth: Decimal | None = None  # as the provider stated it, whatever the row's status
     computed_fee_usd: Decimal | None = None
     raw: str = ""
@@ -63,7 +84,7 @@ def storable_text(value: str, limit: int = 200) -> bool:
 
 
 def set_aside_record(
-    reason: str,
+    reason: SetAsideReason,
     content: Mapping[str, object],
     *,
     row_id: str | None,

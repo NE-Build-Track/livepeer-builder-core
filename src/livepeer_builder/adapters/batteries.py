@@ -24,6 +24,7 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     NewAllocationKey,
+    SetAsideReason,
     SetAsideUsage,
     UsagePage,
     UsageRow,
@@ -228,7 +229,7 @@ def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
     )
 
 
-def _unreadable(item: dict[str, Any]) -> str | None:
+def _unreadable(item: dict[str, Any]) -> SetAsideReason | None:
     """Why the item is no usage row, as a short code; None when it is one."""
     status = item.get("status")
     if _row_id(item) is None:

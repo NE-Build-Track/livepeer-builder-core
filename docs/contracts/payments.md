@@ -204,6 +204,16 @@ checks stop that:
   stayed live with its secret stored and nothing pointing at it, and a resumed rotation put back a key
   the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
 
+  **What the guarantee covers, and the known gap.** It covers commands that write different columns,
+  and the cases named above: a revoke, two rotations, a provisioning that another command overtook.
+  Two status commands at the same moment (a pause and an activate) write the same column, and the last
+  write wins at the provider and in the store separately. Each sets the status at the provider and
+  then stores it, so when a pause is at the provider while an activate runs to its end, the provider
+  ends `paused` then `active` and the store `active` then `paused`: the stored status is the opposite
+  of the provider's. Closing this needs a version on the row or a read-back of the provider's status,
+  and #115 adds neither. Until then, send the status you want again: a repeated `set_status` sets it
+  at the provider and in the store.
+
   The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
   `set_actor_status`, `set_actor_key`, `provision_actor`). The packaged SQL store has them; a supplied
   store has all three or is treated as having none. With a supplied store without them, the engine

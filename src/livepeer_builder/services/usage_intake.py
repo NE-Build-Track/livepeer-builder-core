@@ -1,39 +1,17 @@
 """Which usage rows cost sync stores, and which it sets aside (#114, C13).
 
 PostgreSQL refuses a text longer than its column, and a NUL; no database takes a lone surrogate. One such
-row failed its page on every pass, so the cursor never moved and no later cost arrived. The rule is
-checked here, before the store is asked, so the sync does the same on SQLite and on PostgreSQL.
+row failed its page on every pass, so the cursor never moved and no later cost arrived. The rule
+(``contracts.costs.unstorable_field``) is checked here, before the store is asked, so the sync does the
+same on SQLite and on PostgreSQL, whatever the usage source. The Batteries adapter checks it first, on the
+item it still holds, so its log line is the row as received.
 """
 
 from collections.abc import Sequence
 
 from livepeer_builder.contracts import SetAsideUsage, UsagePage, UsageRow
-from livepeer_builder.contracts.costs import set_aside_record, storable_text
+from livepeer_builder.contracts.costs import set_aside_record, unstorable_field, unstorable_reason
 from livepeer_builder.protocols import UsageSetAsideRepo
-
-# The longest text ``lpb_usage_rows`` keeps in each column (``store/schema.py``): ids are ``ID``, fees
-# are decimal strings of ``AMOUNT``. tests/store/test_usage_set_aside.py fails when the two disagree.
-LIMITS: dict[str, int] = {
-    "id": 200,
-    "event_id": 200,
-    "manifest_id": 200,
-    "allocation_id": 200,
-    "payment_session_id": 200,
-    "request_id": 200,
-    "pipeline": 200,
-    "computed_fee_eth": 64,
-    "computed_fee_usd": 64,
-    "currency": 8,
-}
-
-
-def unstorable_field(row: UsageRow) -> str | None:
-    """The first field of ``row`` the store cannot keep, or None when it keeps the row."""
-    for name, limit in LIMITS.items():
-        value = getattr(row, name)
-        if value is not None and not storable_text(str(value), limit):
-            return name
-    return None
 
 
 def sort_page(page: UsagePage) -> tuple[list[UsageRow], list[SetAsideUsage]]:
@@ -51,8 +29,9 @@ def sort_page(page: UsagePage) -> tuple[list[UsageRow], list[SetAsideUsage]]:
 
 
 def _unstorable(row: UsageRow, field: str) -> SetAsideUsage:
+    """The record of a row no source set aside itself: its content is the row as that source read it."""
     return set_aside_record(
-        f"unstorable_{field}",
+        unstorable_reason(field),
         row.model_dump(mode="json"),
         row_id=row.id,
         fee_eth=row.computed_fee_eth,

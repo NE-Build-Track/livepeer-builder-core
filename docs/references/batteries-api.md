@@ -10,7 +10,8 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
   `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.** `grants.fund` covers every
   grant. The engine sends the grant id on the request, or the grant of the caller's own allocation.
 - **Ids in paths:** every id the engine places in a route below (`{id}`) is percent-encoded as one path
-  segment (`adapters/batteries.py`, `segment`; #113, C10), and an id of only dots is encoded too.
+  segment (`adapters/batteries.py`, `segment`; #113, C10), and the ids `.` and `..` are encoded too
+  (`%2E`, `%2E%2E`).
 - **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Optional: without
   it the engine starts with the grant desk off (`list_grants`/`create_grant` and their routes absent).
 
@@ -26,7 +27,7 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
 | `revoke_key` | `POST /v1/api-keys/{id}/revoke` | |
 | `read_allocation` | `GET /v1/allocations/{id}` | `allocated_<cur>`, `spent_<cur>`, `available_<cur>`, where `<cur>` is the allocation's `usd`/`eth` |
-| usage feed | `GET /v1/usage?limit=&cursor=` | Optional filters `grant_id`, `allocation_id`, `manifest_id` (exact IDs; a row must match every one; usage with no session appears only unfiltered). The engine sends none: cost sync reads every row (D28). `{items, next_cursor}`. The cursor is opaque and bound to its filters; empty on the last page; 400 `invalid cursor` on a mismatch. An item the engine cannot read as a usage row (no `id`, an unknown `status`, no usable `created_at_ms`) is set aside, not an error (#114, C13; [payments.md](../contracts/payments.md#cost-classification)) |
+| usage feed | `GET /v1/usage?limit=&cursor=` | Optional filters `grant_id`, `allocation_id`, `manifest_id` (exact IDs; a row must match every one; usage with no session appears only unfiltered). The engine sends none: cost sync reads every row (D28). `{items, next_cursor}`. The cursor is opaque and bound to its filters; empty on the last page; 400 `invalid cursor` on a mismatch. An item's `id` and its other text fields are strings (or `null`), `created_at_ms` is a whole number, and a fee is a decimal string, `null`, `""` or `"[error]"`. An item the engine cannot read as a usage row (no `id`, an unknown `status`, no usable `created_at_ms`, a text field that is not text, a fee that is stated and is not a finite number) is set aside, not an error (#114, C13; [payments.md](../contracts/payments.md#cost-classification)) |
 
 - **Answers:** every route above answers a success with a JSON object (`managementResult`), and a list
   with `{"items": [...], "next_cursor": "<string>"}`: `items` is `[]` when empty, never `null`, and

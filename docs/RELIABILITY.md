@@ -74,9 +74,14 @@ SQL and parameters, goes to the log with the code, in `discovery.failed` and `co
 
 | Code | Meaning |
 | --- | --- |
-| `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with an error status, or raised anything not listed below |
-| `invalid_answer` | It answered with something the engine could not read: not JSON, not the expected shape, a value it cannot convert |
+| `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with a status that is not 2xx (an error, or a redirect), or raised anything not listed below |
+| `invalid_answer` | It answered 2xx with something the engine could not read: not JSON, not the expected shape, a value it cannot convert |
 | `store_error` | Cost sync failed after the usage source answered: writing or matching the usage in the engine's store |
+
+The codes are a closed set in the contract (`SourceFailureCode` for `discovery_error`, `FailureCode` for
+`cost_sync_error`), so the OpenAPI schema lists them and nothing else can be written there. The shipped
+adapters decide the code where they read the answer; a supplied source's failure is read by its
+exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
 
 `scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and

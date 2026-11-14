@@ -14,6 +14,12 @@ class Contract(BaseModel):
 
 Currency = Literal["USD", "ETH"]
 
+# A background failure as ``GET /readyz`` shows it (#113, C7): a closed set, so the schema publishes it and
+# an exception's text does not fit. What a discovery source or a usage source did, and, for cost sync,
+# a failure in the engine's own store after the usage source answered.
+SourceFailureCode = Literal["unavailable", "invalid_answer"]
+FailureCode = Literal["unavailable", "invalid_answer", "store_error"]
+
 
 def _no_nul(value: str) -> str:
     if "\x00" in value:

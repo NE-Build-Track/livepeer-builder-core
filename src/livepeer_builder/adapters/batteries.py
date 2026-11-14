@@ -198,7 +198,7 @@ class BatteriesUsageSource:
         message = error_message(response) if response.status_code >= 400 else ""
         if response.status_code == 400 and "cursor" in message:
             raise CursorMismatch(message)
-        if response.status_code >= 400:
+        if not response.is_success:  # a redirect is no answer either (#113, C7)
             raise ProviderError(response.status_code, message)
         body = response.json()
         read = [read_usage_item(item) for item in body["items"]]

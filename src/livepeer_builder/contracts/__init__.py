@@ -11,7 +11,7 @@ from livepeer_builder.contracts.access import (
     Operation,
     ResourceRef,
 )
-from livepeer_builder.contracts.common import Contract, Currency, Money
+from livepeer_builder.contracts.common import Contract, Currency, FailureCode, Money, SourceFailureCode
 from livepeer_builder.contracts.costs import (
     AttemptCost,
     CostClass,
@@ -20,6 +20,7 @@ from livepeer_builder.contracts.costs import (
     Fees,
     JobCost,
     Reconciliation,
+    SetAsideReason,
     SetAsideUsage,
     SyncCheckpoint,
     SyncReport,
@@ -108,6 +109,7 @@ __all__ = [
     "EventPage",
     "ExecutionMode",
     "Failure",
+    "FailureCode",
     "FailureKind",
     "Fees",
     "FundRequest",
@@ -149,8 +151,10 @@ __all__ = [
     "Session",
     "SessionMatch",
     "SessionRequest",
+    "SetAsideReason",
     "SetAsideUsage",
     "SignedSession",
+    "SourceFailureCode",
     "SyncCheckpoint",
     "SyncReport",
     "UsagePage",

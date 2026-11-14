@@ -64,7 +64,7 @@ async def test_an_actor_keeps_a_secret_reference_of_any_length(sql: SqlStore, cl
     await sql.save_actor(saved)
     assert await sql.get_actor("default", "alice") == saved
     rotated = await sql.set_actor_key(
-        "default", "alice", "a1", "k2", SecretRef(ref=LONG + "/v2"), clock.now()
+        "default", "alice", "a1", "k2", SecretRef(ref=LONG + "/v2"), clock.now(), only_from="k1"
     )
     assert rotated is not None and rotated.secret_ref.ref == LONG + "/v2"
     assert await sql.list_actors("default") == [rotated]

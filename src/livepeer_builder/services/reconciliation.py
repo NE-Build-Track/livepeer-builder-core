@@ -41,9 +41,10 @@ class PaidAttempts:
         return paid | ({current} if current is not None else set())
 
     def reconciled(self, current: str | None, requested: str | None) -> str:
-        """The allocation to reconcile: ``requested`` when it is one of the actor's, else the current one.
-        An allocation that is not the actor's is not found, so no caller reads another's spend."""
-        chosen = requested or current
+        """The allocation to reconcile: ``requested`` when one is named, else the current one. An
+        allocation that is not the actor's is not found, so no caller reads another's spend; an empty
+        name is one of those, not a request for the current allocation."""
+        chosen = requested if requested is not None else current
         if chosen is None:
             raise NotFound("no allocation pays for that actor or application")
         if chosen not in self._known(current):

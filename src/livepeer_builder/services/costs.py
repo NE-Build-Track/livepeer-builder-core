@@ -21,6 +21,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,7 @@ from livepeer_builder.contracts import (
     CostClass,
     CostStatus,
     CostSummary,
+    FailureCode,
     Fees,
     Job,
     JobCost,
@@ -49,7 +51,7 @@ from livepeer_builder.contracts import (
     add_fees,
     billable_fees,
 )
-from livepeer_builder.errors import CursorMismatch, NotFound, ProviderUnavailable
+from livepeer_builder.errors import CursorMismatch, NotFound, ProviderError, ProviderUnavailable
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllowanceReader,
@@ -129,7 +131,10 @@ class CostSyncWorker:
 
     async def _page(self, cursor: str | None) -> UsagePage:
         try:
-            return await self._source.page(cursor, limit=1000)
+            page = await self._source.page(cursor, limit=1000)
+            if page.next_cursor and page.next_cursor == cursor:  # asking again would never end
+                raise ProviderError(200, "the usage cursor did not advance")
+            return page
         except Exception as error:
             self.source_error = error
             raise
@@ -170,20 +175,25 @@ class CostService:
         self._allowances = allowances
         self._interval_s = interval_s
         self.last_synced_at: datetime | None = None
-        self.last_error: str | None = None
+        self.last_error: FailureCode | None = None
         self.set_aside_rows: int | None = None  # every usage row left out so far, as of the last sync
 
     async def sync_once(self) -> SyncReport:
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
-        report, new_rows = await self._worker.sync_once()
+        try:
+            report, new_rows = await self._worker.sync_once()
+        except Exception:  # the pages before the failure may have set rows aside: the table has them
+            with contextlib.suppress(Exception):  # the sync's own failure is the one to raise
+                self.set_aside_rows = await count_set_aside(self._store)
+            raise
+        self.set_aside_rows = await count_set_aside(self._store)  # before a later step can fail
         affected = await self._store.match_sessions(new_rows)
         jobs = await self._store.jobs_for_projection(list(affected))
         for job in jobs:
             found = await self._store.job_for_projection(job.id)  # reloaded with its evidence version
             if found is not None:
                 await self._refresh_projection(*found)
-        self.set_aside_rows = await count_set_aside(self._store)
         self.last_synced_at, self.last_error = self._clock.now(), None
         return report.model_copy(update={"jobs_updated": len(jobs)})
 
@@ -199,7 +209,8 @@ class CostService:
                     await self.sync_once()
                 except Exception as exc:  # keep syncing; health shows a code, the log the text (#113, C7)
                     from_source = self._worker.source_error is exc
-                    self.last_error = code = source_failure(exc) if from_source else STORE_ERROR
+                    code: FailureCode = source_failure(exc) if from_source else STORE_ERROR
+                    self.last_error = code
                     _LOG.warning(
                         "cost sync failed",
                         extra={"event": "costs.sync_failed", "code": code, "error": str(exc)},

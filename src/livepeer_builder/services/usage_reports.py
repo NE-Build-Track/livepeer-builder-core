@@ -21,15 +21,24 @@ from livepeer_builder.errors import InvalidRequest, NotFound
 from livepeer_builder.protocols import JobRepo, UsageOnceRepo
 
 
-async def report_once(store: JobRepo, job: Job, quantities: Mapping[str, int], now: datetime) -> Job:
-    """Store the owner's report on ``job`` (as the caller read it), or answer a repeat of it."""
+def usage_to_store(job: Job, quantities: Mapping[str, int], now: datetime) -> MeasuredUsage | None:
+    """The usage a report on ``job`` stores, or ``None`` for a repeat of the report already stored, which
+    stores nothing. Any other report is refused. ``FakeEngine`` answers by this same rule."""
     if job.usage is not None:
-        return _repeated(job, quantities)
+        _repeated(job, quantities)
+        return None
     if job.state != "succeeded":
         raise InvalidRequest("usage can only be reported for a succeeded job")
     if not quantities or any(value < 0 for value in quantities.values()):
         raise InvalidRequest("usage needs at least one non-negative quantity")
-    usage = MeasuredUsage(quantities=dict(quantities), source="app_reported", reported_at=now)
+    return MeasuredUsage(quantities=dict(quantities), source="app_reported", reported_at=now)
+
+
+async def report_once(store: JobRepo, job: Job, quantities: Mapping[str, int], now: datetime) -> Job:
+    """Store the owner's report on ``job`` (as the caller read it), or answer a repeat of it."""
+    usage = usage_to_store(job, quantities, now)
+    if usage is None:
+        return job
     if not isinstance(store, UsageOnceRepo):
         await store.set_usage(job.id, usage)  # unconditional: this store has no conditional write
     elif not await store.set_usage_once(job.id, usage):

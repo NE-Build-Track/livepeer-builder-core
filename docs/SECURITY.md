@@ -35,7 +35,8 @@ See [contracts/access.md](contracts/access.md#boundaries).
   goes to the signer.
 - **Runner addresses:** a runner URL names one app on an orchestrator, and a job's `path` is appended
   to it. The contract refuses a path that is not already normal (a dot or empty segment, an encoded
-  separator, a backslash, a control character or a fragment) with a 422 before anything is written, and the transport sends the
+  separator, a backslash, a control character, a lone surrogate or a fragment) with a 422 before anything
+  is written, and the transport sends the
   address as built and refuses one that no longer begins with the runner's (#113, C3,
   [engine.md](contracts/engine.md#jobs-and-attempts)).
 - **Management API:** the engine uses a least-privilege Batteries credential. It may `grants.fund` and has no `grants.*`. Batteries applies `grants.fund` to every grant on the instance. An engine admin may fund any grant it names (`POST /v1/admin/grant/fund`); an actor key cannot. Listing and creating grants uses `LPB_BATTERIES_OPERATOR_TOKEN` (`grants.read` and `grants.create`); it is optional, and without it the grant desk and its routes are absent.

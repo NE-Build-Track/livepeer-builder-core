@@ -99,7 +99,7 @@ async def test_create_grant_returns_the_response_record() -> None:
     client = BatteriesClient(
         "https://batteries.test", "t", client=mock_client(httpx.MockTransport(missing_id))
     )
-    with pytest.raises(ProviderError, match="missing id") as error:
+    with pytest.raises(ProviderError, match="no usable id") as error:
         await client.create_grant("ops", Money(amount=Decimal("1"), currency="USD"))
     assert error.value.status_code == 200
 
@@ -153,6 +153,8 @@ async def test_a_grant_carries_the_engines_tag_as_batteries_metadata() -> None:
             return httpx.Response(201, json={"id": "grant_9"})
         tagged = {"id": "grant_9", "name": "ops", "metadata": '{"lpb_operation": "abc"}'}
         free_text = {"id": "grant_1", "name": "legacy", "metadata": "set up by hand"}
+        if request.url.path != "/v1/grants":  # the read-back of the one grant
+            return httpx.Response(200, json=tagged)
         return httpx.Response(200, json={"items": [free_text, tagged], "next_cursor": ""})
 
     client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))

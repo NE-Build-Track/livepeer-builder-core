@@ -132,15 +132,13 @@ class BatteriesClient:
         body = {"name": name, "status": "active", "sponsor": name, **_amount_fields(amount)}
         if metadata:  # Batteries takes string fields only: the object travels as JSON text
             body["metadata"] = json.dumps(dict(metadata), sort_keys=True)
-        created = await self._request("POST", "/v1/grants", json=body)
-        if not created.get("id"):
-            raise ProviderError(200, "grant response missing id")
+        grant_id = _required(await self._request("POST", "/v1/grants", json=body), "id")
         # Batteries answers the create with the id only; the record is the grant as it stored it. The grant
         # exists by now, so a failed read is an unknown outcome, never a refusal that frees the reference.
         try:
-            return grant_from_item(await self._request("GET", f"/v1/grants/{segment(str(created['id']))}"))
+            return grant_from_item(await self._request("GET", f"/v1/grants/{segment(grant_id)}"))
         except ProviderError as exc:
-            raise ProviderUnavailable(f"grant {created['id']} created but not read back: {exc}") from exc
+            raise ProviderUnavailable(f"grant {grant_id} created but not read back: {exc}") from exc
 
     async def _request(
         self,
@@ -316,9 +314,9 @@ def grant_from_item(item: dict[str, Any]) -> GrantRecord:
 
 
 def _required(body: dict[str, Any], key: str) -> str:
-    """A value the answer has to carry: a non-empty string, as Batteries serves every id. Anything else
-    is an answer the engine cannot read (#114, C21): a ``ProviderError`` that is no refusal and quotes
-    no value."""
+    """A value the answer has to carry: a non-empty string, as Batteries serves every id and a new key's
+    secret. Anything else, a missing key included, is an answer the engine cannot read (#114, C21): a
+    ``ProviderError`` that is no refusal and quotes no value."""
     value = body.get(key)
     if not isinstance(value, str) or not value:
         raise ProviderError(200, f"Batteries answered with no usable {key}")
@@ -346,11 +344,11 @@ def _metadata(raw: str) -> dict[str, str]:
 
 def allowance_from_body(body: dict[str, Any]) -> Allowance:
     """Allocation reads carry allocated_/available_/spent_ suffixed by the allocation's currency."""
-    currency: Currency = "USD" if str(body.get("currency", "")).lower() == "usd" else "ETH"
+    currency: Currency = "USD" if _optional(body, "currency").lower() == "usd" else "ETH"
     suffix = currency.lower()
     return Allowance(
-        allocation_id=str(body["id"]),
-        status=str(body.get("status", "")),
+        allocation_id=_required(body, "id"),
+        status=_optional(body, "status"),
         granted=_money(body.get(f"allocated_{suffix}"), currency),
         spent=_money(body.get(f"spent_{suffix}"), currency),
         available=_money(body.get(f"available_{suffix}"), currency),
@@ -379,9 +377,9 @@ def _amount_fields(amount: Money) -> dict[str, str]:
 
 def _new_key(body: dict[str, Any]) -> NewAllocationKey:
     return NewAllocationKey(
-        allocation_id=str(body["allocation_id"]),
-        api_key_id=str(body["id"]),
-        secret=SecretStr(str(body["api_key"])),
+        allocation_id=_required(body, "allocation_id"),
+        api_key_id=_required(body, "id"),
+        secret=SecretStr(_required(body, "api_key")),
     )
 
 

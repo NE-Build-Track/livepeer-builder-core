@@ -38,7 +38,9 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
   strings: `metadata` is `""` for a grant with none, never `null` (`TEXT NOT NULL DEFAULT ''` in
   `migrations/001_initial.sql`). A grant with no `id`, or with one of these that is not a string, is the
   same `ProviderError` (`grant_from_item`); the engine takes a grant with no `metadata` key as one with
-  none.
+  none. Every id Batteries answers with is a string, and so is a new key's `api_key`
+  (`map[string]string` in `internal/store/idempotency.go`; `TEXT` columns): a key answer or an allocation read
+  whose `id`, `allocation_id` or `api_key` is absent, empty or not a string is that `ProviderError` too.
 - **Idempotency:** `Idempotency-Key` on allocation create, API-key create, and grant and allocation
   fund. It is shared by every caller of a grant, which is why the engine namespaces its keys.
   - A matching retry replays the original success, including the secret.

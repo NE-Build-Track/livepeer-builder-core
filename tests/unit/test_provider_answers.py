@@ -410,6 +410,89 @@ async def test_a_grant_read_back_the_engine_cannot_read_is_an_unknown_outcome_no
     assert await ledger(store) == [("grant-1", "started")]
 
 
+KEY = {"id": "key_1", "allocation_id": "alloc_1", "api_key": "lpg_key_1_secret"}
+UNUSABLE_KEYS: dict[str, dict[str, Any]] = {
+    "nulls": {"id": None, "allocation_id": None, "api_key": None},
+    "empty strings": {"id": "", "allocation_id": "", "api_key": ""},
+    "objects": {"id": {"x": 1}, "allocation_id": ["a"], "api_key": {"k": "v"}},
+    "an error in a 2xx": {"error": "overloaded"},
+    "no allocation id": {key: value for key, value in KEY.items() if key != "allocation_id"},
+    "a key id that is a number": KEY | {"id": 7},
+    "a secret that is null": KEY | {"api_key": None},
+}
+
+
+@pytest.mark.parametrize("call", ["create_key_for_grant", "create_key"])
+@pytest.mark.parametrize("answer", UNUSABLE_KEYS)
+async def test_a_key_answer_without_its_required_values_is_a_provider_error(call: str, answer: str) -> None:
+    client = BatteriesClient(BASE, "t", client=answering(UNUSABLE_KEYS[answer], status=201))
+    with pytest.raises(ProviderError) as refused:
+        await CALLS[call](client)
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert "secret" not in str(refused.value) and "overloaded" not in str(refused.value)  # no value quoted
+
+
+@pytest.mark.parametrize("answer", UNUSABLE_KEYS)
+async def test_provisioning_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_not_a_done_command(
+    make_engine: EngineFactory, store: SqlStore, answer: str
+) -> None:
+    """``POST /v1/api-keys`` answered 201 with null, empty or object values. They were turned into text:
+    provisioning answered 201 with ``allocation_id: "None"`` and the ledger recorded it done. An answer
+    that lacked a key raised ``KeyError`` and answered 500."""
+    manager = BatteriesClient(BASE, "t", client=answering(UNUSABLE_KEYS[answer], status=201))
+    engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
+    key = await engine.keys.bootstrap_admin()
+    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "g1", "operation_ref": "p-1"}
+    async with rest(engine, key.token) as http:
+        created = await http.post("/v1/admin/applications/default/actors/alice/allocation", json=body)
+        again = await http.post("/v1/admin/applications/default/actors/alice/allocation", json=body)
+    assert (created.status_code, again.status_code) == (502, 409)  # the key may exist: unknown, and held
+    assert await ledger(store) == [("p-1", "started")]
+
+
+ALLOCATION = {"id": "alloc_1", "status": "active", "currency": "usd", "allocated_usd": "5"}
+UNUSABLE_ALLOCATIONS: dict[str, dict[str, Any]] = {
+    "an error in a 2xx": {"error": "overloaded"},
+    "id null": ALLOCATION | {"id": None},
+    "id a number": ALLOCATION | {"id": 7},
+    "status null": ALLOCATION | {"status": None},
+    "currency an object": ALLOCATION | {"currency": {"code": "usd"}},
+}
+
+
+@pytest.mark.parametrize("answer", UNUSABLE_ALLOCATIONS)
+async def test_an_allocation_answer_without_its_required_values_is_a_provider_error(answer: str) -> None:
+    client = BatteriesClient(BASE, "t", client=answering(UNUSABLE_ALLOCATIONS[answer]))
+    with pytest.raises(ProviderError) as refused:
+        await client.read_allocation("alloc_1")
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+
+
+NO_GRANT_ID = {
+    "null": {"id": None},
+    "empty": {"id": ""},
+    "a number": {"id": 7},
+    "an object": {"id": {"x": 1}},
+}
+
+
+@pytest.mark.parametrize("created", [*NO_GRANT_ID.values(), {"error": "x"}], ids=[*NO_GRANT_ID, "an error"])
+async def test_a_grant_create_answer_without_a_usable_id_is_a_provider_error_and_nothing_is_read_back(
+    created: dict[str, Any],
+) -> None:
+    asked: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        asked.append(f"{request.method} {request.url.path}")
+        return httpx.Response(201, json=created)
+
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+    with pytest.raises(ProviderError) as refused:
+        await BatteriesClient(BASE, "t", client=client).create_grant("ops", USD)
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert asked == ["POST /v1/grants"]  # no read-back of a grant named "None" or "7"
+
+
 @pytest.mark.parametrize("status", [301, 302, 307, 308])
 async def test_a_redirected_usage_page_reads_as_unavailable(status: int) -> None:
     source = BatteriesUsageSource(

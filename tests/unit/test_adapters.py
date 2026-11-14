@@ -99,7 +99,7 @@ async def test_create_grant_returns_the_response_record() -> None:
     client = BatteriesClient(
         "https://batteries.test", "t", client=mock_client(httpx.MockTransport(missing_id))
     )
-    with pytest.raises(ProviderError, match="missing id") as error:
+    with pytest.raises(ProviderError, match="no usable id") as error:
         await client.create_grant("ops", Money(amount=Decimal("1"), currency="USD"))
     assert error.value.status_code == 200
 

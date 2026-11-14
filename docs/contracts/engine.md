@@ -562,9 +562,26 @@ and `failed` jobs; `uncertain` ones are kept ([persistence.md](persistence.md#re
 ## Measured usage
 
 Usage is the work done, in units the capability defines. The default in M2 is **app-reported**:
-`report_usage(actor, job_id, quantities)`. It is accepted once per job, only from the job's owner,
-and only for a succeeded job. The value keeps its source (`app_reported`). Usage is never confused
-with cost. Engine-side meters (`engine_meter`) are a later extension.
+`report_usage(actor, job_id, quantities)`. It is stored once per job, only from the job's owner, and
+only for a succeeded job. The value keeps its source (`app_reported`). Usage is never confused with
+cost. Engine-side meters (`engine_meter`) are a later extension.
+
+**A repeated report (#115, C20).** The store writes usage only where the job has none and is
+`succeeded`, in one statement, so of two reports at the same moment one is stored. Before, both
+succeeded and the second replaced the first.
+
+| A report for a job that already has usage | Answer |
+| --- | --- |
+| the same quantities (a retry after a lost answer, or the slower of two identical reports) | 200 with the job and the **stored** usage, its `reported_at` included. Nothing is written |
+| other quantities | refused as before: `InvalidRequest` (HTTP 400), "usage was already reported for this job". The stored usage stays |
+
+`FakeEngine` (`livepeer_builder.testing`) answers by the same rule, from the engine's own function:
+it keeps the usage on its job and answers a repeat as the table says.
+
+The conditional write is optional for a store (`UsageOnceRepo.set_usage_once` in `protocols`). The
+packaged SQL store has it. With a supplied store without it, the engine checks the job it read and
+calls `set_usage`, which updates unconditionally: a repeat is answered as in the table, but two reports
+at the same moment can still both succeed, the later write replacing the earlier, as before.
 
 ## Async jobs (reserved, M4 · ISS-26)
 

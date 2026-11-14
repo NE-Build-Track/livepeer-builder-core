@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import and_, delete, event, func, insert, select, update
+from sqlalchemy import String, and_, cast, delete, event, func, insert, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -225,6 +225,17 @@ class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
             await conn.execute(
                 update(t.jobs).where(t.jobs.c.id == str(job_id)).values(usage=usage.model_dump(mode="json"))
             )
+
+    async def set_usage_once(self, job_id: UUID, usage: MeasuredUsage) -> bool:
+        """Store ``usage`` only where the job has none and is ``succeeded``, in one statement (#115, C20):
+        of two reports at the same moment, one is stored. A job without usage holds a JSON ``null``."""
+        none = or_(t.jobs.c.usage.is_(None), cast(t.jobs.c.usage, String) == "null")
+        free = and_(t.jobs.c.id == str(job_id), t.jobs.c.state == "succeeded", none)
+        async with self.engine.begin() as conn:
+            stored = await conn.execute(
+                update(t.jobs).where(free).values(usage=usage.model_dump(mode="json"))
+            )
+        return stored.rowcount == 1
 
     # -- costs ----------------------------------------------------------------------------------------
 

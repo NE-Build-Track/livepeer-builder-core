@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from livepeer_builder.contracts.common import Contract, StoredText
-from livepeer_builder.contracts.http import request_headers
+from livepeer_builder.contracts.http import request_headers, request_path
 
 ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
 
@@ -21,7 +21,7 @@ PaymentState = Literal["unknown", "paid", "unpaid"]
 class JobRequest(Contract):
     model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
     app: Annotated[StoredText, Field(min_length=1)]  # the runner app a discovery entry advertises
-    path: str = ""  # appended to the runner URL; must start with "/" when set
+    path: str = ""  # appended to the runner URL; must start with "/" when set, and be normal (#113, C3)
     method: HttpMethod = "POST"
     payload: dict[str, Any] | None = None
     raw_body: bytes | None = Field(
@@ -37,6 +37,11 @@ class JobRequest(Contract):
         if value is not None and len(value) > 8388608:
             raise ValueError("raw_body exceeds 8 MiB decoded limit")
         return value
+
+    @field_validator("path")
+    @classmethod
+    def _normal_path(cls, value: str) -> str:
+        return request_path(value)
 
     @field_validator("headers")
     @classmethod

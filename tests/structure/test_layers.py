@@ -54,8 +54,9 @@ CONFINED: dict[str, tuple[str, ...]] = {
     # adapters/signer_failures.py is runner_call's reading of the SDK's signer errors (D58)
     "livepeer_gateway": ("adapters/sdk.py", "adapters/runner_call.py", "adapters/signer_failures.py"),
     "aiohttp": ("adapters/runner_call.py", "adapters/signer_failures.py"),
-    # The discovery reader keeps a runner URL only when aiohttp's parser connects to the host it names.
-    "yarl": ("adapters/discovery_inventory.py",),
+    # The discovery reader keeps a runner URL only when aiohttp's parser connects to the host it names, and
+    # a runner call's address is handed to aiohttp as built, so yarl cannot re-normalize it (#113, C3).
+    "yarl": ("adapters/discovery_inventory.py", "adapters/runner_address.py"),
     # sdk.py fetches /discovery itself so price_usd stays a Decimal (livepeer-python-gateway#88).
     "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py"),
     "jwt": ("adapters/jwt.py",),

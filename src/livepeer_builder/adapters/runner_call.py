@@ -34,7 +34,6 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urlsplit
 
 import aiohttp
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError, SignerRefreshRequired
@@ -47,6 +46,7 @@ from livepeer_gateway.remote_signer import (
 )
 
 from livepeer_builder.adapters.call_timer import CallTimer
+from livepeer_builder.adapters.runner_address import as_built, origin
 from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
 from livepeer_builder.adapters.signer_failures import (
     classify,
@@ -156,8 +156,8 @@ class PaidRequest:
     ) -> None:
         self.url = url
         # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
-        origins = {_origin(url), _origin(orchestrator_url) if orchestrator_url else None} - {None}
-        if _origin(url) is None:  # unpaid, before any request
+        origins = {origin(url), origin(orchestrator_url) if orchestrator_url else None} - {None}
+        if origin(url) is None:  # unpaid, before any request
             raise RunnerCallError("http", f"invalid runner URL {url!r}", payment_sent=False)
         self._payment_origins = origins
         self._method = method.upper()
@@ -252,9 +252,9 @@ class PaidRequest:
             funding = start_funding(payment) if self._payment_type == "live" else None
             started = self._events.timer.start()
             try:
-                # A redirect would replay the payment headers to another host.
+                # As built, never re-normalized (#113, C3). A redirect would replay the payment headers.
                 response = await session.request(
-                    self._method, self.url, data=self._body, headers=sent, allow_redirects=False
+                    self._method, as_built(self.url), data=self._body, headers=sent, allow_redirects=False
                 )
             except BaseException:
                 # No answer came, and the wait still counts: without a payment it waited for the challenge.
@@ -380,7 +380,7 @@ class PaidRequest:
             if isinstance(data, dict):
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
                 valid = all(isinstance(value, str) and value for value in fields.values())
-                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:
+                if valid and origin(str(fields["payment_url"])) in self._payment_origins:
                     return LivePaymentChallenge(**fields)
         # Malformed, or payment_url names another host: nothing is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
@@ -450,23 +450,6 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
         raise signer_error(error, events) from error
     except (aiohttp.ClientError, OSError) as error:
         raise events.error(network_kind(error), f"{prefix}{error}") from error
-
-
-def _origin(url: str) -> str | None:
-    """``scheme://host:port``, or ``None`` when the URL or its port is not one aiohttp would request.
-
-    An empty port is the scheme default. A stated port counts only in ``1..65535``: ``0`` is not ``443``.
-    """
-    try:
-        parts = urlsplit(url)
-        scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
-    except (ValueError, UnicodeError):
-        return None
-    if port is None:
-        port = 443 if scheme == "https" else 80
-    if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
-        return None
-    return f"{scheme}://{host.lower()}:{port}"
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:

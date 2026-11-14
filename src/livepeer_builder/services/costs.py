@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     CostClass,
     CostStatus,
     CostSummary,
+    FailureCode,
     Fees,
     Job,
     JobCost,
@@ -43,6 +44,7 @@ from livepeer_builder.contracts import (
     ResourceRef,
     SyncCheckpoint,
     SyncReport,
+    UsagePage,
     UsageRow,
     add_fees,
     billable_fees,
@@ -57,6 +59,7 @@ from livepeer_builder.protocols import (
     JobRepo,
     UsageSource,
 )
+from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
 
 _LOG = logging.getLogger(__name__)
@@ -89,6 +92,7 @@ class CostSyncWorker:
         self._source = source
         self._store = store
         self._filters = dict(filters or {})
+        self.source_error: Exception | None = None  # what the usage source last raised: its health code
 
     async def sync_once(self) -> tuple[SyncReport, list[UsageRow]]:
         checkpoint = await self._store.cost_checkpoint()
@@ -98,7 +102,7 @@ class CostSyncWorker:
         restarted = False
         while True:
             try:
-                page = await self._source.page(cursor, limit=1000)
+                page = await self._page(cursor)
             except CursorMismatch:
                 if restarted:
                     raise
@@ -114,6 +118,13 @@ class CostSyncWorker:
             if not page.next_cursor:
                 return SyncReport(pages=pages, rows_seen=rows_seen, rows_new=len(new_rows)), new_rows
             cursor = page.next_cursor
+
+    async def _page(self, cursor: str | None) -> UsagePage:
+        try:
+            return await self._source.page(cursor, limit=1000)
+        except Exception as error:
+            self.source_error = error
+            raise
 
 
 class CostService:
@@ -133,7 +144,7 @@ class CostService:
         self._allowances = allowances
         self._interval_s = interval_s
         self.last_synced_at: datetime | None = None
-        self.last_error: str | None = None
+        self.last_error: FailureCode | None = None
 
     async def sync_once(self) -> SyncReport:
         if self._worker is None:
@@ -158,9 +169,14 @@ class CostService:
             if self._worker is not None:
                 try:
                     await self.sync_once()
-                except Exception as exc:  # keep syncing; surface the error in health
-                    self.last_error = str(exc)
-                    _LOG.warning("cost sync failed", extra={"event": "costs.sync_failed", "error": str(exc)})
+                except Exception as exc:  # keep syncing; health shows a code, the log the text (#113, C7)
+                    from_source = self._worker.source_error is exc
+                    code: FailureCode = source_failure(exc) if from_source else STORE_ERROR
+                    self.last_error = code
+                    _LOG.warning(
+                        "cost sync failed",
+                        extra={"event": "costs.sync_failed", "code": code, "error": str(exc)},
+                    )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self._interval_s)
             except TimeoutError:

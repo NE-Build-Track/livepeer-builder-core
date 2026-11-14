@@ -140,7 +140,7 @@ class EngineSettings(Contract):
     def _http_discovery_url(cls, value: str) -> str:
         # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
         value = value.strip()  # urlsplit ignores padding; httpx refuses a newline and sends a space as %20
-        # A failed refresh's error quotes this URL, and /readyz serves it as discovery_error with no auth;
+        # A failed refresh's error quotes this URL in the log (/readyz shows only a code, #113 C7);
         # httpx also sends a URL's userinfo as Basic auth. So, like signer_url (D58), it carries no userinfo,
         # query or fragment, and this error does not echo it.
         if any(mark in value for mark in "@?#"):

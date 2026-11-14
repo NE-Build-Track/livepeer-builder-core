@@ -7,7 +7,7 @@
 
 ## What the engine reads
 
-`LPB_DISCOVERY_URL` is required. The engine does not start without it, and it does not fall back to a built-in list. `HttpDiscoverySource` sends `GET` to that URL with no credential and does not follow redirects. The URL may carry no userinfo, query or fragment, and the engine refuses one at startup: a failed refresh's error quotes the URL, and `/readyz` serves it as `discovery_error`. A 3xx is a failed refresh. Each poll has 5 seconds in all.
+`LPB_DISCOVERY_URL` is required. The engine does not start without it, and it does not fall back to a built-in list. `HttpDiscoverySource` sends `GET` to that URL with no credential and does not follow redirects. The URL may carry no userinfo, query or fragment, and the engine refuses one at startup: a failed refresh's error quotes the URL, and it goes to the log (`discovery.failed`). `/readyz` serves only a code as `discovery_error`, `unavailable` or `invalid_answer`, never the text (#113, C7; [RELIABILITY.md](../RELIABILITY.md#operations)). A 3xx is a failed refresh. Each poll has 5 seconds in all.
 
 The body is a JSON array, the document livepeer/node's `livepeer-discovery` serves. `[]` is an empty inventory. A body that is not a JSON array fails the refresh, and the last good snapshot stays.
 

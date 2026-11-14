@@ -225,7 +225,7 @@ async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock) -> None
     await discovery.refresh()
     source.fail = True
     snapshot = await discovery.refresh()
-    assert snapshot.last_error == "signer down" and len(snapshot.runners) == 1
+    assert snapshot.last_error == "unavailable" and len(snapshot.runners) == 1  # a code, not the text (C7)
     (offering,) = discovery.offerings()
     assert offering.runner_count == 1  # still served from the last good snapshot
 

@@ -201,17 +201,25 @@ async def test_http_discovery_gives_up_on_a_slow_body_at_its_deadline() -> None:
             await source.fetch()
 
 
-async def test_an_httpx_timeout_says_which_inventory_did_not_arrive(clock: FixedClock) -> None:
-    """httpx's ReadTimeout is not a TimeoutError and its text is empty: /readyz showed discovery_error ""."""
+def discovery_failures(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.error for r in caplog.records if getattr(r, "event", "") == "discovery.failed"]  # type: ignore[attr-defined]
+
+
+async def test_an_httpx_timeout_says_which_inventory_did_not_arrive(
+    clock: FixedClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """httpx's ReadTimeout is not a TimeoutError and its text is empty: the log said nothing. /readyz shows
+    the code, and the log the text (#113, C7)."""
 
     def silent(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(silent)) as client:
         source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
-        snapshot = await DiscoveryService(source, DefaultPolicy(), clock).refresh()
-    assert snapshot.last_error is not None
-    assert "no inventory from http://discovery:8939/discovery within 5s" in snapshot.last_error
+        with caplog.at_level(logging.WARNING, logger="livepeer_builder.services.discovery"):
+            snapshot = await DiscoveryService(source, DefaultPolicy(), clock).refresh()
+    assert snapshot.last_error == "unavailable"
+    assert discovery_failures(caplog) == ["no inventory from http://discovery:8939/discovery within 5s"]
 
 
 @pytest.mark.parametrize(
@@ -267,7 +275,9 @@ def test_a_clean_inventory_logs_no_skip(caplog: pytest.LogCaptureFixture) -> Non
     ]
 
 
-async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: FixedClock) -> None:
+async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(
+    clock: FixedClock, caplog: pytest.LogCaptureFixture
+) -> None:
     """Never followed, as livepeer/node's collector does: the last good snapshot stays."""
     seen: list[str] = []
     answers = [httpx.Response(200, content=json.dumps([GOOD_ENTRY]).encode()),
@@ -281,9 +291,12 @@ async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: Fixe
         source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
         discovery = DiscoveryService(source, DefaultPolicy(), clock)
         await discovery.refresh()
-        snapshot = await discovery.refresh()
+        with caplog.at_level(logging.WARNING, logger="livepeer_builder.services.discovery"):
+            snapshot = await discovery.refresh()
     assert [runner.url for runner in snapshot.runners] == ["https://orch.example/apps/r1/app"]
-    assert snapshot.last_error is not None and "301" in snapshot.last_error
+    assert snapshot.last_error == "unavailable"
+    [logged] = discovery_failures(caplog)
+    assert "301" in logged
     assert seen == ["http://discovery:8939/discovery"] * 2
 
 

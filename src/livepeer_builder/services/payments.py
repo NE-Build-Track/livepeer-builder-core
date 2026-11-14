@@ -48,7 +48,7 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.grants import GrantDesk, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
-from livepeer_builder.services.payment_keys import PaymentKeys
+from livepeer_builder.services.payment_keys import BEGAN_ON, PaymentKeys
 from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
@@ -315,13 +315,15 @@ class PaymentsService:
     ) -> ProvisionedActor:
         """New key on the same allocation, store it, then revoke the old key, on the ledger (D57).
 
-        The old key and secret are recorded when the rotation begins, and every step reads them from there,
-        never from the actor as it is now: a resume after the new key was stored still revokes the old one,
-        and a repeat never revokes the live key as "the old key" (B1). The new key is written only over
+        The old key and secret are recorded when the rotation begins, with the allocation, and every step
+        reads them from there, never from the actor as it is now: a resume after the new key was stored
+        still revokes the old one, a repeat never revokes the live key as "the old key" (B1), and a resume
+        on an allocation provisioned since is refused. The new key is written only over
         that old key: a rotation that another one overtook is refused (``PaymentKeys.rotated``; #115, C4)."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         actor = await self._require_actor(application_id, actor_id)
         previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
+        previous[BEGAN_ON] = actor.allocation_id
         manager = self._require_manager()
 
         async def steps(run: RunningOperation) -> ProvisionedActor:
@@ -341,7 +343,7 @@ class PaymentsService:
         operation_ref: str,
     ) -> ProvisionedActor:
         self._keys.refuse_lost(run, actor_id)
-        actor = await self._require_actor(application_id, actor_id)
+        actor = await self._keys.began_on(run, await self._require_actor(application_id, actor_id))
         sent_as = idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key")
         await self._require_writable_secrets(run, sent_as)
         key = await manager.create_key(  # the provider replays it on a resume

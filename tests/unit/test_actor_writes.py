@@ -336,6 +336,69 @@ async def test_a_rotation_that_lost_and_could_not_revoke_its_own_key_finishes_on
     await holds_only_the_key_of(desk, alice, manager, vault)
 
 
+async def provisioned_again(desk: Desk) -> ProvisionedActor:
+    """Revoked, then provisioned again under another reference: the actor holds a new allocation."""
+    await desk.revoke()
+    again = provision_request().model_copy(update={"operation_ref": "provision-again"})
+    return await desk.payments.provision(desk.admin, again)
+
+
+async def test_a_rotation_resumed_after_a_revoke_and_a_new_provisioning_is_refused(
+    desk: Desk,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    vault: MemorySecretStore,
+    clock: FixedClock,
+) -> None:
+    """rotate-1 timed out at the provider, then the actor was revoked and provisioned again. Before, the
+    resume minted a key on the new allocation and revoked "the old key" its record named, a key of the
+    first allocation: it answered with the new key while the key the new allocation had before stayed
+    live, with its secret stored. A rotation belongs to the allocation it began on."""
+    first = await desk.payments.provision(desk.admin, provision_request())
+    manager.fail_once("create_key", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await desk.rotate()
+    second = await provisioned_again(desk)
+    calls = list(manager.calls)
+    clock.advance(120)
+    with pytest.raises(NotFound, match=f"began on allocation '{first.allocation_id}'") as refused:
+        await desk.rotate()
+    assert manager.calls == calls  # nothing was sent for the new allocation
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == second
+    clock.advance(120)  # a refusal on a resumed run keeps its reference: the same answer again
+    with pytest.raises(NotFound) as again:
+        await desk.rotate()
+    assert str(again.value) == str(refused.value)
+
+
+async def test_such_a_rotation_drops_the_secret_it_had_stored_for_the_revoked_allocation(
+    desk: Desk,
+    alice: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    vault: MemorySecretStore,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await desk.payments.provision(desk.admin, provision_request())
+
+    async def lost(*_: object, **__: object) -> None:
+        raise ConnectionError("the database went away")
+
+    with monkeypatch.context() as losing:
+        losing.setattr(store, "set_actor_key", lost)
+        with pytest.raises(
+            ConnectionError
+        ):  # the new key's secret is stored and noted; the actor is not written
+            await desk.rotate()
+    second = await provisioned_again(desk)
+    assert len(vault.values) == 2  # the new allocation's, and the one the rotation stored
+    clock.advance(120)
+    with pytest.raises(NotFound, match="began on allocation"):
+        await desk.rotate()
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == second
+
+
 # -- a provisioning that another command overtook --------------------------------------------------------
 
 

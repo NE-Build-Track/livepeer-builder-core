@@ -12,6 +12,7 @@ from livepeer_builder.protocols import AllocationManager, SecretStore
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
 
+BEGAN_ON = "allocation_id"  # in a rotation's record: the allocation the actor held when it began
 _LOST_TO = "lost_to_api_key_id"  # in a rotation's record: the key another rotation gave the actor first
 
 
@@ -72,6 +73,23 @@ class PaymentKeys:
         """A rotation refused before, with everything of it revoked, gets the same answer again."""
         if _LOST_TO in run.context:
             raise _lost_rotation(actor_id, run.context[_LOST_TO])
+
+    async def began_on(self, run: RunningOperation, actor: ProvisionedActor) -> ProvisionedActor:
+        """``actor``, when it still holds the allocation the rotation began on. An actor revoked and
+        provisioned again holds another: the old key the record names is not that allocation's, so a
+        rotation resumed there would mint a key on it and leave the key it had live. It is refused
+        before any provider call, and a secret it stored for the revoked allocation's key is dropped. A
+        record written before the allocation was noted is not checked."""
+        began_on = run.context.get(BEGAN_ON, actor.allocation_id)
+        if began_on == actor.allocation_id:
+            return actor
+        if "new_secret_ref" in run.context:
+            await self._secrets.delete(SecretRef(ref=run.context["new_secret_ref"]))
+        raise NotFound(
+            f"this rotation began on allocation {began_on!r}, which actor {actor.actor_id!r} no longer "
+            f"holds: it was revoked and provisioned again (allocation {actor.allocation_id!r}). Rotate "
+            "that allocation's key under a new reference"
+        )
 
     async def rotated(
         self,

@@ -523,7 +523,7 @@ async def test_a_resumed_provisioning_asks_the_store_again_before_another_provid
     assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]
 
 
-async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_operation(
+async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_operation(
     make_engine: EngineFactory,
     admin: ActorContext,
     store: SqlStore,
@@ -531,7 +531,9 @@ async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_o
     clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rotation's provider operation is named by the allocation, which a re-provision replaces."""
+    """Rotation's provider operation is named by the allocation, which a re-provision replaces. A resume
+    there asked the store before it sent that other operation (review of #128). Since #115 (C4) it is
+    refused before that: a rotation belongs to the allocation it began on."""
     vault = SealedVault(sealed=False)
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     await engine.payments.provision(admin, provision_request())
@@ -550,7 +552,7 @@ async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_o
     minted = len(manager.keys)
     vault.sealed = True
     clock.advance(120)
-    with pytest.raises(InvalidRequest, match="cannot store"):
+    with pytest.raises(NotFound, match="began on allocation"):
         await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     assert len(manager.keys) == minted  # no key was minted on the new allocation
     assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == replaced.api_key_id

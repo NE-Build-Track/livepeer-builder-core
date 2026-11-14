@@ -148,9 +148,16 @@ checks stop that:
   | `provision` | the whole row | the actor is as provisioning read it: it has no row, or it still has the `revoked` row being replaced |
 
   Every write also requires the allocation the command acted on, so none lands on an allocation
-  provisioned after a revoke. No command moves an actor out of `revoked`; only a new provisioning gives
-  the actor an allocation again. A fund of an actor that is not `exhausted` writes nothing, `updated_at`
-  included, and answers with the actor as stored. When a revoke finishes while another command is at
+  provisioned after a revoke. A key rotation also notes the allocation in its record when it begins:
+  resumed after the actor was revoked and provisioned again, it is refused before any provider call,
+  404 with the two allocations named, and keeps its reference
+  ([refused or unknown](#repeat-safe-commands)). The old key its record names belongs to the revoked
+  allocation, so on the new one it would mint a key and leave the key that allocation had live. A
+  record written before the allocation was noted is not checked.
+
+  No command moves an actor out of `revoked`; only a new provisioning gives the actor an allocation
+  again. A fund of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
+  with the actor as stored. When a revoke finishes while another command is at
   the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
   that is not provisioned (the rotation's new key is on a revoked allocation, and its secret is
   deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
@@ -286,12 +293,12 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   engine refuses to start unless `LPB_OPERATION_STALE_S` is at least four of them, so the longest
   ordinary command (two calls) fits in a run's half. Its limit is a process paused
   longer than the window, which only a provider idempotency key on grant creation would close.
-- **Rotating the payment key** records the old key's id and secret reference when it begins, and every
-  step reads them from there, never from the actor as it is now. A resume after the new key was stored
+- **Rotating the payment key** records the old key's id and secret reference when it begins, with the
+  allocation, and every step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
   reference is recorded before the actor points at it, so a resume reuses that copy. A rotation that
-  another rotation of the same actor overtook is refused and keeps its reference
-  ([two rotations](#provisioning)).
+  another rotation of the same actor overtook, or that is resumed on an allocation provisioned since
+  it began, is refused and keeps its reference ([two rotations](#provisioning)).
 - **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
   409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor

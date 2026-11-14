@@ -60,11 +60,12 @@ def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
 
     An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
-    entry (``nodes``, and no ``address``) yields nothing. A runner needs an ``app`` that is valid text
-    (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the clock can
-    convert to UTC. Any other text field that is not valid text is absent; such a field may hold a tab or a
-    line break. One bad record does not drop the rest. ``[]`` is an empty inventory, and so is a document
-    with no record to skip. A document with skipped records and no runner raises ``UnreadableInventory``.
+    entry (``nodes``, no ``address`` and no ``runners``) yields nothing. A runner needs an ``app`` that is
+    valid text (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the
+    clock can convert to UTC. Any other text field that is not valid text is absent; such a field may hold
+    a tab or a line break. One bad record does not drop the rest. ``[]`` is an empty inventory, and so is a
+    document with no record to skip. A document with skipped records and no runner raises
+    ``UnreadableInventory``.
     A number ``Decimal`` cannot hold is still a number: the runner is kept, and ``payable_rate`` reports
     that its price cannot be paid.
     """
@@ -120,7 +121,11 @@ def _not_json(token: str) -> Any:
 
 
 def _metadata(entry: object) -> bool:
-    return isinstance(entry, dict) and "nodes" in entry and "address" not in entry
+    """``nodes``, no ``address`` and no ``runners``, as node writes one. With records under it the entry is
+    one no address can read: skipped and counted, not an empty answer (#114, C28)."""
+    return (
+        isinstance(entry, dict) and "nodes" in entry and "address" not in entry and not entry.get("runners")
+    )
 
 
 def _entry(entry: object) -> tuple[str, list[Any]] | None:

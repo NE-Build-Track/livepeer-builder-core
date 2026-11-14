@@ -276,15 +276,17 @@ sequenceDiagram
     participant Pay as PaymentsService (AllowanceReader)
     participant DB as SqlStore
     participant Bat as Batteries
-    Op->>C: GET /v1/admin/reconciliation?actor_id=alice
-    C->>Pay: allocation_for(app, actor)
+    Op->>C: GET /v1/admin/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
+    C->>Pay: allocation_for(app, actor) → the current allocation
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
+    C->>DB: attempt_allocations(app, actor) → which allocation paid each attempt (#115, C9)
+    C->>C: the allocation to reconcile: the current one, or the named one if it is the actor's (else 404)
     C->>DB: projections_and_unprojected(app, actor) → fresh projections (each with its job's runner app), jobs none covers (running, ended since, older evidence version)
-    C->>C: classify the uncovered jobs live (running ones are pending) → sum attempts by cost_class
+    C->>C: classify the uncovered jobs live (running ones are pending) → sum by cost_class the attempts that allocation paid
     C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)
     Pay->>Bat: GET /v1/allocations/{id} → spent_usd
-    C-->>Op: by_class (with pending) + unattributed + balanced (spent == sum)
+    C-->>Op: by_class (with pending) + unattributed + balanced (spent == sum) + other_allocations
 ```
 
 ## 9. Restart recovery

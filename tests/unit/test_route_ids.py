@@ -38,6 +38,7 @@ ROUTES = [
     ("POST", ALLOCATION.format(application="{id}", actor="alice") + "/rotate-key", None, REF),
     ("GET", "/v1/admin/reconciliation", "application_id", None),
     ("GET", "/v1/admin/reconciliation", "actor_id", None),
+    ("GET", "/v1/admin/reconciliation", "allocation_id", None),
 ]  # fmt: skip
 
 

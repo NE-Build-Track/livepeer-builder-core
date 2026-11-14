@@ -63,6 +63,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
+from livepeer_builder.services.reconciliation import PaidAttempts
 from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
 
 _LOG = logging.getLogger(__name__)
@@ -285,9 +286,11 @@ class CostService:
         return summarize(start, end, costs)
 
     async def reconcile(
-        self, admin: ActorContext, application_id: str, actor_id: str | None
+        self, admin: ActorContext, application_id: str, actor_id: str | None, allocation_id: str | None = None
     ) -> Reconciliation:
-        """provider spent == delivered + failed_after_payment + uncertain + pending + unattributed.
+        """provider spent == delivered + failed_after_payment + uncertain + pending + unattributed, for one
+        allocation: the actor's current one, or an earlier one named by ``allocation_id`` (#115, C9). Only
+        the attempts that allocation paid are counted.
 
         The engine side (the classes and the unattributed rows) comes from one snapshot, so a sync running
         alongside can never count a row twice or nowhere. ``spent`` is read from the provider afterwards
@@ -296,15 +299,15 @@ class CostService:
         self._policy.check(admin, Operation.ADMIN_READ, _resource(application_id, actor_id))
         if self._allowances is None:
             raise ProviderUnavailable("no payment provider is configured")
-        allocation_id = await self._allowances.allocation_for(application_id, actor_id)
-        if allocation_id is None:
-            raise NotFound("no allocation pays for that actor or application")
+        current = await self._allowances.allocation_for(application_id, actor_id)
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         async with self._store.cost_snapshot() as reads:
+            paid = await PaidAttempts.read(reads, application_id, actor_id)
+            allocation_id = paid.reconciled(current, allocation_id)
             costs = await _rollup(reads, application_id, actor_id, _EPOCH, _FAR_FUTURE)
             unattributed = fees_of(await reads.unattributed_usage(allocation_id))
         for _, cost in costs:
-            for attempt in cost.attempts:
+            for attempt in paid.by(allocation_id, cost):
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
         spent: Money | None = None
@@ -316,6 +319,7 @@ class CostService:
             application_id=application_id,
             actor_id=actor_id,
             allocation_id=allocation_id,
+            other_allocations=paid.others(current, allocation_id),
             provider_spent=spent,
             by_class=by_class,
             unattributed=unattributed,

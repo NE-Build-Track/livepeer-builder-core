@@ -227,7 +227,10 @@ class Reconciliation(Contract):
 
     application_id: str
     actor_id: str | None
-    allocation_id: str
+    allocation_id: str  # the one reconciled: only the attempts it paid are counted (#115, C9)
+    # The actor's other allocations, each reconciled by naming it: the current one, and every earlier one
+    # that paid an attempt.
+    other_allocations: tuple[str, ...] = ()
     provider_spent: Money | None
     by_class: dict[CostClass, Fees]
     unattributed: Fees

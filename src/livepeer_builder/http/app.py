@@ -386,9 +386,13 @@ def create_app(
 
     @app.get("/v1/admin/reconciliation", response_model=Reconciliation)
     async def reconcile(
-        actor: Actor, application_id: Annotated[StoredText, Query()] = "default", actor_id: QueryId = None
+        actor: Actor,
+        application_id: Annotated[StoredText, Query()] = "default",
+        actor_id: QueryId = None,
+        # an earlier allocation of the actor; absent: the current one, and empty is a 422, not "absent"
+        allocation_id: Annotated[StoredText | None, Query(min_length=1)] = None,
     ) -> Reconciliation:
-        return await engine.costs.reconcile(actor, application_id, actor_id)
+        return await engine.costs.reconcile(actor, application_id, actor_id, allocation_id)
 
     @app.post("/v1/admin/costs/sync", response_model=SyncReport)
     async def sync_costs(actor: Actor) -> SyncReport:

@@ -10,7 +10,7 @@ import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from pydantic import Field
@@ -18,6 +18,27 @@ from pydantic import Field
 from livepeer_builder.contracts.common import Contract, Money, StoredText
 
 UsageStatus = Literal["applied", "quarantined", "ignored", "duplicate"]
+
+# Why cost sync set a usage row aside (#114, C13): a closed set, listed in docs/contracts/payments.md. An
+# ``unstorable_<field>`` names a text column of ``lpb_usage_rows`` (``USAGE_ROW_LIMITS`` below;
+# tests/store/test_usage_set_aside.py fails when the two disagree).
+SetAsideReason = Literal[
+    "missing_id",
+    "unknown_status",
+    "unreadable_created_at",
+    "unreadable_fee",
+    "unreadable_row",
+    "unstorable_id",
+    "unstorable_event_id",
+    "unstorable_manifest_id",
+    "unstorable_allocation_id",
+    "unstorable_payment_session_id",
+    "unstorable_request_id",
+    "unstorable_pipeline",
+    "unstorable_computed_fee_eth",
+    "unstorable_computed_fee_usd",
+    "unstorable_currency",
+]
 
 
 class UsageRow(Contract):
@@ -46,7 +67,7 @@ class SetAsideUsage(Contract):
 
     # the provider's row id; "sha256:" and a digest of the content when it has none the store can keep
     id: Annotated[StoredText, Field(min_length=1)]
-    reason: Annotated[str, Field(min_length=1, max_length=64)]  # a short code, such as "unknown_status"
+    reason: SetAsideReason
     computed_fee_eth: Decimal | None = None  # as the provider stated it, whatever the row's status
     computed_fee_usd: Decimal | None = None
     raw: str = ""
@@ -62,8 +83,38 @@ def storable_text(value: str, limit: int = 200) -> bool:
     return len(value) <= limit and _UNSTORABLE.search(value) is None
 
 
+# The longest text ``lpb_usage_rows`` keeps in each column (``store/schema.py``): ids are ``ID``, fees
+# are decimal strings of ``AMOUNT``. tests/store/test_usage_set_aside.py fails when the two disagree.
+USAGE_ROW_LIMITS: dict[str, int] = {
+    "id": 200,
+    "event_id": 200,
+    "manifest_id": 200,
+    "allocation_id": 200,
+    "payment_session_id": 200,
+    "request_id": 200,
+    "pipeline": 200,
+    "computed_fee_eth": 64,
+    "computed_fee_usd": 64,
+    "currency": 8,
+}
+
+
+def unstorable_field(row: UsageRow) -> str | None:
+    """The first field of ``row`` the store cannot keep, or None when it keeps the row."""
+    for name, limit in USAGE_ROW_LIMITS.items():
+        value = getattr(row, name)
+        if value is not None and not storable_text(str(value), limit):
+            return name
+    return None
+
+
+def unstorable_reason(field: str) -> SetAsideReason:
+    """The reason for a row whose ``field`` (one of ``USAGE_ROW_LIMITS``) the store cannot keep."""
+    return cast(SetAsideReason, f"unstorable_{field}")
+
+
 def set_aside_record(
-    reason: str,
+    reason: SetAsideReason,
     content: Mapping[str, object],
     *,
     row_id: str | None,
@@ -73,7 +124,7 @@ def set_aside_record(
     """The record of one row left out. ``content`` is the row as received; it must be JSON data.
 
     The same content always gets the same id, so a page read again records nothing twice. A fee is kept
-    when the table can hold its digits."""
+    when it is a finite number and the table can hold its digits."""
     raw = json.dumps(content, sort_keys=True, default=str)
     kept_id = row_id if row_id and storable_text(row_id) else None
     return SetAsideUsage(
@@ -86,8 +137,9 @@ def set_aside_record(
 
 
 def _storable_fee(fee: Decimal | None) -> Decimal | None:
-    """The fee when its digits fit the store's decimal-string column (64 characters); otherwise None."""
-    return fee if fee is None or len(str(fee)) <= 64 else None
+    """The fee when it is finite and its digits fit the store's decimal-string column (64 characters);
+    otherwise None. The record takes no ``NaN`` or ``Infinity``, so no fee stops a row being set aside."""
+    return fee if fee is not None and fee.is_finite() and len(str(fee)) <= 64 else None
 
 
 class UsagePage(Contract):

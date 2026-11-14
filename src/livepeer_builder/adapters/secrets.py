@@ -80,7 +80,8 @@ class RoutingSecretStore:
         self._settings = settings
         self._database = database
 
-    async def writable(self) -> bool:
+    # async by protocol (WritableSecretStore): a plug-in store may need I/O to answer. Nothing to await here.
+    async def writable(self) -> bool:  # NOSONAR
         """Only the encrypted database stores new secrets; without ``LPB_SECRET_KEY`` there is none."""
         return self._database is not None
 

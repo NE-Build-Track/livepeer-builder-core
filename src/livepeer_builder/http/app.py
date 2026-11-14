@@ -8,14 +8,12 @@ docs/generated/openapi.json and checked for drift in CI.
 
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime
 
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
@@ -72,8 +70,9 @@ from livepeer_builder.http.bodies import (
     UsageBody,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
-from livepeer_builder.http.params import PathId, QueryId
+from livepeer_builder.http.params import PathId, QueryId, QueryInstant, QueryTime
 from livepeer_builder.http.streaming import stream_response
+from livepeer_builder.http.unprocessable import install_unprocessable_handler
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
 _FAILURE_STATUS = {
@@ -149,9 +148,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if manage_lifecycle:
+            # Before the try: a start that fails has already stopped the engine, and one that is refused
+            # because the engine is running (#113, C27) must not stop an engine this lifespan did not start.
+            await engine.start()
         try:
-            if manage_lifecycle:
-                await engine.start()
             yield
         finally:
             if manage_lifecycle:
@@ -216,7 +217,7 @@ def create_app(
 
     @app.get("/v1/jobs", response_model=list[Job])
     async def list_jobs(
-        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: AwareDatetime | None = None
+        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: QueryInstant = None
     ) -> list[Job]:
         """Newest first; ``before`` (an ISO-8601 time with its offset) is the last page's oldest
         ``created_at``, for the next page (D59)."""
@@ -229,7 +230,8 @@ def create_app(
     @app.get("/v1/jobs/{job_id}/result", status_code=200)
     async def get_result(actor: Actor, job_id: UUID) -> Response:
         result = await engine.jobs.result(actor, job_id)
-        return Response(content=result.content, media_type=result.content_type)
+        # as the job route: the stored content type as a header, since media_type would add a charset (C27)
+        return Response(content=result.content, headers={"Content-Type": result.content_type})
 
     @app.post("/v1/jobs/{job_id}/usage", response_model=Job)
     async def report_usage(actor: Actor, job_id: UUID, body: UsageBody) -> Job:
@@ -246,8 +248,8 @@ def create_app(
     @app.get("/v1/costs/summary", response_model=CostSummary)
     async def cost_summary(
         actor: Actor,
-        start: datetime | None = None,
-        end: datetime | None = None,
+        start: QueryTime = None,
+        end: QueryTime = None,
         actor_id: QueryId = None,
     ) -> CostSummary:
         return await engine.costs.summary(actor, start, end, actor_id)  # the engine's clock fills the window
@@ -404,6 +406,8 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         status: int, message: str, headers: dict[str, str] | None = None, **extra: Any
     ) -> JSONResponse:
         return JSONResponse({"error": message, **extra}, status_code=status, headers=headers)
+
+    install_unprocessable_handler(app)
 
     @app.exception_handler(NotAuthenticated)
     async def _unauthenticated(_: Request, exc: NotAuthenticated) -> Response:

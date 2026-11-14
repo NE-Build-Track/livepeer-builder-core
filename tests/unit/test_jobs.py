@@ -739,8 +739,8 @@ async def test_unprovisioned_actor_fails_before_any_payment(
 async def test_no_offering_and_a_runner_with_zero_capacity_is_still_asked(
     make_engine: EngineFactory, alice: ActorContext
 ) -> None:
-    """Zero advertised capacity no longer fails the job ``no_capacity`` before any attempt (#114, C17,
-    tests/unit/test_zero_capacity.py): the job gets as far as the next check, alice's allocation."""
+    """Zero advertised capacity fails only a job that would pay (#114, C17, tests/unit/test_zero_capacity.py),
+    so alice's allocation is looked up first: she has none, and the job fails there."""
     engine = await make_engine(runners=(runner(capacity_available=0),))
     with pytest.raises(JobFailed) as missing:
         await engine.jobs.run(alice, JobRequest(app="nothing/here"))

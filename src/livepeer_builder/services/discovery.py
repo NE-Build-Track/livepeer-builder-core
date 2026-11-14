@@ -15,7 +15,7 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
-from livepeer_builder.contracts.discovery import ObservedBy
+from livepeer_builder.contracts.discovery import ObservedBy, has_storable_text
 from livepeer_builder.contracts.payments import is_payable, payable_rate, signable
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
 from livepeer_builder.services.failure_codes import source_failure
@@ -38,6 +38,24 @@ class MostCapacityFirst:
 def capped_first(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
     """The policy's order, free runners and those the signer takes a ceiling for first; the rest last."""
     return tuple(sorted(runners, key=lambda runner: not _paid_ready(runner)))  # stable: the policy's order
+
+
+def paid_candidates(runners: Sequence[Runner]) -> list[Runner]:
+    """The runners a job that pays may try (#114, C17): all of them, unless every one advertises zero
+    capacity. livepeer/node asks for payment before it looks at capacity, so a full runner's refusal comes
+    after the signer signed and the ticket is charged. Then only the runners an attempt signs nothing for
+    are left, and none left is the job's ``no_capacity``."""
+    if any(_is_ready(runner) for runner in runners):
+        return list(runners)
+    return [runner for runner in runners if not _signs_for(runner)]
+
+
+def _signs_for(runner: Runner) -> bool:
+    """A paid attempt on this runner signs a payment: it advertises a price the signer takes a ceiling for.
+    The engine signs for no other runner: a free one is never asked to pay, and a 402 from a runner with
+    any other price, or none, is refused unsigned (D62)."""
+    rate = payable_rate(runner.price_info)
+    return rate is not None and signable(rate.amount, rate.currency, rate.unit)
 
 
 def _paid_ready(runner: Runner) -> bool:
@@ -83,12 +101,27 @@ class DiscoveryService:
             _LOG.warning(
                 "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}
             )
-            self._snapshot = self._snapshot.model_copy(
-                update={"last_attempt_at": attempted, "last_error": code}
+            self._snapshot = DiscoverySnapshot(  # built, not copied: a copy would not check the code
+                runners=self._snapshot.runners,
+                observed_at=self._snapshot.observed_at,
+                last_attempt_at=attempted,
+                last_error=code,
             )
             return self._snapshot
+        # The default reader has skipped such a runner already. A supplied source's runner is held to the
+        # same text rule here: one in the snapshot fails the catalog for every application (#114, C12).
+        kept = tuple(runner for runner in runners if has_storable_text(runner))
+        if len(kept) != len(runners):
+            _LOG.warning(
+                "discovery source returned runners whose text cannot be stored",
+                extra={
+                    "event": "discovery.inventory_skipped",
+                    "entries": 0,
+                    "runners": len(runners) - len(kept),
+                },
+            )
         self._snapshot = DiscoverySnapshot(
-            runners=runners, observed_at=attempted, last_attempt_at=attempted, last_error=None
+            runners=kept, observed_at=attempted, last_attempt_at=attempted, last_error=None
         )
         return self._snapshot
 

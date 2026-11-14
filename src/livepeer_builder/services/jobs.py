@@ -64,7 +64,7 @@ from livepeer_builder.protocols import (
     StreamingRunnerTransport,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
-from livepeer_builder.services.discovery import DiscoveryService, capped_first
+from livepeer_builder.services.discovery import DiscoveryService, capped_first, paid_candidates
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.failover import (
     Candidates,
@@ -265,15 +265,18 @@ class JobService:
         candidates = self._discovery.candidates(request.app)
         if not candidates:
             raise await self._fail(job, attempts, "no_offering", f"no runner advertises app {request.app!r}")
-        # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
-        # tries it last, and if every runner refuses the job fails ``refused`` through failover.
         try:
             credential = await self._credentials.credential(actor)
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
+        paid = credential.token is not None and getattr(self._transport, "pays", True)  # no signer, no pay
+        # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
+        # tries it last, and if every runner refuses the job fails ``refused`` through failover. A job
+        # that pays is not tried on runners that all advertise zero: a full runner's refusal costs a ticket.
+        if paid and not (candidates := paid_candidates(candidates)):
+            raise await self._fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
         ordered = tuple(self._selection.order(candidates, request))
-        # paid: a runner with no usable ceiling is refused at its 402 (D62); with no signer, nothing pays
-        if credential.token is not None and getattr(self._transport, "pays", True):
+        if paid:  # a runner with no usable ceiling is refused at its 402 (D62)
             ordered = capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")

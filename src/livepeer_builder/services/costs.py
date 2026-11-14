@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     CostClass,
     CostStatus,
     CostSummary,
+    FailureCode,
     Fees,
     Job,
     JobCost,
@@ -169,7 +170,7 @@ class CostService:
         self._allowances = allowances
         self._interval_s = interval_s
         self.last_synced_at: datetime | None = None
-        self.last_error: str | None = None
+        self.last_error: FailureCode | None = None
         self.set_aside_rows: int | None = None  # every usage row left out so far, as of the last sync
 
     async def sync_once(self) -> SyncReport:
@@ -198,7 +199,8 @@ class CostService:
                     await self.sync_once()
                 except Exception as exc:  # keep syncing; health shows a code, the log the text (#113, C7)
                     from_source = self._worker.source_error is exc
-                    self.last_error = code = source_failure(exc) if from_source else STORE_ERROR
+                    code: FailureCode = source_failure(exc) if from_source else STORE_ERROR
+                    self.last_error = code
                     _LOG.warning(
                         "cost sync failed",
                         extra={"event": "costs.sync_failed", "code": code, "error": str(exc)},

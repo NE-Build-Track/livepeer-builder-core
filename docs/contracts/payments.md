@@ -89,7 +89,9 @@ The same limit applies to every id, label and reference a request carries (`Stor
 
 **A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
 `FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
-and the values `.` and `..`, which a client or server would read as another path. It is a 422 over REST (a
+and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
+id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
+`..`, `" grant_1"` is used as `grant_1`, and an id of only whitespace is no grant chosen. It is a 422 over REST (a
 `ValidationError` in process) before the operation ledger records anything or the provider is called, and
 it applies to the allocation fund route too, whose body is a `FundRequest`. It is held to no pattern such
 as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it

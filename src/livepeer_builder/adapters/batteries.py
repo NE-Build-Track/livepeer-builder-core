@@ -264,7 +264,8 @@ def allowance_from_body(body: dict[str, Any]) -> Allowance:
 
 def segment(value: str) -> str:
     """An id as one path segment, whatever its source (#113, C10): every reserved character is
-    percent-encoded, and so is an id of only dots, which httpx would remove as a dot segment."""
+    percent-encoded, and so are the ids ``.`` and ``..`` (``%2E``, ``%2E%2E``), which httpx would remove
+    as a dot segment. ``...`` is no dot segment and goes out as written."""
     return "%2E" * len(value) if value in (".", "..") else quote(value, safe="")
 
 

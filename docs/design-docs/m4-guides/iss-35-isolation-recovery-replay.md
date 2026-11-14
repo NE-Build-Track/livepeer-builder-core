@@ -1,5 +1,10 @@
 # ISS-35: Isolation, recovery and accounting replay
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D79 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-35 ([Network-Engineering-SPE#49](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/49)),
 source task V3. Extends ISS-23 ([guide](../m3-guides/iss-23-verification.md)).\
@@ -158,12 +163,13 @@ network (`tests/unit/livepeer_net.py`) for signer behavior. Never mock the store
 Replay
 [ ] rebuild of one delivered job equals the incremental projection
 [ ] rebuild equals incremental for failover, ambiguous, refused, unknown-confirmed, late-row jobs
-[ ] corrected rebuilds as observed; the comparison treats them as equal               [?] Q2
+[ ] corrected rebuilds as observed; the comparison treats them as equal
 [ ] re-feeding every page twice changes nothing
 [ ] a crash after apply_usage, then a sync: same result as no crash
 [ ] property: any split, duplication, crash point → the clean-pass state
-[ ] R1 pinned: usage purge with an ambiguous key does not turn it matched            [?] Q3
-[ ] R2 pinned: job purge moves fees to unattributed; reconciliation still balances  [?] Q3
+[ ] R1 pinned, then fixed: usage purge with an ambiguous key does not turn it matched
+[ ] R2 pinned: job purge moves fees to unattributed; reconciliation still balances
+[ ] R3 pinned: after a job and its usage rows are both purged, does reconciliation still balance? (decides Q3)
 Recovery
 [ ] finish_job fails once → restart → uncertain (maybe paid) or failed; no second dispatch
 [ ] each mode × crash point leaves cost pending, never none, when a session may have paid
@@ -202,14 +208,53 @@ decision.
   tables already separate records from derived data; the rebuild check gives the same guarantee.
 - **Replay on the live database.** Rejected: destructive and races the sync loop; always a copy.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** Ship `lpb costs verify` (recommended) or keep rebuild as a test only?
-- **Q2.** Keep `corrected` path-dependent (recommended; the events feed carries history: ISS-46's cost
-  events, one per `revision`), or store the first observed fees so a rebuild can reproduce it?
-- **Q3.** R1/R2: forbid usage retention shorter than job retention and re-check only within an attempt
-  window (T16's exit), or document the effect? ISS-46's Q4 asks the same of event retention; answer them
-  together.
+Locked by Mike on 13 November 2026.
+
+- **Q1, `lpb costs verify`:** shipped as a read-only operator command. Its run on the dev stack is the
+  observed evidence for this ticket.
+- **Q2, the `corrected` label:** it stays dependent on history and is left out of the rebuild comparison,
+  with `revision` and the timestamps. The history of a cost lives in the events feed. Known limit: event
+  retention can delete old correction events, after which the first figure is recorded nowhere.
+- **Q3, retention and the cost data:** "option C if R3 is confirmed". R3 was confirmed by test on 13
+  November, so option C applies. All of these effects need retention switched on, and the default keeps
+  everything. The tests that showed them are not merged yet: slice 1 of this ticket adds them
+  (`tests/store/test_retention_effects.py`). They ran on SQLite, with the ledger and the provider's
+  `spent` faked; PostgreSQL has not been run.
+  - **R1, confirmed.** A purge that leaves one cached ledger session and one engine entry for a key makes
+    the next sync call it `matched`, whoever the two are. A fee was credited to the wrong job in four
+    setups, two of which need only one retention setting. The fix: an ambiguous key is looked at again
+    only within a window after its attempt, and never after rows for that key have been purged.
+  - **R2, confirmed.** After a job purge its fee reads `unattributed`, and the books still balance.
+  - **R3, confirmed.** After a job and later its usage rows are both purged, the fees are counted nowhere
+    in the engine while Batteries still reports them as spent, and `balanced` is false on every later
+    sync.
+  - **The fix for R2 and R3:** the engine keeps a running total of fees removed by retention, per
+    allocation. Reconciliation gains a figure, "fees of purged jobs", and can balance after any purge. The
+    builder console changes with it.
+  - **R4, found by the same tests.** With usage rows purged and the job kept, a later charge on the same
+    session recomputes the job's cost from the rows that remain and stores it lower. **Locked by Mike on
+    13 November:** the usage purge skips rows that a kept job still uses. It deletes a row only when its
+    job is already purged, or when the row matches no job and is past the cutoff. This also protects
+    `uncertain` jobs, which are never purged.
+  - **A constraint on both fixes.** Cost sync reads the ledger's last page again on every sync, so a
+    purged row on that page is cached again. The total of purged fees must not count such a row twice.
+  - **The guide's startup rule** (usage retention not shorter than job retention) is not adopted. The
+    purge rule above covers what it was for.
+
+**Other decisions that touch this guide.**
+
+- **Evidence limits to record:** a charge that reaches Batteries with no ticket (builder console issue 19)
+  is recorded here as an upstream limit. A public issue in livepeer/node is John's to file.
+- **Set-aside usage rows** (#114) are named by `lpb costs verify`, and reconciliation is per allocation
+  (#115).
+- **The isolation sweep** runs under API keys and JWT. The trusted-backend authenticator is not built
+  (ISS-32), and admin comes from a token claim (ISS-33).
+- **Event retention** has no required relation to job retention (ISS-46), and a restore writes a new event
+  epoch.
+- **The Batteries pin is `v0.0.3`** (#117). Its Kafka lag gate, which this guide names as upstream-only,
+  is now in the pin and is reviewed under T28.
 
 ## Delivery slices
 

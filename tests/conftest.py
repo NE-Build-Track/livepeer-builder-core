@@ -1,7 +1,8 @@
 """Shared fixtures: a real SQLite store, a fixed clock, fakes, and an engine factory."""
 
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+import gc
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
 
 import pytest
@@ -20,6 +21,20 @@ from livepeer_builder.testing import make_engine as make_shared_engine
 from livepeer_builder.testing.engine import overlay
 
 MEMORY_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def no_collection_inside_a_test() -> Iterator[None]:
+    """Many tests measure real time in tenths of a second (stream deadlines, call timings, the engine's
+    loops), and a full garbage collection stops the process for longer: 0.3 s and more late in the suite,
+    about fifty times a run. One that fell inside a deadline failed the test, on whichever commit happened
+    to put one there. The collector is off while any test runs, its fixtures included, and on between
+    tests, where what the test made is collected."""
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
 
 
 @pytest.fixture

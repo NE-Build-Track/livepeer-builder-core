@@ -6,16 +6,18 @@ path) left a funded allocation with no record. A reference is opaque text of any
 """
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
-from sqlalchemy import Text, insert, inspect, select
-from sqlalchemy.exc import IntegrityError
+from alembic import command
+from sqlalchemy import Text, func, insert, inspect, select, text
+from sqlalchemy.exc import IntegrityError, NoSuchTableError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from livepeer_builder.contracts import ProvisionedActor, SecretRef
 from livepeer_builder.store import SqlStore, create_engine, current_revision, head_revision, upgrade
 from livepeer_builder.store import schema as t
-from livepeer_builder.store.migrate import downgrade
+from livepeer_builder.store.migrate import alembic_config, downgrade
 from livepeer_builder.testing import FixedClock
 
 LONG = "vault:kv/data/livepeer/" + "p" * 5000
@@ -101,5 +103,77 @@ async def test_existing_actors_survive_the_change_and_a_downgrade(
         assert await store.get_actor("default", "alice") == before
         await upgrade(engine)
         assert await store.get_actor("default", "alice") == before
+    finally:
+        await engine.dispose()
+
+
+# -- SQLite: a run of the migration that died before its commit ---------------------------------------------
+
+COPY = "_alembic_tmp_lpb_actors"  # the table Alembic's batch mode copies the rows into on SQLite
+
+
+class _Killed(Exception):
+    """The process died after the migration ran and before its transaction committed."""
+
+
+async def interrupted(engine: AsyncEngine, direction: str, revision: str) -> None:
+    run = command.upgrade if direction == "up" else command.downgrade
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync: run(alembic_config(sync), revision))
+            raise _Killed
+    except _Killed:
+        pass
+
+
+async def tables(engine: AsyncEngine) -> list[str]:
+    async with engine.connect() as conn:
+        return await conn.run_sync(lambda sync: inspect(sync).get_table_names())
+
+
+async def test_an_interrupted_run_on_sqlite_does_not_block_the_next_migrate(
+    tmp_path: Path, clock: FixedClock
+) -> None:
+    """SQLite creates the batch copy's table outside the migration's transaction, so a run that dies
+    before its commit rolls back to the old revision and leaves ``_alembic_tmp_lpb_actors`` behind. Every
+    later migrate then failed: "table _alembic_tmp_lpb_actors already exists". Up and down."""
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}")
+    try:
+        await upgrade(engine, "0012")
+        store, saved = SqlStore(engine), actor(clock)
+        await store.save_actor(saved)
+
+        await interrupted(engine, "up", "head")
+        assert await current_revision(engine) == "0012" and COPY in await tables(engine)
+        await upgrade(engine)
+        assert await current_revision(engine) == head_revision() and COPY not in await tables(engine)
+        assert await secret_ref_length(engine) is None and await store.get_actor("default", "alice") == saved
+
+        await interrupted(engine, "down", "0012")
+        assert await current_revision(engine) == head_revision() and COPY in await tables(engine)
+        await downgrade(engine, "0012")
+        assert await current_revision(engine) == "0012" and COPY not in await tables(engine)
+        assert await secret_ref_length(engine) == 200 and await store.get_actor("default", "alice") == saved
+    finally:
+        await engine.dispose()
+
+
+async def test_a_copy_that_holds_the_only_actor_rows_is_never_dropped(
+    tmp_path: Path, clock: FixedClock
+) -> None:
+    """The leftover is dropped only while ``lpb_actors`` itself is there. Without it the copy holds the
+    only rows (each one a funded allocation's record), and the migration stops instead."""
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}")
+    try:
+        await upgrade(engine, "0012")
+        await SqlStore(engine).save_actor(actor(clock))
+        async with engine.begin() as conn:
+            await conn.execute(text(f"ALTER TABLE lpb_actors RENAME TO {COPY}"))
+        with pytest.raises(NoSuchTableError):
+            await upgrade(engine)
+        async with engine.connect() as conn:
+            kept = await conn.execute(select(func.count()).select_from(text(COPY)))
+            assert kept.scalar_one() == 1
+        assert await current_revision(engine) == "0012"
     finally:
         await engine.dispose()

@@ -43,6 +43,11 @@ like a source checkout. Version table: `lpb_alembic_version`.
   ready, pay a runner, then fail to record. It checks at start only: a replica already running keeps
   running while another one migrates. A supplied store with no `maintenance` is not checked.
 - **Check:** `lpb revision` (exit code 2 when behind).
+- **An interrupted 0013 on SQLite:** SQLite creates the table that migration 0013 copies the actors
+  into (`_alembic_tmp_lpb_actors`) outside the migration's transaction. A run that dies before its
+  commit rolls back to the old revision and leaves that empty copy behind. 0013 drops a leftover copy
+  when it starts, up or down, and only while `lpb_actors` itself exists, so the next `lpb migrate`
+  goes through. Before, it failed with "table _alembic_tmp_lpb_actors already exists" (#115).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

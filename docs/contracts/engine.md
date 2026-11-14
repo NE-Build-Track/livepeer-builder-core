@@ -122,7 +122,9 @@ refuses a path that is not already normal, with a 422 (a `ValidationError` in pr
 is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
 segment (`//`), and a backslash, a control character or a fragment (`#`) anywhere. A trailing `/` and a
 query string stay allowed; a query's slashes and dots are data. An empty path is the runner URL itself,
-and a path that is set must start with `/` (400, as before). The transport then sends the address
+and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets that
+400, whatever its segments (`run`, `a//b` and `../run` alike); only a backslash, a control character or
+a fragment in it is a 422. The transport then sends the address
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
 longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's).

@@ -114,6 +114,40 @@ async def test_rest_refuses_such_a_path_with_422_before_anything_is_written(
     assert transport.calls == []
 
 
+RELATIVE = ["run", "a/b", "a//b", "../run", "./x", "..", "%2e%2e/run", "a/../b", "run?x=1"]
+
+
+@pytest.mark.parametrize("path", RELATIVE)
+def test_a_path_with_no_leading_slash_is_left_to_the_job_service(path: str) -> None:
+    assert JobRequest(app=APP, path=path).path == path  # one mistake, one answer: the 400 below
+
+
+@pytest.mark.parametrize("path", RELATIVE)
+async def test_rest_refuses_a_path_with_no_leading_slash_with_400_before_anything_is_written(
+    api: tuple[httpx.AsyncClient, BuilderEngine, str], transport: ScriptedStreamTransport, path: str
+) -> None:
+    client, engine, token = api
+    transport.steps = [ScriptedStreamTransport.ok()]  # what a runner would answer, were it reached
+    body = {"app": APP, "path": path, "operation_ref": "order-1"}
+    answer = await client.post("/v1/jobs", json=body, headers={"Authorization": f"Bearer {token}"})
+    assert answer.status_code == 400, answer.text
+    assert "path must start with '/'" in answer.text
+    alice = ActorContext(actor_id="alice", permissions=frozenset({"jobs.read"}))
+    assert await engine.jobs.list_jobs(alice) == []  # no job, so the reference is still free
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("path", ["a\\b", "a#f", "a\x00b"])
+async def test_rest_still_answers_422_for_what_no_path_may_hold(
+    api: tuple[httpx.AsyncClient, BuilderEngine, str], transport: ScriptedStreamTransport, path: str
+) -> None:
+    client, _, token = api
+    body = {"app": APP, "path": path, "operation_ref": "order-1"}
+    answer = await client.post("/v1/jobs", json=body, headers={"Authorization": f"Bearer {token}"})
+    assert answer.status_code == 422, answer.text
+    assert transport.calls == []
+
+
 # -- the transport ---------------------------------------------------------------------------------------
 
 
@@ -248,6 +282,15 @@ def test_a_path_that_makes_the_authority_unreadable_leaves_the_runner(path: str)
     """yarl raises its own errors for these (an ``IndexError`` for an authority that ends in ``@``)."""
     with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
         runner_address("http://127.0.0.1:8936", path)
+    assert (refused.value.kind, refused.value.payment_sent) == ("http", False)
+
+
+@pytest.mark.parametrize("runner_url", ["http://127.0.0.1:8936", "http://127.0.0.1:8936/app/app-1/"])
+@pytest.mark.parametrize("path", RELATIVE)
+def test_the_transport_refuses_a_path_with_no_leading_slash_too(runner_url: str, path: str) -> None:
+    """The contract does not read such a path's segments, so the transport is the second refusal."""
+    with pytest.raises(RunnerCallError, match="leaves the runner") as refused:
+        runner_address(runner_url, path)
     assert (refused.value.kind, refused.value.payment_sent) == ("http", False)
 
 

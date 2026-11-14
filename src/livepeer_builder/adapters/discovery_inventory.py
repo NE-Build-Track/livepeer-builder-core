@@ -155,9 +155,9 @@ def _http_url(value: object) -> str | None:
     a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
     The URL holds no ASCII space, control character or lone surrogate (``_UNSENDABLE``): it is valid
     text, and a space would split the request line. Another space character, such as U+00A0 or U+2028,
-    is kept and sent as written. It has no userinfo, query or fragment: the engine appends each request's
-    path to a runner URL, an ``address`` whose origin matches that URL becomes ``orchestrator_url`` for
-    the payment-origin check, and error text quotes both.
+    is kept and percent-encoded when sent (``runner_address``). It has no userinfo, query or fragment:
+    the engine appends each request's path to a runner URL, an ``address`` whose origin matches that URL
+    becomes ``orchestrator_url`` for the payment-origin check, and error text quotes both.
     """
     if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
         return None

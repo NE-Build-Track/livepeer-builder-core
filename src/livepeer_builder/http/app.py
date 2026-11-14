@@ -6,15 +6,12 @@ contracts (async jobs, sessions, events) answer 501. The generated schema is com
 docs/generated/openapi.json and checked for drift in CI.
 """
 
-import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response, Security
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -75,6 +72,7 @@ from livepeer_builder.http.bodies import (
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
 from livepeer_builder.http.params import PathId, QueryId, QueryInstant, QueryTime
 from livepeer_builder.http.streaming import stream_response
+from livepeer_builder.http.unprocessable import install_unprocessable_handler
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
 _FAILURE_STATUS = {
@@ -405,14 +403,7 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
     ) -> JSONResponse:
         return JSONResponse({"error": message, **extra}, status_code=status, headers=headers)
 
-    @app.exception_handler(RequestValidationError)
-    async def _unprocessable(_: Request, exc: RequestValidationError) -> Response:
-        """FastAPI's own 422, which repeats the input it refused. A lone surrogate in that input (JSON's
-        ``"\\ud800"``) cannot be sent as UTF-8 and made the 422 a 500; it goes out as the escape it came in
-        as. Every other answer is byte for byte what FastAPI sends."""
-        detail = {"detail": jsonable_encoder(exc.errors())}
-        body = json.dumps(detail, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        return Response(body.encode("utf-8", "backslashreplace"), 422, media_type="application/json")
+    install_unprocessable_handler(app)
 
     @app.exception_handler(NotAuthenticated)
     async def _unauthenticated(_: Request, exc: NotAuthenticated) -> Response:

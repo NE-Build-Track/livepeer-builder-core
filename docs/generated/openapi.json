@@ -488,6 +488,11 @@
           "cost_sync_error": {
             "anyOf": [
               {
+                "enum": [
+                  "unavailable",
+                  "invalid_answer",
+                  "store_error"
+                ],
                 "type": "string"
               },
               {
@@ -499,6 +504,10 @@
           "discovery_error": {
             "anyOf": [
               {
+                "enum": [
+                  "unavailable",
+                  "invalid_answer"
+                ],
                 "type": "string"
               },
               {
@@ -2172,6 +2181,8 @@
           "operation_ref": {
             "anyOf": [
               {
+                "maxLength": 200,
+                "minLength": 1,
                 "type": "string"
               },
               {

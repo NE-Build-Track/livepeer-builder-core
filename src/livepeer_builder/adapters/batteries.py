@@ -196,9 +196,9 @@ class BatteriesUsageSource:
         message = error_message(response) if response.status_code >= 400 else ""
         if response.status_code == 400 and "cursor" in message:
             raise CursorMismatch(message)
-        if not response.is_success:  # a redirect is no answer either (#113, C7)
+        if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
-        items, next_cursor = list_page(json_object(response))
+        items, next_cursor = list_page(json_object(response))  # which refuses a redirect (#113, C7)
         read = [read_usage_item(item) for item in items]
         return UsagePage(
             items=tuple(row for row in read if isinstance(row, UsageRow)),
@@ -210,7 +210,13 @@ class BatteriesUsageSource:
 def json_object(response: httpx.Response) -> dict[str, Any]:
     """The one reader of every Batteries answer that is not an error status (#114, C21): a JSON object,
     or a ``ProviderError`` with the answer's own status. That is HTTP 502 to a caller and an unknown outcome
-    to the operation ledger, never a refusal, so a reference stays held. The body is not quoted."""
+    to the operation ledger, never a refusal, so a reference stays held. The body is not quoted.
+
+    Only a 2xx is an answer. A redirect is none, whatever its body: the engine follows no redirect, and a
+    3xx that held a JSON object read as the call's result (Go's ``ServeMux`` answers a 301 for a path it
+    would clean)."""
+    if not response.is_success:
+        raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
     try:
         body = response.json()
     except ValueError:  # not JSON, or not UTF-8

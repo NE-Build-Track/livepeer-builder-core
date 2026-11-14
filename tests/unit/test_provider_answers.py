@@ -80,6 +80,39 @@ async def test_a_2xx_that_is_not_a_json_object_is_a_provider_error_for_every_cal
     assert not definite_refusal(refused.value)  # an unknown outcome to the ledger: the reference stays held
 
 
+REDIRECT_BODIES: dict[str, bytes | dict[str, Any]] = {
+    "an empty object": {},
+    "what the call would answer": {"id": "a1", "key": "lpk_x", "status": "active", "items": []},
+    "a ServeMux redirect": b'<a href="/v1/grants/g1/fund">Moved Permanently</a>.',
+}
+
+
+@pytest.mark.parametrize("call", CALLS)
+@pytest.mark.parametrize("body", REDIRECT_BODIES)
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_a_redirect_is_no_answer_for_any_call_whatever_its_body(
+    call: str, body: str, status: int
+) -> None:
+    """A 3xx with a JSON object in it read as the call's answer: a fund or a revoke that was only
+    redirected counted as done. Go's ServeMux answers a 301 for a path it would clean."""
+    client = BatteriesClient(BASE, "t", client=answering(REDIRECT_BODIES[body], status=status))
+    with pytest.raises(ProviderError, match="redirect") as refused:
+        await CALLS[call](client)
+    assert refused.value.status_code == status
+    assert not definite_refusal(refused.value)  # it may have been applied elsewhere: the reference stays held
+    assert "href" not in str(refused.value)  # the body is not quoted
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_a_redirected_usage_page_is_no_page(status: int) -> None:
+    source = BatteriesUsageSource(
+        BASE, "t", client=answering({"items": [], "next_cursor": ""}, status=status)
+    )
+    with pytest.raises(ProviderError, match="redirect") as refused:
+        await source.page(None)
+    assert refused.value.status_code == status
+
+
 @pytest.mark.parametrize("body", NOT_AN_OBJECT)
 async def test_a_usage_answer_that_is_not_a_json_object_is_a_provider_error(body: str) -> None:
     source = BatteriesUsageSource(BASE, "t", client=answering(NOT_AN_OBJECT[body]))
@@ -238,3 +271,13 @@ async def test_a_resumed_grant_create_never_creates_a_second_grant_over_a_malfor
     clock.advance(120)
     adopted = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # the list answers
     assert (adopted.id, len(batteries.grants)) == ("grant_1", 1)
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_a_redirected_usage_page_reads_as_unavailable(status: int) -> None:
+    source = BatteriesUsageSource(
+        BASE, "t", client=answering({"items": [], "next_cursor": ""}, status=status)
+    )
+    with pytest.raises(ProviderError) as refused:
+        await source.page(None)
+    assert source_failure(refused.value) == "unavailable"  # as a redirect from the discovery source (C7)

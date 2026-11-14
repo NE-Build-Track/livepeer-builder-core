@@ -200,7 +200,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   `ProviderError`: HTTP 502 from the REST service, `invalid_answer` as `cost_sync_error`, and an unknown
   outcome to the ledger, so the reference stays held. Before, a 2xx that was not a JSON object answered
   500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is
-  now refused too, since Batteries answers every management route with a JSON object. A malformed page
+  now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
+  is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
+  with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
   never reads as an empty one, and one malformed item fails its page. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).

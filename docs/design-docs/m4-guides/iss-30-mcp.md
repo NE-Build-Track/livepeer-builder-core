@@ -1,5 +1,10 @@
 # ISS-30: The same authorized journey through MCP
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D73 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions, numbered when they are locked.\
 **Tracker:** ISS-30 ([Network-Engineering-SPE#44](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/44)).\
@@ -160,15 +165,15 @@ Transport and auth
 [ ] revoked key and expired JWT: 401
 [ ] an enterprise Authenticator reading another header is honored (no bearer needed)
 [ ] Origin outside LPB_MCP_ALLOWED_ORIGINS: 403; no Origin: allowed            (verify)
-[ ] GET /mcp: 405                                                               [?] Q5
+[ ] GET /mcp: 405
 [ ] JWT on: PRM document fields; 401 carries resource_metadata
-[ ] token for the MCP resource accepted; token for another audience refused   [?] Q2
+[ ] token for the MCP resource accepted; token for another audience refused
 Tools
 [ ] list_offerings matches GET /v1/offerings
 [ ] get_rates without discover: tool error 403, as REST
 [ ] run_job JSON result: structuredContent equals the runner body; job id present
 [ ] run_job image result: image content, same bytes
-[ ] run_job over LPB_MCP_MAX_RESULT_BYTES: no bytes, ResultRef and a note       [?] Q3
+[ ] run_job over LPB_MCP_MAX_RESULT_BYTES: no bytes, size, sha256 and a note that names async
 [ ] run_job unprovisioned: isError, status 402, code not_provisioned, job included
 [ ] run_job repeated operation_ref: same 409 code as REST (ISS-14)
 [ ] run_job mode=async: isError 501 with milestone M4
@@ -204,7 +209,7 @@ The only new third-party dependency is the MCP Python SDK (`modelcontextprotocol
 ## Consumer impact
 
 Builder console: none required; a "connect an MCP client" help page is optional. ChatLPT and
-inference-gateway embed the engine and are unaffected. Enterprise desk: none. Operators: a new extra and
+inference-gateway embed the engine and are unaffected. Operators: a new extra and
 settings, off by default.
 
 ## Alternatives considered
@@ -215,20 +220,61 @@ settings, off by default.
 - **An authorization server in the engine** (as livepeer/console has): against D13.
 - **Hand-written JSON-RPC:** the spec changes between revisions; the SDK tracks it.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1. Tool set.** The table above (recommended). Add `report_usage` (a write) or admin reads? Recommend no.
-- **Q2. Audiences.** `LPB_JWT_AUDIENCE` as a list holding the REST and MCP resource identifiers (recommended),
-  or one shared identifier for both? Depends on how the ISS-19 client and IdP send `resource` (verify).
-- **Q3. Large results.** Drop above a cap until ISS-26 (recommended), or refuse `run_job` for apps whose
-  results are typically large?
-- **Q4. stdio transport** for local tools: out of scope (recommended); it would need an engine per process.
-- **Q5. `GET /mcp`.** 405 (recommended), or a metadata body for clients that probe with GET, as
-  livepeer/console does for Codex?
-- **Q6. Long jobs.** Default `timeout_s` for `run_job`, and liveness progress, given clients' own tool
-  timeouts (verify for the pinned client).
-- **Q7. The pinned client** (ISS-19): the SDK client in CI plus one OAuth-capable host (for example the MCP
-  Inspector or Claude Code) for evidence?
+Locked by Mike on 13 November 2026. The spike of 4 November (SDK 2.3.0, paid jobs run from Claude Code) is
+the source of the measured facts.
+
+- **Q1, the tool set:** the table above, plus `whoami` (ISS-29) and `cancel_job` for queued jobs (ISS-26).
+  `list_offerings` returns short rows by default and takes a search or capability filter, and a second
+  call describes one offering in full: the spike measured the full catalog at 96 offerings and 55 KB. No
+  `report_usage`, no admin tools, no session or event tools.
+- **Q2, audiences:** `LPB_JWT_AUDIENCE` becomes a list. Proposed for the pull request, not separately
+  decided: the MCP endpoint accepts only the MCP audience (`LPB_MCP_RESOURCE`) and REST accepts only the
+  others.
+- **Q3, large results:** over `LPB_MCP_MAX_RESULT_BYTES` the tool result carries the job id, the size, the
+  SHA-256 and a note, and no bytes. The note and the tool's description say to use `mode="async"`, whose
+  stored result is read with `get_job_result` or over REST. The cap's default is set in the pull request.
+- **Q4, stdio:** HTTP only. No `lpb mcp` command.
+- **Q5, `GET /mcp`:** 405. With SDK 2.3.0 a stateless server that accepts the `GET` holds an idle stream
+  open.
+- **Q6, long jobs:** immediate `run_job` keeps the 300 second default and accepts `timeout_s`. The tool
+  sends liveness progress to a client that asked for it. The description says to use `mode="async"` and
+  poll for work expected to take more than about a minute. Measured: Claude Code moved a tool call to the
+  background after 120 seconds.
+- **Q7, the pinned client:** the SDK's own client in CI, and Claude Code as the pinned host for the
+  evidence page, with its version recorded.
+
+**Other decisions that touch this guide.**
+
+- **The SDK is 2.3.0**, not 1.x: the server class is `MCPServer`, and the client uses `httpx2`.
+- **Tool errors** reuse the ISS-29 code table. REST problems are RFC 9457, so `errors.describe(exc)`
+  returns the fields both adapters render.
+- **Admin from a token claim** (ISS-33) changes the JWT settings this guide lists.
+- **Not verified:** how the pinned client and the identity provider send the resource; whether Claude Code
+  can sign in to the Keycloak realm with OAuth; which clients extend their timeout on progress.
+- **How the client is registered at the identity provider** (John, review of 13 November). The example
+  realm has two confidential clients and no registration for an MCP host, so an MCP client cannot sign in
+  to it today. Two ways to test in slice 3: enable dynamic client registration (DCR) in the realm, or, as
+  John prefers, register the known clients ahead of time, including those that identify themselves with a
+  client ID metadata document (CIMD). Pre-registration is the conservative choice for an enterprise, which
+  may not allow open registration. To verify then: what the pinned Keycloak release supports for CIMD, and
+  how Claude Code is given a registered client id.
+- **Noted, not decided:** rates arrive mostly in wei with no USD figure, so a model cannot compare a price
+  with the USD allowance.
+
+### Where the runner standard plugs in later
+
+Runner contract v1 (ISS-47) is not vetted yet. This ticket therefore routes by app ID, as today, and reads
+no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may move to M5.
+
+- **Working assumption for ISS-48 (12 November):** app IDs stay the routing key; v1 metadata describes a
+  runner and never routes; missing, old or unreadable metadata is ignored and logged; model and profile
+  are filters; no schema check.
+- **Criterion moved to ISS-48 on 13 November:** the tools are `search_capabilities`, `describe_capability`
+  and a checked `run_job`; tool descriptions come only from the registry, never from runner metadata.
+- **The seam to keep:** the compact, filterable `list_offerings` and the describe-one-offering call of Q1.
+  They are where registry text replaces runner text.
 
 ## Delivery slices
 

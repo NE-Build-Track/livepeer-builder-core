@@ -120,12 +120,26 @@ missing `payload` as the JSON object `{}` (D41).
 orchestrator, so a path that a client or server would normalize could reach another app. The contract
 refuses a path that is not already normal, with a 422 (a `ValidationError` in process) before anything
 is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
-segment (`//`), and a backslash, a control character or a fragment (`#`) anywhere. A trailing `/` and a
+segment (`//`), and a backslash, a control character, a lone surrogate or a fragment (`#`) anywhere. A
+lone surrogate is half of a UTF-16 pair, which JSON can write (`"\ud800"`) and no request target can
+encode; the 422 repeats it as that escape. A trailing `/` and a
 query string stay allowed; a query's slashes and dots are data. An empty path is the runner URL itself,
-and a path that is set must start with `/` (400, as before). The transport then sends the address
+and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets that
+400, whatever its segments (`run`, `a//b` and `../run` alike); only a backslash, a control character, a
+lone surrogate or a fragment in it is a 422. The transport then sends the address
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
-longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's).
+longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's)
+or that it cannot encode (a lone surrogate that got past the contract).
+The one exception is the `?` of an empty query: `/run?` is accepted, and the runner receives `/run`,
+because the HTTP client leaves an empty query out of the request target (`/run?x=` and `/run?&` arrive
+as written).
+The runner URL's own path is encoded by the same rule, so a runner URL may hold a space or a non-ASCII
+character in its path: escapes it already holds are kept, and a `%` that begins none is sent as `%25`.
+Its scheme, host and port go out as written, except a host that is not ASCII, which is sent by its IDNA
+name. The payment-origin check names every host that way too, so a 402 whose `payment_url` writes the
+same host in Unicode still matches the runner. A runner URL that cannot be read (a supplied discovery source can return one; the default source
+refuses it earlier) fails that attempt, unpaid, as `invalid runner URL`, like any other runner failure.
 
 | State | Meaning |
 | --- | --- |
@@ -206,11 +220,15 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      (incomplete or expired payment params) and 481 (price above the session ceiling). A
      `SignerRefreshRequired` (HTTP 480) that uses up the payment retry budget is the same refusal:
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
-     challenge and does not fail the attempt. Another orchestrator may succeed. The budgets are per
-     runner call and separate: at most `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` + 1 signatures (4 at the
-     default of 3), and as many unsigned requests, the first included, so a 480 is never a
-     signature. A runner that answers 402 after the last signature ends the attempt `http` (402),
-     paid, and that last challenge is not signed.
+     challenge and does not fail the attempt. Another orchestrator may succeed.
+     The runner's HTTP 402 payment challenge flow has two separate budgets per call.
+     It can sign at most `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` + 1 challenge payments
+     (4 at the default of 3) and send at most the same number of unsigned requests,
+     including the initial request. A signer HTTP 480 uses the unsigned-request
+     budget when it triggers a fresh challenge request. If the runner returns HTTP
+     402 after the last permitted challenge payment, the attempt ends as paid with
+     `http` (402), and the final challenge remains unsigned. Metered live sessions
+     sign renewal payments separately, outside the challenge signature cap.
    - **`payment`:** caller- or signer-side refusals: 401 or 403 (`not_authorized`) and 402
      (`allowance_exhausted`). The stored manifest becomes `unpaid` (D54), so it is never matched or
      billed, and the job ends `failed`. They do **not** fail over, because every orchestrator would
@@ -512,7 +530,7 @@ should handle a failed load ("the provider no longer serves this file") instead 
 or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
 (default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
 ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
-is 422. Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
+is 422, and so is one that UTC cannot hold ([access.md](access.md#answers)). Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
 them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job, or a missing one, is
 404.
 

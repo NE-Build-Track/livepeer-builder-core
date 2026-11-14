@@ -85,11 +85,15 @@ characters or holds a NUL character (422 over REST), before any provider call: e
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
 `app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
-`label`.
+`label`. Stored text also refuses a lone surrogate, half of a UTF-16 pair, which JSON can write
+(`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
+because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
 `FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
-and the values `.` and `..`, which a client or server would read as another path. It is a 422 over REST (a
+and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
+id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
+`..`, `" grant_1"` is used as `grant_1`, and an id of only whitespace is no grant chosen. It is a 422 over REST (a
 `ValidationError` in process) before the operation ledger records anything or the provider is called, and
 it applies to the allocation fund route too, whose body is a `FundRequest`. It is held to no pattern such
 as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it
@@ -100,15 +104,28 @@ the provider itself returned cannot name another resource either.
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:
 
-- **At startup.** An engine in `per_actor` mode with a payment provider (`LPB_BATTERIES_URL` and
-  `LPB_BATTERIES_TOKEN`, or a supplied `allocation_manager`) and the built-in secret store refuses to
-  start without `LPB_SECRET_KEY`, and the error names it.
-- **Per request.** Provisioning and key rotation ask the secret store whether it can write before the
-  ledger records anything and before the provider is called. The check is the store's optional
-  `writable()` (`WritableSecretStore`); the built-in store answers `False` without `LPB_SECRET_KEY`. A
-  `False` is `InvalidRequest` (HTTP 400) with nothing sent to the provider, and the reference stays
-  free, so the same command runs once the store can write. A supplied store that leaves `writable` out
-  is not asked.
+- **At startup.** An engine in `per_actor` mode with a payment provider and the built-in secret store
+  refuses to start when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the
+  error names the setting. The check runs on the parts the engine will run with, after `decorate`: a
+  decorator that turns the provider off, or installs a store of its own, is not refused, and one that
+  adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
+  at boot, such as a sealed vault, still starts and is asked per request.
+- **Per request.** Provisioning and key rotation ask the secret store whether it can write in the step
+  that mints the key, just before the provider is called. The check is the store's optional
+  `writable()` (`WritableSecretStore`); a supplied store that leaves it out is not asked. A `False` is
+  `InvalidRequest` (HTTP 400).
+  - On a first run nothing was sent to the provider and nothing was noted, so the reference stays
+    free and the same command runs once the store can write.
+  - A repeat of a finished command stores nothing and is not asked: it gets the recorded result.
+  - A resume whose key is already stored is not asked either: it goes on, for a rotation to revoke the
+    old key. The stored key must be the one of the provider call about to be sent: the record notes the
+    call's idempotency key beside the secret's reference, and only a match skips the check. A resume
+    after the actor was revoked, or provisioned again, sends another provider call whose key is not
+    stored yet, so it is asked before that call.
+  - A resume that still has a key to store is refused, and the message says that an earlier attempt
+    may have reached the provider. It does not say that nothing was sent, and the refusal does not
+    free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once
+    the store can write.
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
@@ -132,7 +149,11 @@ checks stop that:
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
   ledger records anything and before any provider call. A zero or negative funding or grant amount is
-  still the command's own refusal, 400.
+  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
+  **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
+  18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
+  the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
   caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,
@@ -176,7 +197,11 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   rotation's new key stored, then the old key's revoke refused) leaves the record `started`, so a resume
   finishes the command from what the record noted. A timeout, a transport error, a provider 5xx or a
   crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
-  new reference.
+  new reference. A refusal on a *resumed* run never frees the reference either (#112): the attempt it
+  follows ended in an unknown outcome, and a provider call that timed out may have been applied with
+  nothing noted. The record stays `started`, another request on that reference is still 409
+  `operation_conflict`, and the same request resumes again after `LPB_OPERATION_STALE_S`. The one
+  exception is `already_provisioned`, below.
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
   Every later write of the slower run (its context, its result, its abandonment) checks the token and
   is refused, so a run presumed dead that was only slow answers with the recorded result instead. A
@@ -389,7 +414,7 @@ Units, on every field:
 | `fee_usd` | USD, an exact `Decimal`. `null` when an applied row lacks a USD price; `0` when there are no rows |
 | `row_count` | Applied Batteries usage rows counted in the fees |
 | `MeasuredUsage.quantities` | The app's own units (`tokens`, `seconds`, ...), integers, per job; never summed across apps |
-| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end` |
+| `CostSummary.start`, `end` | UTC instants; the window holds the jobs **created** in `[start, end)`. Without `end` it ends at the engine's `Clock` now; without `start` it starts 30 days before `end`. Over REST a `start` or `end` is converted to UTC when the request is parsed (one with no offset is read as UTC) and answered in UTC; one that UTC cannot hold is a 422 |
 | `jobs_with_cost`, `jobs_pending` | Jobs: `observed` or `corrected`, and `pending` |
 
 **The summary** (`GET /v1/costs/summary`) totals the jobs in its window and scope (an actor's own; an

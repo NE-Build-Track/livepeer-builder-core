@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, SessionRequest
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport
 from tests.conftest import EngineFactory
@@ -23,6 +23,15 @@ APP = "example/echo"
 def test_an_empty_job_reference_is_refused_and_named() -> None:
     with pytest.raises(ValidationError, match="operation_ref"):
         JobRequest(app=APP, operation_ref="")
+
+
+@pytest.mark.parametrize("reference", ["", "r" * 201, "a\x00b"])
+def test_a_reserved_session_request_takes_the_same_reference(reference: str) -> None:
+    """Sessions are not built yet (501), but the contract is published: it must not repeat C19 later."""
+    with pytest.raises(ValidationError, match="operation_ref"):
+        SessionRequest(app=APP, operation_ref=reference)
+    assert SessionRequest(app=APP).operation_ref is None
+    assert SessionRequest(app=APP, operation_ref="open-1").operation_ref == "open-1"
 
 
 def test_a_job_may_still_leave_its_reference_out() -> None:

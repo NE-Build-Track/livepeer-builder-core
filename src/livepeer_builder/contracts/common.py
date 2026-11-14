@@ -14,6 +14,12 @@ class Contract(BaseModel):
 
 Currency = Literal["USD", "ETH"]
 
+# A background failure as ``GET /readyz`` shows it (#113, C7): a closed set, so the schema publishes it and
+# an exception's text does not fit. What a discovery source or a usage source did, and, for cost sync,
+# a failure in the engine's own store after the usage source answered.
+SourceFailureCode = Literal["unavailable", "invalid_answer"]
+FailureCode = Literal["unavailable", "invalid_answer", "store_error"]
+
 
 def _no_nul(value: str) -> str:
     if "\x00" in value:
@@ -96,7 +102,9 @@ def _unsigned(money: Money) -> Money:
 
 
 # Funding and grants: within the provider's format and the engine's bound. That they are positive stays
-# their command's rule (InvalidRequest, 400), as before.
+# their command's rule (InvalidRequest, 400), as before, for an amount this check lets through. The
+# check does not look at the sign, so a non-positive amount with more than 18 decimal places is refused
+# here first (422): invalid either way, with another status.
 FundingAmount = Annotated[Money, AfterValidator(_provider_amount)]
 # Provisioning: zero or more (zero sets up an identity with no money), within the same format and bound.
 ProvisionAmount = Annotated[Money, AfterValidator(_unsigned), AfterValidator(_provider_amount)]

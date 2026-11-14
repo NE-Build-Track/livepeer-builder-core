@@ -220,7 +220,7 @@ def json_object(response: httpx.Response) -> dict[str, Any]:
         raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
     try:
         body = response.json()
-    except ValueError:  # not JSON, or not UTF-8
+    except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
         body = None
     if not isinstance(body, dict):
         raise ProviderError(response.status_code, "Batteries answered with a body that is not a JSON object")
@@ -365,9 +365,10 @@ def segment(value: str) -> str:
 
 
 def error_message(response: httpx.Response) -> str:
+    """The provider's own words for an error status: its ``error`` text, else the body as text."""
     try:
         body = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):  # as in json_object; a number past the digit limit is one too
         return response.text
     if isinstance(body, dict) and isinstance(body.get("error"), str):
         return str(body["error"])

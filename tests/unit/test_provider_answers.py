@@ -54,6 +54,7 @@ NOT_AN_OBJECT = {
     "null": b"null",
     "a number": b"7",
     "not UTF-8": b"\xff\xfe",
+    "too deep": b"[" * 100_000 + b"]" * 100_000,
 }
 CALLS: dict[str, Callable[[BatteriesClient], Awaitable[object]]] = {
     "create_key_for_grant": lambda client: client.create_key_for_grant("g1", "alice", USD, "idem-1"),
@@ -81,6 +82,29 @@ async def test_a_2xx_that_is_not_a_json_object_is_a_provider_error_for_every_cal
         await CALLS[call](client)
     assert refused.value.status_code == status  # the provider's own status: an answer the engine cannot read
     assert not definite_refusal(refused.value)  # an unknown outcome to the ledger: the reference stays held
+
+
+NO_ERROR_TEXT = {
+    "too deep": NOT_AN_OBJECT["too deep"],
+    "a 5000-digit number": b'{"error": ' + b"9" * 5000 + b"}",
+}
+
+
+@pytest.mark.parametrize("body", NO_ERROR_TEXT)
+@pytest.mark.parametrize("status", [400, 503])
+async def test_an_error_status_whose_body_cannot_be_decoded_is_still_that_provider_error(
+    body: str, status: int
+) -> None:
+    """Reading the error's text raised ``RecursionError`` (or a bare ``ValueError``): a 500, not the
+    provider's refusal or outage."""
+    client = BatteriesClient(BASE, "t", client=answering(NO_ERROR_TEXT[body], status=status))
+    with pytest.raises(ProviderError) as refused:
+        await client.fund_grant("g1", USD, "idem-4")
+    assert refused.value.status_code == status
+    source = BatteriesUsageSource(BASE, "t", client=answering(NO_ERROR_TEXT[body], status=status))
+    with pytest.raises(ProviderError) as failed:
+        await source.page(None)
+    assert failed.value.status_code == status
 
 
 REDIRECT_BODIES: dict[str, bytes | dict[str, Any]] = {

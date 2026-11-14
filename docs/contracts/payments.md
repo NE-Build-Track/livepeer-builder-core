@@ -195,8 +195,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   another request on that reference is still 409 `operation_conflict`, and the same request resumes
   again after `LPB_OPERATION_STALE_S`. The one exception is `already_provisioned`, below.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
-  answer that is not an error status. It must be a JSON object. A list page must have `items` as a list
-  of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
+  answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
+  nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
+  a list of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
   `ProviderError`: HTTP 502 from the REST service, `invalid_answer` as `cost_sync_error`, and an unknown
   outcome to the ledger, so the reference stays held. Before, a 2xx that was not a JSON object answered
   500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is

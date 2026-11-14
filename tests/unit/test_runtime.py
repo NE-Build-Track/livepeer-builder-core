@@ -9,6 +9,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
+import httpx
 import pytest
 from sqlalchemy import text
 
@@ -466,5 +467,30 @@ async def test_a_second_start_on_a_running_engine_is_refused(store: SqlStore, cl
         await engine.start()
     assert {task for task in asyncio.all_tasks() if task.get_name() in LOOPS} == loops
     assert engine.health().ready  # the running engine is untouched
+    await engine.stop()
+    assert running_loops() == set()
+
+
+async def test_the_http_lifespan_on_a_running_engine_is_refused_and_leaves_it_running() -> None:
+    """Review of #140: the lifespan's ``finally`` stopped an engine it had not started, so the refusal
+    ended the loops and closed the store of the engine the application was running."""
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+        supply=QUIET,
+    )
+    await engine.start()  # the application starts its own engine (embedded-mode.md)
+    loops = {task for task in asyncio.all_tasks() if task.get_name() in LOOPS}
+    app = create_app(engine)  # manage_lifecycle is on by default
+    with pytest.raises(RuntimeError, match="already started"):
+        async with app.router.lifespan_context(app):
+            pytest.fail("the app must not serve when start() is refused")
+    assert {task for task in asyncio.all_tasks() if task.get_name() in LOOPS} == loops
+    assert len(loops) == 3 and not any(task.done() for task in loops)
+    admin = await engine.keys.bootstrap_admin()  # the store is still open
+    serving = httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False))
+    async with httpx.AsyncClient(transport=serving, base_url="http://engine") as client:
+        assert (await client.get("/readyz")).status_code == 200
+        keys = await client.get("/v1/admin/keys", headers={"Authorization": f"Bearer {admin.token}"})
+        assert keys.status_code == 200 and len(keys.json()) == 1
     await engine.stop()
     assert running_loops() == set()

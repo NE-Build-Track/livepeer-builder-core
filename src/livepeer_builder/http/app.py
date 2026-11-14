@@ -149,9 +149,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if manage_lifecycle:
+            # Before the try: a start that fails has already stopped the engine, and one that is refused
+            # because the engine is running (#113, C27) must not stop an engine this lifespan did not start.
+            await engine.start()
         try:
-            if manage_lifecycle:
-                await engine.start()
             yield
         finally:
             if manage_lifecycle:

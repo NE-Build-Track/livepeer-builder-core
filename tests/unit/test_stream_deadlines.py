@@ -3,8 +3,7 @@ before the first chunk, idle_timeout_s between chunks, and the engine's backstop
 ignores its deadline."""
 
 import asyncio
-import gc
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from decimal import Decimal
 
 import pytest
@@ -18,19 +17,6 @@ from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_streaming import APP, collect, provisioned, read_all
-
-
-@pytest.fixture(autouse=True)
-def no_collection_inside_a_deadline() -> Iterator[None]:
-    """These tests measure real time in tenths of a second, and a full garbage collection stops the process
-    for longer: 0.3 s and more late in the suite, about fifty times a run. One that fell inside a deadline
-    failed the test, on whichever commit happened to put one there. The collector is off while a test here
-    runs; what the test makes is collected after it."""
-    gc.disable()
-    try:
-        yield
-    finally:
-        gc.enable()
 
 
 @pytest.fixture

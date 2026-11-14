@@ -120,14 +120,17 @@ missing `payload` as the JSON object `{}` (D41).
 orchestrator, so a path that a client or server would normalize could reach another app. The contract
 refuses a path that is not already normal, with a 422 (a `ValidationError` in process) before anything
 is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
-segment (`//`), and a backslash, a control character or a fragment (`#`) anywhere. A trailing `/` and a
+segment (`//`), and a backslash, a control character, a lone surrogate or a fragment (`#`) anywhere. A
+lone surrogate is half of a UTF-16 pair, which JSON can write (`"\ud800"`) and no request target can
+encode; the 422 repeats it as that escape. A trailing `/` and a
 query string stay allowed; a query's slashes and dots are data. An empty path is the runner URL itself,
 and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets that
-400, whatever its segments (`run`, `a//b` and `../run` alike); only a backslash, a control character or
-a fragment in it is a 422. The transport then sends the address
+400, whatever its segments (`run`, `a//b` and `../run` alike); only a backslash, a control character, a
+lone surrogate or a fragment in it is a 422. The transport then sends the address
 without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
 a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
-longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's).
+longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's)
+or that it cannot encode (a lone surrogate that got past the contract).
 The one exception is the `?` of an empty query: `/run?` is accepted, and the runner receives `/run`,
 because the HTTP client leaves an empty query out of the request target (`/run?x=` and `/run?&` arrive
 as written).

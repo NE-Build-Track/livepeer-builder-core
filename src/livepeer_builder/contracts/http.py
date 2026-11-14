@@ -4,6 +4,7 @@ import re
 from urllib.parse import unquote
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1
+_SURROGATE = re.compile(r"[\ud800-\udfff]")  # in a str, always a lone one: nothing can encode it
 
 # Transport/payment credentials and framing are owned by the transport, not a job payload.
 _RESERVED = frozenset(
@@ -60,16 +61,19 @@ def request_path(value: str) -> str:
     """A job's path, already normal (#113, C3): it is appended to a runner URL that names one app on an
     orchestrator, and a client or server that normalizes it would reach another app.
 
-    Refused: a fragment, a backslash or a control character anywhere, and in the part before the query an
-    empty segment or a ``.`` or ``..`` segment, literal or percent-encoded (``%2e``, in any case). A trailing
+    Refused: a fragment, a backslash, a control character or a lone surrogate anywhere (JSON can write
+    one, ``"\\ud800"``, and no request target can encode it), and in the part before the query an empty
+    segment or a ``.`` or ``..`` segment, literal or percent-encoded (``%2e``, in any case). A trailing
     ``/`` and a query string stay allowed, as written. One thing is kept here and not sent: the ``?`` of an
     empty query (``/run?``), which the HTTP client leaves out of the request target.
 
     The segments of a path with no leading ``/`` are not read here: the job service refuses every such path
     with one answer (400), whatever its segments, and the transport refuses it again.
     """
-    if "#" in value or "\\" in value or _CONTROL.search(value):
-        raise ValueError("path must not contain a fragment, a backslash or a control character")
+    if "#" in value or "\\" in value or _CONTROL.search(value) or _SURROGATE.search(value):
+        raise ValueError(
+            "path must not contain a fragment, a backslash, a control character or a lone surrogate"
+        )
     target = value.partition("?")[0]
     if not target.startswith("/"):
         return value

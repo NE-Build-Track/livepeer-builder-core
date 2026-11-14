@@ -80,7 +80,9 @@ def _unsigned(money: Money) -> Money:
 
 
 # Funding and grants: within the provider's format and the engine's bound. That they are positive stays
-# their command's rule (InvalidRequest, 400), as before.
+# their command's rule (InvalidRequest, 400), as before, for an amount this check lets through. The
+# check does not look at the sign, so a non-positive amount with more than 18 decimal places is refused
+# here first (422): invalid either way, with another status.
 FundingAmount = Annotated[Money, AfterValidator(_provider_amount)]
 # Provisioning: zero or more (zero sets up an identity with no money), within the same format and bound.
 ProvisionAmount = Annotated[Money, AfterValidator(_unsigned), AfterValidator(_provider_amount)]

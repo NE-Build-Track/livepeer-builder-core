@@ -1,5 +1,10 @@
 # ISS-26: Asynchronous jobs and durable recovery handles
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D69 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\
 **Tracker:** ISS-26 ([Network-Engineering-SPE#40](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/40)).\
@@ -130,7 +135,7 @@ state outside `succeeded`/`failed`/`uncertain` as running).
 
 - **REST:** `POST /v1/jobs` with `mode="async"` → **202**, the `Job`, `Location: /v1/jobs/{id}` and
   `Livepeer-Job-Id`. `GET /v1/jobs/{id}` adds `Retry-After: 1` while not ended. #73's
-  `POST /v1/queue/{app}` alias maps onto this later; its `cancel_url` waits for Q3.
+  `POST /v1/queue/{app}` alias maps onto this later; its `cancel_url` points at the cancel route (Q3, locked).
 - **FakeEngine:** `submit` queues; a test hook `advance()` runs queued jobs; `result()` follows the
   real rules (410 for immediate). Fixes the three parity gaps above.
 - **Docs:** `engine.md` (async, states, results, failures), `persistence.md`, `RELIABILITY.md`, generated
@@ -144,7 +149,7 @@ state outside `succeeded`/`failed`/`uncertain` as running).
 | `api.py` | `JobsApi.submit` |
 | `errors.py` | Reuse `OperationConflict`, `NoCapacity`; add `ResultExpired` (410), `JobNotFinished` (409) |
 | `protocols/__init__.py` | `JobRepo`: `enqueue_job(job, fingerprint, request, actor)`, `claim_job`, `requeue_unstarted`, `finish_job_with_result`, `read_result`, `queued_stats`; `finish_job` gains the state guard |
-| `store/schema.py`, migration `0009` | `lpb_job_requests`, `lpb_job_results`; `lpb_jobs.started_at`, `claims` |
+| `store/schema.py`, a new migration (numbered when written: #114 and #115 add migrations first) | `lpb_job_requests`, `lpb_job_results`; `lpb_jobs.started_at`, `claims` |
 | `store/sql.py`, `store/retention.py` | The methods above; explicit deletes and the result-bytes purge |
 | `services/jobs.py` | Tidy first: extract the paid-call core (`_candidates` … `_finish`) into `services/dispatch.py` (`Dispatcher`), no behavior change; then `submit` and `result` |
 | `services/async_jobs.py` (new) | `AsyncJobWorker(store, dispatcher, admission, clock, limits)`: `run(stop)`, `run_once()`, `drain()` |
@@ -184,11 +189,11 @@ Tidy first (no behavior change): extract Dispatcher; the whole suite stays green
 [ ] a job that reached claims=3 without an attempt: failed, interrupted
 [ ] the client going away after submit changes nothing (HTTP: close the client, job still succeeds)
 [ ] engine.stop() drains; a dispatch still running after the drain ends uncertain if paid
-[ ] repeat submit, same body: the same job, no second dispatch, Idempotent-Replayed   [?] Q1
+[ ] repeat submit, same body: the same job, no second dispatch, Idempotent-Replayed
 [ ] same ref, immediate then async: OperationConflict; after a never-reached-a-runner failure: retry_of
 [ ] revoked allocation while queued: failed not_provisioned at dispatch, unpaid
 [ ] D52 failover and the D55 cap behave as for run (one representative test each)
-[ ] reply above LPB_ASYNC_RESULT_MAX_BYTES: failed result_not_stored, ResultRef keeps sha256   [?] Q4
+[ ] reply above LPB_ASYNC_RESULT_MAX_BYTES: failed result_not_stored, cost failed_after_payment, ResultRef keeps sha256
 [ ] the finishing transaction is atomic: a failed write leaves the job running, no bytes stored
 [ ] retention: result bytes expire, the job stays; the job purge removes both tables; requests go at the end
 [ ] cost of a queued job is pending, never none
@@ -212,7 +217,7 @@ checks green (pytest, coverage gates, diff-cover ≥ 90, ruff, mypy strict, `che
 
 **Builder console:** the M4 matrix's "asynchronous with stored results" (submit, poll, fetch; show
 `queued`). **ChatLPT:** none required; the FakeEngine fix breaks any test that relied on `mode="async"`
-running immediately. **inference-gateway, enterprise desk:** none.
+running immediately. **inference-gateway:** none.
 
 ## Alternatives considered
 
@@ -228,21 +233,53 @@ running immediately. **inference-gateway, enterprise desk:** none.
   state in one transaction.
 - **Re-dispatching interrupted work.** Rejected: the pinned node cannot say whether it ran.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** A repeated async submit returns the existing job (recommended), or 409 `OperationExists`?
-- **Q2.** Requeue only `running` jobs with no attempt row (recommended), or also those whose every
-  attempt provably never reached a runner (the ISS-14 rule)?
-- **Q3.** Cancel a `queued` job (`POST /v1/jobs/{id}/cancel`, nothing paid) in M4, or no cancel at all
-  (ISS-28: generic cancellation is not promised)? Recommended: queued only.
-- **Q4.** A paid reply the engine could not store: cost `failed_after_payment` (recommended: the builder
-  got nothing) or `delivered`, which is what `services/costs.py:367` gives a `succeeded` attempt today?
-- **Q5.** Encrypt stored inputs and results with the `SecretStore` key, or rely on database protection
-  (recommended for M4)?
-- **Q6.** Defaults: 4 workers, 1000 queued, 16 MiB, 7-day results, 1 h queue TTL? **Q7.** Long-polling
-  (`GET /v1/jobs/{id}?wait_s=30`) now, or polling only (recommended)?
-- **Q8.** An access key revoked while its job is queued: run it (authorized at submit, recommended; the
-  allocation check at dispatch still stops spending) or fail it at dispatch?
+Locked by Mike on 13 November 2026.
+
+- **Q1, a repeated async submit:** it returns the existing job in any state, with 200 in place of 202 and
+  `Idempotent-Replayed: true`. A different body under the same reference is still 409 `OperationConflict`.
+- **Q2, interrupted jobs after a restart:** only a `running` job with no attempt row goes back to
+  `queued`, and after three such claims it fails `interrupted`. A job with any attempt is never run again
+  by the engine. The caller can repeat the submit, and the ISS-14 rule creates a new queued job with
+  `retry_of` when no attempt reached a runner.
+- **Q3, cancel:** `POST /v1/jobs/{id}/cancel` for queued jobs only. One conditional write: `queued`
+  becomes `failed`, reason `cancelled`, nothing paid, cost class `none`. A `running` job answers 409. The
+  events feed reports it as `job.finished` with reason `cancelled`.
+- **Q4, a paid reply the engine could not store:** cost class `failed_after_payment`. The attempt keeps
+  outcome `succeeded`, and the cost rule reads the job's failure kind (`result_not_stored`).
+- **Q5, stored inputs and results:** not encrypted by the engine in M4. The operator protects the
+  database, and the docs say what is stored, for how long, and that it is not encrypted.
+- **Q6, defaults:** 4 workers, 1000 queued, a 1 hour queue time limit, 16 MiB per stored result, results
+  kept 7 days. The docs state the worst-case storage: about 16 GiB of queued inputs at the 16 MiB request
+  limit.
+- **Q7, learning that a job finished:** polling only. No `wait_s`. A consumer that wants a signal uses the
+  events feed.
+- **Q8, an access key revoked while its job is queued:** the job runs. It was authorized at submit and
+  belongs to the actor, not the key. The allocation check at dispatch still stops spending.
+
+**Other decisions that touch this guide.**
+
+- **Migration numbers.** The guide names migration `0009`. #114 and #115 each add a migration first, so
+  this one is numbered when it is written.
+- **A second `start()`** on a running engine is refused (#113), in a standalone pull request before this
+  ticket adds workers to `start()`.
+- **The router split** (#25) lands before this ticket, so the cancel and result routes go in their own
+  router file.
+- **Worker leases** are where a second engine on one database is detected (#112 leaves it here).
+
+### Where the runner standard plugs in later
+
+Runner contract v1 (ISS-47) is not vetted yet. This ticket therefore routes by app ID, as today, and reads
+no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may move to M5.
+
+- **Working assumption for ISS-48 (12 November):** app IDs stay the routing key; v1 metadata describes a
+  runner and never routes; missing, old or unreadable metadata is ignored and logged; model and profile
+  are filters; no schema check.
+- **Criterion moved to ISS-48 on 13 November:** recovery follows the runner's registry entry: a completion
+  record the runner writes last, or a provider request id that lets a late result be collected.
+- **The seam to keep:** the job record and `ResultRef` leave room for a provider request id, so a late
+  result can be collected without a new table.
 
 ## Delivery slices
 

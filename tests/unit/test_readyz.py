@@ -9,14 +9,17 @@ shape, and the version, the running-job count and the allocation mode stay publi
 import asyncio
 import dataclasses
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 
 import httpx
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from livepeer_builder import BuilderEngine, EngineParts, EngineSupply
-from livepeer_builder.contracts import Runner, UsagePage, UsageRow
+from livepeer_builder.adapters.batteries import BatteriesUsageSource
+from livepeer_builder.adapters.sdk import HttpDiscoverySource
+from livepeer_builder.contracts import DiscoverySnapshot, EngineHealth, Runner, UsagePage, UsageRow
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 from livepeer_builder.http import create_app
 from livepeer_builder.services.costs import CostService, CostSyncWorker
@@ -141,3 +144,120 @@ async def test_readyz_without_a_credential_serves_codes_not_exception_text(
     }
     assert (health["running_jobs"], health["allocation_mode"]) == (0, "per_actor")
     assert health["version"] == failing_engine.health().version
+
+
+# -- the shipped adapters: the code an operator sees, read where the answer is read -------------------
+
+
+class NotGzip(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"this is not gzip"
+
+
+def undecodable(status_code: int) -> Callable[[], httpx.Response]:
+    """An answer that says gzip over a body that is not. Its body reads once, so each request builds one."""
+    return lambda: httpx.Response(status_code, headers={"Content-Encoding": "gzip"}, stream=NotGzip())
+
+
+Answer = httpx.Response | Exception | Callable[[], httpx.Response]
+
+
+def answering(answer: Answer) -> httpx.AsyncClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        if isinstance(answer, Exception):
+            raise answer
+        return answer if isinstance(answer, httpx.Response) else answer()
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://provider.example")
+
+
+NO_ANSWER: list[tuple[Answer, str]] = [
+    (httpx.Response(302, headers={"Location": "/login"}), "unavailable"),  # a redirect is no answer
+    (httpx.Response(503, text="down"), "unavailable"),
+    (undecodable(503), "unavailable"),  # the status decides before the body is read
+    (httpx.ConnectError("refused"), "unavailable"),
+    (httpx.ReadTimeout("slow"), "unavailable"),
+    (httpx.Response(200, text="<html>"), "invalid_answer"),
+    (httpx.Response(200, json={"unexpected": 1}), "invalid_answer"),
+    (undecodable(200), "invalid_answer"),  # httpx's DecodingError is no ValueError
+]
+
+
+@pytest.mark.parametrize(
+    ("answer", "code"),
+    [*NO_ANSWER, (httpx.Response(200, text="[" * 100_000), "invalid_answer")],  # nested past reading
+)
+async def test_the_http_discovery_source_s_failures_get_the_documented_code(
+    clock: FixedClock, answer: Answer, code: str
+) -> None:
+    async with answering(answer) as client:
+        source = HttpDiscoverySource("http://provider.example/discovery", client=client)
+        snapshot = await DiscoveryService(source, DefaultPolicy(), clock).refresh()
+    assert snapshot.last_error == code
+
+
+def usage_page(created_at_ms: float) -> httpx.Response:
+    return httpx.Response(
+        200, json={"items": [{"id": "u-1", "status": "applied", "created_at_ms": created_at_ms}]}
+    )
+
+
+async def synced_once(store: SqlStore, clock: FixedClock, answer: Answer) -> CostService:
+    stop = asyncio.Event()
+    async with answering(answer) as client:
+        source = BatteriesUsageSource("http://provider.example", "token", client=client)
+        page = source.page
+
+        async def one_pass(cursor: str | None, limit: int = 1000) -> UsagePage:
+            stop.set()
+            return await page(cursor, limit)
+
+        source.page = one_pass  # type: ignore[method-assign]
+        costs = CostService(store, DefaultPolicy(), clock, CostSyncWorker(source, store))
+        await costs.run(stop)
+    return costs
+
+
+@pytest.mark.parametrize(("answer", "code"), NO_ANSWER)
+async def test_the_batteries_usage_source_s_failures_get_the_documented_code(
+    store: SqlStore, clock: FixedClock, answer: Answer, code: str
+) -> None:
+    assert (await synced_once(store, clock, answer)).last_error == code
+
+
+@pytest.mark.parametrize("created_at_ms", [10**20, 1.5e300])
+async def test_a_usage_row_whose_time_no_clock_holds_is_set_aside_and_fails_no_sync(
+    store: SqlStore, clock: FixedClock, created_at_ms: float
+) -> None:
+    """Such a row failed its page with ``unavailable`` (an OSError or an OverflowError), as if Batteries
+    were down. It is set aside (#114, C13), so the sync has no error to show."""
+    costs = await synced_once(store, clock, usage_page(created_at_ms))
+    assert (costs.last_error, costs.set_aside_rows) == (None, 1)
+
+
+# -- the codes are a type: the schema publishes them and nothing else fits ----------------------------
+
+
+def test_the_health_schema_publishes_the_codes() -> None:
+    properties = EngineHealth.model_json_schema()["properties"]
+    codes = {
+        name: properties[name]["anyOf"][0].get("enum") for name in ("discovery_error", "cost_sync_error")
+    }
+    assert codes == {
+        "discovery_error": ["unavailable", "invalid_answer"],
+        "cost_sync_error": ["unavailable", "invalid_answer", "store_error"],
+    }
+
+
+def test_free_text_is_no_code(failing_engine: BuilderEngine) -> None:
+    health = failing_engine.health().model_dump()
+    text = "connect to http://discovery:8939 failed"
+    with pytest.raises(ValidationError):
+        EngineHealth(**{**health, "discovery_error": text})
+    with pytest.raises(ValidationError):
+        EngineHealth(**{**health, "cost_sync_error": text})
+    with pytest.raises(ValidationError):
+        EngineHealth(**{**health, "discovery_error": "store_error"})  # discovery writes to no store
+    with pytest.raises(ValidationError):
+        DiscoverySnapshot(runners=(), observed_at=None, last_attempt_at=None, last_error=text)  # type: ignore[arg-type]

@@ -15,7 +15,7 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
-from livepeer_builder.contracts.discovery import ObservedBy
+from livepeer_builder.contracts.discovery import ObservedBy, has_storable_text
 from livepeer_builder.contracts.payments import is_payable, payable_rate, signable
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
 from livepeer_builder.services.failure_codes import source_failure
@@ -101,12 +101,27 @@ class DiscoveryService:
             _LOG.warning(
                 "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}
             )
-            self._snapshot = self._snapshot.model_copy(
-                update={"last_attempt_at": attempted, "last_error": code}
+            self._snapshot = DiscoverySnapshot(  # built, not copied: a copy would not check the code
+                runners=self._snapshot.runners,
+                observed_at=self._snapshot.observed_at,
+                last_attempt_at=attempted,
+                last_error=code,
             )
             return self._snapshot
+        # The default reader has skipped such a runner already. A supplied source's runner is held to the
+        # same text rule here: one in the snapshot fails the catalog for every application (#114, C12).
+        kept = tuple(runner for runner in runners if has_storable_text(runner))
+        if len(kept) != len(runners):
+            _LOG.warning(
+                "discovery source returned runners whose text cannot be stored",
+                extra={
+                    "event": "discovery.inventory_skipped",
+                    "entries": 0,
+                    "runners": len(runners) - len(kept),
+                },
+            )
         self._snapshot = DiscoverySnapshot(
-            runners=runners, observed_at=attempted, last_attempt_at=attempted, last_error=None
+            runners=kept, observed_at=attempted, last_attempt_at=attempted, last_error=None
         )
         return self._snapshot
 

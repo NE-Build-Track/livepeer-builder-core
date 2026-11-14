@@ -25,7 +25,7 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   | Protocol | Adds | Without it |
   | --- | --- | --- |
   | `UsageSetAsideRepo` (#114, C13) | the record of usage rows cost sync left out | the row is left out and logged once per process ([payments.md](payments.md#cost-classification)) |
-  | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`: each admin command writes only its own actor columns, with its condition in the statement; a key write applies only over the key the rotation began from | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#provisioning)) |
+  | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`, `provision_actor`: each admin command writes only its own actor columns, with its condition in the statement; a key write applies only over the key the rotation began from, and provisioning writes its row only where the actor has none or still has the revoked row it read | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#provisioning)) |
 
 ## Migrations
 

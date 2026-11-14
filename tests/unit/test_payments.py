@@ -113,13 +113,13 @@ async def test_provisioning_repeated_after_a_lost_answer_creates_one_allocation(
     derives the same provider key from the actor, so the provider replays the first allocation. The lost
     answer leaves the operation started, so the repeat resumes it once it is stale (D57)."""
     engine = await make_engine()
-    save_actor = store.save_actor
+    provision_actor = store.provision_actor  # provisioning's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)  # only the first save is lost
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "provision_actor", provision_actor)  # only the first write is lost
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "provision_actor", lost)
     with pytest.raises(ConnectionError):
         await engine.payments.provision(admin, provision_request())
     clock.advance(120)
@@ -503,13 +503,13 @@ async def test_a_resumed_provisioning_asks_the_store_again_before_another_provid
     it must ask the store first: skipped, it funded a second allocation and only then failed to store."""
     vault = SealedVault(sealed=False)
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
-    save_actor = store.save_actor
+    provision_actor = store.provision_actor  # provisioning's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)  # only the first save is lost
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "provision_actor", provision_actor)  # only the first write is lost
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "provision_actor", lost)
     with pytest.raises(ConnectionError):  # the secret is stored and remembered; the actor is not saved
         await engine.payments.provision(admin, provision_request())
     second = provision_request().model_copy(update={"operation_ref": "provision-again"})

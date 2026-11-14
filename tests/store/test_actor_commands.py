@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from livepeer_builder.contracts import ProvisionedActor, SecretRef
 from livepeer_builder.store import SqlStore
@@ -134,6 +135,65 @@ async def test_two_key_writes_from_one_key_at_the_same_time_leave_one(
         )
         won = [written for written in wrote if written is not None]
         assert len(won) == 1 and await sql.get_actor("default", "alice") == won[0]
+
+
+async def test_provisioning_inserts_only_where_the_actor_has_no_row(
+    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+) -> None:
+    """A second provisioning that read "no actor" finds the row the first one wrote, whatever was done
+    to it since, and writes nothing."""
+    bob = actor.model_copy(update={"actor_id": "bob", "allocation_id": "a2", "api_key_id": "k2"})
+    assert await sql.provision_actor(bob, replacing=None) is True
+    assert await sql.get_actor("default", "bob") == bob
+    late = bob.model_copy(update={"secret_ref": SecretRef(ref="db:9"), "label": "late"})
+    assert await sql.provision_actor(late, replacing=None) is False
+    paused = await sql.set_actor_status("default", "bob", "a2", "paused", clock.now())
+    assert await sql.provision_actor(late, replacing=None) is False
+    assert await sql.get_actor("default", "bob") == paused
+
+
+async def test_provisioning_replaces_only_the_revoked_row_it_read(
+    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+) -> None:
+    later = clock.now() + timedelta(minutes=1)
+    again = actor.model_copy(
+        update={"allocation_id": "a2", "api_key_id": "k2", "secret_ref": SecretRef(ref="db:2")}
+    )
+    assert await sql.provision_actor(again, replacing="a1") is False  # not revoked: nothing to replace
+    assert await sql.get_actor("default", "alice") == actor
+    await sql.set_actor_status("default", "alice", "a1", "revoked", later)
+    assert await sql.provision_actor(again, replacing="a0") is False  # not the row that was read
+    assert await sql.provision_actor(again, replacing="a1") is True
+    assert await sql.get_actor("default", "alice") == again
+    third = again.model_copy(update={"allocation_id": "a3", "api_key_id": "k3"})
+    assert await sql.provision_actor(third, replacing="a1") is False  # replaced already
+    await sql.set_actor_status("default", "alice", "a2", "revoked", later)
+    assert await sql.provision_actor(third, replacing="a1") is False  # revoked, but another allocation
+    assert (await sql.get_actor("default", "alice")).allocation_id == "a2"  # type: ignore[union-attr]
+
+
+async def test_two_provisionings_of_a_new_actor_at_the_same_time_leave_one(
+    sql: SqlStore, actor: ProvisionedActor
+) -> None:
+    for round_ in range(1, 11):
+        rivals = [
+            actor.model_copy(
+                update={"actor_id": f"new-{round_}", "allocation_id": f"n{round_}", "label": label}
+            )
+            for label in ("one", "two")
+        ]
+        wrote = await asyncio.gather(*(sql.provision_actor(rival, replacing=None) for rival in rivals))
+        assert sorted(wrote) == [False, True]
+        assert await sql.get_actor("default", f"new-{round_}") == rivals[wrote.index(True)]
+
+
+async def test_an_allocation_stored_as_another_actors_is_an_error_not_a_lost_race(
+    sql: SqlStore, actor: ProvisionedActor
+) -> None:
+    """``False`` means this actor's row was written first. The unique allocation is another matter."""
+    with pytest.raises(IntegrityError):
+        await sql.provision_actor(actor.model_copy(update={"actor_id": "bob"}), replacing=None)
+    assert await sql.get_actor("default", "bob") is None
 
 
 async def test_a_status_write_and_a_key_write_at_the_same_time_both_last(

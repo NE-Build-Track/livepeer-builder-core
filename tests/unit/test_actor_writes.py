@@ -18,6 +18,7 @@ import pytest
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionedActor, ProvisionRequest
 from livepeer_builder.errors import (
+    AlreadyProvisioned,
     InvalidRequest,
     NotFound,
     NotProvisioned,
@@ -225,7 +226,12 @@ async def test_a_status_command_writes_the_status_and_the_time_only(desk: Desk, 
 
 
 def live_keys(manager: FakeAllocationManager) -> list[str]:
-    return [key_id for key_id, (_, _, revoked) in manager.keys.items() if not revoked]
+    """The keys the provider would still take: not revoked, on an allocation that is not revoked."""
+    return [
+        key_id
+        for key_id, (allocation, _, revoked) in manager.keys.items()
+        if not revoked and manager.allocations[allocation].status != "revoked"
+    ]
 
 
 async def rotate_2(desk: Desk) -> ProvisionedActor:
@@ -330,6 +336,105 @@ async def test_a_rotation_that_lost_and_could_not_revoke_its_own_key_finishes_on
     await holds_only_the_key_of(desk, alice, manager, vault)
 
 
+# -- a provisioning that another command overtook --------------------------------------------------------
+
+
+def provision_b() -> ProvisionRequest:
+    """The same actor under another reference: the provider call is the same one (its idempotency key is
+    derived from the actor), so both references get one allocation and one key."""
+    return provision_request().model_copy(update={"operation_ref": "provision-b"})
+
+
+async def overtaken_provisioning(desk: Desk, manager: FakeAllocationManager, *then: str) -> None:
+    """provision-b has read the actor and is at the provider while the other reference provisions the
+    actor and the commands ``then`` run to their end."""
+
+    async def other() -> None:
+        await desk.payments.provision(desk.admin, provision_request())
+        for command in then:
+            await getattr(desk, command)()
+
+    during(manager, "create_key_for_grant", other)
+
+
+@pytest.fixture(params=["new", "revoked"])
+async def start(request: pytest.FixtureRequest, desk: Desk) -> str:
+    """Provisioning inserts the row of a new actor and replaces the row of a revoked one."""
+    if request.param == "revoked":
+        first = provision_request().model_copy(update={"operation_ref": "provision-0"})
+        await desk.payments.provision(desk.admin, first)
+        await desk.revoke()
+    return str(request.param)
+
+
+async def test_a_provisioning_does_not_move_an_actor_out_of_revoked(
+    desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, start: str
+) -> None:
+    """Before, provisioning saved the whole row it had built from its first read: ``active``, on an
+    allocation the provider had revoked meanwhile. Now the actor stays revoked, and the provisioning,
+    whose allocation was funded and then revoked, answers with the actor as stored, as a fund does."""
+    await overtaken_provisioning(desk, manager, "revoke")
+    answer = await desk.payments.provision(desk.admin, provision_b())
+
+    stored = await desk.payments.get_actor(desk.admin, "default", "alice")
+    assert stored.status == "revoked" and answer == stored
+    assert manager.allocations[stored.allocation_id].status == "revoked"
+    assert len(manager.allocations) == (2 if start == "revoked" else 1)  # nothing more was funded
+    with pytest.raises(NotProvisioned):
+        await desk.payments.credential(alice)
+    assert vault.values == {}  # this run's copy of the secret is deleted too
+
+
+async def test_a_provisioning_does_not_undo_a_pause_that_finished_meanwhile(
+    desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, start: str
+) -> None:
+    """Before, the actor was stored ``active`` while the provider kept the allocation paused, and the
+    secret the first provisioning stored was left with nothing pointing at it."""
+    await overtaken_provisioning(desk, manager, "pause")
+    answer = await desk.payments.provision(desk.admin, provision_b())
+
+    stored = await holds_only_the_key_of(desk, alice, manager, vault)
+    assert stored.status == "paused" and answer == stored  # the same allocation and key: its result too
+    assert manager.allocations[stored.allocation_id].status == "paused"
+
+
+async def test_a_provisioning_does_not_undo_a_key_rotation_that_finished_meanwhile(
+    desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, start: str
+) -> None:
+    """Before, the actor was pointed back at the key the rotation had just revoked. The actor no longer
+    holds the key this provisioning got, so it is refused as any provisioning of a provisioned actor."""
+    await overtaken_provisioning(desk, manager, "rotate")
+    with pytest.raises(AlreadyProvisioned) as refused:
+        await desk.payments.provision(desk.admin, provision_b())
+
+    stored = await holds_only_the_key_of(desk, alice, manager, vault)
+    assert refused.value.actor == stored and stored.status == "active"
+
+
+@pytest.mark.parametrize("revoked_again", [False, True])
+async def test_a_provisioning_whose_allocation_was_revoked_and_replaced_meanwhile_is_refused(
+    desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, revoked_again: bool
+) -> None:
+    """The actor was provisioned, revoked and provisioned again while provision-b was at the provider: the
+    row is another allocation's. Nothing is written or funded, and this run's copy of the secret of its
+    revoked allocation's key is deleted. The actor is another reference's now, or revoked again."""
+
+    async def again() -> None:
+        third = provision_request().model_copy(update={"operation_ref": "provision-c"})
+        await desk.payments.provision(desk.admin, third)
+
+    desk.again = again  # type: ignore[attr-defined]
+    await overtaken_provisioning(desk, manager, "revoke", "again", *(["revoke"] if revoked_again else []))
+    refusal = pytest.raises(NotFound, match="revoked while this provisioning")
+    with refusal if revoked_again else pytest.raises(AlreadyProvisioned):
+        await desk.payments.provision(desk.admin, provision_b())
+
+    stored = await desk.payments.get_actor(desk.admin, "default", "alice")
+    assert stored.status == ("revoked" if revoked_again else "active")
+    assert [allocation.status for allocation in manager.allocations.values()] == ["revoked", stored.status]
+    assert list(vault.values) == ([] if revoked_again else [stored.secret_ref.ref])
+
+
 # -- a supplied store without the conditional writes ------------------------------------------------------
 
 
@@ -340,7 +445,7 @@ class _WholeRowStore:
         self._inner = inner
 
     def __getattr__(self, name: str) -> Any:
-        if name in ("set_actor_status", "set_actor_key"):
+        if name in ("set_actor_status", "set_actor_key", "provision_actor"):
             raise AttributeError(name)
         return getattr(self._inner, name)
 
@@ -427,3 +532,16 @@ async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_
     with pytest.raises(InvalidRequest, match="another key rotation"):
         await desk.rotate()
     assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0]
+
+
+@pytest.mark.parametrize("then", ["revoke", "pause"])
+async def test_a_store_without_the_column_writes_keeps_what_finished_during_a_provisioning(
+    whole_row_desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, then: str
+) -> None:
+    desk = whole_row_desk
+    await overtaken_provisioning(desk, manager, then)
+    answer = await desk.payments.provision(desk.admin, provision_b())
+
+    stored = await desk.payments.get_actor(desk.admin, "default", "alice")
+    assert stored.status == ("revoked" if then == "revoke" else "paused") and answer == stored
+    assert list(vault.values) == ([] if then == "revoke" else [stored.secret_ref.ref])

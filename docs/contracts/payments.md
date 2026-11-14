@@ -136,15 +136,16 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
-- **One command never undoes another on the same actor (#115, C4).** `fund`, `set_status`, `revoke` and
-  `rotate_key` read the actor, call the provider, then write. Each writes only its own columns, with its
-  condition in the SQL statement:
+- **One command never undoes another on the same actor (#115, C4).** `provision`, `fund`, `set_status`,
+  `revoke` and `rotate_key` read the actor, call the provider, then write. Each writes only its own
+  columns, with its condition in the SQL statement:
 
   | Command | Writes | Only where |
   | --- | --- | --- |
   | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
   | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
   | `fund` | `status` = `active`, `updated_at` | the status is `exhausted` |
+  | `provision` | the whole row | the actor is as provisioning read it: it has no row, or it still has the `revoked` row being replaced |
 
   Every write also requires the allocation the command acted on, so none lands on an allocation
   provisioned after a revoke. No command moves an actor out of `revoked`; only a new provisioning gives
@@ -155,8 +156,24 @@ checks stop that:
   deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
   deletes the secret of a key a rotation stored meanwhile. Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
-  revoked, and any of them could put a revoked actor back to `active`. Provisioning still writes the
-  whole row: it is the one command that creates it.
+  revoked, and any of them could put a revoked actor back to `active`.
+
+  **A provisioning that another command overtook.** Provisioning is the one command that writes the
+  whole row, so it writes only where the actor is still as it read it. Two provisionings of one actor
+  under two references send the same provider operation (its idempotency key is derived from the
+  actor, under one `LPB_ENGINE_ID`), so both get one allocation and one key, and the first to write
+  stores them. The other then writes nothing, whatever was done to the actor since, deletes its own
+  copy of the key's secret, and answers from the actor as stored:
+
+  | The actor as stored | Answer |
+  | --- | --- |
+  | holds the allocation and the key this provisioning got | the actor, with the status it has now (a pause that finished meanwhile stays) |
+  | holds that allocation, `revoked` | the actor, `revoked`: the allocation was funded and then revoked, and it stays revoked, as for a fund |
+  | holds that allocation with another key (rotated meanwhile), or another allocation (revoked and provisioned again) | 409 `already_provisioned`, as below |
+  | holds another allocation, `revoked` | 404: revoked while this provisioning was at the provider. The record stays `started`; repeated after `LPB_OPERATION_STALE_S` it is a resumed provisioning of a revoked actor |
+
+  Before, it saved the row it had built from its first read: `active` on an allocation revoked or
+  paused meanwhile, or the key a rotation had just revoked.
 
   **Two rotations of one actor's key.** A rotation writes its key only over the key it began from. When
   another rotation gave the actor a key first, whether it ran to its end while this one was at the
@@ -181,11 +198,13 @@ checks stop that:
   the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
 
   The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
-  `set_actor_status`, `set_actor_key`). The packaged SQL store has them. With a supplied store without
-  them, the engine reads the actor again after the provider call, checks the same conditions itself and
-  saves the whole row with `save_actor`. The rules above then hold except in the moment between that
-  read and the save, where a second command can still be overwritten, as it could before: for such a
-  store two rotations that write at the same moment can still leave the slower one's key on the actor.
+  `set_actor_status`, `set_actor_key`, `provision_actor`). The packaged SQL store has them; a supplied
+  store has all three or is treated as having none. With a supplied store without them, the engine
+  reads the actor again after the provider call, checks the same conditions itself and saves the whole
+  row with `save_actor`. The rules above then hold except in the moment between that read and the
+  save, where a second command can still be overwritten, as it could before: for such a store two
+  rotations that write at the same moment can still leave the slower one's key on the actor, and a
+  provisioning can still save over a command that wrote in that moment.
 - **Amounts the provider takes (#112, C11).** The engine mirrors Batteries' amount format (v0.0.3,
   `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
   no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at

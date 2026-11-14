@@ -9,7 +9,9 @@ rotation's new key by a pause, a pause by a rotation, a revoke by any of them. N
   from: an actor holding another key got it from a rotation that finished first;
 - a fund moves ``exhausted`` to ``active`` and writes nothing else;
 - no write applies to a ``revoked`` actor, or to an allocation other than the one the command acted on
-  (one provisioned after a revoke).
+  (one provisioned after a revoke);
+- provisioning, the one command that writes the whole row, writes it only where the actor is as it read
+  it: no row, or the ``revoked`` row it is replacing.
 
 A store that has the conditional writes (``ActorCommandRepo``, as the packaged SQL store does) checks the
 condition in the write itself. For a supplied store without them, the engine reads the actor again,
@@ -71,6 +73,18 @@ class ActorWrites:
         if current is None or current.api_key_id not in (only_from, api_key_id):
             return current
         return await self._saved(current, {"api_key_id": api_key_id, "secret_ref": secret_ref})
+
+    async def provisioned(self, actor: ProvisionedActor, *, replacing: ProvisionedActor | None) -> bool:
+        """Write a newly provisioned actor's whole row, only where the actor is still as provisioning read
+        it: no row (``replacing`` is ``None``) or the ``revoked`` row ``replacing``. ``False`` means
+        another command wrote the actor first and nothing was written."""
+        if isinstance(self._store, ActorCommandRepo):
+            allocation_id = replacing.allocation_id if replacing is not None else None
+            return await self._store.provision_actor(actor, replacing=allocation_id)
+        if await self._store.get_actor(actor.application_id, actor.actor_id) != replacing:
+            return False
+        await self._store.save_actor(actor)
+        return True
 
     async def funded(self, actor: ProvisionedActor) -> ProvisionedActor:
         """After a fund: ``exhausted`` becomes ``active``. Any other status stays as it is stored, one

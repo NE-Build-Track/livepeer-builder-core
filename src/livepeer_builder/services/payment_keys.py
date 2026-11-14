@@ -7,7 +7,7 @@ what a command does when another command wrote the actor first (#115, C4).
 """
 
 from livepeer_builder.contracts import NewAllocationKey, ProvisionedActor, SecretRef
-from livepeer_builder.errors import InvalidRequest, NotFound
+from livepeer_builder.errors import AlreadyProvisioned, InvalidRequest, NotFound
 from livepeer_builder.protocols import AllocationManager, SecretStore
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
@@ -38,6 +38,35 @@ class PaymentKeys:
             await self._secrets.delete(ref)
             raise
         return ref
+
+    async def shared(self, actor: ProvisionedActor, own: SecretRef) -> ProvisionedActor:
+        """The actor holding the key this provisioning got. Another reference may have saved it with its
+        own copy of the secret; this command's copy is then dropped."""
+        if own != actor.secret_ref:
+            await self._secrets.delete(own)
+        return actor
+
+    async def overtaken(
+        self, actor_id: str, current: ProvisionedActor | None, key: NewAllocationKey, ref: SecretRef
+    ) -> ProvisionedActor:
+        """The answer of a provisioning that did not write its row, because another command wrote the
+        actor while it was at the provider: its row would undo a pause, a rotation or a revoke that
+        finished meanwhile. The command that wrote first was a provisioning that had read what this one
+        read, so it sent the same actor-derived provider operation and got this same allocation and key:
+        nothing this one minted is unrecorded, and only its own copy of the secret (``ref``) is extra.
+        The answer comes from ``current``, the actor as stored now, by the rule a resumed run follows:
+        the actor is this command's result while it holds the key this command got."""
+        if current is not None and current.status != "revoked" and current.api_key_id == key.api_key_id:
+            return await self.shared(current, ref)
+        await self._secrets.delete(ref)  # the actor holds another key or is revoked: nothing points at it
+        if current is not None and current.status != "revoked":  # rotated, or revoked and provisioned again
+            raise AlreadyProvisioned(current)
+        if current is not None and current.allocation_id == key.allocation_id:
+            return current  # funded, then revoked: it stays revoked, and that is the answer, as for a fund
+        raise NotFound(
+            f"actor {actor_id!r} was revoked while this provisioning was at the provider; "
+            "it is not provisioned"
+        )
 
     def refuse_lost(self, run: RunningOperation, actor_id: str) -> None:
         """A rotation refused before, with everything of it revoked, gets the same answer again."""

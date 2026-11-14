@@ -126,7 +126,9 @@ class PaymentsService:
         """Create the actor's allocation and key in one atomic provider call, on the ledger (D57).
 
         A repeat of the reference gets the first answer. An actor already provisioned under another
-        reference is ``AlreadyProvisioned``: nothing is applied, the amount included.
+        reference is ``AlreadyProvisioned``: nothing is applied, the amount included. The row is written
+        only where the actor is still as this command read it, so it never undoes a command that
+        finished while it was at the provider (``PaymentKeys.overtaken``; #115, C4).
         """
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         if self.mode != "per_actor":
@@ -156,10 +158,7 @@ class PaymentsService:
             # this amount would be silently dropped.
             if run.context.get("new_secret_key_id") != existing.api_key_id:
                 raise AlreadyProvisioned(existing)
-            own = SecretRef(ref=run.context["new_secret_ref"])
-            if own != existing.secret_ref:  # another reference saved the actor with its own copy
-                await self._secrets.delete(own)
-            return existing
+            return await self._keys.shared(existing, SecretRef(ref=run.context["new_secret_ref"]))
         grant_id = await self._resolved_grant(admin, request.grant_id)
         if not grant_id:
             raise InvalidRequest("choose a grant")
@@ -194,7 +193,9 @@ class PaymentsService:
             updated_at=now,
             label=request.label,
         )
-        await self._store.save_actor(provisioned)
+        if not await self._writes.provisioned(provisioned, replacing=existing):
+            current = await self._store.get_actor(request.application_id, request.actor_id)
+            return await self._keys.overtaken(request.actor_id, current, key, ref)
         return provisioned
 
     # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------

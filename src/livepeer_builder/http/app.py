@@ -387,7 +387,8 @@ def create_app(
         actor: Actor,
         application_id: Annotated[StoredText, Query()] = "default",
         actor_id: QueryId = None,
-        allocation_id: QueryId = None,  # an earlier allocation of the actor; absent: the current one
+        # an earlier allocation of the actor; absent: the current one, and empty is a 422, not "absent"
+        allocation_id: Annotated[StoredText | None, Query(min_length=1)] = None,
     ) -> Reconciliation:
         return await engine.costs.reconcile(actor, application_id, actor_id, allocation_id)
 

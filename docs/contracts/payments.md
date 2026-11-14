@@ -424,7 +424,8 @@ allocation, so after a re-provision reconciliation never balanced again.
 - **The default** is the actor's current allocation (`allocation_id` in the answer).
 - **An earlier allocation** is reconciled by naming it: `costs.reconcile(admin, application_id,
   actor_id, allocation_id)`, or `?allocation_id=` on the route (stored text: over 200 characters or a
-  NUL is 422). Batteries still reports `spent_*` for a revoked allocation, late charges after the
+  NUL is 422, and so is an empty value, which names no allocation and is not read as the current
+  one). Batteries still reports `spent_*` for a revoked allocation, late charges after the
   revocation included (`API.md`, v0.0.3), so an earlier allocation reconciles like the current one.
 - **`other_allocations`** in the answer lists the actor's other allocations, sorted: the current one,
   and every earlier one that paid an attempt. It is empty for an actor that had one allocation.
@@ -432,6 +433,11 @@ allocation, so after a re-provision reconciliation never balanced again.
   attempts) is 404, so a caller who may read one application never reads what another's allocation
   spent. An earlier allocation that paid no attempt is not known to the engine: the actor's record
   keeps only the current one.
+- **Without `actor_id` in `per_actor` mode** no allocation is the current one, so the call is 404
+  unless it names one. Any allocation that paid an attempt in the application can be named: the answer
+  is 200 with `actor_id: null`, it counts the attempts that allocation paid, and `other_allocations`
+  lists every other allocation that paid an attempt in the application. There is still no single
+  figure for a whole application: each allocation reconciles on its own.
 
 Which allocation paid each attempt is an optional read of a store's cost snapshot
 (`AllocationCostSnapshot` in `protocols`: `attempt_allocations`). The packaged SQL store has it. With a

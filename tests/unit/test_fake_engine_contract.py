@@ -289,6 +289,18 @@ async def test_health_is_ready_after_a_discovery_snapshot(side: Side) -> None:
         assert engine.health().ready
 
 
+async def test_a_second_start_on_a_running_engine_is_refused(side: Side) -> None:
+    """#113 C27: an application that starts its engine twice hears of it from the fake too."""
+    async with side() as engine:
+        await engine.start()
+        with pytest.raises(RuntimeError, match="engine is already started"):
+            await engine.start()
+        assert engine.health().ready  # the running engine carries on
+        await engine.stop()
+        with pytest.raises(RuntimeError, match="engine is stopped"):
+            await engine.start()
+
+
 async def test_run_returns_the_parsed_body_as_data(side: Side) -> None:
     async with side(data={"answer": 42}) as engine:
         result = await engine.jobs.run(ALICE, JobRequest(app=APP))

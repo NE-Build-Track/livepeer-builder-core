@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import model_validator
 
-from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.common import Contract, SourceFailureCode
 from livepeer_builder.contracts.payments import NetworkRate
 
 ObservedBy = Literal["orchestrator", "engine"]
@@ -101,7 +101,7 @@ class DiscoverySnapshot(Contract):
     runners: tuple[Runner, ...]
     observed_at: datetime | None  # None before the first successful poll
     last_attempt_at: datetime | None
-    last_error: str | None
+    last_error: SourceFailureCode | None  # a code, never an error's text (#113, C7)
 
 
 class Offering(Contract):

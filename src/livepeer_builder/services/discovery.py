@@ -82,8 +82,11 @@ class DiscoveryService:
             _LOG.warning(
                 "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}
             )
-            self._snapshot = self._snapshot.model_copy(
-                update={"last_attempt_at": attempted, "last_error": code}
+            self._snapshot = DiscoverySnapshot(  # built, not copied: a copy would not check the code
+                runners=self._snapshot.runners,
+                observed_at=self._snapshot.observed_at,
+                last_attempt_at=attempted,
+                last_error=code,
             )
             return self._snapshot
         # The default reader has skipped such a runner already. A supplied source's runner is held to the

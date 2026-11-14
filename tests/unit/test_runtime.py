@@ -9,6 +9,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
+import httpx
 import pytest
 from sqlalchemy import text
 
@@ -383,7 +384,12 @@ async def test_without_auto_migrate_a_database_at_another_revision_stops_startup
     with pytest.raises(RuntimeError) as refused:
         await engine.start()
     message = str(refused.value)
-    assert database in message and head_revision() in message and "lpb migrate" in message
+    assert database in message and head_revision() in message
+    assert str(tmp_path / "engine.db") in message  # the database that was checked, by name
+    if revision == "head":  # ahead: this package cannot migrate it, so it does not say to
+        assert "another release" in message and "run `lpb migrate`" not in message
+    else:  # behind: migrate that database
+        assert "run `lpb migrate`" in message and "LPB_DATABASE_URL" in message
     assert not engine.health().ready  # no discovery snapshot was taken
     with pytest.raises(RuntimeError, match="engine is stopped"):
         await engine.start()
@@ -402,6 +408,94 @@ async def test_without_auto_migrate_a_current_database_starts_and_is_checked_onl
         assert engine.health().ready
     finally:
         await engine.stop()
+
+
+class _OverSql:
+    """A supplied store over the engine's SQL store: every call goes to it, and ``maintenance`` is its own."""
+
+    def __init__(self, inner: SqlStore, maintenance: object) -> None:
+        self._inner = inner
+        self.maintenance = maintenance
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+
+class _OwnRevisions:
+    """Housekeeping of a store that keeps its own schema: its revisions are not this package's."""
+
+    async def purge(self, now: datetime, jobs_days: int | None, usage_days: int | None) -> PurgeReport:
+        return PurgeReport(jobs_deleted=0, usage_rows_deleted=0)
+
+    async def schema_revision(self) -> str | None:
+        return "vault-7"
+
+
+async def test_without_auto_migrate_a_supplied_store_with_its_own_revisions_still_starts(
+    tmp_path: Path,
+) -> None:
+    """The check is for the packaged migrations (#112, C8). A supplied store reports revisions of its own
+    schema, which ``lpb migrate`` cannot change, so comparing them with this package's head would stop a
+    working engine."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "head"), migrate=False)
+    try:
+        store = _OverSql(inner, _OwnRevisions())
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=store),  # type: ignore[arg-type]
+        )
+        await engine.start()
+        try:
+            assert await engine.schema_revision() == "vault-7"
+        finally:
+            await engine.stop()
+    finally:
+        await inner.close()  # a supplied store is borrowed: the engine never closes it
+
+
+async def test_without_auto_migrate_a_decorated_sql_store_is_still_checked(tmp_path: Path) -> None:
+    """A wrapper that keeps the SQL store's own housekeeping still runs on the packaged migrations."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
+    try:
+        store = _OverSql(inner, inner.maintenance)
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=store),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError, match="lpb migrate"):
+            await engine.start()
+    finally:
+        await inner.close()  # borrowed: the failed start closes only what the engine opened
+
+
+async def test_the_refusal_names_a_supplied_stores_own_database_not_the_configured_one(
+    tmp_path: Path,
+) -> None:
+    """``lpb migrate`` migrates ``LPB_DATABASE_URL``. A supplied SQL store may be another database, so the
+    message names the one that was checked (review of #129)."""
+    inner = await SqlStore.connect(await database_at(tmp_path, "0010"), migrate=False)
+    try:
+        engine = await BuilderEngine.create(
+            without_auto_migrate(MEMORY),
+            supply=EngineSupply(store=_OverSql(inner, inner.maintenance)),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError) as refused:
+            await engine.start()
+    finally:
+        await inner.close()
+    message = str(refused.value)
+    assert str(tmp_path / "engine.db") in message and ":memory:" not in message
+
+
+def test_the_database_named_in_the_refusal_hides_its_password() -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from livepeer_builder.store.maintenance import SqlMaintenance
+
+    named = SqlMaintenance(
+        create_async_engine("postgresql+asyncpg://lpb:hunter2@db.internal/engine")
+    ).database
+    assert "hunter2" not in named and "db.internal/engine" in named
 
 
 def unmigrated() -> EngineSettings:
@@ -466,5 +560,30 @@ async def test_a_second_start_on_a_running_engine_is_refused(store: SqlStore, cl
         await engine.start()
     assert {task for task in asyncio.all_tasks() if task.get_name() in LOOPS} == loops
     assert engine.health().ready  # the running engine is untouched
+    await engine.stop()
+    assert running_loops() == set()
+
+
+async def test_the_http_lifespan_on_a_running_engine_is_refused_and_leaves_it_running() -> None:
+    """Review of #140: the lifespan's ``finally`` stopped an engine it had not started, so the refusal
+    ended the loops and closed the store of the engine the application was running."""
+    engine = await BuilderEngine.create(
+        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+        supply=QUIET,
+    )
+    await engine.start()  # the application starts its own engine (embedded-mode.md)
+    loops = {task for task in asyncio.all_tasks() if task.get_name() in LOOPS}
+    app = create_app(engine)  # manage_lifecycle is on by default
+    with pytest.raises(RuntimeError, match="already started"):
+        async with app.router.lifespan_context(app):
+            pytest.fail("the app must not serve when start() is refused")
+    assert {task for task in asyncio.all_tasks() if task.get_name() in LOOPS} == loops
+    assert len(loops) == 3 and not any(task.done() for task in loops)
+    admin = await engine.keys.bootstrap_admin()  # the store is still open
+    serving = httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False))
+    async with httpx.AsyncClient(transport=serving, base_url="http://engine") as client:
+        assert (await client.get("/readyz")).status_code == 200
+        keys = await client.get("/v1/admin/keys", headers={"Authorization": f"Bearer {admin.token}"})
+        assert keys.status_code == 200 and len(keys.json()) == 1
     await engine.stop()
     assert running_loops() == set()

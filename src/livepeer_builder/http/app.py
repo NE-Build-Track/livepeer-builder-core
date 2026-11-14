@@ -6,16 +6,17 @@ contracts (async jobs, sessions, events) answer 501. The generated schema is com
 docs/generated/openapi.json and checked for drift in CI.
 """
 
+import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response, Security
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime
 
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
@@ -72,7 +73,7 @@ from livepeer_builder.http.bodies import (
     UsageBody,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
-from livepeer_builder.http.params import PathId, QueryId
+from livepeer_builder.http.params import PathId, QueryId, QueryInstant, QueryTime
 from livepeer_builder.http.streaming import stream_response
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
@@ -149,9 +150,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if manage_lifecycle:
+            # Before the try: a start that fails has already stopped the engine, and one that is refused
+            # because the engine is running (#113, C27) must not stop an engine this lifespan did not start.
+            await engine.start()
         try:
-            if manage_lifecycle:
-                await engine.start()
             yield
         finally:
             if manage_lifecycle:
@@ -216,7 +219,7 @@ def create_app(
 
     @app.get("/v1/jobs", response_model=list[Job])
     async def list_jobs(
-        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: AwareDatetime | None = None
+        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: QueryInstant = None
     ) -> list[Job]:
         """Newest first; ``before`` (an ISO-8601 time with its offset) is the last page's oldest
         ``created_at``, for the next page (D59)."""
@@ -229,7 +232,8 @@ def create_app(
     @app.get("/v1/jobs/{job_id}/result", status_code=200)
     async def get_result(actor: Actor, job_id: UUID) -> Response:
         result = await engine.jobs.result(actor, job_id)
-        return Response(content=result.content, media_type=result.content_type)
+        # as the job route: the stored content type as a header, since media_type would add a charset (C27)
+        return Response(content=result.content, headers={"Content-Type": result.content_type})
 
     @app.post("/v1/jobs/{job_id}/usage", response_model=Job)
     async def report_usage(actor: Actor, job_id: UUID, body: UsageBody) -> Job:
@@ -246,8 +250,8 @@ def create_app(
     @app.get("/v1/costs/summary", response_model=CostSummary)
     async def cost_summary(
         actor: Actor,
-        start: datetime | None = None,
-        end: datetime | None = None,
+        start: QueryTime = None,
+        end: QueryTime = None,
         actor_id: QueryId = None,
     ) -> CostSummary:
         return await engine.costs.summary(actor, start, end, actor_id)  # the engine's clock fills the window
@@ -400,6 +404,15 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         status: int, message: str, headers: dict[str, str] | None = None, **extra: Any
     ) -> JSONResponse:
         return JSONResponse({"error": message, **extra}, status_code=status, headers=headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def _unprocessable(_: Request, exc: RequestValidationError) -> Response:
+        """FastAPI's own 422, which repeats the input it refused. A lone surrogate in that input (JSON's
+        ``"\\ud800"``) cannot be sent as UTF-8 and made the 422 a 500; it goes out as the escape it came in
+        as. Every other answer is byte for byte what FastAPI sends."""
+        detail = {"detail": jsonable_encoder(exc.errors())}
+        body = json.dumps(detail, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return Response(body.encode("utf-8", "backslashreplace"), 422, media_type="application/json")
 
     @app.exception_handler(NotAuthenticated)
     async def _unauthenticated(_: Request, exc: NotAuthenticated) -> Response:

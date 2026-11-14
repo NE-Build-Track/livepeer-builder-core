@@ -22,6 +22,7 @@ from sqlalchemy import select
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesUsageSource
 from livepeer_builder.contracts import ActorContext, SetAsideReason, SetAsideUsage, UsageRow
+from livepeer_builder.errors import ProviderError
 from livepeer_builder.http import create_app
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
@@ -352,6 +353,48 @@ async def test_the_count_of_set_aside_rows_is_served_in_health_and_the_sync_repo
         "rows_set_aside": 1,
     }
     assert health.json()["cost_sync_set_aside"] == 1
+
+
+async def test_health_counts_the_rows_a_failed_sync_set_aside(
+    make_engine: EngineFactory, store: SqlStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row is set aside on the first page and the next page fails on every pass. The table had the row
+    and health said ``null``: the count was read only after a whole sync."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("cursor") == "p1":
+            return httpx.Response(503, json={"error": "overloaded"})
+        return httpx.Response(200, json={"items": [item("u-bad", status="mystery")], "next_cursor": "p1"})
+
+    client = httpx.AsyncClient(base_url="https://batteries.test", transport=httpx.MockTransport(handle))
+    source = BatteriesUsageSource("https://batteries.test", "t", client=client)
+    engine = await make_engine(supply=EngineSupply(usage_source=source))
+    with pytest.raises(ProviderError):
+        await engine.costs.sync_once()
+    assert await set_aside(store) == [("u-bad", "unknown_status", "0.5", "0.25")]
+    assert engine.health().cost_sync_set_aside == 1
+
+    async def no_count() -> int:
+        raise RuntimeError("the store is away")
+
+    monkeypatch.setattr(store, "count_set_aside_usage", no_count)
+    with pytest.raises(ProviderError):  # the sync's own failure is still the one raised
+        await engine.costs.sync_once()
+    assert engine.health().cost_sync_set_aside == 1
+
+
+async def test_health_counts_the_rows_set_aside_when_a_later_step_of_the_sync_fails(
+    make_engine: EngineFactory, store: SqlStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_match(rows: Sequence[UsageRow]) -> set[Any]:
+        raise RuntimeError("the store is away")
+
+    monkeypatch.setattr(store, "match_sessions", no_match)
+    source = batteries([item("u-bad", status="mystery"), item("u1")])
+    engine = await make_engine(supply=EngineSupply(usage_source=source))
+    with pytest.raises(RuntimeError):
+        await engine.costs.sync_once()
+    assert engine.health().cost_sync_set_aside == 1
 
 
 class _NoSetAsideTable:

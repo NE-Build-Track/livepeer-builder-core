@@ -21,6 +21,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -176,14 +177,19 @@ class CostService:
     async def sync_once(self) -> SyncReport:
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
-        report, new_rows = await self._worker.sync_once()
+        try:
+            report, new_rows = await self._worker.sync_once()
+        except Exception:  # the pages before the failure may have set rows aside: the table has them
+            with contextlib.suppress(Exception):  # the sync's own failure is the one to raise
+                self.set_aside_rows = await count_set_aside(self._store)
+            raise
+        self.set_aside_rows = await count_set_aside(self._store)  # before a later step can fail
         affected = await self._store.match_sessions(new_rows)
         jobs = await self._store.jobs_for_projection(list(affected))
         for job in jobs:
             found = await self._store.job_for_projection(job.id)  # reloaded with its evidence version
             if found is not None:
                 await self._refresh_projection(*found)
-        self.set_aside_rows = await count_set_aside(self._store)
         self.last_synced_at, self.last_error = self._clock.now(), None
         return report.model_copy(update={"jobs_updated": len(jobs)})
 

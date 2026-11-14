@@ -359,13 +359,15 @@ The reasons are a closed set (`SetAsideReason` in `contracts`): a record with an
 where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
 `computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
 that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
-table can keep is recorded under `sha256:` and a digest of its content. A row is recorded, counted and
-logged once, however often its page is read again; the first record of an id is kept. The row's content
-goes only to the log: one WARNING `costs.usage_set_aside` with the id, the reason, the fees and up to
-2000 characters of the row as received (for a row another `UsageSource` delivered as a `UsageRow` and
-the store cannot keep, the row as that source read it). `SyncReport.rows_set_aside` counts the rows a
-sync recorded, and `EngineHealth.cost_sync_set_aside` (`GET /readyz`) the rows left out in all, as of
-the last sync.
+table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
+differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
+A row is recorded, counted and logged once, however often its page is read again; the first record of
+an id is kept. The row's content goes only to the log: one WARNING `costs.usage_set_aside` with the id,
+the reason, the fees and up to 2000 characters of the row as received (for a row another `UsageSource`
+delivered as a `UsageRow` and the store cannot keep, the row as that source read it).
+`SyncReport.rows_set_aside` counts the rows a sync recorded, and `EngineHealth.cost_sync_set_aside`
+(`GET /readyz`) the rows left out in all, as of the last sync, including one that failed after it set
+rows aside.
 
 Recording the rows is optional for a store (`UsageSetAsideRepo` in `protocols`). The packaged SQL
 store has it. A supplied store without it still syncs: such a row is left out and logged once per

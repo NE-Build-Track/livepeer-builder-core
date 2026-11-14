@@ -52,7 +52,9 @@ class AccessPolicy(Protocol):
   `WWW-Authenticate` header.
 - **A bearer longer than 16 KiB is refused first (#113, C22).** The chain answers `NotAuthenticated`
   (401) before any authenticator sees an `Authorization: Bearer` credential longer than 16,384
-  characters, so it also protects the API-key path and a deployment's own authenticators. The cap is a
+  characters, so it also protects the API-key path and a deployment's own authenticators. It is counted
+  on the whole header (16,384 characters and `Bearer `), whatever the scheme and however it is spelled,
+  because a supplied authenticator may read as a bearer what the engine does not (a tab after `Bearer`). The cap is a
   fixed constant (`adapters/auth.py`, `MAX_BEARER_LENGTH`), not a setting.
 - **Imported mode needs no authenticator.** The application builds `ActorContext` itself. The policy
   still applies.

@@ -113,13 +113,13 @@ async def test_provisioning_repeated_after_a_lost_answer_creates_one_allocation(
     derives the same provider key from the actor, so the provider replays the first allocation. The lost
     answer leaves the operation started, so the repeat resumes it once it is stale (D57)."""
     engine = await make_engine()
-    save_actor = store.save_actor
+    provision_actor = store.provision_actor  # provisioning's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)  # only the first save is lost
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "provision_actor", provision_actor)  # only the first write is lost
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "provision_actor", lost)
     with pytest.raises(ConnectionError):
         await engine.payments.provision(admin, provision_request())
     clock.advance(120)
@@ -503,13 +503,13 @@ async def test_a_resumed_provisioning_asks_the_store_again_before_another_provid
     it must ask the store first: skipped, it funded a second allocation and only then failed to store."""
     vault = SealedVault(sealed=False)
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
-    save_actor = store.save_actor
+    provision_actor = store.provision_actor  # provisioning's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)  # only the first save is lost
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "provision_actor", provision_actor)  # only the first write is lost
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "provision_actor", lost)
     with pytest.raises(ConnectionError):  # the secret is stored and remembered; the actor is not saved
         await engine.payments.provision(admin, provision_request())
     second = provision_request().model_copy(update={"operation_ref": "provision-again"})
@@ -523,7 +523,7 @@ async def test_a_resumed_provisioning_asks_the_store_again_before_another_provid
     assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]
 
 
-async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_operation(
+async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_operation(
     make_engine: EngineFactory,
     admin: ActorContext,
     store: SqlStore,
@@ -531,17 +531,19 @@ async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_o
     clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rotation's provider operation is named by the allocation, which a re-provision replaces."""
+    """Rotation's provider operation is named by the allocation, which a re-provision replaces. A resume
+    there asked the store before it sent that other operation (review of #128). Since #115 (C4) it is
+    refused before that: a rotation belongs to the allocation it began on."""
     vault = SealedVault(sealed=False)
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     await engine.payments.provision(admin, provision_request())
-    save_actor = store.save_actor
+    set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object) -> None:
+        monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "set_actor_key", lost)
     with pytest.raises(ConnectionError):  # the new key's secret is stored and remembered
         await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     await engine.payments.revoke(admin, "default", "alice")
@@ -550,7 +552,7 @@ async def test_a_resumed_rotation_asks_the_store_again_before_another_provider_o
     minted = len(manager.keys)
     vault.sealed = True
     clock.advance(120)
-    with pytest.raises(InvalidRequest, match="cannot store"):
+    with pytest.raises(NotFound, match="began on allocation"):
         await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     assert len(manager.keys) == minted  # no key was minted on the new allocation
     assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == replaced.api_key_id

@@ -140,6 +140,92 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
+- **One command never undoes another on the same actor (#115, C4).** `provision`, `fund`, `set_status`,
+  `revoke` and `rotate_key` read the actor, call the provider, then write. Each writes only its own
+  columns, with its condition in the SQL statement:
+
+  | Command | Writes | Only where |
+  | --- | --- | --- |
+  | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
+  | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
+  | `fund` | `status` = `active`, `updated_at` | the status is `exhausted` |
+  | `provision` | the whole row | the actor is as provisioning read it: it has no row, or it still has the `revoked` row being replaced |
+
+  Every write also requires the allocation the command acted on, so none lands on an allocation
+  provisioned after a revoke. A key rotation also notes the allocation in its record when it begins:
+  resumed after the actor was revoked and provisioned again, it is refused before any provider call,
+  404 with the two allocations named, and keeps its reference
+  ([refused or unknown](#repeat-safe-commands)). The old key its record names belongs to the revoked
+  allocation, so on the new one it would mint a key and leave the key that allocation had live. A
+  record written before the allocation was noted is not checked.
+
+  No command moves an actor out of `revoked`; only a new provisioning gives the actor an allocation
+  again. A fund of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
+  with the actor as stored. When a revoke finishes while another command is at
+  the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
+  that is not provisioned (the rotation's new key is on a revoked allocation, and its secret is
+  deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
+  deletes the secret of a key a rotation stored meanwhile. Before, each of these commands saved the
+  whole row it had read: a pause during a rotation put back the old key, which the rotation had just
+  revoked, and any of them could put a revoked actor back to `active`.
+
+  **A provisioning that another command overtook.** Provisioning is the one command that writes the
+  whole row, so it writes only where the actor is still as it read it. Two provisionings of one actor
+  under two references send the same provider operation (its idempotency key is derived from the
+  actor, under one `LPB_ENGINE_ID`), so both get one allocation and one key, and the first to write
+  stores them. The other then writes nothing, whatever was done to the actor since, deletes its own
+  copy of the key's secret, and answers from the actor as stored:
+
+  | The actor as stored | Answer |
+  | --- | --- |
+  | holds the allocation and the key this provisioning got | the actor, with the status it has now (a pause that finished meanwhile stays) |
+  | holds that allocation, `revoked` | the actor, `revoked`: the allocation was funded and then revoked, and it stays revoked, as for a fund |
+  | holds that allocation with another key (rotated meanwhile), or another allocation (revoked and provisioned again) | 409 `already_provisioned`, as below |
+  | holds another allocation, `revoked` | 404: revoked while this provisioning was at the provider. The record stays `started`; repeated after `LPB_OPERATION_STALE_S` it is a resumed provisioning of a revoked actor |
+
+  Before, it saved the row it had built from its first read: `active` on an allocation revoked or
+  paused meanwhile, or the key a rotation had just revoked.
+
+  **Two rotations of one actor's key.** A rotation writes its key only over the key it began from. When
+  another rotation gave the actor a key first, whether it ran to its end while this one was at the
+  provider or finished between this one's interrupted run and its resume, this one writes nothing and
+  leaves nothing of its own live:
+
+  1. it revokes its own new key, then deletes that key's secret. The revoke comes first, so a key that
+     is still live still has its secret stored; when the revoke fails, the record stays `started` and a
+     repeat, which gets the same key replayed, does it again;
+  2. it revokes the key it began from and deletes that key's secret, unless the actor holds them. The
+     actor no longer does, and for a rotation that stored its key, failed to revoke the old one and was
+     then replaced by a newer rotation, no other command would;
+  3. it notes in its record the key the actor holds, and answers `InvalidRequest` (HTTP 400): another
+     key rotation finished after this one began.
+
+  The refusal never frees the reference: under a free reference the provider would replay the revoked
+  key to a new rotation. The record stays `started` with that note. A repeat inside
+  `LPB_OPERATION_STALE_S` is 409 `operation_in_progress`; a later one is refused in the same words
+  before any provider call. To replace the key again, rotate under a new reference. Before, the key
+  write asked only for the same allocation: the slower rotation overwrote the finished one, whose key
+  stayed live with its secret stored and nothing pointing at it, and a resumed rotation put back a key
+  the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
+
+  **What the guarantee covers, and the known gap.** It covers commands that write different columns,
+  and the cases named above: a revoke, two rotations, a provisioning that another command overtook.
+  Two status commands at the same moment (a pause and an activate) write the same column, and the last
+  write wins at the provider and in the store separately. Each sets the status at the provider and
+  then stores it, so when a pause is at the provider while an activate runs to its end, the provider
+  ends `paused` then `active` and the store `active` then `paused`: the stored status is the opposite
+  of the provider's. Closing this needs a version on the row or a read-back of the provider's status,
+  and #115 adds neither. Until then, send the status you want again: a repeated `set_status` sets it
+  at the provider and in the store.
+
+  The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
+  `set_actor_status`, `set_actor_key`, `provision_actor`). The packaged SQL store has them; a supplied
+  store has all three or is treated as having none. With a supplied store without them, the engine
+  reads the actor again after the provider call, checks the same conditions itself and saves the whole
+  row with `save_actor`. The rules above then hold except in the moment between that read and the
+  save, where a second command can still be overwritten, as it could before: for such a store two
+  rotations that write at the same moment can still leave the slower one's key on the actor, and a
+  provisioning can still save over a command that wrote in that moment.
 - **Amounts the provider takes (#112, C11).** The engine mirrors Batteries' amount format (v0.0.3,
   `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
   no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at
@@ -241,10 +327,12 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   engine refuses to start unless `LPB_OPERATION_STALE_S` is at least four of them, so the longest
   ordinary command (two calls) fits in a run's half. Its limit is a process paused
   longer than the window, which only a provider idempotency key on grant creation would close.
-- **Rotating the payment key** records the old key's id and secret reference when it begins, and every
-  step reads them from there, never from the actor as it is now. A resume after the new key was stored
+- **Rotating the payment key** records the old key's id and secret reference when it begins, with the
+  allocation, and every step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
-  reference is recorded before the actor points at it, so a resume reuses that copy.
+  reference is recorded before the actor points at it, so a resume reuses that copy. A rotation that
+  another rotation of the same actor overtook, or that is resumed on an allocation provisioned since
+  it began, is refused and keeps its reference ([two rotations](#provisioning)).
 - **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
   409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor

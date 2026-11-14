@@ -70,6 +70,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "AllowanceReader": (PaymentsService,),
     "EngineStore": (SqlStore,),
     "StoreMaintenance": (SqlMaintenance,),
+    "ActorCommandRepo": (SqlStore,),
     "UsageSetAsideRepo": (SqlStore,),
     "CostSnapshot": (SqlCostSnapshot,),
     "Clock": (SystemClock,),
@@ -94,7 +95,7 @@ def protocol_classes() -> dict[str, type]:
         for name, obj in vars(protocols).items()
         if inspect.isclass(obj)
         and getattr(obj, "_is_protocol", False)
-        and obj.__module__ == protocols.__name__
+        and obj.__module__.startswith(protocols.__name__)  # the package: its submodules re-export here
     }
 
 

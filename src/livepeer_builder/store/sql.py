@@ -68,7 +68,7 @@ def create_engine(url: str) -> AsyncEngine:
     return engine
 
 
-class SqlStore(SqlKeys, SqlOperations):
+class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
         self.maintenance = SqlMaintenance(engine)

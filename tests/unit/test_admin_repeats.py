@@ -343,13 +343,13 @@ async def test_a_rotation_resumed_after_its_secret_was_stored_keeps_one_copy_of_
     ledger's context, instead of writing a second copy of the live key that nothing points to."""
     engine = await make_engine()
     await engine.payments.provision(admin, provision_request())
-    save_actor = store.save_actor
+    set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object) -> None:
+        monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "set_actor_key", lost)
     with pytest.raises(ConnectionError):
         await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
     clock.advance(120)
@@ -583,13 +583,13 @@ async def test_a_provisioning_resumed_after_its_secret_was_stored_keeps_one_copy
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = await make_engine()
-    save_actor = store.save_actor
+    provision_actor = store.provision_actor  # provisioning's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "provision_actor", provision_actor)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "provision_actor", lost)
     with pytest.raises(ConnectionError):
         await engine.payments.provision(admin, provision_request())
     clock.advance(120)
@@ -866,13 +866,13 @@ async def test_a_resumed_provisioning_that_reached_the_provider_answers_with_the
     actor. The provider key is actor-derived, so A got B's allocation replayed: B's command did apply, and
     its resume answers with the actor, dropping B's now unused copy of the secret."""
     engine = await make_engine()
-    save_actor = store.save_actor
+    provision_actor = store.provision_actor  # provisioning's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "provision_actor", provision_actor)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "provision_actor", lost)
     with pytest.raises(ConnectionError):
         await engine.payments.provision(admin, provision_request(ref="p-b"))
     a = await engine.payments.provision(admin, provision_request(ref="p-a"))

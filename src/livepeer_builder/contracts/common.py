@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 
 class Contract(BaseModel):
@@ -31,6 +31,28 @@ def _no_nul(value: str) -> str:
 # NUL. SQLite takes anything; PostgreSQL refuses either when the row is written, which for provisioning
 # is after the provider key was funded. So it is refused where the request is parsed.
 StoredText = Annotated[str, Field(max_length=200), AfterValidator(_no_nul)]
+
+
+def _one_path_segment(value: str) -> str:
+    if value in (".", "..") or any(c in "/\\?#%" or ord(c) < 32 or 127 <= ord(c) < 160 for c in value):
+        raise ValueError(
+            "must not contain '/', '\\', '?', '#', '%' or a control character, or be '.' or '..'"
+        )
+    return value
+
+
+def _without_surrounding_whitespace(value: object) -> object:
+    return value.strip() if isinstance(value, str) else value
+
+
+# A grant id: stored text that the payment provider's URL path reads as one segment, whatever a client or
+# server normalizes (#113, C10). The engine places it in ``/v1/grants/{grant_id}/fund``, where ``..`` or a
+# ``/`` would name another resource. It is held to no pattern such as a UUID: the provider chooses its ids.
+# Whitespace around it is removed first, so the value checked is the value the engine uses: ``" .."`` is
+# ``..`` and refused, ``" grant_1"`` is ``grant_1``, and only whitespace is no grant chosen.
+GrantId = Annotated[
+    StoredText, BeforeValidator(_without_surrounding_whitespace), AfterValidator(_one_path_segment)
+]
 
 
 class Money(Contract):

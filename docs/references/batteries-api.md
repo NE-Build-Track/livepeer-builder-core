@@ -21,7 +21,7 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
 | `create_key` | `POST /v1/api-keys` `{allocation_id, name}` | Key rotation |
 | `fund_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation |
 | `fund_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | `Idempotency-Key` is `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
-| `list_grants` | `GET /v1/grants` | Operator token. `{items: [...]}` |
+| `list_grants` | `GET /v1/grants` | Operator token. `{items: [...], next_cursor}` |
 | `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*}` | Operator token. `grants.create` |
 | `set_allocation_status` | `PATCH /v1/allocations/{id}/status` `{status: active \| paused}` | |
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
@@ -29,6 +29,20 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
 | `read_allocation` | `GET /v1/allocations/{id}` | `allocated_<cur>`, `spent_<cur>`, `available_<cur>`, where `<cur>` is the allocation's `usd`/`eth` |
 | usage feed | `GET /v1/usage?limit=&cursor=` | Optional filters `grant_id`, `allocation_id`, `manifest_id` (exact IDs; a row must match every one; usage with no session appears only unfiltered). The engine sends none: cost sync reads every row (D28). `{items, next_cursor}`. The cursor is opaque and bound to its filters; empty on the last page; 400 `invalid cursor` on a mismatch. An item's `id` and its other text fields are strings (or `null`), `created_at_ms` is a whole number, and a fee is a decimal string, `null`, `""` or `"[error]"`. An item the engine cannot read as a usage row (no `id`, an unknown `status`, no usable `created_at_ms`, a text field that is not text, a fee that is stated and is not a finite number) is set aside, not an error (#114, C13; [payments.md](../contracts/payments.md#cost-classification)) |
 
+- **Answers:** every route above answers a success with a JSON object (`managementResult`), and a list
+  with `{"items": [...], "next_cursor": "<string>"}`: `items` is `[]` when empty, never `null`, and
+  `next_cursor` is `""` on the last page (`internal/app/pagination.go`, read at `03bc9fb`). The engine
+  holds every answer to that: a 2xx that is not a JSON object, `items` that is not a list of objects, or
+  a `next_cursor` that is not a string is a `ProviderError` (502), never an empty answer (#114, C21;
+  `adapters/batteries.py`, `json_object` and `list_page`). The engine also takes a list with no
+  `next_cursor` as a last page, and a page that answers the cursor it was asked with as that
+  `ProviderError`: Batteries' cursor is the last row's `seq`, so it always advances. A grant's `id`, `name`, `status`, `currency`, total and `metadata` are
+  strings: `metadata` is `""` for a grant with none, never `null` (`TEXT NOT NULL DEFAULT ''` in
+  `migrations/001_initial.sql`). A grant with no `id`, or with one of these that is not a string, is the
+  same `ProviderError` (`grant_from_item`); the engine takes a grant with no `metadata` key as one with
+  none. Every id Batteries answers with is a string, and so is a new key's `api_key`
+  (`map[string]string` in `internal/store/idempotency.go`; `TEXT` columns): a key answer or an allocation read
+  whose `id`, `allocation_id` or `api_key` is absent, empty or not a string is that `ProviderError` too.
 - **Idempotency:** `Idempotency-Key` on allocation create, API-key create, and grant and allocation
   fund. It is shared by every caller of a grant, which is why the engine namespaces its keys.
   - A matching retry replays the original success, including the secret.

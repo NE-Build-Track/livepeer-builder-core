@@ -197,11 +197,37 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   rotation's new key stored, then the old key's revoke refused) leaves the record `started`, so a resume
   finishes the command from what the record noted. A timeout, a transport error, a provider 5xx or a
   crash leaves the outcome *unknown*: the record stays `started` for a resume, never a retry under a
-  new reference. A refusal on a *resumed* run never frees the reference either (#112): the attempt it
-  follows ended in an unknown outcome, and a provider call that timed out may have been applied with
-  nothing noted. The record stays `started`, another request on that reference is still 409
-  `operation_conflict`, and the same request resumes again after `LPB_OPERATION_STALE_S`. The one
-  exception is `already_provisioned`, below.
+  new reference. So does a provider answer the engine cannot read (below). A refusal on a *resumed*
+  run never frees the reference either (#112): the attempt it follows ended in an unknown outcome, and
+  a provider call that timed out may have been applied with nothing noted. The record stays `started`,
+  another request on that reference is still 409 `operation_conflict`, and the same request resumes
+  again after `LPB_OPERATION_STALE_S`. The one exception is `already_provisioned`, below.
+- **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
+  answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
+  nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
+  a list of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
+  `ProviderError`: HTTP 502 from the REST service, `invalid_answer` as `cost_sync_error`, and an unknown
+  outcome to the ledger, so the reference stays held. Before, a 2xx that was not a JSON object answered
+  500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is
+  now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
+  is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
+  with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
+  never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
+  cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
+  resumed create's search and cost sync alike: before, the engine asked for that page again without end,
+  and `GET /v1/admin/grants` and `POST /v1/admin/costs/sync` never answered. A longer cycle (a cursor that
+  comes back after other pages) is not detected. A grant, in a list or read alone,
+  must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
+  strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
+  JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
+  (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
+  not create. The same holds for every value a command's result is built from: the `id` a grant create
+  answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
+  be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
+  `null` there was recorded as the text `"None"` in a finished command (provisioning answered 201 with
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. The error does not quote the
+  body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
+  sense: it is set aside ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
   Every later write of the slower run (its context, its result, its abandonment) checks the token and
   is refused, so a run presumed dead that was only slow answers with the recorded result instead. A
@@ -233,7 +259,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   resumed create reads the grants page by page, oldest first, and adopts the one carrying its tag instead
   of creating a second. It records the list cursor after each page, so a resume that runs out of its
   budget in a slow catalog leaves the next one to go on from there; pages already read lacked the tag,
-  and a grant created later is on a later page. Grant names stay free-form: two references may create two grants with one name.
+  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`, or the grant with its `metadata` as `null` or as an object) read as a grant with no tag, and the resume created a second grant. A read-back of the new grant that the engine cannot read is an unknown outcome too (503, the reference held), never the command's result. Grant names stay free-form: two references may create two grants with one name.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.

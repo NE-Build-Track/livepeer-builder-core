@@ -44,7 +44,11 @@ def paid_candidates(runners: Sequence[Runner]) -> list[Runner]:
     """The runners a job that pays may try (#114, C17): all of them, unless every one advertises zero
     capacity. livepeer/node asks for payment before it looks at capacity, so a full runner's refusal comes
     after the signer signed and the ticket is charged. Then only the runners an attempt signs nothing for
-    are left, and none left is the job's ``no_capacity``."""
+    are left, and none left is the job's ``no_capacity``.
+
+    With any runner that has room, a full one the job would pay stays, on purpose: the hint can lag, and
+    it is the last resort when the others failed. Failover can then reach it and pay for its refusal,
+    and ``capped_first`` can put it ahead of a runner with room whose price the signer does not take."""
     if any(_is_ready(runner) for runner in runners):
         return list(runners)
     return [runner for runner in runners if not _signs_for(runner)]

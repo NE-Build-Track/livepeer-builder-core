@@ -207,7 +207,10 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      pay (and free ones) and within the rest, since those are moved ahead of the rest: a priced
      zero-capacity runner is tried before a runner with room and no payable price. When every runner for the app advertises zero, the engine tries only
      the runners an attempt signs no payment for, which on an unpaid job is all of them. The node asks
-     for payment before it checks capacity, so an attempt on a full priced runner costs a ticket. If
+     for payment before it checks capacity, so an attempt on a full priced runner costs a ticket. That
+     cost is accepted when any runner for the app has room: a full priced runner then stays a
+     candidate, since its advertisement may be out of date, and a job whose other runners failed can
+     reach it and pay for its refusal. If
      the runners tried all refuse, the job fails `refused` like any other job whose runners all refused.
      A job that would pay every one of them fails `no_capacity` before any attempt, with nothing signed
      ([discovery.md](discovery.md#advertised-capacity)).

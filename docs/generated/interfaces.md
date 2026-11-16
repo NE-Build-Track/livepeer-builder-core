@@ -96,6 +96,12 @@ classDiagram
         +async purge(now, jobs_days, usage_days) PurgeReport
         +async schema_revision() str?
     }
+    class ActorCommandRepo {
+        <<interface>>
+        +async provision_actor(actor, replacing) bool
+        +async set_actor_key(application_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ProvisionedActor?
+        +async set_actor_status(application_id, actor_id, allocation_id, status, updated_at, only_from) ProvisionedActor?
+    }
     class UsageSetAsideRepo {
         <<interface>>
         +async count_set_aside_usage() int
@@ -161,6 +167,7 @@ classDiagram
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
+    ActorCommandRepo <|.. SqlStore
     UsageSetAsideRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
@@ -191,6 +198,7 @@ classDiagram
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
+| `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |

@@ -20,6 +20,7 @@ from tests.unit.discovery_wire import ORCHESTRATOR, document, record, skipped, w
 
 GOOD = document(record())
 NO_STAMP = {"url": f"{ORCHESTRATOR}/apps/a", "app": "a/b"}
+NOT_LISTS: tuple[Any, ...] = ({}, None, "", False, 0)
 UNREADABLE = {
     "every runner unreadable": document(NO_STAMP, record(app="")),
     "one record, not a runner": document(7),
@@ -28,6 +29,8 @@ UNREADABLE = {
     # ``nodes`` and no ``address``, as a metadata entry has, but with records no address can read
     "nodes with runners": json.dumps([{"nodes": [], "runners": [NO_STAMP, record()]}]),
     "nodes with runners, not a list": json.dumps([{"nodes": [], "runners": {"url": "x"}}]),
+    # Review of #143: only an absent or an empty list of runners is metadata. Any other empty value is not.
+    **{f"nodes with runners {empty!r}": json.dumps([{"nodes": [], "runners": empty}]) for empty in NOT_LISTS},
 }
 COUNTS = {
     "every runner unreadable": (0, 2),
@@ -36,6 +39,7 @@ COUNTS = {
     "runners is not a list": (1, 0),
     "nodes with runners": (1, 0),
     "nodes with runners, not a list": (1, 0),
+    **{f"nodes with runners {empty!r}": (1, 0) for empty in NOT_LISTS},
 }
 EMPTY = {
     "an empty list": b"[]",

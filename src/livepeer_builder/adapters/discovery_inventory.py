@@ -123,11 +123,12 @@ def _not_json(token: str) -> Any:
 
 
 def _metadata(entry: object) -> bool:
-    """``nodes``, no ``address`` and no ``runners``, as node writes one. With records under it the entry is
-    one no address can read: skipped and counted, not an empty answer (#114, C28)."""
-    return (
-        isinstance(entry, dict) and "nodes" in entry and "address" not in entry and not entry.get("runners")
-    )
+    """``nodes``, no ``address`` and no ``runners`` (or an empty list), as node writes one. With records
+    under it the entry is one no address can read: skipped and counted, not an empty answer (#114, C28).
+    So is one whose ``runners`` is any other value, ``null`` or ``{}`` included: it is no list to be empty."""
+    if not isinstance(entry, dict) or "nodes" not in entry or "address" in entry:
+        return False
+    return "runners" not in entry or entry["runners"] == []
 
 
 def _entry(entry: object) -> tuple[str, list[Any]] | None:

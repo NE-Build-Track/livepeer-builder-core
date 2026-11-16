@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from pydantic import SecretStr
@@ -75,7 +76,7 @@ class BatteriesClient:
     async def fund_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         await self._request(
             "POST",
-            f"/v1/allocations/{allocation_id}/fund",
+            f"/v1/allocations/{segment(allocation_id)}/fund",
             json=_amount_fields(amount),
             idempotency_key=idempotency_key,
         )
@@ -83,22 +84,24 @@ class BatteriesClient:
     async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
         await self._request(
             "POST",
-            f"/v1/grants/{grant_id}/fund",
+            f"/v1/grants/{segment(grant_id)}/fund",
             json=_amount_fields(amount),
             idempotency_key=idempotency_key,
         )
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
-        await self._request("PATCH", f"/v1/allocations/{allocation_id}/status", json={"status": status})
+        await self._request(
+            "PATCH", f"/v1/allocations/{segment(allocation_id)}/status", json={"status": status}
+        )
 
     async def revoke_allocation(self, allocation_id: str) -> None:
-        await self._request("POST", f"/v1/allocations/{allocation_id}/revoke")  # repeat-safe upstream
+        await self._request("POST", f"/v1/allocations/{segment(allocation_id)}/revoke")  # repeat-safe
 
     async def revoke_key(self, api_key_id: str) -> None:
-        await self._request("POST", f"/v1/api-keys/{api_key_id}/revoke")
+        await self._request("POST", f"/v1/api-keys/{segment(api_key_id)}/revoke")
 
     async def read_allocation(self, allocation_id: str) -> Allowance:
-        return allowance_from_body(await self._request("GET", f"/v1/allocations/{allocation_id}"))
+        return allowance_from_body(await self._request("GET", f"/v1/allocations/{segment(allocation_id)}"))
 
     async def list_grants(self) -> list[GrantRecord]:
         """Every grant, page by page."""
@@ -135,7 +138,7 @@ class BatteriesClient:
         # Batteries answers the create with the id only; the record is the grant as it stored it. The grant
         # exists by now, so a failed read is an unknown outcome, never a refusal that frees the reference.
         try:
-            return grant_from_item(await self._request("GET", f"/v1/grants/{created['id']}"))
+            return grant_from_item(await self._request("GET", f"/v1/grants/{segment(str(created['id']))}"))
         except ProviderError as exc:
             raise ProviderUnavailable(f"grant {created['id']} created but not read back: {exc}") from exc
 
@@ -261,6 +264,13 @@ def allowance_from_body(body: dict[str, Any]) -> Allowance:
         spent=_money(body.get(f"spent_{suffix}"), currency),
         available=_money(body.get(f"available_{suffix}"), currency),
     )
+
+
+def segment(value: str) -> str:
+    """An id as one path segment, whatever its source (#113, C10): every reserved character is
+    percent-encoded, and so are the ids ``.`` and ``..`` (``%2E``, ``%2E%2E``), which httpx would remove
+    as a dot segment. ``...`` is no dot segment and goes out as written."""
+    return "%2E" * len(value) if value in (".", "..") else quote(value, safe="")
 
 
 def error_message(response: httpx.Response) -> str:

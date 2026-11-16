@@ -180,7 +180,7 @@ async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedC
     await engine.start()
     await asyncio.sleep(0.05)
     await engine.stop()
-    assert engine.health().cost_sync_error == "batteries down"
+    assert engine.health().cost_sync_error == "unavailable"  # the usage source's code; its text is logged
 
 
 async def test_retention_failures_are_logged_not_fatal(

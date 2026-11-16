@@ -41,7 +41,8 @@ class HttpDiscoverySource:
 
     The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
-    client; it fails the refresh. There is no size cap (D63).
+    client; it fails the refresh. A 2xx whose content encoding does not decode is a ``ValueError``, as
+    a body that is not JSON is. There is no size cap (D63).
     """
 
     def __init__(
@@ -74,10 +75,14 @@ class HttpDiscoverySource:
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
         request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
-        response = await client.send(request, follow_redirects=False)
+        response = await client.send(request, stream=True, follow_redirects=False)
         async with contextlib.aclosing(response):
-            response.raise_for_status()
-            return response.content
+            response.raise_for_status()  # the status decides first: an error's body is not read
+            try:
+                return await response.aread()
+            except httpx.DecodingError as error:  # httpx's is no ValueError; an unreadable 2xx is one (C7)
+                message = f"the inventory from {self._discovery_url} did not decode: {error}"
+                raise ValueError(message) from error
 
 
 class SdkRunnerTransport:

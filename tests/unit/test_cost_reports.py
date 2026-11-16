@@ -64,7 +64,7 @@ async def test_batteries_down_leaves_a_succeeded_job_succeeded_with_its_cost_pen
     usage.page = batteries_down  # type: ignore[method-assign]
     await engine.costs.run(stop)  # the background sync loop: it logs and keeps the error for health
 
-    assert engine.health().cost_sync_error == "batteries down"
+    assert engine.health().cost_sync_error == "unavailable"  # a code; "batteries down" goes to the log
     assert await engine.jobs.get(alice, job.id) == job  # the job record is unchanged
     cost = await engine.costs.for_job(alice, job.id)
     assert (cost.status, [attempt.cost_class for attempt in cost.attempts]) == ("pending", ["pending"])

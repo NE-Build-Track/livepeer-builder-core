@@ -209,11 +209,10 @@ def create_app(
                 opened, {JOB_ID_HEADER: str(opened.job.id), "Cache-Control": "no-cache"}
             )
         result = await engine.jobs.run(actor, body)
-        return Response(
+        return Response(  # the runner's content type as a header: media_type would add a charset (C27)
             content=result.content,
             status_code=result.status_code,
-            media_type=result.content_type,
-            headers={JOB_ID_HEADER: str(result.job.id)},
+            headers={"Content-Type": result.content_type, JOB_ID_HEADER: str(result.job.id)},
         )
 
     @app.get("/v1/jobs", response_model=list[Job])
@@ -231,7 +230,8 @@ def create_app(
     @app.get("/v1/jobs/{job_id}/result", status_code=200)
     async def get_result(actor: Actor, job_id: UUID) -> Response:
         result = await engine.jobs.result(actor, job_id)
-        return Response(content=result.content, media_type=result.content_type)
+        # as the job route: the stored content type as a header, since media_type would add a charset (C27)
+        return Response(content=result.content, headers={"Content-Type": result.content_type})
 
     @app.post("/v1/jobs/{job_id}/usage", response_model=Job)
     async def report_usage(actor: Actor, job_id: UUID, body: UsageBody) -> Job:

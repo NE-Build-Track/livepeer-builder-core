@@ -37,7 +37,6 @@ from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
     bump_evidence,
     bump_evidence_on_new_rows,
-    in_window,
     jobs_needing_projection,
     match_payment_sessions,
 )
@@ -165,15 +164,6 @@ class SqlStore(SqlKeys, SqlOperations):
         query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
         async with self.engine.connect() as conn:
             return await load_jobs(conn, list((await conn.execute(query)).mappings()))
-
-    async def jobs_between(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[Job]:
-        query = select(t.jobs).where(*in_window(application_id, actor_id, start, end))
-        async with self.engine.connect() as conn:
-            return await load_jobs(
-                conn, list((await conn.execute(query.order_by(t.jobs.c.created_at))).mappings())
-            )
 
     async def jobs_in_state(self, state: JobState) -> list[Job]:
         async with self.engine.connect() as conn:

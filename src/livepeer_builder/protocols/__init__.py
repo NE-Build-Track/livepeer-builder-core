@@ -304,10 +304,6 @@ class JobRepo(Protocol):
         self, application_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
     ) -> list[Job]: ...
 
-    async def jobs_between(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[Job]: ...
-
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
 
     async def record_payment_evidence(self, attempt: Attempt) -> None:

@@ -2,6 +2,7 @@
 REST service accepts the provider's tokens. The identity provider is a local aiohttp server publishing a
 discovery document and a JWKS, so the real wiring (settings, default_parts, an httpx client) runs."""
 
+import base64
 import json
 import time
 from collections.abc import AsyncIterator
@@ -327,3 +328,24 @@ async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: Ide
             assert [(a["actor_id"], a["label"], a["provisioned"]) for a in listed] == [
                 ("3c446b40-7123", "alice", False)
             ]  # the operator signing in is not an actor, so is not listed
+
+
+async def test_an_oversized_or_nested_bearer_is_a_401_not_a_500(idp: IdentityProvider) -> None:
+    """#113 C22: json.loads raised RecursionError on a deeply nested segment, and no handler caught it."""
+
+    def segment(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    nested, ours = segment(b"[" * 12000), segment(json.dumps({"iss": idp.issuer}).encode())
+    tokens = {
+        "40 kB, a nested payload": f"e30.{segment(b'[' * 30000)}.sig",
+        "a nested payload": f"e30.{nested}.sig",
+        "a nested header on our token": f"{nested}.{ours}.sig",
+    }
+    async with make_engine(**jwt_settings(idp)) as engine:
+        app = create_app(engine, manage_lifecycle=False)
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+            for name, token in tokens.items():
+                answer = await client.get("/v1/jobs", headers=bearer(token))
+                assert answer.status_code == 401, (name, answer.status_code, answer.text)

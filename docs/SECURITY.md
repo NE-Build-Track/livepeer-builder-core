@@ -26,7 +26,9 @@ for a payment key, the signer URL and the signer's words ([payments.md](contract
 See [contracts/access.md](contracts/access.md#boundaries).
 
 - **Identity:** requests authenticate through the authenticator chain. No request field establishes
-  identity.
+  identity. A bearer longer than 16 KiB is a 401 before any authenticator sees it, and a token that
+  cannot be read, however malformed, is a 401, never a 500 (#113, C22,
+  [access.md](contracts/access.md#protocols)).
 - **Admin:** admin is a distinct credential kind, bootstrapped once from the CLI. There is no network
   bootstrap and no static admin token.
 - **Payment calls:** the caller's credential stops at the engine. Only the actor's allocation key

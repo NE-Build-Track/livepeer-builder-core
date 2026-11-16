@@ -15,7 +15,9 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   Applications never write them.
 - **Money and fees** are exact decimal strings, summed in Python.
 - **Timestamps** are UTC. Lists that are queried (payment sessions) live in child tables.
-- **Payment keys** are not stored. `lpb_actors.secret_ref` holds a `SecretRef`. The
+- **Payment keys** are not stored. `lpb_actors.secret_ref` holds a `SecretRef`: opaque text of any
+  length, in an unbounded `text` column (migration 0013, #115; it was `varchar(200)`, which PostgreSQL
+  enforced after the provider key was funded), so a supplied secret store may return a long path. The
   encrypted-database `SecretStore` keeps Fernet ciphertext in `lpb_secrets`, with the key outside the
   database.
 - **Default URL:** `sqlite+aiosqlite:///./livepeer-builder.db`. There is no silent in-memory store.
@@ -53,6 +55,11 @@ like a source checkout. Version table: `lpb_alembic_version`.
   `maintenance` is its own reports revisions of its own schema and is not compared, and neither is one
   with no `maintenance`. A wrapper that keeps the SQL store's `maintenance` is still checked.
 - **Check:** `lpb revision` (exit code 2 when behind).
+- **An interrupted 0013 on SQLite:** SQLite creates the table that migration 0013 copies the actors
+  into (`_alembic_tmp_lpb_actors`) outside the migration's transaction. A run that dies before its
+  commit rolls back to the old revision and leaves that empty copy behind. 0013 drops a leftover copy
+  when it starts, up or down, and only while `lpb_actors` itself exists, so the next `lpb migrate`
+  goes through. Before, it failed with "table _alembic_tmp_lpb_actors already exists" (#115).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

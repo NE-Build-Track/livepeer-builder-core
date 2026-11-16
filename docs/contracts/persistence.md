@@ -28,9 +28,16 @@ like a source checkout. Version table: `lpb_alembic_version`.
 - **Apply:** `lpb migrate`. Settings `auto_migrate=true` (the default) also migrate on start.
 - **Refuse a mismatch:** with `auto_migrate=false`, `BuilderEngine.start()` compares the store's
   revision with the package head before anything else and raises `RuntimeError` on any mismatch,
-  behind or ahead, naming both revisions and `lpb migrate` (#112, C8). Otherwise the engine would start
+  behind or ahead (#112, C8). The message names both revisions and the database that was checked, by
+  its URL with the password hidden: `lpb migrate` migrates `LPB_DATABASE_URL`, and a supplied SQL
+  store may be another database. For a database behind this package it says to run `lpb migrate`
+  with `LPB_DATABASE_URL` pointing at that database. For a revision this package does not know, it
+  says another release migrated the database and that release should be started: `lpb migrate`
+  from this package cannot change it. Otherwise the engine would start
   ready, pay a runner, then fail to record. It checks at start only: a replica already running keeps
-  running while another one migrates. A supplied store with no `maintenance` is not checked.
+  running while another one migrates. Only the packaged migrations are checked: a supplied store whose
+  `maintenance` is its own reports revisions of its own schema and is not compared, and neither is one
+  with no `maintenance`. A wrapper that keeps the SQL store's `maintenance` is still checked.
 - **Check:** `lpb revision` (exit code 2 when behind).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.

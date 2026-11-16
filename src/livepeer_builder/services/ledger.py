@@ -165,9 +165,13 @@ class OperationLedger:
                     f"{command} ran past its {self._stale_s / 2:g} s budget; repeat it to resume"
                 ) from refused
             # Freed only when nothing was applied: a step noted in the context (by this run or an earlier
-            # one) means the command is half done, and a resume must finish it from that context. An actor
-            # already provisioned is refused for good: the earlier run's actor was revoked or is another's.
-            untouched = running.record.context == record.context == dict(context or {})
+            # one) means the command is half done, and a resume must finish it from that context. A resumed
+            # run follows an attempt whose outcome is unknown (a provider call that timed out may have been
+            # applied, with nothing noted), so its refusal never frees the reference: freed, the next repeat
+            # would run as new, and another request could take the reference. An actor already provisioned
+            # is refused for good: the earlier run's actor was revoked or is another's.
+            unchanged = running.record.context == record.context == dict(context or {})
+            untouched = unchanged and not running.resumed
             if definite_refusal(refused) and (untouched or isinstance(refused, AlreadyProvisioned)):
                 await self._repo.abandon_operation(record)
             raise  # otherwise the record stays started, for a resume

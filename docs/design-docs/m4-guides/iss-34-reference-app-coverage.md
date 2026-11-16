@@ -1,5 +1,10 @@
 # ISS-34: Reference-app coverage of baseline execution and reporting
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D78 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; the
 console's own decisions live in its `docs/design-docs/decisions.md`.\
 **Tracker:** ISS-34 ([Network-Engineering-SPE#48](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/48)),
@@ -82,7 +87,8 @@ the three journeys against a scripted engine.**
    `max_duration_s`, close, and the interaction. For HTTP endpoints the console's server forwards the
    builder's request to `proxy_path` with the session's key. For a socket endpoint, the browser connects
    to a console route that holds the actor key server-side and relays frames to the engine
-   ([?] Q2: Next.js route handlers and WebSocket upgrade must be checked in
+   (Replaced by Q2, locked: the console's server is the socket client and the browser reads an HTTP
+   stream, so no upgrade is needed. Was: Next.js route handlers and WebSocket upgrade must be checked in
    `web/node_modules/next/dist/docs/` first, the console's own rule).
 5. **Failures by category.** A pure `failureView(job)` maps ISS-28's categories (validation, access,
    capacity, execution, payment, reporting) and ISS-12's `reason` to a title, a sentence, whether
@@ -148,14 +154,14 @@ Job page
 [ ] a stored result renders with the output view chosen by content type
 [ ] resultView: inline result not retained → "not kept" with the reason
 [ ] resultView: stored result 404 or expired provider URL → "no longer available" with the reason
-[ ] failureView maps each ISS-28 category to a title and an action             [?] Q1
+[ ] failureView maps each ISS-28 recovery value to a title and an action
 [ ] failureView: an unknown kind shows the engine's message
 [ ] uncertain shows "may have run and been charged" and the cost as pending
 Sessions
 [ ] sessionView: opening, open, closed, failed, with time left against max_duration_s
 [ ] a session cost reads corrected after it grows, with the explanation
 [ ] open and close go through the keyed engine only from the Builder (structure)
-[ ] socket relay keeps the actor key server-side                                [?] Q2
+[ ] the server-side socket client keeps the actor key on the server; the browser reads an HTTP stream
 Reporting
 [ ] My jobs shows the mode of each job
 [ ] a job with no usage reads "no usage reported"
@@ -183,7 +189,7 @@ endpoint is a socket.
 
 ## Consumer impact
 
-The console is the consumer. ChatLPT, inference-gateway and the enterprise desk are unaffected.
+The console is the consumer. ChatLPT and inference-gateway are unaffected.
 
 ## Alternatives considered
 
@@ -194,15 +200,32 @@ The console is the consumer. ChatLPT, inference-gateway and the enterprise desk 
 - **The browser holding a realtime token (#73) instead of a server relay.** Possible once the engine
   ships the token route; the relay keeps the console's rule that the browser holds no engine key.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** Failure categories and their wording come from ISS-28; lock the list there first, then here.
-- **Q2.** Persistent endpoint for the matrix: an HTTP endpoint (no socket, simplest), or realtime
-  speech-to-text over a socket (needs a relay route or #73's token route)? Recommended: whatever ISS-27
-  ships first, relayed server-side.
-- **Q3.** Async job: FLUX schnell with `mode="async"` (recommended), or a job that is naturally long?
-- **Q4.** Scripted engine for the browser smoke: a fixture script in the console using builder-core's
-  `testing` package (recommended), or a fixture server shipped by builder-core?
+Locked by Mike on 13 November 2026. "The console" in this guide is the builder console,
+`NE-Build-Track/builder-core-console`.
+
+- **Q1, failure wording:** the console reads the engine's `category` and `recovery` fields (ISS-28) and
+  holds no table of failure kinds. One pure function maps each `recovery` value to a title, a sentence and
+  what the builder can do.
+- **Q2, the persistent endpoint:** file-driven, with the socket on the server side. The builder picks an
+  audio file; the console's server opens the WebSocket to the engine's session as a client, streams the
+  file, and passes transcripts back to the browser over an ordinary HTTP stream. No WebSocket upgrade in
+  Next.js, no microphone, and the engine key stays on the server. The same panel works with the CPU-only
+  fallback runner of ISS-27. A live browser relay can replace it when the token route exists (#120).
+- **Q3, the async job:** FLUX schnell with `mode="async"`. No long-running job is selected.
+- **Q4, the scripted engine:** a short Python fixture script in the console's repository, using
+  builder-core's public `testing` package at the pinned tag. Builder-core ships no fixture server.
+
+**Other decisions that touch this guide.**
+
+- **REST problems are RFC 9457** (ISS-29), so the console's error parsing changes in the same work. Lists
+  page with an opaque cursor, and the grant funding route is renamed.
+- **A cancel for queued jobs** exists (ISS-26), so the job page can offer it.
+- **The engine's frames on a session socket** are a first `start` and a last `end` frame (ISS-27). The
+  server-side client reads the job id and the ending from them.
+- **Reconciliation may gain a figure**, "fees of purged jobs" (ISS-35), which the console would then show.
+- **Admin from a token claim** (ISS-33) changes the Keycloak stack's settings.
 
 ## Delivery slices
 

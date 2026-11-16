@@ -4,6 +4,7 @@
 | --- | --- | --- |
 | [core-beliefs.md](core-beliefs.md) | Accepted | Partly enforced by `tests/structure/` |
 | [m3-decisions.md](m3-decisions.md) | Decisions after the M2 close-out: streaming, abandoned streams, runner metadata, the stream lifecycle fixes, paid failover, repeat-safe commands, payment failures, rates and discovery (D29–D63) | yes |
+| [m4-decisions.md](m4-decisions.md) | Decisions for M4: the order of work, the hardening rules, and the locked answers for each M4 guide (D64–D81) |
 | [m3-guides/](m3-guides/index.md) | One implementation guide per remaining M3 engine change (architecture, code areas, test plan, open questions) | Built or superseded; M3 closed 9 November 2026. Kept as the proposals the decisions came from (verified against `releases/m3` `d3df806`) |
 | [m4-guides/](m4-guides/index.md) | One implementation guide per M4 tracker (ISS-26 to ISS-36, and ISS-46) | Proposals, verified against `releases/m3` `d3df806` (ISS-46 against `1514212`) |
 | [m5-guides/](m5-guides/index.md) | One implementation guide per M5 tracker (ISS-37 to ISS-39) | Proposals, verified against `releases/m3` `d3df806` |

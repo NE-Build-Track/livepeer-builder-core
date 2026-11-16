@@ -267,6 +267,36 @@ async def test_a_command_refused_before_any_step_applied_still_frees_its_referen
     assert manager.calls.count("fund_allocation") == 2
 
 
+async def test_a_refusal_on_a_resumed_run_keeps_its_reference(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    store: SqlStore,
+    clock: FixedClock,
+) -> None:
+    """A resumed run follows an attempt whose outcome is unknown: the provider may have applied a call
+    that timed out, with nothing noted. So a refusal on it never frees the reference (review of #128):
+    freed, the next repeat would run as a new command, and another request could take the reference."""
+    engine = await make_engine()
+    await engine.payments.provision(admin, provision_request(amount="0"))
+    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.fund(admin, "default", "alice", request)
+    clock.advance(120)
+    manager.fail_once("fund_allocation", ProviderError(400, "bad amount"))
+    with pytest.raises(ProviderError):
+        await engine.payments.fund(admin, "default", "alice", request)  # resumed, and refused
+    held = await store.get_operation("default", "operator", "topup-1")
+    assert held is not None and held.state == "started"
+    other = request.model_copy(update={"amount": usd("9")})
+    with pytest.raises(OperationConflict):
+        await engine.payments.fund(admin, "default", "alice", other)
+    clock.advance(120)
+    await engine.payments.fund(admin, "default", "alice", request)  # the same request still resumes
+    assert manager.allocations["alloc_1"].granted == Decimal("10")
+
+
 async def test_a_rotation_resumed_after_storing_the_secret_failed_revokes_the_old_key_once(
     make_engine: EngineFactory,
     admin: ActorContext,

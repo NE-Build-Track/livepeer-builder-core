@@ -8,7 +8,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
-| `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate`. With `false`, `start()` compares the database's revision with the package's and refuses to start on any mismatch, behind or ahead, with a message naming both revisions and `lpb migrate`. It checks at start only, so replicas already running through a rolling deploy keep running |
+| `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate`. With `false`, `start()` compares the database's revision with the package's and refuses to start on any mismatch, behind or ahead. The message names both revisions and the database that was checked, says to run `lpb migrate` against that database when it is behind, and says to start the release that migrated it when its revision is one this package does not know. It checks at start only, so replicas already running through a rolling deploy keep running |
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
 | `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused), with no userinfo, query or fragment. Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record the reader cannot use is skipped (`discovery.inventory_skipped`) |
 | `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
@@ -18,7 +18,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required in `per_actor` mode with a payment provider when the built-in secret store is used: without it the engine refuses to start ([payments.md](contracts/payments.md#provisioning)) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
-| `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | How many times one runner call may retry a 402 payment challenge (≥ 0). One runner call signs at most one payment plus this many retries: 4 signatures at the default. A signer's 480 (refresh) is not a signature: the call asks the runner for a fresh challenge, and its unsigned requests, the first included, have a bound of the same size. A runner still asking after the last signature fails the attempt `http` (402); a refresh past its bound is `payment_refused` |
+| `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
 | `LPB_MAX_PAID_ATTEMPTS` | `2` | Paid attempts a job may fail over from (1 to 10; `1` turns paid failover off). The operator pays for them, so the caller's `max_attempts` cannot raise it (D55) |
@@ -74,9 +74,14 @@ SQL and parameters, goes to the log with the code, in `discovery.failed` and `co
 
 | Code | Meaning |
 | --- | --- |
-| `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with an error status, or raised anything not listed below |
-| `invalid_answer` | It answered with something the engine could not read: not JSON, not the expected shape, a value it cannot convert |
+| `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with a status that is not 2xx (an error, or a redirect), or raised anything not listed below |
+| `invalid_answer` | It answered 2xx with something the engine could not read: a content encoding that does not decode, not JSON, not the expected shape, a value it cannot convert |
 | `store_error` | Cost sync failed after the usage source answered: writing or matching the usage in the engine's store |
+
+The codes are a closed set in the contract (`SourceFailureCode` for `discovery_error`, `FailureCode` for
+`cost_sync_error`), so the OpenAPI schema lists them and nothing else can be written there. The shipped
+adapters decide the code where they read the answer; a supplied source's failure is read by its
+exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
 
 `scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
@@ -107,7 +112,7 @@ SQL and parameters, goes to the log with the code, in `discovery.failed` and `co
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |
 | `start()` fails (a store error, or a cancellation) | The engine stops itself and closes what `create` opened before the error reaches the caller; create a new engine |
-| `start()` again on a running engine | Refused with `RuntimeError`; the running engine and its one set of background loops carry on (#113, C27) |
+| `start()` again on a running engine | Refused with `RuntimeError`; the running engine and its one set of background loops carry on (#113, C27). The REST app's lifespan (`create_app(engine)`) on a running engine is refused the same way and does not stop it |
 | The engine stops with open streams | They get `LPB_STREAM_DRAIN_TIMEOUT_S` to finish, then end `abandoned`; `stop()` returns only after every end is written |
 
 There is no HA, exactly-once or SLA. See

@@ -1,5 +1,10 @@
 # ISS-46: The versioned integration events feed
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D75 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 2 November 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\
 **Tracker:** ISS-46 ([Network-Engineering-SPE#51](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/51)),
@@ -79,7 +84,7 @@ Push delivery (#86's CloudEvents worker) is a consumer of the same table, in its
 
 ### The event log
 
-`lpb_events` (migration `0012`): `sequence` (integer, primary key), `id` (unique), `type`,
+`lpb_events` (a new migration, numbered when written): `sequence` (integer, primary key), `id` (unique), `type`,
 `schema_version`, `occurred_at`, `application_id`, `actor_id`, `job_id`, `operation_ref`, `payload` (JSON).
 Indexes on `(application_id, sequence)` and `(application_id, actor_id, sequence)`. `job_id` has **no
 foreign key**: the schema's convention is `ondelete="CASCADE"` (`store/schema.py:105,205`), which would
@@ -274,7 +279,7 @@ so it can be ahead of the feed by one sync interval. A failure in the feed's rea
 job. Push delivery (Q1) runs in its own task, with its own cursor per subscription. A failing
 collector raises lag in health; it never blocks a job or another tenant's delivery.
 
-### Push delivery (if Q1 brings it into M4)
+### Push delivery (stretch ticket #124)
 
 #86's design, narrowed to a consumer of `lpb_events`:
 
@@ -335,7 +340,7 @@ collector raises lag in health; it never blocks a job or another tenant's delive
 | File | Change |
 | --- | --- |
 | `store/sql.py` | **Tidy first:** move the job and attempt writes into `store/jobs.py` (no behavior change); the file is at 464 of 500 lines |
-| `store/schema.py`, migration `0012` | `lpb_events` (no foreign key on `job_id`), `lpb_event_log` and `lpb_event_floor` with their seed rows, `lpb_cost_projections.revision` (1 on rows already final) (`lpb_event_subscriptions` in the push slice) |
+| `store/schema.py`, a new migration | `lpb_events` (no foreign key on `job_id`), `lpb_event_log` and `lpb_event_floor` with their seed rows, `lpb_cost_projections.revision` (1 on rows already final) (`lpb_event_subscriptions` in the push slice) |
 | `store/events.py` (new) | `append(conn, ...)` (sequence last, skip on existing id), `last_cost_event(conn, job_id, revision)` (by id), `events_after(scope, cursor, limit, epoch)` (floor, epoch, scoped head and page in one statement), `purge_before(cutoff)` (own transaction, prefix only), `new_epoch()` |
 | `store/jobs.py`, `store/sql.py` | `create_job`; `finish_job` (ISS-28's G9 guard: `running` or `queued` only; reads the job back; returns whether it finished); `set_usage` (guarded on `usage IS NULL`, returns whether it stored); `save_projection` (reads the job's correlation fields, compares with the baseline, compare-and-set on `revision`). Each appends in its own transaction |
 | `store/retention.py`, `store/maintenance.py`, `runtime/engine.py`, `config.py` | `LPB_RETENTION_EVENTS_DAYS`; `purge()` takes it; `_retention_loop` runs when any retention is set; `PurgeReport.events_deleted` |
@@ -407,7 +412,7 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] a failed write after the append rolls the event back with the change (both backends)
 [ ] PostgreSQL: a later transaction cannot commit an earlier-visible sequence (two connections)
 [ ] the same id twice writes one row
-[ ] scope: an actor sees only its own events; an auditor and an admin their application   [?] Q2
+[ ] scope: an actor sees only its own events; an auditor and an admin their application
 [ ] PostgreSQL: an event committed while a page is read is never skipped by next_cursor (one snapshot)
 [ ] without events.read: 403 before any lookup
 [ ] paging: limit honoured; next_cursor is the last sequence; an empty page returns the cursor unchanged
@@ -422,7 +427,7 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 [ ] cursor above the global head: 410; after a restore, an old epoch: 410; the resync then matches the store
 [ ] resync: every job and its cost rebuilt from /v1/jobs and /v1/jobs/{id}/cost (after ISS-29's keyset paging)
 [ ] FakeEngine: job and usage events, ids and scope match the engine; a second usage report is refused; cost events via the hook
-[ ] push slice: delivered in order, cursor moves on 2xx only, Retry-After honoured, HMAC verifies  [?] Q1
+[ ] push slice (#124): delivered in order, cursor moves on 2xx only, Retry-After honoured, HMAC verifies
 [ ] push slice: non-HTTPS, private-resolving, rebinding and redirecting targets refused (pinned address)
 [ ] push slice: NAT64, IPv4-compatible, site-local and CGNAT targets refused; one bad address refuses the name
 [ ] push slice: a private target works only when listed in LPB_EVENTS_PRIVATE_TARGETS; no API sets it
@@ -468,41 +473,49 @@ Tidy first (no behavior change): job writes move to store/jobs.py; the whole sui
 - **Writing events from the services** after the store call. Rejected: it is a dual write, and a crash
   between the two loses the event.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** M4 delivers the pull feed as its acceptance (recommended), with push as a separate slice that
-  may follow. Or both pull and push in M4?
-- **Q2.** Scope. (a) An ordinary actor reads only its own events (recommended, D44), or its whole
-  application, as `events.md` says? (b) An admin reads its own application, as the job and cost lists
-  do (recommended), or every application, as `events.md` says? An operator-wide view would then need
-  its own parameter, whose absence keeps the admin in its own application. That is the reverse of
-  `GET /v1/admin/actors`, where an admin's default is every application and `application_id` narrows
-  it (`services/payments.py:203`). The admin credential may act on any application (`DefaultPolicy`),
-  so this default has to come from the feed's own query, as it does in `list_jobs`.
-- **Q3.** Allocate sequences with the counter row (recommended), or with a PostgreSQL advisory lock taken
-  at the same point?
-- **Q4.** Must `LPB_RETENTION_EVENTS_DAYS` be at least `LPB_RETENTION_JOBS_DAYS`, enforced at startup
-  like `operation_stale_s`? Recommended: yes. And does M4 keep the floor per scope, so a tenant with no
-  events of its own is never sent a 410 it does not need? Recommended: no, a global floor for M4; the
-  repeat is one resync per purge run, and only with event retention on.
-- **Q5.** A `cost.corrected` payload is the new `JobCost` only (recommended; consumers keep the previous
-  one), or the `JobCost` plus the previous fees, as #86 proposes for append-only meters?
-- **Q6.** ISS-26's async jobs: `job.created` at submit and `job.finished` at the end, with no new type
-  (recommended), or add `job.started` (a `schema_version` question, not a breaking one)?
-- **Q7.** No backfill for jobs that existed before the migration (recommended), or synthesize their
-  events once? Either way, older jobs emit events from the migration on, so consumers must accept a
-  `job.finished` or `cost.corrected` for a job they never saw created.
-- **Q8.** Does any change in content with the same job total count as `cost.corrected`, such as an
-  attempt's class changing or a fee moving between attempts? Recommended: yes, with the label written
-  by `save_projection` from the same comparison, so the projection and the event agree. Today the label
-  changes only when the total changes.
-- **Q9.** Restore: an `epoch` on `EventPage` and the 410, with `lpb restore` and `lpb events new-epoch`
-  changing it (recommended), or document that every consumer must resync by hand after a restore?
+Locked by Mike on 12 and 13 November 2026.
+
+- **Q1, pull or push:** the pull feed is ISS-46, in the first three slices. Push delivery is the stretch
+  ticket #124, which may move to M5.
+- **Q2, scope:** an ordinary actor reads only its own events. An auditor or an admin reads every actor's
+  events in its own application. `events.md` is corrected to match. A feed across applications for an
+  operator is not in M4.
+- **Q3, sequence numbers:** the counter row, on both databases. No advisory lock.
+- **Q4, retention:** `LPB_RETENTION_EVENTS_DAYS` may be any value, with no required relation to job
+  retention and no startup check. One global floor, not one per tenant. **This replaces the
+  recommendation** that events be kept at least as long as jobs. A consumer behind the floor gets a 410
+  and resyncs, and the docs explain that.
+- **Q5, a correction's payload:** the new `JobCost` only. Whether a correction also carries the previous
+  fees is decided with #124.
+- **Q6, async jobs:** `job.created` at submit and `job.finished` at the end. No `job.started`.
+- **Q7, jobs from before the feed:** no backfill. A consumer must accept an event for a job it never saw
+  created.
+- **Q8, what counts as a correction:** any change in a cost's content, with the label written by
+  `save_projection` from the same comparison.
+- **Q9, restore:** the `epoch`, with `lpb restore` and `lpb events new-epoch` changing it.
+
+**Other decisions that touch this guide.**
+
+- **A cancelled job** (ISS-26) is `job.finished` with reason `cancelled`. No new event type.
+- **A repeated usage report** (#115): an identical repeat answers 200 with the stored usage and writes no
+  event; a report with different quantities is refused. This replaces the guide's "a second report …
+  answers `InvalidRequest`" for the identical case.
+- **The `finish_job` state guard** is shared with ISS-28 (its G9). Whichever ticket lands first adds it.
+- **Migration numbers.** The guide names migration `0012`. It is numbered when it is written.
+  Secret-reference columns for push are unbounded text (#115).
+- **Paging for the resync.** ISS-29 pages lists with an opaque cursor, and the 410 body is an RFC 9457
+  problem with `code`, `floor`, `resume_after` and `epoch` as extension fields.
+- **The commerce fixture** of ISS-32 consumes this feed from the start, so its event slice follows slice 3
+  here.
+- **`lpb costs verify`** (ISS-35) leaves `status` and `revision` out of its comparison, because both
+  depend on history.
 
 ## Delivery slices
 
 1. **Tidy:** split `store/sql.py`; move the event contracts out of `reserved`; no behavior change.
-2. **Log:** migration `0012`, `store/events.py`, emission in the four write paths, ordering on both
+2. **Log:** the migration, `store/events.py`, emission in the four write paths, ordering on both
    backends.
 3. **Feed:** `StoreEventFeed`, scope, paging, retention and the 410; FakeEngine; docs. **ISS-46's
    acceptance is met here.**

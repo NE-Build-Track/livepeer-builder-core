@@ -11,6 +11,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from alembic.util import CommandError
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -31,6 +32,34 @@ def head_revision() -> str:
     if head is None:
         raise RuntimeError(f"no migrations found in {MIGRATIONS_DIR}")
     return head
+
+
+def schema_mismatch(database_revision: str | None, database: str) -> str | None:
+    """Why ``database`` cannot run with this package, or None when its schema is at this package's head.
+
+    The message names the database that was checked: ``lpb migrate`` migrates ``LPB_DATABASE_URL``, and a
+    supplied store may be another one. It says to migrate only when that can work: a revision this
+    package does not know was made by another release, and ``lpb migrate`` from here cannot change it."""
+    package = head_revision()
+    if database_revision == package:
+        return None
+    here = f"the database {database} is at schema revision {database_revision or 'none'}"
+    if database_revision is not None and not _known(database_revision):
+        return (
+            f"{here}, which this package (at {package}) does not know: another release migrated it. "
+            "Start that release instead; this package cannot migrate it (LPB_AUTO_MIGRATE is false)"
+        )
+    return (
+        f"{here} and this package needs {package}: run `lpb migrate` with this package, with "
+        "LPB_DATABASE_URL pointing at that database, before starting (LPB_AUTO_MIGRATE is false)"
+    )
+
+
+def _known(revision: str) -> bool:
+    try:
+        return ScriptDirectory.from_config(alembic_config()).get_revision(revision) is not None
+    except CommandError:
+        return False
 
 
 async def upgrade(engine: AsyncEngine, revision: str = "head") -> None:

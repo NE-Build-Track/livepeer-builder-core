@@ -1,5 +1,10 @@
 # ISS-36: Funded journeys across the acceptance matrix
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D80 in
+> [m4-decisions.md](../m4-decisions.md).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-36 ([Network-Engineering-SPE#50](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/50)),
 source task V2.\
@@ -152,7 +157,7 @@ lists exactly that session's usage rows.
 [ ] failover job → both attempts, billable apart from fees
 [ ] no token or secret appears in the output (scan for lpk_, lpg_, Bearer)
 [ ] the collector sends only GET requests
-[ ] pins are read from the running services' reported versions, not typed by hand   [?] Q3
+[ ] pins are read from the running services' reported versions, not typed by hand
 ```
 
 **Definition of done.** Every row's record present with all seven outcomes and its limitations; the
@@ -183,13 +188,36 @@ setup (a separately operated signer and Batteries) is a deploy change in its rep
 - **A separate failure row with a paid failure.** Rejected: a pre-payment failure and the ISS-35
   restart show outcome 5 without paying for a failure on purpose.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** The seven rows above, or a smaller set (for example, drop F and put MCP on configuration 2 in E)?
-- **Q2.** Cap: $3 across dry and final runs (recommended), or keep $1?
-- **Q3.** Where the evidence lives: builder-core `docs/references/evidence/` (recommended, home ENGINE),
-  or the console repository as for ISS-25?
-- **Q4.** Does M3 decision 8 (agent runs, Mike watches) carry to M4 unchanged?
+Locked by Mike on 13 November 2026.
+
+- **Q1, the rows:** the seven rows above.
+  - Row C is FLUX schnell with `mode="async"`.
+  - Row D is the `realtime-transcription` session, driven from an audio file, or the CPU-only fallback
+    runner of ISS-27.
+  - The MCP client in rows E and F is Claude Code.
+  - No row needs runners that follow the new runner standard.
+- **Q2, the cap:** $3 across dry and final runs. The session rate for `realtime-transcription` is unknown,
+  and it is read from the catalog and stated before the first paid session.
+- **Q3, where the evidence lives:** in builder-core, under `docs/references/evidence/`, beside the
+  collector. Evidence about the builder console alone stays in its repository (ISS-25, ISS-33). Each
+  record is read before it is committed.
+- **Q4, the procedure:** M3 decision 8 carries to M4. The agent runs each step and Mike watches; a dry run
+  first, the final run on merged code. Adjustments: the cap is $3; the JWT rows issue no engine key; on
+  configuration 2 the funding step is to show the operator's funded allocation. John reviews the written
+  evidence afterwards.
+
+**Other decisions that touch this guide.**
+
+- **Not verified:** Claude Code signing in to the Keycloak realm with OAuth. If it fails, rows E and F
+  fall back to an engine key, and row B still shows the JWT sign-in.
+- **The pins have moved** (#117): livepeer/node to a commit at or after `2364436`, Batteries to `v0.0.3`,
+  the SDK to `7dc2a07`. The upstream table in this guide names the old node pin.
+- **The candidate** every client pins is a `v0.3.0rcN` tag (ISS-32).
+- **Admin from a token claim** (ISS-33) changes the JWT rows' settings.
+- **ISS-48** is the last feature of M4 and may move to M5. The M4 gate, and this matrix, do not wait for
+  it.
 
 ## Delivery slices
 

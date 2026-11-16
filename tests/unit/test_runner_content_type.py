@@ -10,6 +10,7 @@ transport keeps the header's bytes read as Latin-1, which goes back out as the s
 """
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -180,11 +181,10 @@ async def test_rest_answers_with_the_content_type_bytes_the_runner_sent_and_the_
         await run_both_ways_then_read(client, alice, net.runner().app, content_type.encode())
 
 
-@pytest.fixture
-async def raw_runner(request: pytest.FixtureRequest) -> AsyncIterator[Runner]:
-    """A loopback runner that answers every request with exactly ``request.param`` as its Content-Type:
-    aiohttp's server writes header text as UTF-8, so it cannot send a byte that is not."""
-    head = b"HTTP/1.1 200 OK\r\nContent-Type: " + request.param + b"\r\nContent-Length: 5\r\n"
+async def answering(head: bytes) -> AsyncIterator[Runner]:
+    """A loopback runner that answers every request with exactly the header lines in ``head``: aiohttp's
+    server writes header text as UTF-8, so it cannot send a byte that is not."""
+    head = b"HTTP/1.1 200 OK\r\n" + head + b"\r\nContent-Length: 5\r\n"
 
     async def answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         asked = await reader.readuntil(b"\r\n\r\n")
@@ -203,6 +203,13 @@ async def raw_runner(request: pytest.FixtureRequest) -> AsyncIterator[Runner]:
     finally:
         server.close()
         await server.wait_closed()
+
+
+@pytest.fixture
+async def raw_runner(request: pytest.FixtureRequest) -> AsyncIterator[Runner]:
+    """A loopback runner whose Content-Type is exactly ``request.param``."""
+    async for value in answering(b"Content-Type: " + request.param):
+        yield value
 
 
 @pytest.mark.parametrize(("raw_runner", "sent"), RAW, ids=RAW_IDS, indirect=["raw_runner"])
@@ -224,3 +231,45 @@ async def test_rest_answers_a_content_type_that_is_not_utf_8_byte_for_byte_and_t
 ) -> None:
     async for client, alice in serving(make_engine, admin, raw_runner):
         await run_both_ways_then_read(client, alice, APP, sent)
+
+
+# -- every other header of a stream (review of #141) ------------------------------------------------------
+
+# (a header line a runner sends, the pair an embedded caller reads): the bytes read as Latin-1, as the
+# content type is. aiohttp reads them as UTF-8 and writes a byte that is not as a lone surrogate.
+HEADERS = [
+    (b"X-Title: caf\xe9", ("X-Title", "caf\xe9")),  # one Latin-1 byte, no UTF-8
+    (b"X-Trace: \xff\xfe", ("X-Trace", "\xff\xfe")),
+    (b"X-Title: caf\xc3\xa9", ("X-Title", "caf\xc3\xa9")),  # written as UTF-8: its two bytes, not one e-acute
+    (b"X-Trace: plain", ("X-Trace", "plain")),
+]
+HEADER_IDS = ["latin-1 byte", "ff fe", "utf-8", "ascii"]
+
+
+@pytest.fixture
+async def header_runner(request: pytest.FixtureRequest) -> AsyncIterator[Runner]:
+    """A loopback runner that answers JSON with exactly ``request.param`` as one more header line."""
+    async for value in answering(b"Content-Type: application/json\r\n" + request.param):
+        yield value
+
+
+@pytest.mark.parametrize(
+    ("header_runner", "line", "pair"),
+    [(line, line, pair) for line, pair in HEADERS],
+    ids=HEADER_IDS,
+    indirect=["header_runner"],
+)
+async def test_a_stream_s_headers_are_the_runner_s_bytes_read_as_latin_1(
+    header_runner: Runner, line: bytes, pair: tuple[str, str]
+) -> None:
+    """``JobStreamApi.headers`` is for an embedded caller to log, store or send on. A lone surrogate in
+    one value made each of those a ``UnicodeEncodeError``, as it did for the content type."""
+    stream = await SdkRunnerTransport(None).open(header_runner, JobRequest(app=APP), None)
+    try:
+        headers = stream.headers
+    finally:
+        await stream.aclose()
+    assert pair in headers and ("Content-Type", "application/json") in headers
+    assert json.dumps(headers, ensure_ascii=False).encode()  # it can be logged and stored
+    sent_on = [name.encode("latin-1") + b": " + value.encode("latin-1") for name, value in headers]
+    assert line in sent_on  # and sent on, as the bytes that came

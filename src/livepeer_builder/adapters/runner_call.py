@@ -47,7 +47,7 @@ from livepeer_gateway.remote_signer import (
 
 from livepeer_builder.adapters.call_timer import CallTimer
 from livepeer_builder.adapters.runner_address import as_built, origin
-from livepeer_builder.adapters.runner_content_type import content_type_as_sent
+from livepeer_builder.adapters.runner_content_type import content_type_as_sent, headers_as_sent
 from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
 from livepeer_builder.adapters.signer_failures import (
     classify,
@@ -411,7 +411,7 @@ class SdkRunnerStream:
     @property
     def headers(self) -> tuple[tuple[str, str], ...]:
         """Every response header pair, repeated names included, as the runner sent them."""
-        return tuple(self._response.headers.items())
+        return headers_as_sent(self._response.raw_headers)
 
     @property
     def manifest_ids(self) -> tuple[str, ...]:

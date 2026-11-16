@@ -467,6 +467,13 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   length limit is the HTTP client's for one header, 8190 bytes; a longer one fails the call as a runner
   error.
 
+  **Upgrading:** before this release those three fields held the media type alone, in lower case
+  (`application/json`), whatever parameters the runner sent. A caller that compares one with a bare
+  type (`content_type == "application/json"`) stops matching a runner that sends
+  `application/json; charset=utf-8`: read the media type as the part before the first `;`, without
+  regard to case. Job records written before the upgrade keep the bare value, so `GET /v1/jobs` and
+  `GET /v1/jobs/{id}` over retained jobs answer with both shapes.
+
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
 transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and
 the REST streaming route answers 400 (D33).
@@ -617,7 +624,12 @@ default `*/*`. Signer credentials and the payment headers stay the transport's.
 
 `RunnerStream.headers` and `JobStreamApi.headers` expose response header pairs to embedded
 callers, preserving repeated fields as the runner sent them. Custom stream implementations must provide
-this property (an empty tuple when no headers exist). The shipped fakes support it. These
+this property (an empty tuple when no headers exist). The shipped fakes support it. The SDK
+transport reads each name and value as its bytes in Latin-1, as it reads the `Content-Type` (#113, C27):
+no value holds a lone surrogate, so every pair can be logged, written as JSON and sent on as the bytes
+the runner sent. A value the runner wrote in UTF-8 reads as those bytes (`é` as `Ã©`); before this
+release it read as `é`, and a byte that is not UTF-8 as a lone surrogate. Nothing is replaced or left
+out here, a control character included. These
 headers are untrusted; applications must filter cookies, credentials, hop-by-hop fields and
 content framing before forwarding them to another client. The stock REST stream keeps its
 existing header policy. Buffered SDK results do not expose a new header guarantee.

@@ -517,7 +517,7 @@ should handle a failed load ("the provider no longer serves this file") instead 
 or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
 (default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
 ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
-is 422. Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
+is 422, and so is one that UTC cannot hold ([access.md](access.md#answers)). Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
 them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job, or a missing one, is
 404.
 

@@ -8,14 +8,12 @@ docs/generated/openapi.json and checked for drift in CI.
 
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime
 
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
@@ -72,6 +70,7 @@ from livepeer_builder.http.bodies import (
     UsageBody,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
+from livepeer_builder.http.params import PathId, QueryId, QueryInstant, QueryTime
 from livepeer_builder.http.streaming import stream_response
 from livepeer_builder.http.unprocessable import install_unprocessable_handler
 
@@ -174,12 +173,12 @@ def create_app(
         return health
 
     @app.get("/v1/offerings", response_model=list[Offering])
-    async def offerings(app_name: Annotated[str | None, Query(alias="app")] = None) -> list[Offering]:
+    async def offerings(app_name: Annotated[StoredText | None, Query(alias="app")] = None) -> list[Offering]:
         # Public (#5): the catalog names no runner URL, starts no work and spends nothing.
         return engine.discovery.offerings(app=app_name)
 
     @app.get("/v1/runners", response_model=list[Runner])
-    async def runners(actor: Actor, app_name: Annotated[str, Query(alias="app")]) -> list[Runner]:
+    async def runners(actor: Actor, app_name: Annotated[StoredText, Query(alias="app")]) -> list[Runner]:
         # App names contain "/" (livepeer-example/hello), so they travel as a query parameter.
         return engine.discovery.runners(actor, app_name)
 
@@ -217,7 +216,7 @@ def create_app(
 
     @app.get("/v1/jobs", response_model=list[Job])
     async def list_jobs(
-        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: AwareDatetime | None = None
+        actor: Actor, limit: Annotated[int, Query(ge=1, le=500)] = 50, before: QueryInstant = None
     ) -> list[Job]:
         """Newest first; ``before`` (an ISO-8601 time with its offset) is the last page's oldest
         ``created_at``, for the next page (D59)."""
@@ -247,14 +246,14 @@ def create_app(
     @app.get("/v1/costs/summary", response_model=CostSummary)
     async def cost_summary(
         actor: Actor,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        actor_id: str | None = None,
+        start: QueryTime = None,
+        end: QueryTime = None,
+        actor_id: QueryId = None,
     ) -> CostSummary:
         return await engine.costs.summary(actor, start, end, actor_id)  # the engine's clock fills the window
 
     @app.get("/v1/allowance", response_model=Allowance)
-    async def allowance(actor: Actor, actor_id: str | None = None) -> Allowance:
+    async def allowance(actor: Actor, actor_id: QueryId = None) -> Allowance:
         return await engine.payments.allowance(actor, actor_id)
 
     @app.get("/v1/events", response_model=EventPage)
@@ -286,27 +285,29 @@ def create_app(
             return _replay(response, issued)
 
         @app.get("/v1/admin/keys", response_model=list[AccessKey])
-        async def list_keys(actor: Actor, application_id: str | None = None) -> list[AccessKey]:
+        async def list_keys(actor: Actor, application_id: QueryId = None) -> list[AccessKey]:
             return await keys.list_keys(actor, application_id)
 
         @app.get("/v1/admin/keys/{key_id}", response_model=AccessKey)
-        async def get_key(actor: Actor, key_id: str) -> AccessKey:
+        async def get_key(actor: Actor, key_id: PathId) -> AccessKey:
             return await keys.get(actor, key_id)
 
         @app.post("/v1/admin/keys/{key_id}/rotate", response_model=IssuedKey, status_code=201)
-        async def rotate_key(actor: Actor, key_id: str, body: RotateKeyBody, response: Response) -> IssuedKey:
+        async def rotate_key(
+            actor: Actor, key_id: PathId, body: RotateKeyBody, response: Response
+        ) -> IssuedKey:
             rotated = await keys.rotate(actor, key_id, label=body.label, operation_ref=body.operation_ref)
             return _replay(response, rotated)
 
         @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
-        async def revoke_key(actor: Actor, key_id: str) -> Response:
+        async def revoke_key(actor: Actor, key_id: PathId) -> Response:
             await keys.revoke(actor, key_id)
             return Response(status_code=204)
 
     @app.get("/v1/admin/actors", response_model=list[KnownActor])
     async def list_actors(
         actor: Actor,
-        application_id: str | None = None,
+        application_id: QueryId = None,
         status: AllocationStatus | None = None,
         provisioned: bool | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 500,
@@ -319,7 +320,7 @@ def create_app(
     base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"
 
     @app.get(base, response_model=ProvisionedActor)
-    async def get_actor(actor: Actor, application_id: str, actor_id: str) -> ProvisionedActor:
+    async def get_actor(actor: Actor, application_id: PathId, actor_id: PathId) -> ProvisionedActor:
         return await engine.payments.get_actor(actor, application_id, actor_id)
 
     @app.post(base, response_model=ProvisionedActor, status_code=201)
@@ -342,7 +343,7 @@ def create_app(
 
     @app.post(base + "/fund", response_model=ProvisionedActor)
     async def fund(
-        actor: Actor, application_id: str, actor_id: str, body: FundRequest, response: Response
+        actor: Actor, application_id: PathId, actor_id: PathId, body: FundRequest, response: Response
     ) -> ProvisionedActor:
         return _replay(response, await engine.payments.fund(actor, application_id, actor_id, body))
 
@@ -366,24 +367,24 @@ def create_app(
 
     @app.post(base + "/status", response_model=ProvisionedActor)
     async def set_status(
-        actor: Actor, application_id: str, actor_id: str, body: StatusBody
+        actor: Actor, application_id: PathId, actor_id: PathId, body: StatusBody
     ) -> ProvisionedActor:
         return await engine.payments.set_status(actor, application_id, actor_id, body.status)
 
     @app.post(base + "/revoke", response_model=ProvisionedActor)
-    async def revoke(actor: Actor, application_id: str, actor_id: str) -> ProvisionedActor:
+    async def revoke(actor: Actor, application_id: PathId, actor_id: PathId) -> ProvisionedActor:
         return await engine.payments.revoke(actor, application_id, actor_id)
 
     @app.post(base + "/rotate-key", response_model=ProvisionedActor)
     async def rotate(
-        actor: Actor, application_id: str, actor_id: str, body: RotateBody, response: Response
+        actor: Actor, application_id: PathId, actor_id: PathId, body: RotateBody, response: Response
     ) -> ProvisionedActor:
         rotated = await engine.payments.rotate_key(actor, application_id, actor_id, body.operation_ref)
         return _replay(response, rotated)
 
     @app.get("/v1/admin/reconciliation", response_model=Reconciliation)
     async def reconcile(
-        actor: Actor, application_id: str = "default", actor_id: str | None = None
+        actor: Actor, application_id: Annotated[StoredText, Query()] = "default", actor_id: QueryId = None
     ) -> Reconciliation:
         return await engine.costs.reconcile(actor, application_id, actor_id)
 

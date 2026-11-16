@@ -29,7 +29,9 @@ def _no_nul(value: str) -> str:
 
 # Text a record keeps (an id, a label, a reference): at most 200 characters (``store.schema.ID``) and no
 # NUL. SQLite takes anything; PostgreSQL refuses either when the row is written, which for provisioning
-# is after the provider key was funded. So it is refused where the request is parsed.
+# is after the provider key was funded. So it is refused where the request is parsed. A lone surrogate
+# (JSON's ``"\ud800"``) is refused there too, by pydantic itself: text with a length limit must be valid
+# Unicode (``string_unicode``). ``tests/unit/test_stored_text.py`` pins that.
 StoredText = Annotated[str, Field(max_length=200), AfterValidator(_no_nul)]
 
 

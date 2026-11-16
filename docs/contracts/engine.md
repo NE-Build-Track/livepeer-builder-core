@@ -578,6 +578,13 @@ succeeded and the second replaced the first.
 `FakeEngine` (`livepeer_builder.testing`) answers by the same rule, from the engine's own function:
 it keeps the usage on its job and answers a repeat as the table says.
 
+**Upgrading (tests that use `FakeEngine`):** the fake now refuses what the engine refuses, in the
+engine's words. A report with no quantities (`{}`) is refused, where the fake took it. A negative
+quantity is refused with "usage needs at least one non-negative quantity", where the fake said "usage
+quantities must be non-negative". A second report with other quantities is refused, where the fake took
+every report. A test that matched the old text, or relied on one of those reports passing, needs the
+change. The engine's own answers to these three are as they were.
+
 The conditional write is optional for a store (`UsageOnceRepo.set_usage_once` in `protocols`). The
 packaged SQL store has it. With a supplied store without it, the engine checks the job it read and
 calls `set_usage`, which updates unconditionally: a repeat is answered as in the table, but two reports

@@ -43,7 +43,7 @@ from livepeer_builder.store.matching import (
 )
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.operations import SqlOperations
-from livepeer_builder.store.rows import chunks, load_jobs
+from livepeer_builder.store.rows import chunks, insert_once, load_jobs
 
 _LOG = logging.getLogger(__name__)
 
@@ -266,7 +266,7 @@ class SqlStore(SqlKeys, SqlOperations):
 
     async def set_aside_usage(self, rows: Sequence[SetAsideUsage]) -> list[SetAsideUsage]:
         """Record rows cost sync left out, once per id (#114, C13). Returns the ones not recorded before;
-        the first record of an id is kept. ``raw`` is not stored."""
+        the first record of an id is kept, also when two syncs record it at once. ``raw`` is not stored."""
         new: list[SetAsideUsage] = []
         table, at = t.usage_set_aside, datetime.now(UTC)
         async with self.engine.begin() as conn:
@@ -277,10 +277,10 @@ class SqlStore(SqlKeys, SqlOperations):
                 known.add(row.id)  # the same id later on this page is the same row
                 fees = _fee_text(row)
                 values = {"id": row.id, "reason": row.reason, "set_aside_at": at}
-                await conn.execute(
-                    insert(table).values(values | {"computed_fee_eth": fees[0], "computed_fee_usd": fees[1]})
-                )
-                new.append(row)
+                values |= {"computed_fee_eth": fees[0], "computed_fee_usd": fees[1]}
+                # Another sync may have recorded it since this one looked: then nothing is written.
+                if (await conn.execute(insert_once(conn, table).values(values))).rowcount:
+                    new.append(row)
         return new
 
     async def count_set_aside_usage(self) -> int:

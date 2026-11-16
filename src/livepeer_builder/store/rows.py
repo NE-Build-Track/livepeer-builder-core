@@ -5,7 +5,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Table, select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from livepeer_builder.contracts import (
@@ -56,6 +57,14 @@ def _timings(attempt: dict[str, Any]) -> CallTimings | None:
 def chunks(values: list[str], size: int = 500) -> Iterable[list[str]]:
     for start in range(0, len(values), size):
         yield values[start : start + size]
+
+
+def insert_once(conn: AsyncConnection, table: Table) -> Any:
+    """An insert that leaves a row with the same primary key as it is (``ON CONFLICT DO NOTHING``), in
+    the connection's dialect. Its ``rowcount`` is 0 for a row another transaction stored first, where a
+    plain insert fails on the key: two writers that both looked and saw no row."""
+    build = postgresql.insert if conn.dialect.name == "postgresql" else sqlite.insert
+    return build(table).on_conflict_do_nothing(index_elements=list(table.primary_key.columns))
 
 
 async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:

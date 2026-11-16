@@ -9,6 +9,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any, get_args
 
+import pytest
 from sqlalchemy import String, inspect, select
 
 from livepeer_builder.contracts import SetAsideReason, SetAsideUsage, UsageRow
@@ -90,6 +91,27 @@ async def test_a_set_aside_row_is_recorded_once_with_its_reason_and_fee(database
     async with store.engine.connect() as conn:  # the raw content is in the log, never in the table
         columns = {column["name"] for column in await conn.run_sync(lambda sync: inspect(sync).get_columns("lpb_usage_set_aside"))}  # fmt: skip
     assert columns == {"id", "reason", "computed_fee_eth", "computed_fee_usd", "set_aside_at"}
+    await store.close()
+
+
+async def test_a_row_another_sync_set_aside_since_this_one_looked_is_recorded_once(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of #144: the background loop and an admin's sync read the same page at once. Both saw the
+    id as absent and both inserted it; the slower one failed on the primary key, and its pass ended
+    before the cursor moved. Here the slower sync's look finds nothing, as it does when the faster one
+    has not committed yet, and the row is there by the time it inserts."""
+    store = await SqlStore.connect(database_url)
+    row = SetAsideUsage(id="u-1", reason="unknown_status", computed_fee_eth=Decimal("0.5"))
+    assert await store.set_aside_usage([row]) == [row]  # the faster sync
+    monkeypatch.setattr("livepeer_builder.store.sql.chunks", lambda ids: [])  # the slower one looked first
+    slower = row.model_copy(update={"reason": "unreadable_created_at"})
+    other = SetAsideUsage(id="u-2", reason="unreadable_fee")
+    assert await store.set_aside_usage([slower, other]) == [other]  # not new to it, so not logged twice
+    assert await recorded(store) == [
+        ("u-1", "unknown_status", "0.5", None),  # the first record of an id is kept
+        ("u-2", "unreadable_fee", None, None),
+    ]
     await store.close()
 
 

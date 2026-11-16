@@ -50,7 +50,7 @@ from livepeer_builder.contracts import (
     add_fees,
     billable_fees,
 )
-from livepeer_builder.errors import CursorMismatch, NotFound, ProviderUnavailable
+from livepeer_builder.errors import CursorMismatch, NotFound, ProviderError, ProviderUnavailable
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllowanceReader,
@@ -129,7 +129,10 @@ class CostSyncWorker:
 
     async def _page(self, cursor: str | None) -> UsagePage:
         try:
-            return await self._source.page(cursor, limit=1000)
+            page = await self._source.page(cursor, limit=1000)
+            if page.next_cursor and page.next_cursor == cursor:  # asking again would never end
+                raise ProviderError(200, "the usage cursor did not advance")
+            return page
         except Exception as error:
             self.source_error = error
             raise

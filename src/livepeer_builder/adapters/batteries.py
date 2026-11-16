@@ -112,7 +112,8 @@ class BatteriesClient:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{segment(allocation_id)}"))
 
     async def list_grants(self) -> list[GrantRecord]:
-        """Every grant, page by page."""
+        """Every grant, page by page. A page that answers the cursor it was asked with is an answer the
+        engine cannot read: asking again would never end."""
         grants: list[GrantRecord] = []
         cursor: str | None = None
         while True:
@@ -120,6 +121,8 @@ class BatteriesClient:
             grants += page.grants
             if page.next_cursor is None:
                 return grants
+            if page.next_cursor == cursor:
+                raise ProviderError(200, "Batteries answered a grant list whose cursor did not advance")
             cursor = page.next_cursor
 
     async def grant_page(self, cursor: str | None) -> GrantPage:
@@ -127,12 +130,10 @@ class BatteriesClient:
         params = {"limit": "1000"}  # Batteries' largest page
         if cursor:
             params["cursor"] = cursor
-        body = await self._request("GET", "/v1/grants", params=params)
-        items = body.get("items")
-        listed = items if isinstance(items, list) else []
-        grants = [grant_from_item(item) for item in listed if isinstance(item, dict)]
-        next_cursor = body.get("next_cursor")
-        return GrantPage(grants=tuple(grants), next_cursor=str(next_cursor) if next_cursor else None)
+        items, next_cursor = list_page(await self._request("GET", "/v1/grants", params=params))
+        return GrantPage(
+            grants=tuple(grant_from_item(item) for item in items), next_cursor=next_cursor or None
+        )
 
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
@@ -140,15 +141,13 @@ class BatteriesClient:
         body = {"name": name, "status": "active", "sponsor": name, **_amount_fields(amount)}
         if metadata:  # Batteries takes string fields only: the object travels as JSON text
             body["metadata"] = json.dumps(dict(metadata), sort_keys=True)
-        created = await self._request("POST", "/v1/grants", json=body)
-        if not created.get("id"):
-            raise ProviderError(200, "grant response missing id")
+        grant_id = _required(await self._request("POST", "/v1/grants", json=body), "id")
         # Batteries answers the create with the id only; the record is the grant as it stored it. The grant
         # exists by now, so a failed read is an unknown outcome, never a refusal that frees the reference.
         try:
-            return grant_from_item(await self._request("GET", f"/v1/grants/{segment(str(created['id']))}"))
+            return grant_from_item(await self._request("GET", f"/v1/grants/{segment(grant_id)}"))
         except ProviderError as exc:
-            raise ProviderUnavailable(f"grant {created['id']} created but not read back: {exc}") from exc
+            raise ProviderUnavailable(f"grant {grant_id} created but not read back: {exc}") from exc
 
     async def _request(
         self,
@@ -170,7 +169,7 @@ class BatteriesClient:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(response.status_code, error_message(response))
-        return dict(response.json()) if response.content else {}
+        return json_object(response)
 
 
 class BatteriesUsageSource:
@@ -208,15 +207,46 @@ class BatteriesUsageSource:
         message = error_message(response) if response.status_code >= 400 else ""
         if response.status_code == 400 and "cursor" in message:
             raise CursorMismatch(message)
-        if not response.is_success:  # a redirect is no answer either (#113, C7)
+        if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
-        body = response.json()
-        read = [read_usage_item(item) for item in body["items"]]
+        items, next_cursor = list_page(json_object(response))  # which refuses a redirect (#113, C7)
+        read = [read_usage_item(item) for item in items]
         return UsagePage(
             items=tuple(row for row in read if isinstance(row, UsageRow)),
             set_aside=tuple(row for row in read if isinstance(row, SetAsideUsage)),
-            next_cursor=str(body.get("next_cursor") or ""),
+            next_cursor=next_cursor,
         )
+
+
+def json_object(response: httpx.Response) -> dict[str, Any]:
+    """The one reader of every Batteries answer that is not an error status (#114, C21): a JSON object,
+    or a ``ProviderError`` with the answer's own status. That is HTTP 502 to a caller and an unknown outcome
+    to the operation ledger, never a refusal, so a reference stays held. The body is not quoted.
+
+    Only a 2xx is an answer. A redirect is none, whatever its body: the engine follows no redirect, and a
+    3xx that held a JSON object read as the call's result (Go's ``ServeMux`` answers a 301 for a path it
+    would clean)."""
+    if not response.is_success:
+        raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
+    try:
+        body = response.json()
+    except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
+        body = None
+    if not isinstance(body, dict):
+        raise ProviderError(response.status_code, "Batteries answered with a body that is not a JSON object")
+    return body
+
+
+def list_page(body: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """A list answer's items and its cursor, ``""`` on the last page (#114, C21). ``items`` is a list of
+    objects and ``next_cursor`` a string or absent; anything else is a ``ProviderError``. A malformed page
+    never reads as an empty one, which would end a listing early, and one malformed item fails the page."""
+    items, next_cursor = body.get("items"), body.get("next_cursor", "")
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise ProviderError(200, "Batteries answered a list whose items are not a list of objects")
+    if not isinstance(next_cursor, str):
+        raise ProviderError(200, "Batteries answered a list whose next_cursor is not a string")
+    return items, next_cursor
 
 
 def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
@@ -309,22 +339,44 @@ def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
 
 
 def grant_from_item(item: dict[str, Any]) -> GrantRecord:
-    currency = str(item.get("currency", "")).lower()
+    """A grant as Batteries serves it, in a list or alone: ``id`` a non-empty string, and ``name``,
+    ``status``, ``currency``, the total and ``metadata`` strings where present. Any other object is an
+    answer the engine cannot read (#114, C21), never a grant with no tag: a resumed create would read
+    "no such grant" and create a second one."""
+    currency = _optional(item, "currency").lower()
     total_key = "total_usd" if currency == "usd" else "total_eth"
     return GrantRecord(
-        id=str(item.get("id", "")),
-        name=str(item.get("name", "")),
-        status=str(item.get("status", "")),
+        id=_required(item, "id"),
+        name=_optional(item, "name"),
+        status=_optional(item, "status"),
         currency=currency.upper() or "USD",
-        total=str(item.get(total_key, "")),
-        metadata=_metadata(item.get("metadata")),
+        total=_optional(item, total_key),
+        metadata=_metadata(_optional(item, "metadata")),
     )
 
 
-def _metadata(raw: Any) -> dict[str, str]:
+def _required(body: dict[str, Any], key: str) -> str:
+    """A value the answer has to carry: a non-empty string, as Batteries serves every id and a new key's
+    secret. Anything else, a missing key included, is an answer the engine cannot read (#114, C21): a
+    ``ProviderError`` that is no refusal and quotes no value."""
+    value = body.get(key)
+    if not isinstance(value, str) or not value:
+        raise ProviderError(200, f"Batteries answered with no usable {key}")
+    return value
+
+
+def _optional(body: dict[str, Any], key: str) -> str:
+    """A text the answer may leave out, ``""`` then. One that is no string is never turned into text."""
+    value = body.get(key, "")
+    if not isinstance(value, str):
+        raise ProviderError(200, f"Batteries answered with a {key} that is not a string")
+    return value
+
+
+def _metadata(raw: str) -> dict[str, str]:
     """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {}."""
     try:
-        parsed = json.loads(raw) if isinstance(raw, str) and raw else None
+        parsed = json.loads(raw) if raw else None
     except ValueError:
         return {}
     if not isinstance(parsed, dict):
@@ -334,11 +386,11 @@ def _metadata(raw: Any) -> dict[str, str]:
 
 def allowance_from_body(body: dict[str, Any]) -> Allowance:
     """Allocation reads carry allocated_/available_/spent_ suffixed by the allocation's currency."""
-    currency: Currency = "USD" if str(body.get("currency", "")).lower() == "usd" else "ETH"
+    currency: Currency = "USD" if _optional(body, "currency").lower() == "usd" else "ETH"
     suffix = currency.lower()
     return Allowance(
-        allocation_id=str(body["id"]),
-        status=str(body.get("status", "")),
+        allocation_id=_required(body, "id"),
+        status=_optional(body, "status"),
         granted=_money(body.get(f"allocated_{suffix}"), currency),
         spent=_money(body.get(f"spent_{suffix}"), currency),
         available=_money(body.get(f"available_{suffix}"), currency),
@@ -353,9 +405,10 @@ def segment(value: str) -> str:
 
 
 def error_message(response: httpx.Response) -> str:
+    """The provider's own words for an error status: its ``error`` text, else the body as text."""
     try:
         body = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):  # as in json_object; a number past the digit limit is one too
         return response.text
     if isinstance(body, dict) and isinstance(body.get("error"), str):
         return str(body["error"])
@@ -368,9 +421,9 @@ def _amount_fields(amount: Money) -> dict[str, str]:
 
 def _new_key(body: dict[str, Any]) -> NewAllocationKey:
     return NewAllocationKey(
-        allocation_id=str(body["allocation_id"]),
-        api_key_id=str(body["id"]),
-        secret=SecretStr(str(body["api_key"])),
+        allocation_id=_required(body, "allocation_id"),
+        api_key_id=_required(body, "id"),
+        secret=SecretStr(_required(body, "api_key")),
     )
 
 

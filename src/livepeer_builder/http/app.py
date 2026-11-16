@@ -73,6 +73,7 @@ from livepeer_builder.http.bodies import (
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
 from livepeer_builder.http.streaming import stream_response
+from livepeer_builder.http.unprocessable import install_unprocessable_handler
 
 JOB_ID_HEADER = "Livepeer-Job-Id"
 _FAILURE_STATUS = {
@@ -398,6 +399,8 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         status: int, message: str, headers: dict[str, str] | None = None, **extra: Any
     ) -> JSONResponse:
         return JSONResponse({"error": message, **extra}, status_code=status, headers=headers)
+
+    install_unprocessable_handler(app)
 
     @app.exception_handler(NotAuthenticated)
     async def _unauthenticated(_: Request, exc: NotAuthenticated) -> Response:

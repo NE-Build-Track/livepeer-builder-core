@@ -187,7 +187,7 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   engine, it records an attempt on the first runner for the app, ends a stream once (read to the end
   or `complete()`: `succeeded`; `aclose()`, `break`, `return` or an error: `abandoned`; a cancellation:
   the runner's settle window, as on the engine), and rejects a repeated
-  `operation_ref`. It does not model admission, failover or payment.
+  `operation_ref` and a path with no leading `/`. It does not model admission, failover or payment.
 - **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
   fakes (`async with make_engine(runners=[...]) as engine:`).
 

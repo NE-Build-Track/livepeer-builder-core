@@ -13,6 +13,7 @@ import json
 import httpx
 
 from livepeer_builder.adapters.discovery_inventory import read_inventory
+from livepeer_builder.adapters.runner_address import runner_address
 from livepeer_builder.adapters.runner_call import (
     PaidRequest,
     PaymentEvents,
@@ -101,7 +102,7 @@ class SdkRunnerTransport:
     ) -> PaidRequest:
         signer_url = self._signer_url if credential is not None else None
         return PaidRequest(
-            runner.url.rstrip("/") + request.path,
+            runner_address(runner.url, request.path),  # sent as built, and still the runner's (#113, C3)
             method=request.method,
             # Runners expect a JSON object; an empty body for ``None`` is not the contract yet (T15).
             body=request.raw_body

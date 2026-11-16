@@ -9,6 +9,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from livepeer_builder.contracts.common import Contract, StoredText
 from livepeer_builder.contracts.http import request_headers, request_path
+from livepeer_builder.contracts.operations import OperationRef
 
 ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
 
@@ -55,7 +56,7 @@ class JobRequest(Contract):
             raise ValueError("Invalid content type")
         return value
 
-    operation_ref: StoredText | None = None  # the caller's retry key
+    operation_ref: OperationRef | None = None  # the caller's retry key, as admin commands': never "" (C19)
     capability: StoredText | None = None  # label only in M2; resolution is a later contract
     model: StoredText | None = None
     mode: ExecutionMode = "immediate"

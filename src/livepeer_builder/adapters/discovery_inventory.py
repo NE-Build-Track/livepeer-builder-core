@@ -8,6 +8,7 @@ binary floats.
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -15,7 +16,14 @@ from urllib.parse import urlsplit
 
 import yarl
 
-from livepeer_builder.contracts.discovery import PriceInfo, Runner, RunnerGPU
+from livepeer_builder.contracts.discovery import (
+    NOT_TEXT,
+    PriceInfo,
+    Runner,
+    RunnerGPU,
+    is_optional_text,
+    is_text,
+)
 
 _LOG = logging.getLogger(__name__)
 _FRACTION = re.compile(r"(\.\d{6})\d+")
@@ -26,7 +34,10 @@ _RFC3339 = re.compile(
 )
 _INT64 = 1 << 63
 _HTTP = frozenset({"http", "https"})
-_UNSENDABLE = re.compile(r"[\x00-\x20\x7f]")  # whitespace and control characters
+# A URL holds none of what is not text (``contracts.discovery``, #114, C12), and no space, which the HTTP
+# client cannot send.
+_UNSENDABLE = re.compile(f"[ {NOT_TEXT}]")
+_MAX_APP = 200  # a job stores its app as ``store.schema.ID``, and ``JobRequest.app`` takes no longer one
 
 
 class JsonNumber:
@@ -40,8 +51,10 @@ def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
 
     An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
-    entry (``nodes``, and no ``address``) yields nothing. A runner needs a non-empty ``app``, a ``url``
-    the engine can call, and an ``observed_at`` the clock can convert to UTC. One bad record does not drop
+    entry (``nodes``, and no ``address``) yields nothing. A runner needs an ``app`` that is valid text
+    (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the clock can
+    convert to UTC. Any other text field that is not valid text is absent; such a field may hold a tab or a
+    line break. One bad record does not drop
     the rest. ``[]`` is an empty inventory. A number ``Decimal`` cannot hold is still a number: the
     runner is kept, and ``payable_rate`` reports that its price cannot be paid.
     """
@@ -107,8 +120,8 @@ def _runner(raw: object, address: str) -> Runner | None:
     if not isinstance(raw, dict):
         return None
     url = _http_url(raw.get("url"))
-    app = raw.get("app")
-    if url is None or not isinstance(app, str) or not app:
+    app = _text(raw.get("app"))
+    if url is None or not app or len(app) > _MAX_APP:
         return None
     observed_at = _stamp(raw.get("observed_at"))
     if observed_at is None:
@@ -121,15 +134,15 @@ def _runner(raw: object, address: str) -> Runner | None:
     return Runner(
         url=url,
         app=app,
-        mode=_string(raw.get("mode")),
+        mode=_optional_text(raw.get("mode")),
         orchestrator_url=address if _origin(address) == _origin(url) else None,
         capacity=_integer(raw.get("capacity")),
         capacity_used=_integer(raw.get("capacity_used")),
         capacity_available=_available(raw),
         price_info=_price_info(raw.get("price_info")),
         observed_at=observed_at,
-        version=_string(raw.get("version")),
-        metadata=_string(raw.get("metadata")),
+        version=_optional_text(raw.get("version")),
+        metadata=_optional_text(raw.get("metadata")),
         gpu=_gpu(gpu) if isinstance(gpu, dict) else None,
     )
 
@@ -140,10 +153,11 @@ def _http_url(value: object) -> str | None:
     aiohttp, which makes every runner call, reads the URL with yarl. yarl must connect to the host
     ``urlsplit`` names, the one the payment-origin check compares, on a port from 1 to 65535. yarl folds
     a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
-    The URL holds no whitespace or control character, which aiohttp cannot send. It has no userinfo,
-    query or fragment: the engine appends each request's path to a runner URL, an ``address`` whose
-    origin matches that URL becomes ``orchestrator_url`` for the payment-origin check, and error text
-    quotes both.
+    The URL holds no ASCII space, control character or lone surrogate (``_UNSENDABLE``): it is valid
+    text, and a space would split the request line. Another space character, such as U+00A0 or U+2028,
+    is kept and percent-encoded when sent (``runner_address``). It has no userinfo, query or fragment:
+    the engine appends each request's path to a runner URL, an ``address`` whose origin matches that URL
+    becomes ``orchestrator_url`` for the payment-origin check, and error text quotes both.
     """
     if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
         return None
@@ -180,8 +194,8 @@ def _price_info(value: object) -> PriceInfo | None:
     return PriceInfo(
         price=_decimal(value.get("price")),
         price_usd=_decimal(value.get("price_usd")),
-        currency=_string(value.get("currency")),
-        unit=_string(value.get("unit")),
+        currency=_optional_text(value.get("currency")),
+        unit=_optional_text(value.get("unit")),
     )
 
 
@@ -217,8 +231,18 @@ def _available(raw: dict[str, Any]) -> int | None:
     return 0 if available is None else available
 
 
-def _string(value: object) -> str | None:
-    return value if isinstance(value, str) else None
+def _text(value: object, valid: Callable[[str], bool] = is_text) -> str | None:
+    """A string of valid Unicode text with no control character, exactly as written; otherwise None.
+
+    Nothing is repaired: text with a NUL, another control character or a lone surrogate is not read."""
+    if not isinstance(value, str) or not valid(value):
+        return None
+    return value
+
+
+def _optional_text(value: object) -> str | None:
+    """As ``_text``, for a field a runner may leave out: a tab and a line break are kept (#114, C12)."""
+    return _text(value, is_optional_text)
 
 
 def _stamp(value: object) -> datetime | None:
@@ -242,7 +266,7 @@ def _stamp(value: object) -> datetime | None:
 
 def _gpu(value: dict[str, Any]) -> RunnerGPU:
     return RunnerGPU(
-        id=_string(value.get("id")),
-        name=_string(value.get("name")),
+        id=_optional_text(value.get("id")),
+        name=_optional_text(value.get("name")),
         vram_mb=_integer(value.get("vram_mb")),
     )

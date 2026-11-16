@@ -736,14 +736,18 @@ async def test_unprovisioned_actor_fails_before_any_payment(
     assert transport.calls == []  # no silent fallback to a shared key
 
 
-async def test_no_offering_and_no_capacity(make_engine: EngineFactory, alice: ActorContext) -> None:
+async def test_no_offering_and_a_runner_with_zero_capacity_is_still_asked(
+    make_engine: EngineFactory, alice: ActorContext
+) -> None:
+    """Zero advertised capacity fails only a job that would pay (#114, C17, tests/unit/test_zero_capacity.py),
+    so alice's allocation is looked up first: she has none, and the job fails there."""
     engine = await make_engine(runners=(runner(capacity_available=0),))
     with pytest.raises(JobFailed) as missing:
         await engine.jobs.run(alice, JobRequest(app="nothing/here"))
     assert missing.value.job.failure is not None and missing.value.job.failure.kind == "no_offering"
     with pytest.raises(JobFailed) as busy:
         await engine.jobs.run(alice, JobRequest(app=APP))
-    assert busy.value.job.failure is not None and busy.value.job.failure.kind == "no_capacity"
+    assert busy.value.job.failure is not None and busy.value.job.failure.kind == "not_provisioned"
 
 
 async def test_admission_refuses_before_dispatch(

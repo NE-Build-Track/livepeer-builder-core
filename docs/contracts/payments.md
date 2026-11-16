@@ -107,8 +107,13 @@ checks stop that:
   - A resume whose key is already stored is not asked either: it goes on, for a rotation to revoke the
     old key. The stored key must be the one of the provider call about to be sent: the record notes the
     call's idempotency key beside the secret's reference, and only a match skips the check. A resume
-    after the actor was revoked, or provisioned again, sends another provider call whose key is not
-    stored yet, so it is asked before that call.
+    after the actor was revoked, or provisioned again, or under another `LPB_ENGINE_ID`, sends another
+    provider call whose key is not stored yet, so it is asked before that call.
+  - A record with the secret's reference and no idempotency key beside it was written by a release
+    that did not yet note it (v0.2.x). A rotation resumed from such a record after the upgrade is not
+    asked when its actor already holds the key and secret the record notes: the provider call is still
+    sent and replays that key, nothing is left to store, and the old key is revoked. A record that has
+    the note is never judged by what the actor holds.
   - A resume that still has a key to store is refused, and the message says that an earlier attempt
     may have reached the provider. It does not say that nothing was sent, and the refusal does not
     free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once

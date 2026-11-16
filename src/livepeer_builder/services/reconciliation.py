@@ -56,7 +56,9 @@ class PaidAttempts:
         return tuple(sorted(self._known(current) - {reconciled}))
 
     def by(self, allocation_id: str, cost: JobCost) -> Sequence[AttemptCost]:
-        """The job's attempt costs that ``allocation_id`` paid; all of them when the store cannot say."""
+        """The job's attempt costs that ``allocation_id`` paid; all of them when the store cannot say.
+        An attempt that records no allocation is counted under none. It has no matched fee to leave out:
+        a payment session is matched on the attempt's allocation and its manifest."""
         if self._by_attempt is None:
             return cost.attempts
         return [

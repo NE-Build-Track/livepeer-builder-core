@@ -45,6 +45,7 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo
+from livepeer_builder.protocols.conditional_writes import UsageOnceRepo as UsageOnceRepo
 
 # -- time -------------------------------------------------------------------------------------------
 

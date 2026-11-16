@@ -37,7 +37,6 @@ from livepeer_builder.contracts import (
     JobRequest,
     JobResult,
     JobState,
-    MeasuredUsage,
     Operation,
     PaymentCredential,
     ResourceRef,
@@ -79,6 +78,7 @@ from livepeer_builder.services.operations import check_operation, claim_operatio
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
+from livepeer_builder.services.usage_reports import report_once
 from livepeer_builder.utils import run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -215,20 +215,11 @@ class JobService:
         return await self._store.list_jobs(actor.application_id, target, limit=limit, before=before)
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
-        """The application measured the work and reports it once (service-mode default). Running the job
-        is the permission it needs, not reading it (D44)."""
+        """The application measured the work and reports it once (service-mode default): it is stored once,
+        and an identical repeat is answered with the stored usage (#115, C20; ``services/usage_reports``).
+        Running the job is the permission it needs, not reading it (D44)."""
         job = await self._owned(actor, Operation.JOBS_RUN, job_id)
-        if job.usage is not None:
-            raise InvalidRequest("usage was already reported for this job")
-        if job.state != "succeeded":
-            raise InvalidRequest("usage can only be reported for a succeeded job")
-        if not quantities or any(value < 0 for value in quantities.values()):
-            raise InvalidRequest("usage needs at least one non-negative quantity")
-        usage = MeasuredUsage(
-            quantities=dict(quantities), source="app_reported", reported_at=self._clock.now()
-        )
-        await self._store.set_usage(job.id, usage)
-        return job.model_copy(update={"usage": usage})
+        return await report_once(self._store, job, quantities, self._clock.now())
 
     async def recover_interrupted(self) -> int:
         """Resolve jobs a restart left ``running`` (``failover.recover_interrupted``)."""

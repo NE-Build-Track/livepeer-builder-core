@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import and_, delete, event, insert, select, update
+from sqlalchemy import and_, delete, event, func, insert, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
     ProvisionedActor,
     ResultRef,
     SeenActor,
+    SetAsideUsage,
     SyncCheckpoint,
     UsageRow,
 )
@@ -42,7 +43,7 @@ from livepeer_builder.store.matching import (
 )
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.operations import SqlOperations
-from livepeer_builder.store.rows import chunks, load_jobs
+from livepeer_builder.store.rows import chunks, insert_once, load_jobs
 
 _LOG = logging.getLogger(__name__)
 
@@ -240,7 +241,8 @@ class SqlStore(SqlKeys, SqlOperations):
         """Insert rows not seen before and move the cursor, in one transaction. Returns the new rows.
 
         A new row on an already matched session bumps that job's evidence version in the same transaction.
-        A row id seen before keeps its stored copy; delivered again with another fee, it is logged (D61)."""
+        A row id seen before keeps its stored copy; delivered again with another fee, it is logged (D61).
+        Two syncs may write one page at once (the loop and an admin's): each row is new to one of them."""
         new: list[UsageRow] = []
         synced_at = datetime.now(UTC)
         fees = (t.usage_rows.c.id, t.usage_rows.c.computed_fee_eth, t.usage_rows.c.computed_fee_usd)
@@ -254,14 +256,38 @@ class SqlStore(SqlKeys, SqlOperations):
                     _log_another_fee(row, *stored[row.id])
                     continue
                 stored[row.id] = _fee_text(row)
-                await conn.execute(insert(t.usage_rows).values(_usage_values(row) | {"synced_at": synced_at}))
-                new.append(row)
+                values = _usage_values(row) | {"synced_at": synced_at}
+                if (await conn.execute(insert_once(conn, t.usage_rows).values(values))).rowcount:
+                    new.append(row)  # not new when another sync stored it since this one looked
             await bump_evidence_on_new_rows(conn, new)
             cursor = {"resume_cursor": checkpoint.resume_cursor, "filters": checkpoint.filters}
             moved = await conn.execute(update(t.cost_cursor).where(t.cost_cursor.c.id == 1).values(cursor))
-            if moved.rowcount == 0:
-                await conn.execute(insert(t.cost_cursor).values(id=1, **cursor))
+            if moved.rowcount == 0:  # the first sync; of two at once, one cursor is kept
+                await conn.execute(insert_once(conn, t.cost_cursor).values(id=1, **cursor))
         return new
+
+    async def set_aside_usage(self, rows: Sequence[SetAsideUsage]) -> list[SetAsideUsage]:
+        """Record rows cost sync left out, once per id (#114, C13). Returns the ones not recorded before;
+        the first record of an id is kept, also when two syncs record it at once. ``raw`` is not stored."""
+        new: list[SetAsideUsage] = []
+        table, at = t.usage_set_aside, datetime.now(UTC)
+        async with self.engine.begin() as conn:
+            known: set[str] = set()
+            for chunk in chunks([row.id for row in rows]):
+                known.update((await conn.execute(select(table.c.id).where(table.c.id.in_(chunk)))).scalars())
+            for row in (row for row in rows if row.id not in known):
+                known.add(row.id)  # the same id later on this page is the same row
+                fees = _fee_text(row)
+                values = {"id": row.id, "reason": row.reason, "set_aside_at": at}
+                values |= {"computed_fee_eth": fees[0], "computed_fee_usd": fees[1]}
+                # Another sync may have recorded it since this one looked: then nothing is written.
+                if (await conn.execute(insert_once(conn, table).values(values))).rowcount:
+                    new.append(row)
+        return new
+
+    async def count_set_aside_usage(self) -> int:
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(select(func.count()).select_from(t.usage_set_aside))).scalar_one())
 
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]:
         """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute, and bumps their
@@ -422,7 +448,7 @@ def _attempt_values(attempt: Attempt) -> dict[str, Any]:
     return values | attempt.timings.model_dump() if attempt.timings else values
 
 
-def _fee_text(row: UsageRow) -> tuple[str | None, str | None]:
+def _fee_text(row: UsageRow | SetAsideUsage) -> tuple[str | None, str | None]:
     """A row's fees as the store holds them, to compare a later copy of the same id against."""
     eth, usd = row.computed_fee_eth, row.computed_fee_usd
     return (None if eth is None else str(eth), None if usd is None else str(usd))

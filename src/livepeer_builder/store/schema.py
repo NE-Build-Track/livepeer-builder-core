@@ -233,4 +233,19 @@ operations = Table(
     Column("completed_at", UTCDateTime, nullable=True),
 )
 
+# -- 0012: usage rows cost sync set aside (#114, C13) ----------------------------------------------------
+
+# A provider usage row the sync could not read or store, left out of every cost: its id, why, and the fee
+# it stated. The row's content is in the log (``costs.usage_set_aside``), never here. No purge.
+usage_set_aside = Table(
+    "lpb_usage_set_aside",
+    metadata,
+    # the provider's row id; "sha256:" and a digest of the content when it has none this column can keep
+    Column("id", String(ID), primary_key=True),
+    Column("reason", String(64), nullable=False),
+    Column("computed_fee_eth", String(AMOUNT), nullable=True),
+    Column("computed_fee_usd", String(AMOUNT), nullable=True),
+    Column("set_aside_at", UTCDateTime, nullable=False),
+)
+
 VERSION_TABLE = "lpb_alembic_version"

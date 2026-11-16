@@ -131,6 +131,13 @@ erDiagram
         datetime created_at
         datetime synced_at
     }
+    lpb_usage_set_aside {
+        string id PK
+        string reason
+        string computed_fee_eth
+        string computed_fee_usd
+        datetime set_aside_at
+    }
     lpb_attempts ||--o{ lpb_payment_sessions : "attempt_number, job_id"
     lpb_jobs ||--o{ lpb_attempts : "job_id"
     lpb_jobs ||--o| lpb_cost_projections : "job_id"
@@ -315,3 +322,13 @@ Indexes:
 
 - `lpb_usage_rows_allocation` (allocation_id)
 - `lpb_usage_rows_session` (payment_session_id)
+
+## `lpb_usage_set_aside`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `id` | VARCHAR(200) | no | PK |
+| `reason` | VARCHAR(64) | no |  |
+| `computed_fee_eth` | VARCHAR(64) | yes |  |
+| `computed_fee_usd` | VARCHAR(64) | yes |  |
+| `set_aside_at` | DATETIME | no |  |

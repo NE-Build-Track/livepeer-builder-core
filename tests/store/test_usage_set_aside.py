@@ -5,6 +5,7 @@ what the store can keep before it writes, so it behaves the same on each: these 
 in CI, on PostgreSQL, where one such row used to fail its page on every pass.
 """
 
+import asyncio
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any, get_args
@@ -12,7 +13,7 @@ from typing import Any, get_args
 import pytest
 from sqlalchemy import String, inspect, select
 
-from livepeer_builder.contracts import SetAsideReason, SetAsideUsage, UsageRow
+from livepeer_builder.contracts import SetAsideReason, SetAsideUsage, SyncCheckpoint, UsageRow
 from livepeer_builder.contracts.costs import USAGE_ROW_LIMITS as LIMITS
 from livepeer_builder.services.costs import CostSyncWorker
 from livepeer_builder.store import SqlStore, create_engine, purge, upgrade
@@ -112,6 +113,50 @@ async def test_a_row_another_sync_set_aside_since_this_one_looked_is_recorded_on
         ("u-1", "unknown_status", "0.5", None),  # the first record of an id is kept
         ("u-2", "unreadable_fee", None, None),
     ]
+    await store.close()
+
+
+async def stored_usage(store: SqlStore) -> list[str]:
+    async with store.engine.connect() as conn:
+        return sorted((await conn.execute(select(t.usage_rows.c.id))).scalars())
+
+
+async def test_a_usage_row_another_sync_stored_since_this_one_looked_is_stored_once(
+    database_url: str, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same two syncs, on a page of rows the store keeps: the slower one failed on the primary key
+    of ``lpb_usage_rows`` and its pass ended before the cursor moved (review of #144; the write is from
+    before #114). The row is not new to it, and its cursor still moves."""
+    store = await SqlStore.connect(database_url)
+    first, second = usage_row(clock, "u1"), usage_row(clock, "u2")
+    assert await store.apply_usage([first], SyncCheckpoint(resume_cursor="c1")) == [first]  # the faster
+    monkeypatch.setattr("livepeer_builder.store.sql.chunks", lambda ids: [])  # the slower one looked first
+    assert await store.apply_usage([first, second], SyncCheckpoint(resume_cursor="c2")) == [second]
+    assert await stored_usage(store) == ["u1", "u2"]
+    checkpoint = await store.cost_checkpoint()
+    assert checkpoint is not None and checkpoint.resume_cursor == "c2"
+    await store.close()
+
+
+async def test_the_first_two_syncs_of_a_store_at_once_both_end_and_store_each_row_once(
+    database_url: str, clock: FixedClock
+) -> None:
+    """No row and no cursor yet, and two syncs write the same page at the same moment: both end, the page
+    is new to one of them, and one cursor is kept."""
+    store = await SqlStore.connect(database_url)
+    page = [usage_row(clock, "u1"), usage_row(clock, "u2")]
+    aside = [SetAsideUsage(id="bad", reason="unknown_status")]
+
+    async def sync() -> tuple[list[SetAsideUsage], list[UsageRow]]:
+        recorded_now = await store.set_aside_usage(aside)
+        return recorded_now, await store.apply_usage(page, SyncCheckpoint(resume_cursor="c1"))
+
+    answers = await asyncio.gather(sync(), sync())
+    assert sorted(len(set_aside) for set_aside, _ in answers) == [0, 1]
+    assert sorted(row.id for _, new in answers for row in new) == ["u1", "u2"]
+    assert await stored_usage(store) == ["u1", "u2"] and await store.count_set_aside_usage() == 1
+    checkpoint = await store.cost_checkpoint()
+    assert checkpoint is not None and checkpoint.resume_cursor == "c1"
     await store.close()
 
 

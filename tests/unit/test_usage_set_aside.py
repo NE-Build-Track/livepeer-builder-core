@@ -397,6 +397,32 @@ async def test_health_counts_the_rows_set_aside_when_a_later_step_of_the_sync_fa
     assert engine.health().cost_sync_set_aside == 1
 
 
+async def test_a_count_that_cannot_be_read_fails_no_sync(
+    make_engine: EngineFactory, store: SqlStore, usage: FakeUsageSource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of #144: the count is read for health alone, after the rows are stored and the cursor has
+    moved. When that read failed the pass ended there: its rows were matched to no session and no job's
+    cost was refreshed, and a later pass does not see those rows as new."""
+    usage.rows = [usage_row("u1")]
+    engine = await make_engine()
+    matched: list[list[str]] = []
+    match = store.match_sessions
+
+    async def recording(rows: Sequence[UsageRow]) -> set[Any]:
+        matched.append([row.id for row in rows])
+        return await match(rows)
+
+    async def no_count() -> int:
+        raise RuntimeError("the store is away")
+
+    monkeypatch.setattr(store, "match_sessions", recording)
+    monkeypatch.setattr(store, "count_set_aside_usage", no_count)
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, matched) == (1, [["u1"]])
+    assert engine.costs.last_synced_at is not None and engine.costs.last_error is None
+    assert engine.health().cost_sync_set_aside is None  # no count was read, and none is made up
+
+
 class _NoSetAsideTable:
     """A supplied store from before #114: everything the SQL store does, without the two set-aside calls."""
 

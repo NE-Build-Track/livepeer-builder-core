@@ -7,6 +7,7 @@ same on SQLite and on PostgreSQL, whatever the usage source. The Batteries adapt
 item it still holds, so its log line is the row as received.
 """
 
+import contextlib
 from collections.abc import Sequence
 
 from livepeer_builder.contracts import SetAsideUsage, UsagePage, UsageRow
@@ -60,6 +61,12 @@ class SetAsideRecorder:
         return new
 
 
-async def count_set_aside(store: object) -> int | None:
-    """Every row left out so far, or None when the store keeps no such record."""
-    return await store.count_set_aside_usage() if isinstance(store, UsageSetAsideRepo) else None
+async def count_set_aside(store: object, known: int | None) -> int | None:
+    """Every row left out so far, or None when the store keeps no such record. Health alone reads the
+    count, so a store that cannot be read fails nothing: the answer is then ``known``, the last count.
+    A sync that failed keeps its own error, and one that stored its rows goes on to match them."""
+    if not isinstance(store, UsageSetAsideRepo):
+        return None
+    with contextlib.suppress(Exception):
+        return await store.count_set_aside_usage()
+    return known

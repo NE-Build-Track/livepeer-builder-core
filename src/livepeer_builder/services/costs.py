@@ -21,7 +21,6 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 """
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -180,10 +179,9 @@ class CostService:
         try:
             report, new_rows = await self._worker.sync_once()
         except Exception:  # the pages before the failure may have set rows aside: the table has them
-            with contextlib.suppress(Exception):  # the sync's own failure is the one to raise
-                self.set_aside_rows = await count_set_aside(self._store)
+            self.set_aside_rows = await count_set_aside(self._store, self.set_aside_rows)
             raise
-        self.set_aside_rows = await count_set_aside(self._store)  # before a later step can fail
+        self.set_aside_rows = await count_set_aside(self._store, self.set_aside_rows)  # before a later step
         affected = await self._store.match_sessions(new_rows)
         jobs = await self._store.jobs_for_projection(list(affected))
         for job in jobs:

@@ -444,7 +444,10 @@ class FakeEngine:
         if self.stopped:
             raise RuntimeError("engine is stopped; create a new one")
         if self.started:  # as the engine (#113, C27)
-            raise RuntimeError("engine is already started; stop() it, then create a new one to start again")
+            raise RuntimeError(
+                "engine is already started; stop() it, then create a new one to start again. "
+                "To serve an engine you start yourself, pass create_app(engine, manage_lifecycle=False)"
+            )
         self.started = True
 
     async def stop(self) -> None:

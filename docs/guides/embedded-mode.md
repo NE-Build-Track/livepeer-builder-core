@@ -67,7 +67,7 @@ twice and closes everything the engine opened; an engine is single-use, so after
 A second `start()` on a running engine raises `RuntimeError` and changes nothing: the loops run once
 (#113, C27). The REST app's lifespan is such a second start: `create_app(engine)` on an engine you
 already started fails at startup and leaves the engine running. To serve an engine you start and stop
-yourself, pass `create_app(engine, manage_lifecycle=False)`.
+yourself, pass `create_app(engine, manage_lifecycle=False)`; the error says so too.
 If construction fails part-way, whatever it had already opened is closed before the error reaches you. So
 is a failed `start()` (a store error, or a cancellation): the engine stops, which also covers
 `async with engine:`, whose exit does not run when entry fails.

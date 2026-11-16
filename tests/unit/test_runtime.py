@@ -574,7 +574,8 @@ async def test_the_http_lifespan_on_a_running_engine_is_refused_and_leaves_it_ru
     await engine.start()  # the application starts its own engine (embedded-mode.md)
     loops = {task for task in asyncio.all_tasks() if task.get_name() in LOOPS}
     app = create_app(engine)  # manage_lifecycle is on by default
-    with pytest.raises(RuntimeError, match="already started"):
+    # The error names the remedy for this caller: stopping the engine to start it again is not it.
+    with pytest.raises(RuntimeError, match=r"already started.*create_app\(engine, manage_lifecycle=False\)"):
         async with app.router.lifespan_context(app):
             pytest.fail("the app must not serve when start() is refused")
     assert {task for task in asyncio.all_tasks() if task.get_name() in LOOPS} == loops

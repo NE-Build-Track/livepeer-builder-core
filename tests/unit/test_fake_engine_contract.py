@@ -293,7 +293,8 @@ async def test_a_second_start_on_a_running_engine_is_refused(side: Side) -> None
     """#113 C27: an application that starts its engine twice hears of it from the fake too."""
     async with side() as engine:
         await engine.start()
-        with pytest.raises(RuntimeError, match="engine is already started"):
+        # The refusal names the way out for whoever serves an engine they started (review of #140).
+        with pytest.raises(RuntimeError, match=r"engine is already started.*manage_lifecycle=False"):
             await engine.start()
         assert engine.health().ready  # the running engine carries on
         await engine.stop()

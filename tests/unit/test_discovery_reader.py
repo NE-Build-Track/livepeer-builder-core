@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from livepeer_builder.adapters.discovery_inventory import read_inventory
+from livepeer_builder.adapters.discovery_inventory import UnreadableInventory, read_inventory
 from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents
 from livepeer_builder.errors import RunnerCallError
 
@@ -23,6 +23,14 @@ _METADATA = '[{"nodes":[{"url":"https://orch.example","queried_at":"2026-10-22T1
 
 def _envelope(record: str, address: str = "https://orch.example/deployment") -> str:
     return '[{"address":"' + address + '","runners":[' + record + "]}]"
+
+
+def _skips_its_only_record(body: str) -> bool:
+    """The reader skipped the document's one record. With no runner read, that is an answer the engine
+    could not read, not an empty inventory (#114, C28)."""
+    with pytest.raises(UnreadableInventory, match=r"no readable runner: \d entries and \d runners skipped"):
+        read_inventory(body)
+    return True
 
 
 def test_every_runner_node_serves_is_read_with_its_exact_price() -> None:
@@ -131,7 +139,7 @@ def test_a_document_node_accepts_is_read(body: str) -> None:
 
 @pytest.mark.parametrize("body", _SKIPPED.values(), ids=_SKIPPED.keys())
 def test_a_runner_the_engine_cannot_use_is_skipped(body: str) -> None:
-    assert read_inventory(body) == ()
+    assert _skips_its_only_record(body)
 
 
 @pytest.mark.parametrize("body", ["[]", _METADATA, '[{"nodes":[],"runners":[]}]'])
@@ -162,11 +170,13 @@ def test_an_empty_or_metadata_only_document_has_no_runners(body: str) -> None:
     ],
 )
 def test_a_runner_url_the_engine_cannot_send_is_skipped(url: str) -> None:
-    assert read_inventory(_envelope(_RUNNER.replace("https://orch.example/app", json.dumps(url)[1:-1]))) == ()
+    assert _skips_its_only_record(
+        _envelope(_RUNNER.replace("https://orch.example/app", json.dumps(url)[1:-1]))
+    )
 
 
 def test_an_address_aiohttp_would_connect_to_under_another_name_skips_its_entry() -> None:
-    assert read_inventory(_envelope(_RUNNER, "https://\u246027.0.0.1")) == ()
+    assert _skips_its_only_record(_envelope(_RUNNER, "https://\u246027.0.0.1"))
 
 
 @pytest.mark.parametrize(
@@ -254,4 +264,4 @@ def test_a_lowercase_rfc_3339_stamp_is_read() -> None:
     ],
 )
 def test_a_stamp_that_is_not_rfc_3339_or_does_not_convert_skips_the_runner(stamp: str) -> None:
-    assert read_inventory(_envelope(_RUNNER.replace("2026-10-22T18:05:00.123+01:00", stamp))) == ()
+    assert _skips_its_only_record(_envelope(_RUNNER.replace("2026-10-22T18:05:00.123+01:00", stamp)))

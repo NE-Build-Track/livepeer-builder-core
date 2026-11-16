@@ -94,6 +94,22 @@ class SqlCostSnapshot:
                 costs[cost.job_id] = cost
         return [(job, costs.get(job.id)) for job in jobs]
 
+    async def attempt_allocations(
+        self, application_id: str, actor_id: str | None
+    ) -> dict[tuple[UUID, int], str]:
+        """The allocation that paid each attempt of the actor's jobs (the application's with no actor), for
+        the attempts that record one (#115, C9)."""
+        attempts = t.attempts.c
+        query = (
+            select(attempts.job_id, attempts.number, attempts.allocation_id)
+            .join(t.jobs, t.jobs.c.id == attempts.job_id)
+            .where(t.jobs.c.application_id == application_id, attempts.allocation_id.is_not(None))
+        )
+        if actor_id is not None:
+            query = query.where(t.jobs.c.actor_id == actor_id)
+        found = await self._conn.execute(query)
+        return {(UUID(job_id), number): allocation_id for job_id, number, allocation_id in found}
+
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]:
         return await usage_for_payment_sessions(self._conn, payment_session_ids)
 

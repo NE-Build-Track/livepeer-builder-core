@@ -115,6 +115,15 @@ classDiagram
         +async unattributed_usage(allocation_id) UsageRow[]
         +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
     }
+    class AllocationCostSnapshot {
+        <<interface>>
+        +async attempt_allocations(application_id, actor_id) map
+        +async job_with_projection(job_id) tuple~Job JobCost?~?
+        +async projections_and_unprojected(application_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
+        +async recent_with_projections(application_id, actor_id, limit) tuple~Job JobCost?~[]
+        +async unattributed_usage(allocation_id) UsageRow[]
+        +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
+    }
     class Clock {
         <<interface>>
         +now() datetime
@@ -170,6 +179,7 @@ classDiagram
     ActorCommandRepo <|.. SqlStore
     UsageSetAsideRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
+    AllocationCostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
     EventFeed <|.. ReservedEventFeed
     SessionManager <|.. ReservedSessions
@@ -201,6 +211,7 @@ classDiagram
 | `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
+| `AllocationCostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |
 | `EventFeed` | `ReservedEventFeed` | `livepeer_builder.services.reserved` |
 | `SessionManager` | `ReservedSessions` | `livepeer_builder.services.reserved` |

@@ -165,7 +165,11 @@ checks stop that:
   the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
   that is not provisioned (the rotation's new key is on a revoked allocation, and its secret is
   deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
-  deletes the secret of a key a rotation stored meanwhile. Before, each of these commands saved the
+  deletes the secret of a key a rotation stored meanwhile. A revoke that another revoke overtook
+  answers with the revoked actor as stored, as a repeat does. If the actor was provisioned again
+  before it wrote, it writes nothing and answers with the allocation it revoked, `revoked`: the
+  answer to a revoke is never an active actor, and the new allocation is read with
+  `GET /v1/admin/applications/{application_id}/actors/{actor_id}/allocation`. Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
   revoked, and any of them could put a revoked actor back to `active`.
 

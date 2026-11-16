@@ -185,6 +185,31 @@ async def test_two_revokes_at_once_answer_alike(desk: Desk, manager: FakeAllocat
     assert await desk.payments.get_actor(desk.admin, "default", "alice") == answers[0]
 
 
+async def test_a_revoke_overtaken_by_a_revoke_and_a_new_provisioning_answers_for_its_own_allocation(
+    desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
+) -> None:
+    """Review of #148: while a revoke was at the provider the actor was revoked by another and
+    provisioned again. Its write is refused, as the row is another allocation's, and it then answered
+    with the actor as stored: ``active``, as the result of a revoke. It answers for the allocation it
+    revoked, and the new provisioning is as it was."""
+    first = await desk.payments.provision(desk.admin, provision_request())
+
+    async def revoked_and_provisioned_again() -> None:
+        await desk.revoke()
+        again = provision_request().model_copy(update={"operation_ref": "provision-again"})
+        await desk.payments.provision(desk.admin, again)
+
+    during(manager, "revoke_allocation", revoked_and_provisioned_again)
+    answer = await desk.revoke()
+
+    stored = await desk.payments.get_actor(desk.admin, "default", "alice")
+    assert (stored.status, stored.allocation_id != first.allocation_id) == ("active", True)
+    assert (answer.status, answer.allocation_id) == ("revoked", first.allocation_id)
+    assert [allocation.status for allocation in manager.allocations.values()] == ["revoked", "active"]
+    assert (await desk.payments.credential(alice)).token == manager.keys[stored.api_key_id][1]
+    assert list(vault.values) == [stored.secret_ref.ref]
+
+
 async def test_a_fund_moves_exhausted_to_active(desk: Desk) -> None:
     provisioned = await desk.payments.provision(desk.admin, provision_request("0"))
     assert provisioned.status == "exhausted"

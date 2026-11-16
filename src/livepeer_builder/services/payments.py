@@ -305,7 +305,12 @@ class PaymentsService:
         await self._secrets.delete(actor.secret_ref)
         revoked = await self._writes.status(actor, "revoked")
         if revoked is None:  # another revoke wrote it first: answer as a repeat does
-            return await self._store.get_actor(application_id, actor_id) or actor
+            stored = await self._store.get_actor(application_id, actor_id)
+            if stored is not None and stored.allocation_id == actor.allocation_id:
+                return stored
+            # Provisioned again since: the row is another allocation's, perhaps live. The answer is the
+            # allocation this call revoked, never an active actor as the result of a revoke.
+            return actor.model_copy(update={"status": "revoked", "updated_at": self._clock.now()})
         if revoked.secret_ref != actor.secret_ref:  # a rotation stored a new key meanwhile: forget it too
             await self._secrets.delete(revoked.secret_ref)
         return revoked

@@ -53,9 +53,9 @@ def _engine_url_port(text: str, setting: str, host: str) -> int:
 
 
 def test_the_signer_and_discovery_listen_where_the_engine_calls_them() -> None:
-    """livepeer/node f45d83f (boa v1.0.4) refuses a non-loopback bind without ``unsafe@`` and exits. The
-    engine calls both over the compose network, so neither may listen on loopback. Their metrics stay on
-    loopback: those ports are not published."""
+    """livepeer/node (boa v1.0.4 at f45d83f, v1.0.5 at v1.0.7) refuses a non-loopback bind without
+    ``unsafe@`` and exits. The engine calls both over the compose network, so neither may listen on
+    loopback. Their metrics stay on loopback: those ports are not published."""
     engine_calls = {
         "signer": _engine_url_port((STACK / ".env.example").read_text(), "LPB_SIGNER_URL", "clearinghouse"),
         "discovery": _engine_url_port((STACK / "compose.yaml").read_text(), "LPB_DISCOVERY_URL", "discovery"),

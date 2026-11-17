@@ -697,6 +697,6 @@ ever sent twice: aiohttp's resend of an idempotent request on a dropped connecti
 every runner request (D56).
 
 The engine sends the runner request itself (D53), so no SDK change is needed: the SDK stays
-pinned to upstream `2017a80`. An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
+pinned to upstream `main` (`7dc2a07` now, `2017a80` when this was written). An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
 ([SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6)); that PR is
 replaced by this one. No streaming uploads or provider-specific request processing is added.

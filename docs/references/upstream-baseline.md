@@ -101,18 +101,20 @@ SHAs, so `.github/workflows/upstream.yml` does:
 1. Read each SHA from those files (the same source the tests use).
 2. Compare it with the upstream default-branch HEAD and, when one exists, the latest GitHub
    release. A release that is *behind* the pin (the SDK's `v1.0.0`) is not an update.
-3. On the daily cron, or `workflow_dispatch` with **Open or update tracking issues**, open or
+3. On the daily cron, or a default-branch `workflow_dispatch` with **Open or update tracking issues**, open or
    refresh **one** issue labelled `upstream-update` per dependency that has moved. The body has the
    current pin, the new SHA or tag, and a compare URL. A later run updates that issue instead of
-   opening another; it closes the issue when the pin catches up.
+   opening another. It closes the issue when the pin catches up and reopens a closed tracker when
+   its comparison changes.
 
 Pull requests run the same comparison and write a table to the job summary; they do not open
 issues. All three upstream repositories are public, so `GITHUB_TOKEN` is enough. If one of them is
 made private, add a repository secret named `UPSTREAM_GITHUB_TOKEN` (a PAT that can read that
-upstream). The script prefers that secret over `GITHUB_TOKEN`.
+upstream). The script uses that secret for upstream reads and `GITHUB_TOKEN` for tracking issues.
 
 Run it locally with `python scripts/check_upstream.py`. Add `--notify` only when
-`GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set.
+`GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set. A local run with a personal token manages trackers
+owned by that account. Use the default-branch workflow dispatch to update the scheduled bot's trackers.
 
 ## Licenses
 

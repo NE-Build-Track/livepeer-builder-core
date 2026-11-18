@@ -27,6 +27,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 API = "https://api.github.com"
 LABEL = "upstream-update"
+ACTIONS_BOT = "github-actions[bot]"
 LABEL_COLOR = "fbca04"
 LABEL_DESCRIPTION = "An upstream pin (SDK, node, or Batteries) has a newer commit or release"
 USER_AGENT = "livepeer-builder-upstream-check"
@@ -128,8 +129,8 @@ class Report:
 
     @property
     def fingerprint(self) -> str:
-        release = self.release.sha if self.release and self.release.ahead > 0 else "none"
-        return f"head={self.head.sha}|release={release}"
+        release = f"{self.release.sha}@{self.release.label}" if self.release else "none"
+        return f"pin={self.pin.sha}|head={self.head.sha}|release={release}"
 
 
 class GitHub:
@@ -293,7 +294,8 @@ def probe(github: GitHub, pin: Pin) -> Report:
 
 
 def compare_url(report: Report) -> str:
-    return f"https://github.com/{report.repo}/compare/{report.pin.sha}...{report.head.sha}"
+    target = report.release if report.head.ahead == 0 and report.release else report.head
+    return f"https://github.com/{report.repo}/compare/{report.pin.sha}...{target.sha}"
 
 
 def issue_title(report: Report) -> str:
@@ -330,7 +332,7 @@ def issue_body(report: Report) -> str:
 
 
 def _marker_in(body: str, repo: str) -> bool:
-    return MARKER.format(repo=repo) in (body or "")
+    return body.partition("\n")[0].rstrip("\r") == MARKER.format(repo=repo)
 
 
 def _fingerprint_in(body: str) -> str | None:
@@ -338,16 +340,31 @@ def _fingerprint_in(body: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _open_issues(github: GitHub, repository: str) -> list[dict[str, Any]]:
+def _same_comparison(issue: dict[str, Any], report: Report) -> bool:
+    body = issue.get("body") or ""
+    fingerprint = _fingerprint_in(body)
+    if fingerprint == report.fingerprint:
+        return True
+    # Preserve dismissals made before the fingerprint included the pin and release tag.
+    release = report.release
+    old_release = release.sha if release and release.ahead > 0 else "none"
+    release_text = f"[{release.label}](" if release else "_none_"
+    return (
+        issue["state"] == "closed"
+        and fingerprint == f"head={report.head.sha}|release={old_release}"
+        and f"- **Current pin:** `{report.pin.sha}`" in body
+        and f"- **Latest release:** {release_text}" in body
+    )
+
+
+def _tracking_issues(github: GitHub, repository: str, creator: str) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     page = 1
-    while page <= 10:
+    while True:
         batch = github.get(
             f"/repos/{repository}/issues",
-            {"state": "open", "per_page": "100", "page": str(page)},
+            {"state": "all", "creator": creator, "labels": LABEL, "per_page": "100", "page": str(page)},
         )
-        if not isinstance(batch, list) or not batch:
-            break
         issues.extend(item for item in batch if "pull_request" not in item)
         if len(batch) < 100:
             break
@@ -374,26 +391,40 @@ def notify(
     github: GitHub,
     repository: str,
     reports: Sequence[Report],
+    creator: str = ACTIONS_BOT,
 ) -> list[str]:
     """Open, update or close one tracking issue per dependency. Returns one line per action."""
     _ensure_label(github, repository)
-    open_issues = _open_issues(github, repository)
+    trackers = _tracking_issues(github, repository, creator)
     actions: list[str] = []
     for report in reports:
-        existing = next(
-            (issue for issue in open_issues if _marker_in(str(issue.get("body") or ""), report.repo)),
-            None,
+        existing = max(
+            (issue for issue in trackers if _marker_in(issue.get("body") or "", report.repo)),
+            key=lambda issue: (issue["state"] == "open", issue["number"]),
+            default=None,
         )
         if not report.has_update:
-            if existing is not None:
+            if existing is not None and existing["state"] == "open":
                 number = int(existing["number"])
+                message = f"The pin in `{report.pin.upstream.pin_file}` has caught up at `{report.pin.sha}`."
                 github.post(
                     f"/repos/{repository}/issues/{number}/comments",
-                    {"body": f"The pin now matches `{report.pin.sha}` (`{report.default_branch}`). Closing."},
+                    {"body": message},
                 )
                 github.patch(
                     f"/repos/{repository}/issues/{number}",
-                    {"state": "closed", "state_reason": "completed"},
+                    {
+                        "state": "closed",
+                        "state_reason": "completed",
+                        "body": "\n".join(
+                            [
+                                MARKER.format(repo=report.repo),
+                                FINGERPRINT.format(value=report.fingerprint),
+                                "",
+                                message,
+                            ]
+                        ),
+                    },
                 )
                 actions.append(f"closed #{number} for {report.repo} (pin caught up)")
             else:
@@ -409,23 +440,20 @@ def notify(
             actions.append(f"opened #{created['number']} for {report.repo}")
             continue
         number = int(existing["number"])
-        if _fingerprint_in(str(existing.get("body") or "")) == report.fingerprint:
+        if _same_comparison(existing, report):
             actions.append(f"unchanged #{number} for {report.repo}")
             continue
-        github.patch(
-            f"/repos/{repository}/issues/{number}",
-            {"title": title, "body": body, "labels": [LABEL]},
-        )
+        changes = {"title": title, "body": body}
+        reopened = existing["state"] == "closed"
+        if reopened:
+            changes["state"] = "open"
+        github.patch(f"/repos/{repository}/issues/{number}", changes)
         github.post(
             f"/repos/{repository}/issues/{number}/comments",
-            {
-                "body": (
-                    f"Upstream moved again. Default branch is now `{report.head.sha}`"
-                    f" ({report.head.ahead} commit(s) ahead). Compare: {compare_url(report)}"
-                )
-            },
+            {"body": f"Updated the comparison for pin `{report.pin.sha}`. Compare: {compare_url(report)}"},
         )
-        actions.append(f"updated #{number} for {report.repo}")
+        action = "reopened" if reopened else "updated"
+        actions.append(f"{action} #{number} for {report.repo}")
     return actions
 
 
@@ -491,10 +519,15 @@ def main(argv: Sequence[str] | None = None, github: GitHub | None = None) -> int
         if not args.repository:
             sys.stderr.write("check_upstream: --notify needs --repository or GITHUB_REPOSITORY\n")
             return 2
-        if token_from_env() is None and github is None:
-            sys.stderr.write("check_upstream: --notify needs GITHUB_TOKEN or UPSTREAM_GITHUB_TOKEN\n")
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token and github is None:
+            sys.stderr.write("check_upstream: --notify needs GITHUB_TOKEN\n")
             return 2
-        actions = notify(client, args.repository, reports)
+        destination = github or GitHub(token=token)
+        creator = ACTIONS_BOT
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            creator = destination.get("/user")["login"]
+        actions = notify(destination, args.repository, reports, creator)
     text = render(reports, actions)
     sys.stdout.write(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

@@ -7,8 +7,10 @@ mean the signer and discovery are not the same node. Failure messages say which 
 from __future__ import annotations
 
 import runpy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -34,7 +36,15 @@ class FakeGitHub:
         params: dict[str, str] | None = None,
     ) -> Any:
         if path.endswith("/issues"):
-            return list(self.issues)
+            assert params is not None
+            assert params["state"] == "all"
+            issues = [
+                issue
+                for issue in self.issues
+                if issue["user"]["login"] == params["creator"] and params["labels"] in issue["labels"]
+            ]
+            start = (int(params["page"]) - 1) * int(params["per_page"])
+            return issues[start : start + int(params["per_page"])]
         if path in self.missing:
             raise CHECK["GitHubError"]("GET", path, 404, "Not Found")
         assert path in self.gets, f"unexpected GET {path} {params}"
@@ -52,6 +62,8 @@ class FakeGitHub:
                 "title": body["title"],
                 "body": body["body"],
                 "labels": body.get("labels", []),
+                "user": {"login": CHECK["ACTIONS_BOT"]},
+                "state": "open",
             }
             self.next_number += 1
             self.issues.append(issue)
@@ -69,8 +81,6 @@ class FakeGitHub:
             for issue in self.issues:
                 if issue["number"] == number:
                     issue.update(body)
-                    if body.get("state") == "closed":
-                        self.issues.remove(issue)
                     break
         return {}
 
@@ -238,6 +248,7 @@ def test_notify_opens_one_issue_and_refreshes_it_instead_of_duplicating() -> Non
     second = CHECK["notify"](github, "NE-Build-Track/livepeer-builder-core", [report])
     assert second == ["unchanged #1 for livepeer/livepeer-python-gateway"]
     assert len(github.issues) == 1
+    github.issues[0]["labels"].append("triaged")
     moved = CHECK["Report"](
         pin=report.pin,
         default_branch=report.default_branch,
@@ -253,6 +264,7 @@ def test_notify_opens_one_issue_and_refreshes_it_instead_of_duplicating() -> Non
     assert third == ["updated #1 for livepeer/livepeer-python-gateway"]
     assert len(github.issues) == 1
     assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in github.issues[0]["body"]
+    assert github.issues[0]["labels"] == [CHECK["LABEL"], "triaged"]
 
 
 def test_notify_closes_the_issue_when_the_pin_has_caught_up() -> None:
@@ -261,6 +273,9 @@ def test_notify_closes_the_issue_when_the_pin_has_caught_up() -> None:
     github.issues.append(
         {
             "number": 9,
+            "user": {"login": CHECK["ACTIONS_BOT"]},
+            "labels": [CHECK["LABEL"]],
+            "state": "open",
             "title": "Upstream update: livepeer/node",
             "body": "<!-- upstream-update: livepeer/node -->\n<!-- upstream-fingerprint: head=old release=none -->\n",
         }
@@ -270,7 +285,7 @@ def test_notify_closes_the_issue_when_the_pin_has_caught_up() -> None:
     report = CHECK["probe"](github, pin)
     actions = CHECK["notify"](github, "NE-Build-Track/livepeer-builder-core", [report])
     assert actions == ["closed #9 for livepeer/node (pin caught up)"]
-    assert github.issues == []
+    assert github.issues[0]["state"] == "closed"
     assert any(path.endswith("/issues/9") and body.get("state") == "closed" for path, body in github.patched)
 
 
@@ -289,3 +304,86 @@ def test_main_report_only_does_not_open_issues() -> None:
     assert CHECK["main"]([], github=github) == 0
     assert github.issues == []
     assert github.posted == []
+
+
+def test_notify_only_changes_owned_trackers_even_beyond_page_ten() -> None:
+    github = FakeGitHub()
+    pin = _pin("sdk", "1111111")
+    _wired(github, pin.upstream.repo, pin.sha, head="2222222", ahead=1)
+    report = CHECK["probe"](github, pin)
+    notify = CHECK["notify"]
+    repo = "owner/project"
+    notify(github, repo, [report])
+    tracker = github.issues[0]
+    github.issues[:0] = [
+        dict(tracker, number=2, user={"login": "contributor"}),
+        dict(tracker, number=3, labels=[]),
+        dict(tracker, number=4, pull_request={}),
+        *(dict(tracker, number=number, body="unrelated") for number in range(5, 1006)),
+    ]
+    _wired(github, pin.upstream.repo, pin.sha, head=pin.sha, ahead=0)
+    assert notify(github, repo, [CHECK["probe"](github, pin)]) == [
+        "closed #1 for livepeer/livepeer-python-gateway (pin caught up)"
+    ]
+    assert tracker["state"] == "closed"
+    assert all(issue["state"] == "open" for issue in github.issues[:-1])
+
+
+def test_partial_pin_bump_and_release_retag_refresh_the_same_tracker() -> None:
+    github = FakeGitHub()
+    pin = _pin("node", "1111111")
+    _wired(github, pin.upstream.repo, pin.sha, head="3333333", ahead=3, release_tag="v1", release_ahead=3)
+    report = CHECK["probe"](github, pin)
+    notify = CHECK["notify"]
+    repo = "owner/project"
+    notify(github, repo, [report])
+    moved = replace(report, pin=replace(pin, sha="2222222"))
+    assert notify(github, repo, [moved]) == ["updated #1 for livepeer/node"]
+    assert "2222222...3333333" in github.issues[0]["body"]
+    github.issues[0]["state"] = "closed"
+    assert notify(github, repo, [moved]) == ["unchanged #1 for livepeer/node"]
+    assert github.issues[0]["state"] == "closed"
+    github.issues[0]["body"] = github.issues[0]["body"].replace(
+        moved.fingerprint, f"head={moved.head.sha}|release={moved.release.sha}"
+    )
+    assert notify(github, repo, [moved]) == ["unchanged #1 for livepeer/node"]
+    retagged = replace(moved, release=replace(moved.release, label="v2"))
+    assert notify(github, repo, [retagged]) == ["reopened #1 for livepeer/node"]
+    assert github.issues[0]["state"] == "open"
+    assert "[v2]" in github.issues[0]["body"]
+
+
+def test_release_only_notification_links_to_its_commits() -> None:
+    github = FakeGitHub()
+    pin = _pin("node", "1111111")
+    _wired(
+        github,
+        pin.upstream.repo,
+        pin.sha,
+        pin.sha,
+        0,
+        release_tag="v1",
+        release_sha="2222222",
+        release_ahead=1,
+    )
+    report = CHECK["probe"](github, pin)
+    assert report.has_update
+    assert f"/compare/{pin.sha}...2222222" in CHECK["issue_body"](report)
+
+
+def test_main_keeps_upstream_reads_and_issue_writes_on_their_own_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream = FakeGitHub()
+    destination = FakeGitHub()
+    monkeypatch.setenv("UPSTREAM_GITHUB_TOKEN", "upstream-read")
+    monkeypatch.setenv("GITHUB_TOKEN", "destination-write")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    for pin in CHECK["load_pins"]():
+        _wired(upstream, pin.upstream.repo, pin.sha, "2222222", 1)
+    clients = {"upstream-read": upstream, "destination-write": destination}
+    with patch.dict(CHECK["main"].__globals__, GitHub=lambda token: clients[token]):
+        assert CHECK["main"](["--notify", "--repository", "owner/project"]) == 0
+    assert upstream.posted == []
+    assert len(destination.issues) == 3

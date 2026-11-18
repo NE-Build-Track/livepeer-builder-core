@@ -1,0 +1,50 @@
+# Compare the SDK, livepeer/node and Batteries git SHA pins with upstream.
+# Schedule and workflow_dispatch --notify open one upstream-update issue per dependency.
+name: upstream pins
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      notify:
+        description: Open or update tracking issues
+        type: boolean
+        default: false
+  pull_request:
+  push:
+    branches: [main, "releases/**"]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pins:
+    name: compare pinned SHAs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare pins with upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional. Public upstreams (livepeer/livepeer-python-gateway, livepeer/node,
+          # livepeer/clearinghouse-batteries) work with GITHUB_TOKEN. If one of those
+          # repositories is made private, set this repository secret to a PAT that can
+          # read it; the script prefers UPSTREAM_GITHUB_TOKEN over GITHUB_TOKEN.
+          UPSTREAM_GITHUB_TOKEN: ${{ secrets.UPSTREAM_GITHUB_TOKEN }}
+        run: |
+          notify=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            notify=--notify
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.notify }}" = "true" ]; then
+            notify=--notify
+          fi
+          python3 scripts/check_upstream.py $notify

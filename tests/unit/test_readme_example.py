@@ -35,17 +35,17 @@ async def quick_start(
 
 
 async def test_the_quick_start_runs_a_job_and_reads_its_cost(tmp_path: Path) -> None:
+    from livepeer_builder import generate_secret_key
     from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, ScriptedTransport, runner
     from livepeer_builder.testing.discovery import serve
+    from tests.conftest import provision
 
     settings = EngineSettings.model_validate(
         {
             # A file, as a deployment runs it. A started engine on in-memory SQLite shares one connection
             # between the job and the background loops, which is not safe under concurrent writes.
             "database_url": f"sqlite+aiosqlite:///{tmp_path}/quick-start.db",
-            "allocation_mode": "per_application",
-            "shared_payment_key": "lpg_example",
-            "shared_allocation_id": "alloc_example",
+            "secret_key": generate_secret_key(),
             "log_json": False,
             "discovery_url": "http://discovery.test/discovery",
         }
@@ -57,6 +57,12 @@ async def test_the_quick_start_runs_a_job_and_reads_its_cost(tmp_path: Path) -> 
         usage_source=FakeUsageSource(),  # the cost loop runs: its first sync must not leave this job none (#33)
     )
     try:
+        # An admin provisions the customer once, before its first job: nothing else pays for it.
+        desk = await BuilderEngine.create(settings, supply=offline, decorate=install)
+        try:
+            await provision(desk, ActorContext(actor_id="customer-42"))
+        finally:
+            await desk.stop()
         cost = await quick_start(settings, offline, install)
     finally:
         await client.aclose()

@@ -3,13 +3,14 @@
 import contextlib
 import gc
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from decimal import Decimal
 from typing import Any
 
 import pytest
 from livepeer_gateway.remote_signer import get_signer_info
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, Runner
+from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest, Runner
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import (
     FakeAllocationManager,
@@ -94,6 +95,21 @@ def bob() -> ActorContext:
 
 
 EngineFactory = Callable[..., Awaitable[BuilderEngine]]
+
+
+async def provision(engine: BuilderEngine, *actors: ActorContext) -> None:
+    """Give each actor an allocation of 5 USD, as an admin does. A job needs one: an actor with no
+    allocation fails ``not_provisioned`` before any payment, and there is no shared key."""
+    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    for actor in actors:
+        request = ProvisionRequest(
+            operation_ref=f"provision:{actor.application_id}:{actor.actor_id}",
+            application_id=actor.application_id,
+            actor_id=actor.actor_id,
+            amount=Money(amount=Decimal(5), currency="USD"),
+            grant_id="grant_1",
+        )
+        await engine.payments.provision(operator, request)
 
 
 @pytest.fixture

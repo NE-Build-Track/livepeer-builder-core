@@ -198,11 +198,7 @@ async def test_a_decorated_default_discovery_source_is_the_configured_one() -> N
     app = web.Application()
     app.router.add_get("/discovery", inventory)
     async with TestServer(app) as discovery:
-        configured = settings(
-            discovery_url=str(discovery.make_url("/discovery")),
-            signer_url="http://signer",
-            shared_payment_key="lpg_k",
-        )
+        configured = settings(discovery_url=str(discovery.make_url("/discovery")), signer_url="http://signer")
         recording: list[Recording] = []
 
         def decorate(parts: EngineParts) -> EngineParts:

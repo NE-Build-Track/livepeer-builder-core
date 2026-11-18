@@ -263,7 +263,8 @@ class JobService:
         paid = credential.token is not None and getattr(self._transport, "pays", True)  # no signer, no pay
         # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
         # tries it last, and if every runner refuses the job fails ``refused`` through failover. A job
-        # that pays is not tried on runners that all advertise zero: a full runner's refusal costs a ticket.
+        # that pays is not tried on runners that all advertise zero: a full runner's refusal can cost a
+        # ticket.
         if paid and not (candidates := paid_candidates(candidates)):
             raise await self._fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
         ordered = tuple(self._selection.order(candidates, request))

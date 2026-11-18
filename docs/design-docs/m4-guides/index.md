@@ -22,19 +22,37 @@ answers that did:
 - **ISS-35:** the wrong-match defect is fixed, and a total of purged fees is kept. A test on 13 November
   confirmed that reconciliation otherwise stops balancing.
 
+**ISS-31 was replaced on 18 November 2026** (D82 to D86). The second payment configuration is a payment
+clearinghouse: an engine in front of Batteries and the signer that does payments only, with tenants,
+tenant admins and a clearinghouse admin. `per_actor` is the only allocation mode, and names follow the
+domain language. The ISS-31 guide is rewritten, and every other guide carries an "Amended on 18 November
+2026" section. What each one takes:
+
+- **ISS-28:** the recovery value `operator` becomes `admin`.
+- **ISS-29:** the route groups and names; `GET /v1/me` returns the tenant; the application parameter on
+  admin reads goes; the grant funding route becomes the nested top-up route.
+- **ISS-32:** the two examples are an embedded engine and an engine server, and one pays through a
+  clearinghouse.
+- **ISS-33:** the kinds and the tenant claim. Identity providers stay at the enterprise's own engine.
+- **ISS-34:** the reference app allots an allocation for each user.
+- **ISS-35:** tenant isolation at the clearinghouse, and its private listener.
+- **ISS-36:** the second configuration in the matrix.
+- **ISS-46:** the events feed belongs to the work half, and its schema says tenant.
+- **ISS-26, ISS-27, ISS-30:** names only.
+
 **Related tickets, all builder-core issues on the board under M4.** The hardening and upkeep tickets, #112
 to #117, come from the review of the `v0.2.0` release, and the hardening fixes merge before any feature
 work. The stretch tickets, #118 to #124, hold the parts of #73 and #86 that the ISS-27 and ISS-46 guides
-left out; any of them may move to M5.
+left out; any of them may move to M5. The payment clearinghouse work is #162 to #169, eight sub-issues of
+ISS-31 that gate M4 with it.
 
 **The runner standard.** ISS-47 (runner contract v1) is not vetted yet. ISS-48, its adoption in the engine,
 is the last feature of M4 and may move to M5, and it has no guide here yet. ISS-26 to ISS-30 no longer
 depend on it: they route by app ID, as today, and each guide notes where the standard plugs in later.
 
 **No M4 guide needs an upstream change.** ISS-27 vendors two SDK functions (the reserve-response parser
-and `stop_runner_session`), fingerprinted as D53 did. Per-actor allocations under a separately operated
-payment service would need grant-scoped Batteries credentials, which cannot be vendored; ISS-31 works
-around it.
+and `stop_runner_session`), fingerprinted as D53 did. The payment clearinghouse needs no grant-scoped
+Batteries credentials, because no Batteries credential leaves the clearinghouse (ISS-31).
 
 ## Review agenda
 
@@ -48,7 +66,7 @@ the SDK's `run_payments()`, and ISS-27 and ISS-28 read its result instead of own
 | 1 | [iss-26-async-jobs.md](iss-26-async-jobs.md) | John | ISS-14, ISS-15, ISS-19 | A database-backed queue and an in-process worker; stored results with their own retention; polling, no webhooks yet; restart rules | Q1–Q7 |
 | 2 | [iss-27-persistent-endpoints.md](iss-27-persistent-endpoints.md) | John | ISS-14, ISS-19 | Sessions as jobs holding one paid reservation; #73's reserve and relay, narrowed; the SDK funding loop's result read, not dropped | Q1–Q8 |
 | 3 | [iss-28-failure-recovery.md](iss-28-failure-recovery.md) | John | ISS-15, ISS-26, ISS-27 | `Failure.kind` stays the fact; derived `category` and `recovery`; one table across all four modes; T17 | Q1–Q4 |
-| 4 | [iss-31-payment-configurations.md](iss-31-payment-configurations.md) | John | ISS-13 | The second configuration is a separately operated payment service (`per_application`, read-only operator credential, no money moves from the engine) | Q1–Q4 |
+| 4 | [iss-31-payment-configurations.md](iss-31-payment-configurations.md) | John | ISS-13 | The second configuration is a payment clearinghouse: tenants, the engine's work and clearinghouse halves, `per_actor` only, a public and a private listener (rewritten 18 November, D82 to D86) | Locked 18 November |
 | 5 | [iss-29-rest-coverage.md](iss-29-rest-coverage.md) | John | ISS-18, ISS-20, ISS-28 | A `code` on every error; a REST contract with a coverage test; keyset paging; a compatibility check against the last tag | Q1–Q5 |
 | 6 | [iss-30-mcp.md](iss-30-mcp.md) | John | ISS-29 | An MCP adapter beside `http/`, streamable HTTP, mounted by `lpb serve` under an `[mcp]` extra; the same authorization as REST | Q1–Q7 |
 | 7 | [iss-32-embedding-and-extensions.md](iss-32-embedding-and-extensions.md) | John | ISS-07, ISS-29, ISS-30 | "Proved" = a release-candidate tag, examples installed from its wheel in CI, every consumer pinned to it; the trusted-backend authenticator | Q1–Q6 |
@@ -69,7 +87,8 @@ Found while writing these guides and checked against the code; each is handled i
   follows the attempt, not the job. `finish_job` has no state guard. ISS-28.
 - **FakeEngine runs every job as `immediate`**, and `JobService.submit` is not on the public facade. ISS-26.
 - **The docs disagree on the second payment configuration**: the console calls it `per_application`; the
-  plan (P4) means a separately operated payment service. ISS-31.
+  plan (P4) means a separately operated payment service. Settled on 18 November: it is a payment
+  clearinghouse, and `per_application` goes. ISS-31.
 - **Two retention risks to test first:** purging usage rows can turn an ambiguous match into a wrong one,
   and purging a job moves its delivered fees to `unattributed`. ISS-35.
 - **Nothing reads `Livepeer-Actor`**, so a service credential with `actors.assert` does nothing yet. ISS-32.

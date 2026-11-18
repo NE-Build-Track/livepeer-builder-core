@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D71 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\
@@ -82,9 +85,9 @@ the stored fact. A pure function maps the stored facts (state, failure, attempts
 | --- | --- | --- |
 | `retry` | Nothing reached a runner and nothing was paid. Repeating with the **same** `operation_ref` re-dispatches (ISS-14) | Caller, after `Retry-After` |
 | `resume` | The engine continues by itself (an async job requeued after a restart) | Nobody |
-| `check` | It may have run or been paid. Read the job and its cost; do not resubmit blindly. A new reference is new paid work | Caller, then operator if cost stays `uncertain` |
+| `check` | It may have run or been paid. Read the job and its cost; do not resubmit blindly. A new reference is new paid work | Caller, then an admin if cost stays `uncertain` |
 | `fix_request` | The request is wrong for this runner or the engine | Caller |
-| `operator` | An operator must act (fund, re-authorize, provision, fix configuration) | Operator |
+| `admin` | An admin must act (allot or top up an allocation, re-authorize, fix configuration). It was named `operator` until 18 November (D83) | The tenant admin or the clearinghouse admin, by reason; see [Amended on 18 November 2026](#amended-on-18-november-2026) |
 | `final` | It ran and failed. A new reference is new paid work, at the caller's choice | Caller |
 
 Both are **computed, never stored** (a pydantic `computed_field` on `Job`), so they appear in REST and
@@ -112,11 +115,11 @@ record get the same two words in the problem body.
 | `interrupted` (`restart`), async, no attempt | execution | queued | `resume` | async |
 | `interrupted` (`final_save_failed`) | reporting | uncertain | `check` | immediate, streamed, async |
 | `result_not_stored` (ISS-26) | reporting | failed | `check` | async |
-| `not_provisioned` | payment | failed | `operator` | all |
-| `payment` (`not_authorized`, `allowance_exhausted`) | payment | failed | `operator` | all |
+| `not_provisioned` | payment | failed | `admin` | all |
+| `payment` (`not_authorized`, `allowance_exhausted`) | payment | failed | `admin` | all |
 | `payment` (`signer_unavailable`) | payment | failed | `retry` | all |
 | `payment_unknown` (`signer_unknown`) | payment | uncertain | `check` | all |
-| cost `pending` past a threshold, `ambiguous`, `quarantined` | reporting | unchanged | `operator` (reconcile) | all |
+| cost `pending` past a threshold, `ambiguous`, `quarantined` | reporting | unchanged | `admin` (reconcile) | all |
 
 `reason` generalizes ISS-12's `PaymentReason` into `FailureReason`, adding `restart`, `final_save_failed`,
 `released`, `queue_expired` and (if Q3 of ISS-26 says yes) `cancelled`.
@@ -144,7 +147,7 @@ re-dispatch, ISS-26's requeue and the FakeEngine.
 
 ### Persistent sessions (ISS-27)
 
-From #73's session end table: signer refused before reserve → `payment`, `operator` or `retry` by
+From #73's session end table: signer refused before reserve → `payment`, `admin` or `retry` by
 reason; reserve refused after signing → D52 failover, then `refused`; client closed or limit reached →
 `succeeded`; runner released → `succeeded` if frames flowed, else `failed`, `final`; connection lost
 after signing → `uncertain`, `check`; engine restart → the session lapses, `interrupted`/`restart`,
@@ -247,7 +250,7 @@ Locked by Mike on 13 November 2026.
   then: a runner 401, 403 or 429 after payment also reads `fix_request`. The revisit belongs with ISS-48.
 - **Q4, a cost that stays `pending` too long:** health gains a count of ended jobs whose cost has been
   `pending` longer than a threshold, and the age of the oldest. Reconciliation lists them as `reporting` /
-  `operator`. The job's state and cost class do not change. The threshold is a setting, proposed default
+  `admin`. The job's state and cost class do not change. The threshold is a setting, proposed default
   one hour after the job ended.
 
 **Other decisions that touch this guide.**
@@ -277,6 +280,25 @@ no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may
   rule.
 - **The seam to keep:** `services/recovery.py` is the one classifier, so the standard's error kinds map
   into it in one place. That is also where the category of a runner's 4xx (Q3) is revisited.
+
+## Amended on 18 November 2026
+
+The recovery value `operator` becomes `admin` (D83), because the payment clearinghouse splits that person
+in two. The tables above are changed.
+
+| Reason | Who acts |
+| --- | --- |
+| `not_provisioned` | The tenant admin, who allots an allocation |
+| `allowance_exhausted` | The tenant admin, who tops up the allocation from the grant. If the grant is empty, the enterprise buys more and the clearinghouse admin tops up the grant |
+| `not_authorized` | Usually the tenant admin: a paused allocation or a rotated payment key. The clearinghouse admin if the whole tenant is paused |
+| A cost that stays `pending`, `ambiguous` or `quarantined` | Either, depending on which side holds the problem |
+
+- **One value, not two.** The engine cannot always tell which admin must act, so it reports `admin` and
+  the `reason` carries the detail.
+- **Self-hosted payments.** Both admins are the same party, so the value reads correctly there too.
+- **Failures of the clearinghouse itself**, as an enterprise's engine sees them, take the place of signer
+  failures: unreachable or not ready is `signer_unavailable` and `retry`. To be confirmed with the remote
+  adapters (#168).
 
 ## Delivery slices
 

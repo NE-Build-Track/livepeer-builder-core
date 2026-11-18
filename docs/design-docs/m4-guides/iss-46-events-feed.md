@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D75 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 2 November 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\
@@ -481,7 +484,8 @@ Locked by Mike on 12 and 13 November 2026.
   ticket #124, which may move to M5.
 - **Q2, scope:** an ordinary actor reads only its own events. An auditor or an admin reads every actor's
   events in its own application. `events.md` is corrected to match. A feed across applications for an
-  operator is not in M4.
+  operator is not in M4. **Amended on 18 November (D83):** an auditor or a tenant admin reads every
+  actor's events in its own tenant.
 - **Q3, sequence numbers:** the counter row, on both databases. No advisory lock.
 - **Q4, retention:** `LPB_RETENTION_EVENTS_DAYS` may be any value, with no required relation to job
   retention and no startup check. One global floor, not one per tenant. **This replaces the
@@ -511,6 +515,18 @@ Locked by Mike on 12 and 13 November 2026.
   here.
 - **`lpb costs verify`** (ISS-35) leaves `status` and `revision` out of its comparison, because both
   depend on history.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes names
+here and says which half owns the feed.
+
+- **The feed belongs to the work half.** Its five event types are about jobs, the work reported for them
+  and their cost, so it lives in the enterprise's own engine.
+- **The clearinghouse emits no events in the first version** (D86). A low grant balance or an empty
+  allocation is read on demand.
+- **Names.** `application_id` in the event schema and its indexes becomes `tenant_id` (#163).
+- **Q2's rule** now reads: an auditor or a tenant admin reads every actor's events in its own tenant.
 
 ## Delivery slices
 

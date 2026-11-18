@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D73 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions, numbered when they are locked.\
@@ -275,6 +278,18 @@ no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may
   and a checked `run_job`; tool descriptions come only from the registry, never from runner metadata.
 - **The seam to keep:** the compact, filterable `list_offerings` and the describe-one-offering call of Q1.
   They are where registry text replaces runner text.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes names
+here and one mounting rule.
+
+- **Where it mounts.** The MCP adapter belongs to the work half of the engine. An engine in its
+  `clearinghouse` role mounts no job routes and no MCP tools (#169).
+- **Names.** `whoami` returns the tenant in place of the application (#163).
+- **Admin from a token claim.** The claim's values are the kinds of D83: `clearinghouse_admin`,
+  `tenant_admin` and `auditor`.
+- **`not_provisioned`** on `run_job` is unchanged: status 402, with the recovery value `admin`.
 
 ## Delivery slices
 

@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D78 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; the
 console's own decisions live in its `docs/design-docs/decisions.md`.\
@@ -92,7 +95,7 @@ the three journeys against a scripted engine.**
    `web/node_modules/next/dist/docs/` first, the console's own rule).
 5. **Failures by category.** A pure `failureView(job)` maps ISS-28's categories (validation, access,
    capacity, execution, payment, reporting) and ISS-12's `reason` to a title, a sentence, whether
-   payment went out, and what the builder can do (retry, ask the operator, wait for cost). Unknown
+   payment went out, and what the builder can do (retry, ask an admin, wait for cost). Unknown
    kinds fall back to the engine's message, never to a blank.
 6. **Missing metadata.** Offerings without input descriptions start from `{}` with a visible note (as
    today); a missing or stale rate stays marked; a job page whose job has no `usage` (`Job.usage` is
@@ -101,8 +104,8 @@ the three journeys against a scripted engine.**
    from `by_app` (ISS-18, D60: per app and class, so pending spend is shown apart) when the engine
    provides it.
 
-No new top-level page; Operator actions are untouched (ISS-31 may hide money actions in its second
-configuration).
+No new top-level page; Operator actions are untouched by this ticket. The tenant admin and clearinghouse
+admin views that ISS-31 now calls for are stretch scope (builder-core-console #26).
 
 ### Architecture in the console
 
@@ -226,6 +229,19 @@ Locked by Mike on 13 November 2026. "The console" in this guide is the builder c
   server-side client reads the job id and the ending from them.
 - **Reconciliation may gain a figure**, "fees of purged jobs" (ISS-35), which the console would then show.
 - **Admin from a token claim** (ISS-33) changes the Keycloak stack's settings.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes
+little in this ticket.
+
+- **Allocations.** `per_actor` is the only allocation mode (D82), so the journey allots an allocation for
+  each user, as the console's stack already does.
+- **Where the job pages work.** They need an engine that runs jobs, so they work beside an enterprise's
+  engine and not at a payment clearinghouse.
+- **The failure view** reads the recovery value `admin` in place of `operator` (ISS-28).
+- **The tenant admin and clearinghouse admin views** are stretch scope (builder-core-console #26) and not
+  part of this ticket.
 
 ## Delivery slices
 

@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D77 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; the
 console's locked rules go to its `docs/design-docs/decisions.md`, engine rules to builder-core's decisions.\
@@ -206,6 +209,23 @@ Locked by Mike on 13 November 2026.
 - **An empty `LPB_JWT_NAME_CLAIM`** turning recording off (finding C18) lands with slice 3.
 - **Evidence** about the builder console alone stays in its repository. The funded matrix's records go in
   builder-core (ISS-36).
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes names
+here and says where this flow applies.
+
+- **Where it applies.** This guide's flow is for an enterprise's own engine. A payment clearinghouse
+  accepts keys only in the first version (D85), so the identity provider stays beside the engine that
+  runs jobs.
+- **The second application is a second tenant.** `LPB_JWT_APPLICATION_CLAIM` becomes
+  `LPB_JWT_TENANT_CLAIM` (#163).
+- **The role claim's values** follow the kinds of D83: `clearinghouse_admin`, `tenant_admin` and
+  `auditor`, and absent for an actor. The realm's `operator` role is renamed with them. Which admin kind
+  it maps to in an engine with the `both` role is for this ticket's pull request.
+- **Routes in the probe.** The `/v1/admin/keys` and `/v1/admin/actors` checks move to the clearinghouse
+  routes of the ISS-31 guide.
+- **#126 is replaced.** The design for admins scoped to one application is now D85 and #165.
 
 ## Delivery slices
 

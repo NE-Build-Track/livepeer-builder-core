@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D69 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\
@@ -280,6 +283,17 @@ no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may
   record the runner writes last, or a provider request id that lets a late result be collected.
 - **The seam to keep:** the job record and `ResultRef` leave room for a provider request id, so a late
   result can be collected without a new table.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes names
+here and nothing else.
+
+- **Where it runs.** Async jobs belong to the work half of the engine, so they run in the enterprise's own
+  engine. A payment clearinghouse runs no jobs.
+- **Names.** `application_id` in the job's actor snapshot becomes `tenant_id` (#163).
+- **`not_provisioned`** still fails a job before payment. With a clearinghouse it means the actor has no
+  allocation there. Its recovery value is `admin`, as ISS-28 now names it.
 
 ## Delivery slices
 

@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D76 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions (numbered then).\
@@ -258,6 +261,22 @@ Locked by Mike on 13 November 2026. Three answers replace the recommendation.
 - **The fixture runs embedded or forwards a JWT**, since there is no trusted-backend credential.
 - **The MCP tool extension** (E7) waits for ISS-30, as before.
 - **The builder console's browser test** (ISS-34) is another consumer of the public `testing` package.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) adds one
+requirement and renames the examples.
+
+- **The examples.** The embedded example is an embedded engine and the service example is an engine
+  server. Those are the two ways an enterprise app uses the engine.
+- **One example pays through a payment clearinghouse.** Its engine runs in the `work` role with the remote
+  adapters (#168, #169). The amended ISS-32 acceptance asks for this.
+- **The trusted-backend authenticator** (E4, T7) is still not built in M4. A clearinghouse does not need
+  it: an enterprise's engine presents a payment key for each actor, so nobody acts for someone else
+  there. An engine server still needs a credential for each user when the enterprise app's backend calls
+  it for them.
+- **Names.** `application_id` becomes `tenant_id` in `ActorContext`, which every embedded caller builds
+  (#163).
 
 ## Delivery slices
 

@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D70 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions, numbered when they are locked.\
@@ -294,6 +297,19 @@ no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may
   declaration (start and stop paths, channels, idle and drain timeouts) and its registry entry.
 - **The seam to keep:** `adapters/reservation.py` is the one place that knows how a session starts and
   stops, so a declared start path can replace the reserve route there.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes one
+thing here beyond names.
+
+- **Where it runs.** Sessions belong to the work half of the engine, in the enterprise's own engine.
+- **Payment cycles go through the clearinghouse.** A session's renewals are payment cycles, about one
+  every 3 seconds. When the engine uses a payment clearinghouse, each cycle is signed by the
+  clearinghouse's payments route with the actor's payment key (#166). The SDK's `run_payments()` result is
+  read as before.
+- **An empty allocation ends the session** at the next cycle, which the clearinghouse refuses.
+- **Names.** `application_id` becomes `tenant_id` (#163).
 
 ## Delivery slices
 

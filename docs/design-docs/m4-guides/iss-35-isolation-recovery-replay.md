@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D79 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-35 ([Network-Engineering-SPE#49](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/49)),
@@ -74,8 +77,9 @@ systems of record and must reproduce the incremental answer.**
 ### 1. Isolation sweep (injected)
 
 One table-driven test per surface: the FastAPI route table, the facade (`api.py`), and the MCP tool
-list (ISS-30). Principals: owner actor, other actor same application, actor of another application,
-auditor same application, auditor other application, admin, revoked key, expired JWT, no credential.
+list (ISS-30). Principals: owner actor, other actor same tenant, actor of another tenant, auditor same
+tenant, auditor other tenant, tenant admin same tenant, tenant admin other tenant, clearinghouse admin on
+each listener, a payment key for another actor, revoked key, expired JWT, no credential.
 Expected outcome per (operation kind, principal) from one table (200 / 403 / 404 per D44 / 401), run
 under `LPB_AUTH=api_keys`, `jwt` and `jwt,api_keys`. A new route or tool is covered without editing the
 test; one with no row fails. Includes job results, session proxy paths and async job reads.
@@ -255,6 +259,19 @@ Locked by Mike on 13 November 2026.
   epoch.
 - **The Batteries pin is `v0.0.3`** (#117). Its Kafka lag gate, which this guide names as upstream-only,
   is now in the pin and is reviewed under T28.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) widens the
+isolation sweep. Recovery and replay are unchanged.
+
+- **New principals.** A tenant admin of the same tenant, a tenant admin of another tenant, a clearinghouse
+  admin on each listener, and a payment key for another actor. The list above is changed.
+- **New routes.** The clearinghouse routes join the sweep: another tenant in the path is 403, and the
+  private routes are 404 on the public listener (#165, #167).
+- **Usage isolation.** The usage route returns one tenant's records (#166).
+- **Where replay runs.** Accounting replay belongs to the work half. With a payment clearinghouse the
+  usage rows arrive through the usage route in place of Batteries (#168).
 
 ## Delivery slices
 

@@ -4,6 +4,9 @@
 > locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
 > section says which part it replaces. The answers are decision D72 in
 > [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
 
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become decisions (numbered then).\
@@ -146,8 +149,9 @@ field or a new required request field, unless `rest.md` lists the break with its
 reason ([iss-12-payment-failures.md](../m3-guides/iss-12-payment-failures.md)); `before` on jobs
 ([iss-15-history-and-results.md](../m3-guides/iss-15-history-and-results.md)); `by_app`
 ([iss-18-cost-reports.md](../m3-guides/iss-18-cost-reports.md)); rate fields
-([iss-10-rates.md](../m3-guides/iss-10-rates.md)). Add `GET /v1/me` (G13: actor, application, kind,
-permissions; any authenticated caller) and an optional `application_id` on the admin money reads (G9).
+([iss-10-rates.md](../m3-guides/iss-10-rates.md)). Add `GET /v1/me` (G13: actor, tenant, kind,
+permissions; any authenticated caller). The optional `application_id` on the admin money reads (G9) was
+dropped on 18 November (D83).
 
 ## Code areas
 
@@ -199,7 +203,7 @@ Modes (land with ISS-26, ISS-27)
 Compatibility
 [ ] check_api_compat fails on a removed operation and on a new required field
 [ ] check_api_compat passes on an added optional field
-[ ] GET /v1/me returns the caller's actor, application, kind and permissions
+[ ] GET /v1/me returns the caller's actor, tenant, kind and permissions
 ```
 
 **Gears.** Obvious Implementation for the codes and handlers; Triangulate the keyset paging across ties.
@@ -252,7 +256,9 @@ same release.
   same member.
 - **Q5, the grant funding route:** `POST /v1/admin/grant/fund` becomes `POST /v1/admin/grants/{id}/fund`,
   with no alias. The grant id moves from the body to the path. **This replaces the proposal** to keep the
-  old path as an alias until M5.
+  old path as an alias until M5. **Replaced on 18 November (D83):** grant funding is
+  `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up`, built in #165, and this ticket does not
+  rename the old route.
 
 **Other decisions that touch this guide.**
 
@@ -280,6 +286,25 @@ no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may
   and a request is checked against the entry's schema before payment.
 - **The seam to keep:** the coverage table in `rest.md` and its test, which make a new route such as
   `/v1/capabilities` declare its facade call, permission and problem codes.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes the
+route list this contract covers.
+
+- **Two route sets.** The contract and its coverage test cover the work routes and the clearinghouse
+  routes, which sit under `/v1/clearinghouse` (D83, D84). The ISS-31 guide lists them.
+- **`GET /v1/me`** stays in this ticket (D72). It returns the caller's actor, tenant, kind and
+  permissions, and both halves serve it.
+- **The application parameter on admin money reads is dropped** (G9). Jobs and costs live at the
+  enterprise's engine, and a clearinghouse admin lists tenants.
+- **Q5 is replaced.** Grant funding is `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up`, built
+  in #165. This ticket does not rename the old route.
+- **Names.** Tenant for application, top-up for fund and allot for provision land with #163, before this
+  ticket. Renaming app IDs to capabilities stays with ISS-48.
+- **The access sweep** adds the kinds `tenant_admin` and `clearinghouse_admin`, and the public and private
+  listeners (#167).
+- **The current-state table above** still names today's routes. It needs a pass after #163 and #164.
 
 ## Delivery slices
 

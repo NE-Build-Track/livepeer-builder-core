@@ -1,9 +1,9 @@
 """The discovery reader against livepeer/node's own output and its own test cases at the pin (D63).
 
 The reader takes the fields the engine stores; it does not validate node's schema. These tests anchor it
-to the node commit ``docs/references/upstream-baseline.md`` records: ``node_discovery_f45d83f.json`` is
-what that commit's ``livepeer-discovery --dump`` served for ai1 and xodeapp. When the pin moves, capture
-that file again and keep these tests green.
+to the node commit ``docs/references/upstream-baseline.md`` records: ``node_discovery_eee09c4.json`` is
+what that commit's ``livepeer-discovery`` served at ``/discovery`` for ai1 and xodeapp on 18 November.
+When the pin moves, capture that file again and keep these tests green.
 """
 
 import json
@@ -16,7 +16,7 @@ from livepeer_builder.adapters.discovery_inventory import UnreadableInventory, r
 from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents
 from livepeer_builder.errors import RunnerCallError
 
-_NODE_DOCUMENT = Path(__file__).with_name("node_discovery_f45d83f.json").read_text()
+_NODE_DOCUMENT = Path(__file__).with_name("node_discovery_eee09c4.json").read_text()
 _RUNNER = '{"url":"https://orch.example/app","app":"example","observed_at":"2026-10-22T18:05:00.123+01:00"}'
 _METADATA = '[{"nodes":[{"url":"https://orch.example","queried_at":"2026-10-22T18:05:00Z"}]}]'
 

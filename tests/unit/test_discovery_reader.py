@@ -1,9 +1,9 @@
 """The discovery reader against livepeer/node's own output and its own test cases at the pin (D63).
 
 The reader takes the fields the engine stores; it does not validate node's schema. These tests anchor it
-to the node commit ``docs/references/upstream-baseline.md`` records: ``node_discovery_f45d83f.json`` is
-what that commit's ``livepeer-discovery --dump`` served for ai1 and xodeapp. When the pin moves, capture
-that file again and keep these tests green.
+to the node commit ``docs/references/upstream-baseline.md`` records: ``node_discovery_eee09c4.json`` is
+what that commit's ``livepeer-discovery`` served at ``/discovery`` for ai1 and xodeapp on 18 November.
+When the pin moves, capture that file again and keep these tests green.
 """
 
 import json
@@ -14,9 +14,10 @@ import pytest
 
 from livepeer_builder.adapters.discovery_inventory import UnreadableInventory, read_inventory
 from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents
+from livepeer_builder.contracts import Runner
 from livepeer_builder.errors import RunnerCallError
 
-_NODE_DOCUMENT = Path(__file__).with_name("node_discovery_f45d83f.json").read_text()
+_NODE_DOCUMENT = Path(__file__).with_name("node_discovery_eee09c4.json").read_text()
 _RUNNER = '{"url":"https://orch.example/app","app":"example","observed_at":"2026-10-22T18:05:00.123+01:00"}'
 _METADATA = '[{"nodes":[{"url":"https://orch.example","queried_at":"2026-10-22T18:05:00Z"}]}]'
 
@@ -140,6 +141,85 @@ def test_a_document_node_accepts_is_read(body: str) -> None:
 @pytest.mark.parametrize("body", _SKIPPED.values(), ids=_SKIPPED.keys())
 def test_a_runner_the_engine_cannot_use_is_skipped(body: str) -> None:
     assert _skips_its_only_record(body)
+
+
+def _with(fields: str) -> str:
+    return _envelope(_RUNNER.removesuffix("}") + "," + fields + "}")
+
+
+# Cases livepeer/node added by v1.0.7 (eee09c4), by its own names: schema_test.go and, marked (v), its
+# TestDiscoveryRunnerValidation. From that version node's decoder drops a runner with an optional field
+# of the wrong type, a repeated key or a key in the wrong letter case (node #82), so behind its
+# livepeer-discovery such a record never reaches the engine. The reader is not node's validator: it reads
+# the fields the engine stores and treats a wrong one as absent (docs/contracts/discovery.md). Where the
+# two agree the case is in _V107_SAME; where node rejects and the reader keeps, on purpose, it is below.
+_V107_SAME = {
+    "unknown properties": (
+        _with('"gpu.name":null,"vers\u0131on":null,"extension":{"count":9007199254740993}'),
+        True,
+    ),
+    "integer tokens": (
+        _with('"capacity":4.0,"capacity_used":1e0,"capacity_available":9007199254740993'),
+        True,
+    ),
+    "scaled integers": (
+        _with('"capacity":1200.0e-2,"capacity_used":1.20E1,"capacity_available":-0.00e-100'),
+        True,
+    ),
+    "large integer exponent (v)": (_with('"gpu":{"vram_mb":1e1000000}'), True),
+    "overflow integer exponent (v)": (_with('"gpu":{"vram_mb":1e999999999999999999999}'), True),
+    "zero with overflow exponent (v)": (_with('"gpu":{"vram_mb":0e-999999999999999999999}'), True),
+    "wrong URL field case": (_envelope(_RUNNER.replace('"url":', '"URL":')), False),
+    "comma observation fraction": (_envelope(_RUNNER.replace("00.123", "00,123")), False),
+    "invalid observation offset": (_envelope(_RUNNER.replace("+01:00", "+24:00")), False),
+}
+_V107_KEPT_THOUGH_NODE_REJECTS = {
+    "capacity string": _with('"capacity":"4"'),
+    "fractional capacity": _with('"capacity_available":1.5'),
+    "version number": _with('"version":1'),
+    "null metadata": _with('"metadata":null'),
+    "null GPU": _with('"gpu":null'),
+    "GPU name number": _with('"gpu":{"name":1}'),
+    "fractional VRAM": _with('"gpu":{"vram_mb":1.5}'),
+    "null price": _with('"price_info":{"price":null}'),
+    "large fractional exponent (v)": _with('"gpu":{"vram_mb":1e-1000000}'),
+    "overflow fractional exponent (v)": _with('"gpu":{"vram_mb":1e-999999999999999999999}'),
+    "case alias (v)": _with('"URL":"https://other.example/app"'),
+    "Unicode case alias (v)": _with('"capacity_used":1,"capacity_u\u017fed":9'),
+    "nested Unicode case alias (v)": _with('"price_info":{"price_usd":0.1,"price_u\u017fd":0.9}'),
+    "optional field case (v)": _with('"Mode":"persistent"'),
+    "duplicate field (v)": _with('"capacity":1,"capacity":2'),
+    "duplicate extension field (v)": _with('"extension":{"x":1,"x":2}'),
+    "invalid Unicode (v)": _with('"extension":"\\ud800"'),
+}
+
+
+@pytest.mark.parametrize(("body", "kept"), _V107_SAME.values(), ids=_V107_SAME.keys())
+def test_the_reader_and_node_v1_0_7_agree(body: str, kept: bool) -> None:
+    assert len(read_inventory(body)) == 1 if kept else _skips_its_only_record(body)
+
+
+@pytest.mark.parametrize(
+    "body", _V107_KEPT_THOUGH_NODE_REJECTS.values(), ids=_V107_KEPT_THOUGH_NODE_REJECTS.keys()
+)
+def test_a_record_node_v1_0_7_drops_for_a_field_the_reader_ignores_is_kept(body: str) -> None:
+    (runner,) = read_inventory(body)
+    assert (runner.url, runner.app) == ("https://orch.example/app", "example")
+
+
+def test_what_the_reader_makes_of_the_wrong_fields_it_keeps_a_runner_with() -> None:
+    def read(name: str) -> Runner:
+        (runner,) = read_inventory(_V107_KEPT_THOUGH_NODE_REJECTS[name])
+        return runner
+
+    assert read("capacity string").capacity is None  # absent
+    assert read("fractional capacity").capacity_available == 0  # present and no integer: tried last
+    assert read("duplicate field (v)").capacity == 2  # the last one, as Python's json reads it
+    assert read("case alias (v)").url == "https://orch.example/app"  # the lower-case key is the field
+    assert read("Unicode case alias (v)").capacity_used == 1
+    assert read("optional field case (v)").mode is None
+    price = read("null price").price_info
+    assert price is not None and price.price is None
 
 
 @pytest.mark.parametrize("body", ["[]", _METADATA, '[{"nodes":[],"runners":[]}]'])

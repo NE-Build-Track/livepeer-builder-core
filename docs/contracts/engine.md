@@ -211,8 +211,10 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      old as the discovery snapshot. On a job that pays, "after" holds within the runners the signer can
      pay (and free ones) and within the rest, since those are moved ahead of the rest: a priced
      zero-capacity runner is tried before a runner with room and no payable price. When every runner for the app advertises zero, the engine tries only
-     the runners an attempt signs no payment for, which on an unpaid job is all of them. The node asks
-     for payment before it checks capacity, so an attempt on a full priced runner costs a ticket. That
+     the runners an attempt signs no payment for, which on an unpaid job is all of them. An attempt
+     on a full priced runner can cost a ticket: livepeer/node before v1.0.7 asks for payment before it
+     checks capacity, and from v1.0.7 a slot can still be taken between the challenge and the paid
+     request. That
      cost is accepted when any runner for the app has room: a full priced runner then stays a
      candidate, since its advertisement may be out of date, and a job whose other runners failed can
      reach it and pay for its refusal. If
@@ -366,7 +368,7 @@ the last kind alone.
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
 | `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
-| `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: the node asks for payment before it checks capacity, so an attempt on a full priced runner costs a ticket (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written |
+| `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: an attempt on a full priced runner can cost a ticket, because livepeer/node before v1.0.7 asks for payment before it checks capacity (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written |
 | `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
 | `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
 | `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
@@ -697,6 +699,6 @@ ever sent twice: aiohttp's resend of an idempotent request on a dropped connecti
 every runner request (D56).
 
 The engine sends the runner request itself (D53), so no SDK change is needed: the SDK stays
-pinned to upstream `2017a80`. An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
+pinned to upstream `main` (`7dc2a07` now, `2017a80` when this was written). An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
 ([SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6)); that PR is
 replaced by this one. No streaming uploads or provider-specific request processing is added.

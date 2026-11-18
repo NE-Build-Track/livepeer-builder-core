@@ -6,8 +6,9 @@ then. Now the engine tries them anyway, after any runner with room, when the att
 each refuses, the job fails ``refused`` through the normal failover path: 503 and ``Retry-After: 5`` as
 before.
 
-A job that would pay keeps the free fast fail. livepeer/node asks a priced request for payment before it
-looks at capacity, so a full runner's 503 arrives on the paid request and the ticket is still charged.
+A job that would pay keeps the free fast fail. livepeer/node before v1.0.7 asks a priced request for payment
+before it looks at capacity, so a full runner's 503 arrives on the paid request and the ticket is still
+charged. From v1.0.7 it looks first, but the engine cannot tell which version an orchestrator runs.
 When every runner advertises zero, the engine tries only the runners it would sign nothing for; with none
 left the job fails ``no_capacity`` before any attempt, nothing signed.
 
@@ -157,7 +158,7 @@ async def post_job(engine: BuilderEngine, **fields: Any) -> httpx.Response:
         return await client.post("/v1/jobs", json={"app": APP, **fields})
 
 
-# -- a job that would pay: the node asks for payment before it looks at capacity ----------------------
+# -- a job that would pay: an older node asks for payment before it looks at capacity -----------------
 
 
 async def test_a_job_that_would_pay_is_not_tried_when_every_runner_advertises_zero_capacity() -> None:

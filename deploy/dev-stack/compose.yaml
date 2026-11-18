@@ -23,9 +23,9 @@ services:
       retries: 12
 
   signer:
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:f45d83f
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:eee09c4
     build:
-      context: https://github.com/livepeer/node.git#f45d83fd68f73d195dffe8b45f6cac296d023c49
+      context: https://github.com/livepeer/node.git#eee09c41f46d64a34bfd9ed3c9cb649536490f13
       dockerfile: docker/Dockerfile
     user: "0:0"  # dev only: lets the container read bind-mounted secrets regardless of host uid
     network_mode: service:clearinghouse  # Kafka and the webhook listen on this namespace's loopback
@@ -40,9 +40,9 @@ services:
         condition: service_healthy
 
   discovery:  # livepeer/node's stock discovery, static mode. Same image as the signer.
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:f45d83f
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-dev/node:eee09c4
     build:
-      context: https://github.com/livepeer/node.git#f45d83fd68f73d195dffe8b45f6cac296d023c49
+      context: https://github.com/livepeer/node.git#eee09c41f46d64a34bfd9ed3c9cb649536490f13
       dockerfile: docker/Dockerfile
     entrypoint: ["/usr/local/bin/livepeer-discovery"]
     command: [--config, /etc/livepeer/discovery.toml]

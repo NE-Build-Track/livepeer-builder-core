@@ -23,7 +23,7 @@ pip install "livepeer-builder[server,postgres]"   # optional PostgreSQL store
 ```
 
 The engine pins the SDK to [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway)
-`main` at `2017a80` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
+`main` at `7dc2a07` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
 
 ## Embed it
 

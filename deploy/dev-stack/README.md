@@ -7,7 +7,7 @@ payment side, node's discovery and the engine:
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries v0.0.3 (`03bc9fb`): authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | livepeer/node `f45d83f` remote signer (main, 10 commits after v1.0.6). It only signs payments |
+| `signer` | livepeer/node `eee09c4` remote signer (v1.0.7). It only signs payments |
 | `discovery` | livepeer/node's `livepeer-discovery` from that same commit, static mode, on `127.0.0.1:8939`. The list is `config/discovery.toml`. The engine still only reads `GET /discovery` ([contract](../../docs/contracts/discovery.md)) |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from discovery (`LPB_DISCOVERY_URL`) |
 
@@ -55,7 +55,7 @@ curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"kind":"actor","actor_id":"alice","operation_ref":"dev-key-alice"}' \
   http://127.0.0.1:8080/v1/admin/keys                                                  # an actor key
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d '{"amount":{"amount":"1","currency":"USD"},"operation_ref":"dev-provision-alice"}' \
+  -d '{"amount":{"amount":"1","currency":"USD"},"grant_id":"<grant id>","operation_ref":"dev-provision-alice"}' \
   http://127.0.0.1:8080/v1/admin/applications/default/actors/alice/allocation          # explicit funding
 ALICE=lpk_...
 curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key
@@ -63,6 +63,10 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
   -d '{"app":"<app from offerings>","path":"/v1/embeddings","payload":{"model":"...","input":"hi"}}' \
   http://127.0.0.1:8080/v1/jobs
 ```
+
+`<grant id>` is the id `grant create` printed; with the grant desk on, `GET /v1/admin/grants` lists it.
+The bootstrap admin key has no allocation of its own, so a request without `grant_id` gets 400
+`choose a grant` ([payments.md](../../docs/contracts/payments.md)).
 
 Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliation?actor_id=alice`.
 

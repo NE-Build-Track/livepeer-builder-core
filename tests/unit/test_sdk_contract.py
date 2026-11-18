@@ -22,19 +22,19 @@ from livepeer_gateway.remote_signer import (
 
 from livepeer_builder.adapters import runner_call, runner_price
 
-COPIED_AT = "2017a80"
+COPIED_AT = "7dc2a07"
 # The first 16 hex digits of each function's source sha256 at COPIED_AT. When one fails: read the SDK
 # diff, carry what matters into adapters/runner_call.py or adapters/runner_price.py (_runner_payment_type,
 # _pad_runner_price), then update the digest and COPIED_AT.
 COPIED = {
-    "live_runner.call_runner": "deff844bd224b1a6",
+    "live_runner.call_runner": "393728fff5c1b545",
     "live_runner._parse_runner_payment_challenge": "379451580ba148b3",
     "live_runner._runner_payment_type": "19d390438f197d34",
     "live_runner._pad_runner_price": "6d9b23d21957da77",
     "live_runner._start_funding": "109226506dcb7277",
     "live_runner._stop_funding": "f518f7d17f4b7b83",
     "live_runner._is_json_content_type": "5e8dad829aed9d1f",
-    "http._open_request": "c523ab00c1072621",
+    "http._open_request": "06cfab075d168d82",
     "http._request_parts": "9b572a482cc870b0",
 }
 _MODULES = {"live_runner": live_runner, "http": http}

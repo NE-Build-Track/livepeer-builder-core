@@ -20,7 +20,6 @@ from livepeer_builder.testing.fakes import (
     runner,
 )
 from livepeer_builder.testing.scripts import Fails, Raises, Reply
-from livepeer_builder.testing.signer import FakeSigningTransport, ForwardedSignerCall
 from livepeer_builder.testing.usage import FakeUsageSource
 
 __all__ = [
@@ -30,10 +29,8 @@ __all__ = [
     "FakeDiscoveryService",
     "FakeEngine",
     "FakeJobStream",
-    "FakeSigningTransport",
     "FakeUsageSource",
     "FixedClock",
-    "ForwardedSignerCall",
     "MemorySecretStore",
     "Raises",
     "Reply",

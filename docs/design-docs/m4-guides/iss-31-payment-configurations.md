@@ -5,7 +5,7 @@
 > [m4-decisions.md](../m4-decisions.md), and the answers are under [Questions locked](#questions-locked).
 > The 13 November design (`separately_operated`, `per_application` only) is not built.
 
-**Status:** locked by Mike on 18 November 2026, with the open points settled the same day (D87). The
+**Status:** amended by John on 19 November 2026 for direct signer access and work-engine credential custody. The
 work is tracked in [the exec plan](../../exec-plans/active/iss-31-payment-clearinghouse.md).\
 **Tracker:** ISS-31 ([Network-Engineering-SPE#45](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/45)),
 source task P4, amended on 18 November. Its work is eight builder-core issues, #162 to #169 (P1 to P8).\
@@ -32,7 +32,7 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 
 - A payment clearinghouse serves at least two tenants, one for each enterprise app. Each enterprise app
   runs its jobs in its own engine, as an embedded engine or an engine server, and reaches the
-  clearinghouse only for signing, allotment, allowance and usage.
+  clearinghouse for allotment, allowance and usage; it calls the signer directly.
 - One tenant's admin cannot read or change another tenant. The attempt is refused.
 - Self-hosted payments still work, as one deployment with one tenant.
 - The clearinghouse admin onboards a tenant and tops up its grant by hand, on a private listener. The
@@ -51,10 +51,8 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | Admin authority | Since P4 (#165) there are two admin kinds. `DefaultPolicy.check` still returns at once for `clearinghouse_admin`, an admin of every tenant. A `tenant_admin` is an admin of its own tenant only: it divides its grant and cannot enlarge it, and it changes no admin key. At `719378f` there was one admin kind | `services/policy.py` |
 | Writes and the policy | Since P4 (#165) allot, top up, status, revoke, payment key rotation and every key command pass the tenant they act on to the policy, so a tenant admin is confined there and another tenant in a path is 403 before any lookup or Batteries call. At `719378f` they passed no resource, so the path or body chose the tenant | `services/payments.py`, `services/keys.py`, `services/tenants.py` |
 | Tenants | Since P4 (#165) a tenant's id is its Batteries grant's id. `POST /v1/clearinghouse/tenants` onboards one (its grant and its first tenant admin key), and its grant, actors, allocations and keys are nested under `/v1/clearinghouse/tenants/{tenant_id}`. `grant_id` is gone from `AllotRequest`, `TopUpRequest` and their bodies. Records written before keep the grant they name: nothing is re-keyed | `services/tenants.py`, `http/clearinghouse.py`; [payments.md](../../contracts/payments.md#tenants) |
-| Payment keys | Since P5 (#166) allotting an allocation returns the actor's payment key (`lpp_`), once. Rotating the payment key replaces it, with the Batteries key behind it, and the old one stops at once; revoking the allocation stops it. The clearinghouse keeps the key's hash, bound to the allocation, and finds the actor of a live key (`payments.resolve_payment_key`). As a bearer on any route but the signer's two paths it gets what no credential gets. Before P5 the answer was the allocation alone, and an allocation allotted then has no payment key until it is rotated | `services/issued_payment_keys.py`, migration 0015; [payments.md](../../contracts/payments.md#payment-keys) |
 | A tenant's usage | Since P5 (#166) `GET /v1/clearinghouse/tenants/{tenant_id}/usage` returns the tenant's payment records as the `UsageSource` port's own page, filtered by Batteries' `grant_id` filter, and the tenant list and the grant read carry `spent`. Before P5 only cost sync read usage, for every tenant | `services/tenant_usage.py`, `adapters/batteries.py`; [payments.md](../../contracts/payments.md#a-tenants-usage) |
 | The runner list | Since P5 (#166) `GET /v1/clearinghouse/discovery` serves the livepeer/node document the clearinghouse's own discovery source last read, byte for byte, to a tenant's admin or auditor. Today's reader reads it once its HTTP client sends a credential, which is P7's to add. Before P5 no engine served a list | `services/runner_list.py`, `adapters/sdk.py`; [discovery.md](../../contracts/discovery.md#the-clearinghouses-runner-list) |
-| Signing through a clearinghouse | Since P5 (#166) an engine with a signer serves the signer's two paths at the root, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each called with a payment key (D87 point 3, as amended on 19 November). It puts the actor's Batteries key in the payment key's place and calls its signer once; the body, the signer's `state` and the signer's answer pass through as they are, so an empty allocation is the signer's 402. A fixed job and a live job are paid through it by the unmodified SDK's transport, against a loopback signer. Before P5 only an engine's own jobs reached a signer | `http/signing.py`, `services/payment_signing.py`, `adapters/signer_forward.py`; [payments.md](../../contracts/payments.md#signing-through-a-clearinghouse) |
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
 | Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one. Since P3 (#164) a structure test fails when the work half reaches payments another way | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`), `tests/structure/test_two_halves.py` |
 | Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. Since P4 the clearinghouse set is two groups that also mount by themselves: a tenant's own routes, and what only a clearinghouse admin does, for the private listener of P6. One app mounts both, always: no role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
@@ -76,191 +74,59 @@ Batteries is a Go server. It cannot be vendored, and no upstream change is propo
 
 ## Decision
 
-**The second configuration is a payment clearinghouse: an engine in front of Batteries and the signer
-that does payments only and is the only thing published.** An enterprise app keeps its own engine, which
-runs its jobs and sends them straight to orchestrators. That engine asks the clearinghouse to sign each
-payment, to allot allocations, and for its tenant's usage. Batteries and the signer stay private.
-
-This reverses one alternative the 13 November design rejected, a tenant layer shipped in builder-core.
-It is still software for someone to run, not a hosted service.
+The enterprise work engine holds each actor's allocation API key and calls the signer directly.
+The clearinghouse manages tenants, grants and allocations and serves tenant usage and discovery.
+It exposes no signer proxy and stores no allocation secret. This is John's 19 November amendment
+of D85/D87; the historical decisions below must be read with that amendment.
 
 ### What each side holds
 
-| | Self-hosted payments | Payment clearinghouse |
-| --- | --- | --- |
-| Runs Batteries, the signer and the wallet | The enterprise | The clearinghouse |
-| Tenants | One | Many, one for each enterprise app |
-| Where jobs run | The enterprise's engine | The enterprise's engine |
-| The enterprise's engine holds | Batteries tokens and one Batteries key for each actor | The clearinghouse's address, a tenant admin key, and one payment key for each actor |
-| Per-actor cap | Batteries, at each payment | Batteries, at each payment |
-| What crosses to another party | Nothing | Payment calls only. Never a prompt or a result |
-| Who tops up the grant | The enterprise | The clearinghouse admin, by hand in the first version |
+| Component | Credential custody |
+| --- | --- |
+| Work engine | Allocation API keys in its secret store; tenant admin credential for management |
+| Clearinghouse engine | Batteries management credentials; allocation identifiers and delivery receipts |
+| Signer | Wallet and Batteries authorization webhook configuration |
 
 ### The engine's two halves
 
-The engine stays one program. A role setting decides which half a deployment runs.
-
-- **Work half:** network capabilities, runner choice, the runner call, streaming, job records and the
-  cost of each job.
-- **Clearinghouse half:** tenants, grants, allocations, payment keys, signing and usage.
-
-| `LPB_ROLE` | Routes served | Payment ports point at | Who runs it |
-| --- | --- | --- | --- |
-| `both`, the default | Work and clearinghouse | Batteries and the signer | An enterprise with self-hosted payments |
-| `work` | Work only | The payment clearinghouse | An enterprise that uses a clearinghouse |
-| `clearinghouse` | Clearinghouse only | Batteries and the signer | A payment clearinghouse, which never runs jobs |
-
-The work half reaches payments through five ports and nothing else. Each gets a second adapter that calls
-the clearinghouse over HTTP.
-
-| Port | Reaches today | With a payment clearinghouse |
-| --- | --- | --- |
-| Signing, inside `RunnerTransport` | The signer, with the actor's Batteries key | The clearinghouse, at the signer's two paths, with that actor's payment key |
-| `CredentialResolver` | The engine's stored Batteries key | The payment key the clearinghouse issued at allotment |
-| `AllocationManager` | Batteries' management API | The tenant routes, with the tenant admin key |
-| `AllowanceReader` | Batteries | The actor's allocation at the clearinghouse |
-| `UsageSource` | Batteries' usage feed, for every tenant | The usage route, for the caller's tenant only |
+The work half keeps `jobs.run` admission and the existing SDK signer calls. The clearinghouse half
+performs authenticated tenant-scoped management. The five payment ports remain the boundary;
+credential resolution is local to the work engine and signing reaches the signer directly.
 
 ### Tenants and money
 
-- **A tenant and its grant share one id.** Onboarding creates the Batteries grant, and that grant's id is
-  the tenant's id. Nothing maps one to the other, and no route takes a separate grant id.
-- **Each tenant has one grant, for life.** It is prepaid and topped up as needed. A tenant that must stop
-  is paused. Its grant is never closed.
-- **A tenant admin divides the grant and cannot enlarge it.** Only the clearinghouse admin onboards
-  tenants and tops up grants.
-- **`per_actor` is the only allocation mode.** An enterprise app that wants one shared budget runs every
-  job as a single actor.
-- **No key is tied to a grant.** Payment keys belong to allocations and access keys belong to the tenant,
-  so a leaked key is rotated and the grant is untouched.
-- **Each clearinghouse has one wallet.** Its deposit stays above the total of unspent grants, with a
-  margin for the ETH price. The clearinghouse admin watches it and funds it by hand.
+A tenant has one grant. Multiple tenant admins may share a grant, each with a distinct operator
+actor ID. Tenant scope is checked before provider access. Only a clearinghouse admin enlarges grants.
 
 ### One payment, and live work
 
-1. The enterprise's engine sends the request to a runner, which answers 402 with its price and a payment
-   id.
-2. The engine asks the clearinghouse to sign, at the signer's own path (`POST /generate-live-payment`),
-   presenting that actor's payment key.
-3. The clearinghouse swaps in the actor's Batteries key and calls the signer. The signer asks Batteries
-   to approve the payment against the allocation, signs, and records an accounting event.
-4. The engine sends the signed payment to the orchestrator.
-
-Fixed work pays once, up front. Live work pays in payment cycles: the SDK asks for the next payment every
-3 seconds (`PAYMENT_INTERVAL_S`), and each cycle is approved against the allocation. When the allocation
-is empty the next payment is refused and the stream stops. The clearinghouse sees the capability, the
-orchestrator, the fee and the payment id. It never sees the job, its outcome or its content.
+The work engine resolves its stored allocation credential and supplies it to the SDK. The SDK reaches
+`/sign-orchestrator-info` and `/generate-live-payment` on the configured signer origin. The signer
+must use its Batteries authorization webhook. Fixed and live work retain their existing SDK flow.
 
 ### Routes
 
-Kinds: `clearinghouse_admin` (every tenant, private listener only), `tenant_admin` (one tenant),
-`auditor` (one tenant, read-only), `actor` (itself), and a payment key (one actor's allocation).
-
-**Clearinghouse half, public listener.** Another tenant's id in the path is 403, and a
-`clearinghouse_admin` credential is 403 on this listener.
-
-| Route | Who may call | What it does |
-| --- | --- | --- |
-| `GET /v1/me` | Any credential | The caller's kind and tenant. From ISS-29 (D72) |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | The grant's total, unallocated balance and status |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations |
-| `GET …/actors/{actor_id}/allocation` | That tenant's admin or auditor | One allocation: allotted, spent, available and status |
-| `POST …/actors/{actor_id}/allocation` | That tenant's admin | Allots an allocation from the tenant's grant and returns the actor's payment key once |
-| `POST …/allocation/top-up`, `…/status`, `…/revoke`, `…/rotate-payment-key` | That tenant's admin | Adds to, pauses, ends or re-keys one allocation |
-| Key routes under `/v1/clearinghouse/tenants/{tenant_id}/keys` | That tenant's admin | Manages the tenant's auditor keys. A tenant admin cannot issue tenant admin keys |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records |
-| `POST /generate-live-payment` | A payment key | Signs one payment against that actor's allocation. 402 when it is empty. At the root, where the gateway SDK calls a signer |
-| `POST /sign-orchestrator-info` | A payment key | The signer's identity, which every payment begins with. No charge. At the root |
-| `GET /v1/clearinghouse/discovery` | Any credential of a tenant | The clearinghouse's runner list |
-
-**Clearinghouse half, private listener.** For a `clearinghouse_admin` only. Every public route is also
-served here, for any tenant.
-
-| Route | What it does |
-| --- | --- |
-| `POST /v1/clearinghouse/tenants` | Onboards a tenant: creates its grant and returns the tenant's id and its first tenant admin key, once |
-| `GET /v1/clearinghouse/tenants` | Every tenant, with its grant's balance and payment usage |
-| `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | Adds to the tenant's grant |
-| `POST /v1/clearinghouse/tenants/{tenant_id}/status` | Pauses or resumes a tenant by pausing its grant |
-| `POST /v1/clearinghouse/tenants/{tenant_id}/keys` with kind `tenant_admin` | Issues another tenant admin key |
-| `GET /v1/clearinghouse/wallet` | The deposit and reserve, the total of unspent grants, and the signer's readiness |
-
-**Work half.** The job, offering, runner, cost and allowance routes keep their paths. Reconciliation and
-cost sync move here from `/v1/admin`, as `GET /v1/costs/reconciliation` and `POST /v1/costs/sync`. The
-access keys of an enterprise's own engine are under `/v1/keys`.
-
-The names follow D83. The paths that began as proposals are locked (D87): payments, usage, discovery,
-tenant status, both sets of key routes, reconciliation and cost sync. The payments path is the signer's
-two paths at the root, as Mike amended D87 point 3 on 19 November 2026: the gateway SDK calls a signer
-at those two paths of the signer address's origin and drops any path in the address, so a clearinghouse
-that serves them is reached by the SDK unmodified.
+Standalone clearinghouse allotment and rotation return `DeliveredAllocation`, including an
+`allocation_api_key` only in the issuing response, with `Cache-Control: no-store`. No secret is
+persisted by the clearinghouse. Completed retries return no token; explicit rotation recovers a lost
+response. Reads return metadata only. There is no clearinghouse payments/signing route.
 
 ### What builder-core can do without an upstream change
 
-| Need | Without upstream | How |
-| --- | --- | --- |
-| Separate one tenant from another | Yes | The clearinghouse's engine holds every Batteries credential and checks the tenant itself |
-| Per-actor allocations for many tenants | Yes | Each tenant's allocations sit under its own grant, which Batteries already keeps apart |
-| A tenant's own usage and nothing more | Yes | The usage route filters by the tenant's grant |
-| Pay without reaching the signer | Yes | The clearinghouse serves the signer's two paths and swaps the payment key for the Batteries key |
-
-The 13 November design needed grant-scoped Batteries credentials to allow `per_actor` under a separate
-operator. This design does not, because no credential leaves the clearinghouse.
+The existing SDK and signer already accept the allocation bearer. No new credential prefix or
+permission is needed. The signer must be reachable by the work engine; Batteries management stays private.
 
 ### The arrangement (to document, not a service)
 
-Two Compose projects on one host, as D74 already decided, so the boundary is real: separate networks and
-separate credential files.
-
-- **Clearinghouse project:** a proxy, the engine in its `clearinghouse` role with a public and a private
-  listener, Batteries, the signer and the wallet keystore. It publishes only the proxy.
-- **Enterprise project:** an enterprise app with its engine in its `work` role. It knows the
-  clearinghouse's address and its tenant admin key, and nothing about Batteries or the signer.
-
-Limits to write down: one host; the same people run both sides; top-up and wallet funding are manual
-steps; one signer for the wallet; no availability promise.
-
-The two Compose projects live in this repository's `deploy/` folder, in place of the planned
-`deploy/separate-operator/` (D87). The separate `self-hosted-payments` template stays the installable
-reference, which ISS-37 documents.
-
-**`lpb payments check`** is kept from the 13 November design as a read-only command (D87). It prints the
-role and probes what that role needs. A self-hosted engine probes the signer and Batteries. An engine
-that uses a clearinghouse probes the clearinghouse: who it is, its grant and its usage. It never writes,
-and ISS-36's runbook uses it as a precondition.
+P6 provides public/private clearinghouse listeners. P7 implements remote management adapters and
+work-engine credential persistence. P8 selects roles and supplies Compose deployments. P5 supplies
+only the delivery contract and services. Combined `create_app` preserves self-hosted local storage;
+standalone route factories default to delivery. These choices must carry into later role wiring.
 
 ### Docs to change
 
-`payments.md` (replace "Mode B" and the allocation modes with the two configurations, the tenant rules
-and the routes); `access.md` (the kinds and the tenant check on writes); `build-track-baseline.md` (the
-Mode B row); `milestones.md` (the ISS-31 row); `RELIABILITY.md` (the configuration table and the role
-setting); the tech debt tracker (T5 closes, because `LPB_SHARED_ALLOCATION_ID` goes); console
-`m3-environment.md` and `m3-journey.md` (the "second configuration" wording).
-
-P1 (#162) changed `payments.md` (the allocation modes, and "Mode B" as a short "Payment configurations"
-section; the tenant rules and the routes follow with their tickets) and the configuration table of
-`RELIABILITY.md`, and closed T5.
-
-P2 (#163) renamed what `payments.md`, `access.md`, the other contracts, the guides, `RELIABILITY.md`,
-`SECURITY.md`, the glossary and the dev stack's files call things. The old and the new names are in
-[the contracts index](../../contracts/index.md#upgrading-to-the-domain-language-names).
-
-P3 (#164) moved three groups of routes in `access.md`, `payments.md`, `RELIABILITY.md`, the
-architecture documents and the dev stack's README, and added the two halves to `ARCHITECTURE.md`. The
-old and the new paths are in
-[the contracts index](../../contracts/index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
-
-P4 (#165) added the tenant rules and the tenant routes to `payments.md`, the kind `tenant_admin` and the
-tenant check on writes to `access.md`, the tenant boundary to `SECURITY.md`, the grant calls to
-`batteries-api.md`, and the grants credential's permissions to `RELIABILITY.md` and the dev stack. The
-old and the new routes and fields are in
-[the contracts index](../../contracts/index.md#upgrading-to-tenants-at-the-clearinghouse).
-
-P5 (#166) added payment keys, a tenant's usage and signing through a clearinghouse to `payments.md`, the
-runner list to `discovery.md`, the payment key and what it is a credential for to `access.md` and
-`SECURITY.md`, the table and its migration to `persistence.md`, and amended D87 point 3. The old and the
-new answers and fields are in
-[the contracts index](../../contracts/index.md#upgrading-to-payment-keys-a-tenants-usage-and-the-runner-list).
+See [payments](../../contracts/payments.md#payment-keys), [security](../../SECURITY.md), and the
+[execution plan](../../exec-plans/active/iss-31-payment-clearinghouse.md).
 
 ## Code areas
 
@@ -269,9 +135,9 @@ new answers and fields are in
 | `config.py` | Remove the allocation mode and the shared-key settings; add `role`, `clearinghouse_url`, `clearinghouse_token`; rename the JWT application settings |
 | `contracts/`, `store/`, a migration | `application_id` becomes `tenant_id`; `ProvisionedActor` becomes `ActorAllocation`; the kinds |
 | `services/policy.py` | The `tenant_admin` kind; writes pass the target tenant to the policy |
-| `services/payments.py`, `services/grants.py`, `services/keys.py` | Tenants, onboarding, grant top-up, allotment that returns a payment key |
+| `services/payments.py`, `services/grants.py`, `services/keys.py` | Tenants, onboarding, grant top-up, allotment that delivers the allocation API key |
 | `http/app.py`, `http/server.py` | Route groups for the two halves; the public and private listeners |
-| `adapters/` (new files) | Remote adapters for the five ports; the wire from a clearinghouse to its signer |
+| `adapters/` (new files) | Remote adapters for the five ports; the payments route's key swap |
 | `runtime/assembly.py` | Wire the role: which routes mount and which adapters are used |
 | `cli.py` | `lpb payments check`, read-only, for each role |
 | `deploy/` | The two Compose projects |
@@ -296,10 +162,9 @@ no Batteries call recorded.
 [x] another tenant in the path is 403, before any lookup or Batteries call (P4, #165)
 [x] a tenant admin cannot onboard a tenant, top up its grant or issue a tenant admin key (P4, #165)
 [x] an allocation larger than the grant's unallocated balance is refused (P4, #165)
-[x] allotment returns a payment key once; rotation replaces it and the old one stops (P5, #166)
-[x] the signer's two paths sign for the payment key's own actor only; an empty allocation is 402 (P5, #166)
-[x] a fixed job and a live job are paid through the clearinghouse's signer paths (P5, #166: the SDK's
-    transport, a clearinghouse app and a loopback signer; the engine around the transport is P7's)
+[x] allotment delivers the allocation API key once; rotation replaces it (P5, #166)
+[ ] the payments route signs for its own actor only; an empty allocation is 402
+[ ] a fixed job and a live job are paid through the payments route
 [x] the usage route returns one tenant's records (P5, #166)
 [ ] onboarding, top-up, tenant status and the wallet are 404 on the public listener
 [ ] a clearinghouse_admin credential is 403 on the public listener
@@ -321,8 +186,8 @@ no Batteries call recorded.
 
 | Upstream | Needed? | Why / workaround |
 | --- | --- | --- |
-| livepeer/node | No | The signer authorizes each request by the key it is given. The clearinghouse swaps in that key |
-| livepeer-python-gateway | No | The SDK calls a signer at two paths of the signer address's origin, with a header. A clearinghouse serves those two paths, so the SDK is pointed at it unmodified (tested in #166) |
+| livepeer/node | No | The signer authorizes each request by the key it is given. The work engine supplies that key directly |
+| livepeer-python-gateway | Not expected | The SDK already takes a signer address and a header. Remote credential persistence is integrated in P7 |
 | clearinghouse-batteries | No | No credential leaves the clearinghouse, so global permissions are enough |
 
 ## Consumer impact
@@ -362,12 +227,11 @@ Locked by Mike on 18 November 2026. They replace the four answers of 13 November
 
 **The open points, settled by Mike on 18 November (D87).** They were first left for John.
 
-- **The key that signs for an actor:** a payment key for each actor, issued at allotment. The engine
-  already stores one key for each actor and presents it this way.
+- **The key that signs for an actor (amended by John, 19 November):** the Batteries allocation API
+  key, delivered once and persisted only by the work engine, which calls the signer directly.
 - **The runner list:** the clearinghouse's list is the default, and an enterprise may use its own
   discovery. Nothing is enforced at signing in the first version.
-- **The route paths** are as written under Routes. The payments path was amended by Mike on 19 November
-  2026: the signer's two paths at the root, in place of `POST /v1/clearinghouse/payments`.
+- **The eight route paths** are as written under Routes.
 - **The two Compose projects** live in this repository's `deploy/` folder.
 - **`lpb payments check`** is kept as a read-only check for each role.
 - **The Keycloak realm's `operator` role** is renamed and maps to `clearinghouse_admin`. A second role
@@ -418,17 +282,9 @@ One builder-core issue each, all sub-issues of ISS-31.
    grant's id: `grant_id` left the allot and top-up requests, and the actor list, the grant list and
    creation and the grant top-up left their old paths with no alias. No migration, and no existing
    record is re-keyed: an allocation allotted before stays on the grant its record names. Payment usage
-   on the tenant list, and the payment key that allotment returns, are P5's. The routes only a
+   on the tenant list, and allocation credential delivery are P5's. The routes only a
    clearinghouse admin calls are one group, which P6 puts on the private listener.
-5. **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery. Built
-   ([#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180)): a payment key for each
-   actor (`lpp_`), issued at allotment, replaced by rotation and stopped by revocation, with migration
-   0015 for its hash; the signer's two paths at the root (`POST /sign-orchestrator-info`,
-   `POST /generate-live-payment`), each called with a payment key and forwarded once to the signer with
-   the actor's Batteries key; a tenant's usage (`GET /v1/clearinghouse/tenants/{tenant_id}/usage`), as
-   the `UsageSource` port's own page, with `spent` on the tenant list; and the runner list
-   (`GET /v1/clearinghouse/discovery`), livepeer/node's document as the clearinghouse read it. What an
-   engine does with them, and reading `signer_not_reached` as a retry, is P7's.
+5. **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
 6. **P6 (#167).** A public and a private listener.
 7. **P7 (#168).** Remote adapters for the five payment ports.
 8. **P8 (#169).** The engine's role setting.

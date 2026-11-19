@@ -169,7 +169,7 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     migrated: tuple[AsyncEngine, str], clock: FixedClock
 ) -> None:
     engine, job_id = migrated
-    assert await current_revision(engine) == head_revision() == "0015"
+    assert await current_revision(engine) == head_revision() == "0016"
     store, now = SqlStore(engine), clock.now()
 
     alice = ActorAllocation(
@@ -297,7 +297,7 @@ async def test_a_command_recorded_before_the_rename_is_replayed_and_not_run_agai
     async with make_engine(supply=supply, auto_migrate=False) as built:
         answered = await built.payments.allot(ADMIN, PROVISION)
         assert OPERATION_REPLAYED.get() is True and manager.calls == []
-        assert answered.allocation == await built.payments.get_actor(ADMIN, "default", "alice")
+        assert answered == await built.payments.get_actor(ADMIN, "default", "alice")
         more = PROVISION.model_copy(update={"amount": Money(amount=Decimal("50"), currency="USD")})
         with pytest.raises(OperationConflict):
             await built.payments.allot(ADMIN, more)

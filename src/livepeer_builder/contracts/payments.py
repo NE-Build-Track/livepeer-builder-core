@@ -32,7 +32,7 @@ class PaymentKey(Contract):
 
 
 class SecretRef(Contract):
-    """A handle to a secret held by a SecretStore. Databases, records and logs hold only this."""
+    """A local SecretStore handle, or an opaque delivered: receipt for work-engine-owned credentials."""
 
     ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
@@ -124,45 +124,6 @@ class ActorAllocation(Contract):
     label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
 
 
-class IssuedPaymentKey(Contract):
-    """An actor's payment key, as the command that issued it answers (D87, #166). The clearinghouse keeps
-    the key's hash and never the key, so the token is in the answer of the run that issued the key and
-    nowhere else. A repeat of the command's reference, or a run that found the key already issued,
-    answers ``token: null`` and ``replayed: true``, as issuing an access key does."""
-
-    token: str | None  # ``lpp_...``, shown once
-    replayed: bool = False
-
-
-class KeyedAllocation(ActorAllocation):
-    """The answer to allotting an allocation and to rotating its payment key: the allocation, and the
-    payment key the command issued for its actor. An enterprise's engine presents that key when it asks
-    the clearinghouse to sign a payment for the actor, and stores it where it stores a Batteries key
-    today. ``payment_key`` is ``None`` when the store keeps no payment keys (a supplied store without
-    ``PaymentKeyRepo``)."""
-
-    payment_key: IssuedPaymentKey | None = None
-
-    @property
-    def allocation(self) -> ActorAllocation:
-        """The allocation as the store keeps it and every read returns it: without the payment key."""
-        return ActorAllocation.model_validate(self.model_dump(exclude={"payment_key"}))
-
-
-SignerCall = Literal["sign-orchestrator-info", "generate-live-payment"]
-"""The two calls the gateway SDK makes to a signer, by the path of each: who the signer is, which signs
-no payment, and one payment."""
-
-
-class SignerAnswer(Contract):
-    """What a signer answered one call with, as it answered (#166): the status, the body as bytes and its
-    content type. Nothing of it is parsed: a clearinghouse hands it back to the engine that asked."""
-
-    status_code: int
-    content: bytes
-    content_type: str = ""
-
-
 class SeenActor(Contract):
     """A person the identity provider signed in as an actor (#52, D48), known before any allocation.
 
@@ -175,6 +136,16 @@ class SeenActor(Contract):
     name: str = Field(default="", max_length=200)
     first_seen_at: datetime
     last_seen_at: datetime
+
+
+class DeliveredAllocation(ActorAllocation):
+    """Allocation metadata and a one-response credential for the work engine.
+
+    Only the work engine persists the credential. A completed replay has no token;
+    rotate under a new operation reference if the first response was lost.
+    """
+
+    allocation_api_key: str | None = Field(default=None, repr=False)
 
 
 class KnownActor(Contract):

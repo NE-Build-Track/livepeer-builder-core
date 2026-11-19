@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P5 are built and in review. P6 to P8 follow in order.
+- **Progress:** P1 to P4 are built and in review. P5 to P8 follow in order.
 
 ## Goal
 
@@ -27,7 +27,7 @@ From ISS-31 as amended on 18 November 2026.
 
 - [ ] A payment clearinghouse serves at least two tenants, one for each enterprise app. Each enterprise
   app runs its jobs in its own engine, as an embedded engine or an engine server, and reaches the
-  clearinghouse only for signing, allotment, allowance and usage.
+  clearinghouse for allotment, allowance and usage; signing goes directly to the signer.
 - [ ] One tenant's admin cannot read or change another tenant. The attempt is refused.
 - [ ] Self-hosted payments still work, as one deployment with one tenant.
 - [ ] The clearinghouse admin onboards a tenant and tops up its grant by hand, on a private listener.
@@ -48,8 +48,7 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
 - [ ] **P4 (#165).** Tenants at the clearinghouse. Built and in review:
   [#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179).
-- [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery. Built and in
-  review: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180).
+- [ ] **P5 (#166).** Allocation credential handoff, usage and discovery; direct signing.
 - [ ] **P6 (#167).** A public and a private listener.
 - [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`.
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
@@ -79,7 +78,9 @@ Each pull request ticks its own line here in the same change.
   #165 rewrites no row. An existing allocation stays on the grant its record names, and nothing new is
   allotted to a tenant whose id is not a grant's id. Whether to re-key existing deployments is open.
   Source: Mike (not to rewrite rows in #165); the rest follows from it.
-- **19 November 2026, D87 point 3 amended.** The payments path is the signer's two paths at the root of a
-  clearinghouse's public listener, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each
-  called with a payment key. The gateway SDK drops any path in a signer address, so
-  `POST /v1/clearinghouse/payments` could not be reached by it unmodified. Source: Mike.
+
+- **19 November 2026, John, P5 comparison.** Remove the signer proxy and separate payment tokens.
+  Allocation secrets belong to the work engine. P5 provides the authenticated one-response handoff,
+  with metadata-only replay and explicit rotation for lost delivery. Self-hosted combined engines
+  retain their local work-engine secret store. Remote persistence stays in P7 and role/listener
+  selection in P6/P8; no later-stack implementation is included here.

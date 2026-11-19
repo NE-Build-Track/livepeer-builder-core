@@ -13,3 +13,10 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process |
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
+
+## Upgrading to the M4 hardening (#112 to #115)
+
+- **An empty `operation_ref` is refused** (#113, C19). A job or session request that sends
+  `operation_ref: ""` is a 422 that names the field (a `ValidationError` in process), before anything
+  is written; it used to count as a reference. A client that sends an empty string for "no retry key"
+  leaves the field out instead ([engine.md](engine.md#idempotency)).

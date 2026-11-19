@@ -213,6 +213,30 @@ async def test_two_first_payment_keys_for_one_allocation_at_the_same_time_leave_
         await second.close()
 
 
+async def test_two_replacements_for_an_actor_with_no_key_at_the_same_time_leave_one(
+    database_url: str, clock: FixedClock
+) -> None:
+    """Two rotations of an allocation that has no key yet (one allotted before #166), on two connections.
+    Both keep a key by their own account, and the actor holds exactly one of them: one row for an actor."""
+    import asyncio
+
+    first, second = await SqlStore.connect(database_url), await SqlStore.connect(database_url)
+    try:
+        alice = actor(clock)
+        await first.save_actor(alice)
+        kept = await asyncio.gather(
+            issued(first, alice, "lpp_a", clock.now()), issued(second, alice, "lpp_b", clock.now())
+        )
+        assert kept == [True, True]
+        [row] = await rows(first.engine)
+        assert row["token_hash"] in (token_hash("lpp_a"), token_hash("lpp_b"))
+        live = "lpp_a" if row["token_hash"] == token_hash("lpp_a") else "lpp_b"
+        assert await first.actor_by_payment_key(token_hash(live)) == alice
+    finally:
+        await first.close()
+        await second.close()
+
+
 # -- when a hash finds nobody ------------------------------------------------------------------------------
 
 

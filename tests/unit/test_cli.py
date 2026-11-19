@@ -1,7 +1,9 @@
 """The `lpb` operator CLI, run in-process: migrations, revision, backup/restore, bootstrap, smoke, docs."""
 
 import asyncio
+import contextlib
 import json
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -149,6 +151,25 @@ def test_engine_commands_that_never_serve_need_no_discovery_address(
     capsys.readouterr()
     with pytest.raises(ValidationError, match="discovery_url"):
         run("serve")
+
+
+def test_engine_commands_that_never_allot_need_no_secret_key(
+    db: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#106 review: with a payment provider set, purge and bootstrap-admin start without LPB_SECRET_KEY, as
+    they start without LPB_DISCOVERY_URL (C23): they never allot, so they keep no payment key. serve, and
+    smoke, which proves the engine starts as serve would, still refuse without it."""
+    monkeypatch.setenv("LPB_BATTERIES_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("LPB_BATTERIES_TOKEN", "tok-throwaway")
+    monkeypatch.delenv("LPB_SECRET_KEY", raising=False)
+    assert run("bootstrap-admin") == 0
+    assert run("purge") == 0
+    capsys.readouterr()
+    with contextlib.closing(sqlite3.connect(db)) as stored:  # nothing was kept, by any key
+        assert stored.execute("SELECT count(*) FROM lpb_secrets").fetchone() == (0,)
+    for command in ("smoke", "serve"):
+        with pytest.raises(ValueError, match="LPB_SECRET_KEY is required with a payment provider"):
+            run(command)
 
 
 def test_gen_docs_writes_then_checks(db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

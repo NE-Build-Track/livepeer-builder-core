@@ -14,6 +14,13 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
 
+## Upgrading to the M4 hardening (#112 to #115)
+
+- **An empty `operation_ref` is refused** (#113, C19). A job or session request that sends
+  `operation_ref: ""` is a 422 that names the field (a `ValidationError` in process), before anything
+  is written; it used to count as a reference. A client that sends an empty string for "no retry key"
+  leaves the field out instead ([engine.md](engine.md#idempotency)).
+
 ## Upgrading to the domain-language names
 
 On 18 November 2026 the names in every contract followed the domain language (D83, #163). Only names

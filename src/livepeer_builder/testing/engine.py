@@ -36,7 +36,7 @@ async def make_engine(
 ) -> AsyncIterator[BuilderEngine]:
     """A real engine, not started, with one discovery snapshot taken; stopped on exit.
 
-    Defaults: an in-memory store, ``per_actor`` payments with a fresh ``LPB_SECRET_KEY``, a
+    Defaults: an in-memory store, a fresh ``LPB_SECRET_KEY`` for the actors' payment keys, a
     ``FixedClock``, the given runners (one ``runner()`` if none), a ``ScriptedStreamTransport``, one
     ``FakeAllocationManager`` for allocations and the grant desk, and a ``FakeUsageSource``. ``supply``
     replaces any of them; ``**settings`` override ``EngineSettings`` fields. The background loops are not
@@ -44,7 +44,6 @@ async def make_engine(
     """
     values: dict[str, Any] = {
         "database_url": MEMORY_URL,
-        "allocation_mode": "per_actor",
         "secret_key": generate_secret_key(),
         "log_json": False,
         "discovery_url": FAKE_DISCOVERY_URL,

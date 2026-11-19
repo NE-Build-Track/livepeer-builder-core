@@ -466,10 +466,7 @@
         "additionalProperties": false,
         "properties": {
           "allocation_mode": {
-            "enum": [
-              "per_application",
-              "per_actor"
-            ],
+            "const": "per_actor",
             "title": "Allocation Mode",
             "type": "string"
           },

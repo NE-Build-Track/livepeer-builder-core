@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
+from livepeer_builder.contracts import Contract, Currency, Operation
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
@@ -67,16 +67,12 @@ class EngineSettings(Contract):
     stream_settle_s: float = Field(default=1.0, ge=0)  # after a disconnect, time for the runner to end
     stream_open_grace_s: float = Field(default=5.0, gt=0)  # how far past its deadline an open may run
 
-    # payments
-    allocation_mode: AllocationMode = "per_actor"
+    # payments: one allocation and key per actor, the only mode (D82); no setting holds a payment key
     default_currency: Currency = "USD"
-    shared_payment_key: SecretStr | None = None  # per_application mode: the one lpg_ key
     batteries_url: str | None = None  # management API and usage feed
     batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
     batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
     batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
-    # per_application: the allocation behind shared_payment_key; every attempt stores it (200 characters)
-    shared_allocation_id: str | None = Field(default=None, max_length=200)
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)

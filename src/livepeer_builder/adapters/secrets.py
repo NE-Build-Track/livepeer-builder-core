@@ -1,7 +1,7 @@
 """SecretStore implementations. Enterprises may plug in Vault or a cloud secret manager instead.
 
-- SettingsSecretStore: read-only secrets from configuration (per_application's shared key).
-- EncryptedDbSecretStore: Fernet-encrypted rows in the engine database (default for per_actor keys).
+- SettingsSecretStore: read-only secrets supplied at startup.
+- EncryptedDbSecretStore: Fernet-encrypted rows in the engine database (the default for payment keys).
 """
 
 import secrets as _random

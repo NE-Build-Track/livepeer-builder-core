@@ -15,7 +15,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from livepeer_builder import EngineSettings, EngineSupply
+from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, SecretRef
 from livepeer_builder.http import create_app
 from livepeer_builder.http.bodies import IssueKeyBody, RotateKeyBody
@@ -131,8 +131,3 @@ async def test_an_actor_whose_secret_reference_is_longer_than_200_characters_sti
 async def test_the_memory_secret_store_s_ref_fits_for_the_longest_actor() -> None:
     ref = await MemorySecretStore().put(f"{'a' * 200}/{'b' * 200}", "lpg_secret")
     assert len(ref.ref) <= 200
-
-
-def test_a_shared_allocation_id_longer_than_an_attempt_keeps_fails_at_startup() -> None:
-    with pytest.raises(ValidationError, match="shared_allocation_id"):
-        EngineSettings.model_validate({"discovery_url": "http://d/discovery", "shared_allocation_id": LONG})

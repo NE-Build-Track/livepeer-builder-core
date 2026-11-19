@@ -287,18 +287,47 @@ def test_settings_from_environment() -> None:
     settings = EngineSettings.from_env(
         {
             "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
-            "LPB_ALLOCATION_MODE": "per_application",
+            "LPB_DEFAULT_CURRENCY": "ETH",
             "LPB_MAX_CONCURRENT_JOBS": "3",
-            "LPB_SHARED_PAYMENT_KEY": "lpg_x",
+            "LPB_BATTERIES_TOKEN": "token_x",
         }
     )
-    assert settings.allocation_mode == "per_application" and settings.max_concurrent_jobs == 3
-    assert settings.shared_payment_key is not None and "lpg_x" not in repr(settings)
+    assert settings.default_currency == "ETH" and settings.max_concurrent_jobs == 3
+    assert settings.batteries_token is not None and "token_x" not in repr(settings)
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
     ignored = EngineSettings.from_env(
         {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_GRANT_ID": "grant_old"}
     )
     assert "grant_id" not in ignored.model_dump()
+
+
+REMOVED_WITH_PER_APPLICATION = {
+    "LPB_ALLOCATION_MODE": "per_application",
+    "LPB_SHARED_PAYMENT_KEY": "lpg_shared",
+    "LPB_SHARED_ALLOCATION_ID": "alloc_shared",
+}
+
+
+def test_the_allocation_mode_and_shared_key_variables_name_no_setting() -> None:
+    """``per_actor`` is the only allocation mode (D82, #162). An environment that still sets the removed
+    variables starts the same engine as one that does not: no shared key is read, so none can pay."""
+    plain = {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery"}
+    leftover = EngineSettings.from_env(plain | REMOVED_WITH_PER_APPLICATION)
+    assert leftover == EngineSettings.from_env(plain)
+    assert "lpg_shared" not in repr(leftover.model_dump())
+
+
+@pytest.mark.parametrize(
+    "name", [variable.removeprefix("LPB_").lower() for variable in REMOVED_WITH_PER_APPLICATION]
+)
+def test_a_removed_payment_setting_given_in_code_is_refused_and_not_echoed(name: str) -> None:
+    """Settings built in code refuse a field they do not have, so an embedder that still passes one
+    learns it when it builds them. The refusal names the field and never repeats its value."""
+    with pytest.raises(ValidationError) as refused:
+        EngineSettings.model_validate({"discovery_url": "http://127.0.0.1:9/discovery", name: "lpg_shared"})
+    (error,) = refused.value.errors()
+    assert (error["type"], error["loc"]) == ("extra_forbidden", (name,))
+    assert "lpg_shared" not in str(refused.value)
 
 
 def test_tuning_values_are_settings_with_todays_defaults() -> None:

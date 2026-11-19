@@ -127,10 +127,9 @@ async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret
     [
         ({**PROVIDER_SETTINGS, "secret_key": generate_secret_key()}, {}),  # the key is set
         ({}, {}),  # no provider: provisioning is refused before any call
-        ({**PROVIDER_SETTINGS, "allocation_mode": "per_application", "shared_payment_key": "lpg_k"}, {}),
         (PROVIDER_SETTINGS, {"secret_store": MemorySecretStore()}),  # a plug-in store: asked per request
     ],
-    ids=["key", "no-provider", "per-application", "plug-in-store"],
+    ids=["key", "no-provider", "plug-in-store"],
 )
 async def test_an_engine_that_can_keep_its_payment_keys_starts(
     store: SqlStore, clock: FixedClock, values: dict[str, object], supplied: dict[str, object]

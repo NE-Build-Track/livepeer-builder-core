@@ -663,16 +663,6 @@ async def test_a_store_without_the_writable_check_is_not_asked(
     assert manager.calls == ["create_key_for_grant", "create_key"]
 
 
-async def test_per_application_mode_uses_the_configured_key(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
-) -> None:
-    engine = await make_engine(allocation_mode="per_application", shared_payment_key="lpg_shared")
-    shared = await engine.payments.credential(alice)
-    assert shared.token == "lpg_shared" and shared.allocation_id is None
-    with pytest.raises(InvalidRequest, match="per_actor"):
-        await engine.payments.provision(admin, provision_request())
-
-
 async def test_allowance_is_read_from_the_provider(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext
 ) -> None:

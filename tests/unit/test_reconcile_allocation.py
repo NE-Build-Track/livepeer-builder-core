@@ -140,37 +140,6 @@ async def test_an_actor_with_one_allocation_lists_no_other(
     assert report.other_allocations == () and report.balanced is True
 
 
-async def test_a_shared_allocation_counts_only_what_it_paid(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
-    transport: ScriptedTransport, usage: FakeUsageSource, manager: FakeAllocationManager,
-) -> None:  # fmt: skip
-    """``per_application``: the operator replaced the shared allocation. Each one reconciles on its own,
-    over every actor of the application."""
-    one_eth = Money(amount=Decimal(1), currency="ETH")
-    old, new = [
-        (await manager.create_key_for_grant("grant_1", name, one_eth, name)).allocation_id for name in "ab"
-    ]
-    before = await make_engine(
-        allocation_mode="per_application", shared_payment_key="lpg_a", shared_allocation_id=old
-    )
-    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
-    await before.jobs.run(alice, JobRequest(app=APP))
-    engine = await make_engine(
-        allocation_mode="per_application", shared_payment_key="lpg_b", shared_allocation_id=new
-    )
-    transport.steps = [ScriptedTransport.ok(manifest_ids=("m-2",))]
-    await engine.jobs.run(bob, JobRequest(app=APP))
-    usage.rows = [row("1", "0.2", old, "m-1"), row("2", "0.3", new, "m-2")]
-    await engine.costs.sync_once()
-    manager.allocations[old].spent, manager.allocations[new].spent = Decimal("0.2"), Decimal("0.3")
-
-    current = await engine.costs.reconcile(admin, "default", None)
-    assert (current.allocation_id, current.other_allocations) == (new, (old,))
-    assert counted(current) == (Decimal("0.3"), Decimal("0")) and current.balanced is True
-    earlier = await engine.costs.reconcile(admin, "default", None, old)
-    assert counted(earlier) == (Decimal("0.2"), Decimal("0")) and earlier.balanced is True
-
-
 async def test_the_rest_route_takes_the_allocation_as_a_typed_query_id(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
     usage: FakeUsageSource, manager: FakeAllocationManager,

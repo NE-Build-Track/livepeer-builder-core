@@ -347,7 +347,8 @@ checks stop that:
 
 - **At startup.** An engine with a payment provider and the built-in secret store refuses to start
   when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the error names the
-  setting. The check runs on the parts the engine will run with, after `decorate`: a
+  setting; `lpb purge` and `lpb bootstrap-admin`, which never allot, give the store a key for their run
+  only (#106 review). The check runs on the parts the engine will run with, after `decorate`: a
   decorator that turns the provider off, or installs a store of its own, is not refused, and one that
   adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
   at boot, such as a sealed vault, still starts and is asked per request.
@@ -484,9 +485,11 @@ checks stop that:
   effectively none. Allotment takes zero or more (`AllotAmount`); topping up an allocation, topping up a
   grant and creating a grant take an amount within the format and bound (`TopUpAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
-  `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
-  ledger records anything and before any provider call. A zero or negative top-up or grant amount is
-  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  `ValidationError` when an in-process request is built, and `InvalidRequest` (400) from
+  `tenants.onboard`, which takes the grant's amount, the tenant's name and its first admin's actor id
+  itself and names the field, not the value (#106 review). Each comes before the operation ledger
+  records anything and before any provider call. A zero or negative top-up or grant amount is still
+  the command's own refusal, 400, unless it also breaks the format: one with more than 18
   decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
@@ -945,7 +948,7 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 `observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/costs/reconciliation` returns each class and `balanced`. Each
+`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/costs/reconciliation?tenant_id=...` returns each class and `balanced`; the tenant is required (#163 review). Each
 actor has its own allocation, so it balances exactly per user.
 
 **One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor

@@ -35,7 +35,7 @@ ROUTES = [
      None, REF | {"amount": {"amount": "1", "currency": "USD"}}),
     ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/status", None, {"status": "paused"}),
     ("POST", ALLOCATION.format(tenant="default", actor="{id}") + "/revoke", None, None),
-    ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/rotate-key", None, REF),
+    ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/rotate-payment-key", None, REF),
     ("GET", "/v1/admin/reconciliation", "tenant_id", None),
     ("GET", "/v1/admin/reconciliation", "actor_id", None),
     ("GET", "/v1/admin/reconciliation", "allocation_id", None),

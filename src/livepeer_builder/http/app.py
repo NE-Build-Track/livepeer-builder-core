@@ -295,7 +295,7 @@ def create_app(
             return await keys.get(actor, key_id)
 
         @app.post("/v1/admin/keys/{key_id}/rotate", response_model=IssuedKey, status_code=201)
-        async def rotate_key(
+        async def rotate_access_key(
             actor: Actor, key_id: PathId, body: RotateKeyBody, response: Response
         ) -> IssuedKey:
             rotated = await keys.rotate(actor, key_id, label=body.label, operation_ref=body.operation_ref)
@@ -377,11 +377,11 @@ def create_app(
     async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.revoke(actor, tenant_id, actor_id)
 
-    @app.post(base + "/rotate-key", response_model=ActorAllocation)
-    async def rotate(
+    @app.post(base + "/rotate-payment-key", response_model=ActorAllocation)
+    async def rotate_payment_key(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
     ) -> ActorAllocation:
-        rotated = await engine.payments.rotate_key(actor, tenant_id, actor_id, body.operation_ref)
+        rotated = await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, body.operation_ref)
         return _replay(response, rotated)
 
     @app.get("/v1/admin/reconciliation", response_model=Reconciliation)

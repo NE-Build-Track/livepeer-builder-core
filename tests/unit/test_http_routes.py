@@ -73,7 +73,9 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert (
         await client.post(ALLOCATION + "/status", json={"status": "active"}, headers=admin)
     ).status_code == 200
-    rotated = await client.post(ALLOCATION + "/rotate-key", json={"operation_ref": "r1"}, headers=admin)
+    rotated = await client.post(
+        ALLOCATION + "/rotate-payment-key", json={"operation_ref": "r1"}, headers=admin
+    )
     assert rotated.status_code == 200 and "lpg_" not in rotated.text
     assert (await client.get("/v1/allowance", headers=alice)).json()["granted"]["amount"] == "5"
     assert (await client.post("/v1/admin/costs/sync", headers=admin)).json()["pages"] == 1
@@ -509,7 +511,7 @@ async def test_a_replayed_grant_top_up_is_204_and_says_it_is_a_replay(api) -> No
 
 
 @pytest.mark.parametrize(
-    "path", [ALLOCATION + "/top-up", "/v1/admin/grant/top-up", ALLOCATION + "/rotate-key"]
+    "path", [ALLOCATION + "/top-up", "/v1/admin/grant/top-up", ALLOCATION + "/rotate-payment-key"]
 )
 async def test_an_operation_ref_with_a_nul_is_422_on_top_up_and_rotate(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str
@@ -591,7 +593,7 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
         (ALLOCATION + "/top-up", {"amount": usd}),
         ("/v1/admin/grant/top-up", {"amount": usd, "grant_id": "grant_1"}),
         ("/v1/admin/grants", {"name": "ops", "amount": usd}),
-        (ALLOCATION + "/rotate-key", {}),
+        (ALLOCATION + "/rotate-payment-key", {}),
         ("/v1/admin/keys", {"actor_id": "bob"}),
         (f"/v1/admin/keys/{key_id}/rotate", {"label": "ci"}),
     ]

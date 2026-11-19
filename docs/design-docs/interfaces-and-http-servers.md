@@ -146,7 +146,7 @@ classDiagram
         +async allot(admin, request) ActorAllocation
         +async top_up(admin, tenant_id, actor_id, request) ActorAllocation
         +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
-        +async rotate_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
+        +async rotate_payment_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
         +async revoke(admin, tenant_id, actor_id) ActorAllocation
         +async top_up_grant(admin, request) None
         +grants GrantsApi?
@@ -340,7 +340,7 @@ classDiagram
     direction LR
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) PaymentCredential
+        +async credential(actor) PaymentKey
     }
     class AllowanceReader {
         <<interface>>
@@ -766,7 +766,7 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
-| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_key` | `ActorAllocation` |
+| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
 | `POST /v1/admin/grant/top-up` | `payments.top_up_grant` | `204` |
 | `GET /v1/admin/reconciliation` | `costs.reconcile` | `Reconciliation` |

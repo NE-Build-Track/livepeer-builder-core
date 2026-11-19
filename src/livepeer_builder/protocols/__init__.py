@@ -29,7 +29,7 @@ from livepeer_builder.contracts import (
     NewAllocationKey,
     Operation,
     OperationRecord,
-    PaymentCredential,
+    PaymentKey,
     PurgeReport,
     ResourceRef,
     ResultRef,
@@ -181,7 +181,7 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
 class CredentialResolver(Protocol):
     """The signer credential for this actor, resolved at call time. Raises NotProvisioned."""
 
-    async def credential(self, actor: ActorContext) -> PaymentCredential: ...
+    async def credential(self, actor: ActorContext) -> PaymentKey: ...
 
 
 class AllocationManager(Protocol):

@@ -338,7 +338,7 @@ async def test_rotation_replaces_the_key_and_revokes_the_old_one(
     engine = await make_engine()
     before = await engine.payments.allot(admin, allot_request())
     old_secret = (await engine.payments.credential(alice)).token
-    after = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    after = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert after.allocation_id == before.allocation_id and after.api_key_id != before.api_key_id
     assert manager.keys[before.api_key_id][2] is True  # old key revoked upstream
     assert (await engine.payments.credential(alice)).token not in (None, old_secret)
@@ -350,8 +350,8 @@ async def test_repeating_a_rotation_with_the_same_ref_keeps_the_new_key_live(
     """B1: the provider replays the same new key, so the repeat must not revoke it as "the old key"."""
     engine = await make_engine()
     before = await engine.payments.allot(admin, allot_request())
-    first = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
-    again = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")  # a lost response
+    first = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    again = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")  # a lost response
     assert again.api_key_id == first.api_key_id
     assert manager.keys[first.api_key_id][2] is False  # the live key is not revoked
     assert manager.keys[before.api_key_id][2] is True
@@ -400,7 +400,7 @@ async def test_a_store_that_cannot_write_refuses_rotation_before_the_provider(
     before = await engine.payments.allot(admin, allot_request())
     vault.sealed = True
     with pytest.raises(InvalidRequest) as refused:
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.calls == ["create_key_for_grant"]  # no new key was minted
     assert "cannot store" in str(refused.value)
     assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == before.api_key_id
@@ -431,11 +431,11 @@ async def test_an_interrupted_rotation_finishes_while_the_store_cannot_write(
     before = await engine.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is False  # the old key is still live
     vault.sealed = True
     clock.advance(120)  # LPB_OPERATION_STALE_S: the first run is presumed dead
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert rotated.api_key_id != before.api_key_id
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
 
@@ -465,11 +465,11 @@ async def test_a_rotation_interrupted_before_the_upgrade_finishes_while_the_stor
     before = await engine.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     await as_written_before_the_sent_as_note(store, "rotate-1")
     vault.sealed = True
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert rotated.api_key_id != before.api_key_id
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
     assert len(manager.keys) == 2  # and no third key was minted
@@ -498,16 +498,16 @@ async def test_such_a_record_is_still_asked_when_the_actor_does_not_hold_its_key
             if hasattr(store, write):
                 losing.setattr(store, write, lost)
         with pytest.raises(ConnectionError):  # the secret is stored; the actor still has the old key
-            await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+            await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     await as_written_before_the_sent_as_note(store, "rotate-1")
     vault.sealed = True
     clock.advance(120)
     with pytest.raises(InvalidRequest, match="cannot store"):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is False  # not revoked: the actor still uses it
     vault.sealed = False
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is True and len(manager.keys) == 2
     assert rotated.secret_ref.ref in vault.values
 
@@ -524,13 +524,13 @@ async def test_a_record_noting_another_provider_call_is_asked_though_the_actor_h
     await first.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):  # the actor holds the new key; the old one is still live
-        await first.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await first.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     held = await first.payments.get_actor(admin, "default", "alice")
     vault.sealed = True
     clock.advance(120)
     second = await make_engine(supply=EngineSupply(secret_store=vault), engine_id="two")
     with pytest.raises(InvalidRequest, match="cannot store"):
-        await second.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await second.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert len(manager.keys) == 2 and manager.calls.count("create_key") == 1  # no third key was minted
     assert (await second.payments.get_actor(admin, "default", "alice")).api_key_id == held.api_key_id
 
@@ -636,7 +636,7 @@ async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_
 
     monkeypatch.setattr(store, "set_actor_key", lost)
     with pytest.raises(ConnectionError):  # the new key's secret is stored and remembered
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     await engine.payments.revoke(admin, "default", "alice")
     again = allot_request().model_copy(update={"operation_ref": "allot-again"})
     replaced = await engine.payments.allot(admin, again)
@@ -644,7 +644,7 @@ async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_
     vault.sealed = True
     clock.advance(120)
     with pytest.raises(NotFound, match="began on allocation"):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert len(manager.keys) == minted  # no key was minted on the new allocation
     assert (await engine.payments.get_actor(admin, "default", "alice")).api_key_id == replaced.api_key_id
 
@@ -655,7 +655,7 @@ async def test_a_store_without_the_writable_check_is_not_asked(
     """``writable`` is optional: a plug-in store that leaves it out allots as before."""
     engine = await make_engine(supply=EngineSupply(secret_store=MemorySecretStore()))
     await engine.payments.allot(admin, allot_request())
-    await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.calls == ["create_key_for_grant", "create_key"]
 
 

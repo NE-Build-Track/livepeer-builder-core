@@ -74,7 +74,7 @@ async def run_every_command(engine: BuilderEngine, admin: ActorContext) -> None:
         admin, TopUpRequest(amount=USD_5, operation_ref="fund-grant", grant_id="grant_1")
     )
     await desk.create_grant(admin, "Team", USD_5, operation_ref="create-grant")
-    await payments.rotate_key(admin, "default", "alice", "rotate-payment-key")
+    await payments.rotate_payment_key(admin, "default", "alice", "rotate-payment-key")
     kinds: dict[str, CredentialKind] = {
         "admin": "clearinghouse_admin",
         "auditor": "auditor",

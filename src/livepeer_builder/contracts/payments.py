@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
 
 
-class PaymentCredential(Contract):
-    """The signer bearer for one call, and the allocation that bearer spends."""
+class PaymentKey(Contract):
+    """The key that pays for one actor's call, sent as the signer's bearer, and the allocation it spends."""
 
     token: str | None
     allocation_id: str | None

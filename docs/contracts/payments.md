@@ -164,18 +164,18 @@ checks stop that:
 | `grants.create_grant(name, amount, operation_ref=…)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN`, tagged `metadata.lpb_operation` | the ledger; Batteries has none on grants, so a resume finds the tagged grant (Q5) |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
-| `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
+| `rotate_payment_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit top-up.
 - **One command never undoes another on the same actor (#115, C4).** `allot`, `top_up`, `set_status`,
-  `revoke` and `rotate_key` read the actor, call the provider, then write. Each writes only its own
+  `revoke` and `rotate_payment_key` read the actor, call the provider, then write. Each writes only its own
   columns, with its condition in the SQL statement:
 
   | Command | Writes | Only where |
   | --- | --- | --- |
   | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
-  | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
+  | `rotate_payment_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
   | `top_up` | `status` = `active`, `updated_at` | the status is `exhausted` |
   | `allot` | the whole row | the actor is as allotment read it: it has no row, or it still has the `revoked` row being replaced |
 
@@ -190,7 +190,7 @@ checks stop that:
   No command moves an actor out of `revoked`; only a new allotment gives the actor an allocation
   again. A top-up of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
   with the actor as stored. When a revoke finishes while another command is at
-  the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
+  the provider, the actor stays `revoked`: `set_status` and `rotate_payment_key` then answer 404 as for an actor
   that has no allocation (the rotation's new key is on a revoked allocation, and its secret is
   deleted), and a top-up, whose money was already sent, answers with the revoked actor. A revoke also
   deletes the secret of a key a rotation stored meanwhile. A revoke that another revoke overtook

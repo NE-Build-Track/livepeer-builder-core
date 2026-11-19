@@ -256,7 +256,7 @@ async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
             ),
         )  # fmt: skip
         payment_keys = [(await engine.payments.credential(alice)).token]
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
         payment_keys.append((await engine.payments.credential(alice)).token)
         await engine.payments.revoke(admin, "default", "alice")
     tokens = [first.token, issued.token, rotated.token]

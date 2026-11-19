@@ -60,7 +60,7 @@ classDiagram
     }
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) PaymentCredential
+        +async credential(actor) PaymentKey
     }
     class AllocationManager {
         <<interface>>

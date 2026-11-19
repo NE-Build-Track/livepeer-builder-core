@@ -2813,7 +2813,7 @@
     },
     "/v1/admin/keys/{key_id}/rotate": {
       "post": {
-        "operationId": "rotate_key_v1_admin_keys__key_id__rotate_post",
+        "operationId": "rotate_access_key_v1_admin_keys__key_id__rotate_post",
         "parameters": [
           {
             "in": "path",
@@ -2863,7 +2863,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate Key"
+        "summary": "Rotate Access Key"
       }
     },
     "/v1/admin/reconciliation": {
@@ -3120,9 +3120,9 @@
         "summary": "Revoke"
       }
     },
-    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-key": {
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-payment-key": {
       "post": {
-        "operationId": "rotate_v1_admin_tenants__tenant_id__actors__actor_id__allocation_rotate_key_post",
+        "operationId": "rotate_payment_key_v1_admin_tenants__tenant_id__actors__actor_id__allocation_rotate_payment_key_post",
         "parameters": [
           {
             "in": "path",
@@ -3182,7 +3182,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate"
+        "summary": "Rotate Payment Key"
       }
     },
     "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/status": {

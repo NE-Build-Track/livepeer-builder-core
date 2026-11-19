@@ -204,7 +204,7 @@ sequenceDiagram
     J->>DB: job_by_operation_ref → 409 if already used
     J->>Adm: admit(app) → NoCapacity 503 if full (before payment)
     J->>DB: create_job(state=running, fingerprint)
-    J->>Pay: credential(actor) → PaymentCredential(token, allocation_id), or JobFailed(not_provisioned) before any attempt
+    J->>Pay: credential(actor) → PaymentKey(token, allocation_id), or JobFailed(not_provisioned) before any attempt
     loop each candidate (SelectionPolicy order, max_attempts)
         J->>DB: start_attempt(outcome=in_flight)
         J->>T: call(runner, request, credential)

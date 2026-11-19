@@ -1,6 +1,6 @@
 """#115 C4: one admin command never undoes another on the same actor.
 
-``fund``, ``set_status``, ``revoke`` and ``rotate_key`` each read the actor, called the provider, then
+``fund``, ``set_status``, ``revoke`` and ``rotate_payment_key`` each read the actor, called the provider, then
 saved the whole row from that read. A command that finished in between was overwritten: a rotation's new
 key by a pause, a pause by a rotation, a revoke by anything. Each command now writes only its own columns,
 under a condition in the SQL.
@@ -81,7 +81,7 @@ class Desk:
         return await self.payments.revoke(self.admin, "default", "alice")
 
     async def rotate(self) -> ActorAllocation:
-        return await self.payments.rotate_key(self.admin, "default", "alice", "rotate-1")
+        return await self.payments.rotate_payment_key(self.admin, "default", "alice", "rotate-1")
 
 
 PROVIDER_CALL = {
@@ -260,7 +260,7 @@ def live_keys(manager: FakeAllocationManager) -> list[str]:
 
 
 async def rotate_2(desk: Desk) -> ActorAllocation:
-    return await desk.payments.rotate_key(desk.admin, "default", "alice", "rotate-2")
+    return await desk.payments.rotate_payment_key(desk.admin, "default", "alice", "rotate-2")
 
 
 async def holds_only_the_key_of(
@@ -327,7 +327,7 @@ async def test_a_rotation_that_lost_keeps_its_reference_and_answers_the_same_aga
         await desk.rotate()
     with pytest.raises(OperationInProgress):  # the record is still held
         await desk.rotate()
-    third = await desk.payments.rotate_key(desk.admin, "default", "alice", "rotate-3")
+    third = await desk.payments.rotate_payment_key(desk.admin, "default", "alice", "rotate-3")
     calls = list(manager.calls)
     clock.advance(120)
     with pytest.raises(InvalidRequest) as again:

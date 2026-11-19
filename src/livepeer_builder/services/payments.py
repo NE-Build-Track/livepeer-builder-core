@@ -21,7 +21,7 @@ from livepeer_builder.contracts import (
     Currency,
     KnownActor,
     Operation,
-    PaymentCredential,
+    PaymentKey,
     ResourceRef,
     SecretRef,
     SeenActor,
@@ -85,11 +85,11 @@ class PaymentsService:
 
     # -- CredentialResolver ---------------------------------------------------------------------
 
-    async def credential(self, actor: ActorContext) -> PaymentCredential:
+    async def credential(self, actor: ActorContext) -> PaymentKey:
         allotted = await self._store.get_actor(actor.tenant_id, actor.actor_id)
         if allotted is None or allotted.status == "revoked":
             raise NotProvisioned(f"actor {actor.actor_id!r} has no allocation; an admin must allot one")
-        return PaymentCredential(
+        return PaymentKey(
             token=await self._secrets.get(allotted.secret_ref),
             allocation_id=allotted.allocation_id,
         )
@@ -298,7 +298,7 @@ class PaymentsService:
             await self._secrets.delete(revoked.secret_ref)
         return revoked
 
-    async def rotate_key(
+    async def rotate_payment_key(
         self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
     ) -> ActorAllocation:
         """New key on the same allocation, store it, then revoke the old key, on the ledger (D57).

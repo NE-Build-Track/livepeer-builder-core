@@ -222,10 +222,10 @@ async def test_a_rotation_that_died_before_revoking_the_old_key_is_finished_by_a
     before = await engine.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is False  # the old key is still live
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
     assert manager.keys[rotated.api_key_id][2] is False
     assert len(manager.keys) == 2  # allotment's key and one rotation
@@ -245,10 +245,10 @@ async def test_a_rotation_refused_after_its_new_key_was_stored_stays_resumable(
     before = await engine.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderError(409, "key busy"))
     with pytest.raises(ProviderError):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is False  # the old key is still live
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
     assert manager.keys[rotated.api_key_id][2] is False
     assert len(manager.keys) == 2
@@ -325,9 +325,9 @@ async def test_a_rotation_resumed_after_storing_the_secret_failed_revokes_the_ol
 
     monkeypatch.setattr(manager, "revoke_key", counted)
     with pytest.raises(ConnectionError):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert revoked == [before.api_key_id]
     assert manager.keys[rotated.api_key_id][2] is False and len(manager.keys) == 2
     assert (await engine.payments.credential(alice)).token == manager.keys[rotated.api_key_id][1]
@@ -352,9 +352,9 @@ async def test_a_rotation_resumed_after_its_secret_was_stored_keeps_one_copy_of_
 
     monkeypatch.setattr(store, "set_actor_key", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     async with store.engine.connect() as conn:
         refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
     assert refs == {rotated.secret_ref.ref}  # the old key's secret is deleted, and no orphan copy
@@ -419,10 +419,10 @@ async def test_a_slow_rotation_taken_over_while_storing_its_secret_drops_its_cop
         await release.wait()
 
     monkeypatch.setattr(store, "put_secret", slow_once)
-    slow = asyncio.create_task(engine.payments.rotate_key(admin, "default", "alice", "rotate-1"))
+    slow = asyncio.create_task(engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1"))
     await stalled.wait()
     clock.advance(120)
-    resumed = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    resumed = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     release.set()
     assert await slow == resumed
     async with store.engine.connect() as conn:
@@ -538,7 +538,7 @@ async def test_one_ref_used_for_another_command_is_a_conflict(
         admin, "default", "alice", TopUpRequest(amount=usd("10"), operation_ref="op-1")
     )
     with pytest.raises(OperationConflict):
-        await engine.payments.rotate_key(admin, "default", "alice", "op-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "op-1")
     assert "create_key" not in manager.calls
 
 
@@ -802,7 +802,7 @@ async def test_no_token_or_payment_key_is_ever_stored_in_the_ledger(
     issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
     rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
     await engine.payments.allot(admin, allot_request())
-    await engine.payments.rotate_key(admin, "default", "alice", "rotate-payment-1")
+    await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-payment-1")
     async with store.engine.connect() as conn:
         rows = str((await conn.execute(select(t.operations))).all())
     secrets = [issued.token, rotated.token] + [secret for _, secret, _ in manager.keys.values()]

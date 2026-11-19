@@ -38,7 +38,7 @@ from livepeer_builder.contracts import (
     JobResult,
     JobState,
     Operation,
-    PaymentCredential,
+    PaymentKey,
     ResourceRef,
     ResultRef,
     Runner,
@@ -251,7 +251,7 @@ class JobService:
 
     async def _candidates(
         self, job: Job, actor: ActorContext, request: JobRequest, attempts: list[Attempt]
-    ) -> tuple[Candidates, PaymentCredential]:
+    ) -> tuple[Candidates, PaymentKey]:
         """Who could run this, and with which credential. Fails the job (before payment) when nobody can."""
         candidates = self._discovery.candidates(request.app)
         if not candidates:
@@ -275,7 +275,7 @@ class JobService:
         return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
 
     async def _start_attempt(
-        self, job: Job, number: int, runner: Runner, credential: PaymentCredential, attempts: list[Attempt]
+        self, job: Job, number: int, runner: Runner, credential: PaymentKey, attempts: list[Attempt]
     ) -> Attempt:
         attempt = Attempt(
             job_id=job.id,

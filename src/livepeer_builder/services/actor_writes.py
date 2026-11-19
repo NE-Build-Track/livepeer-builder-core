@@ -1,8 +1,8 @@
 """Each admin command writes only its own actor columns, under a condition (#115, C4).
 
-``top_up``, ``set_status``, ``revoke`` and ``rotate_key`` read the actor, call the provider, then write. They
-used to save the whole row from that read, so a command that finished in between was overwritten: a
-rotation's new key by a pause, a pause by a rotation, a revoke by any of them. Now:
+``top_up``, ``set_status``, ``revoke`` and ``rotate_payment_key`` read the actor, call the provider, then
+write. They used to save the whole row from that read, so a command that finished in between was
+overwritten: a rotation's new key by a pause, a pause by a rotation, a revoke by any of them. Now:
 
 - a status command writes ``status`` and ``updated_at``;
 - a key rotation writes ``api_key_id``, ``secret_ref`` and ``updated_at``, and only over the key it began

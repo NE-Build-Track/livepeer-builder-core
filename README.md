@@ -60,8 +60,8 @@ async def quick_start(
 Run it with `asyncio.run(quick_start(EngineSettings.from_env()))`. `async with` starts the engine and
 stops it, closing what it opened. This block is tested (`tests/unit/test_readme_example.py`).
 
-The customer needs an allocation before its first job: an admin provisions it once
-([embedded-mode.md](docs/guides/embedded-mode.md#3-provision-before-paid-work)). A job for an actor
+The customer needs an allocation before its first job: an admin allots one, once
+([embedded-mode.md](docs/guides/embedded-mode.md#3-allot-before-paid-work)). A job for an actor
 with no allocation fails `not_provisioned`, and nothing is paid.
 
 ## Run the service

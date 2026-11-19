@@ -6,7 +6,7 @@ The discovery inventory is not served by a package in this repository
 ([contract](../contracts/discovery.md)).
 
 This document is for reviewing the shapes. Other documents cover the rest:
-- the flows between components (authentication, provisioning, a paid job with failover, cost sync,
+- the flows between components (authentication, allotment, a paid job with failover, cost sync,
   reconciliation, recovery): [architecture-diagrams.md](architecture-diagrams.md);
 - every interface's full method list, generated from the code: [generated/interfaces.md](../generated/interfaces.md);
 - how to replace a default, with runnable examples: [extending-the-engine.md](extending-the-engine.md).
@@ -143,11 +143,11 @@ classDiagram
     }
     class PaymentsAdminApi {
         <<interface>>
-        +async provision(admin, request) ProvisionedActor
-        +async fund(admin, tenant_id, actor_id, request) ProvisionedActor
-        +async set_status(admin, tenant_id, actor_id, status) ProvisionedActor
-        +async rotate_key(admin, tenant_id, actor_id, operation_ref) ProvisionedActor
-        +async revoke(admin, tenant_id, actor_id) ProvisionedActor
+        +async allot(admin, request) ActorAllocation
+        +async fund(admin, tenant_id, actor_id, request) ActorAllocation
+        +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
+        +async rotate_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
+        +async revoke(admin, tenant_id, actor_id) ActorAllocation
         +async fund_grant(admin, request) None
         +grants GrantsApi?
     }
@@ -716,7 +716,7 @@ classDiagram
         starlette
     }
     class RequestBodies {
-        IssueKeyBody, ProvisionBody, GrantBody
+        IssueKeyBody, AllotBody, GrantBody
         StatusBody, RotateBody, UsageBody
     }
     class FastAPI
@@ -765,8 +765,8 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
-| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (provisioned, signed in, or both: D46, D48), `ProvisionedActor` |
-| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
+| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
+| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.allot`, `fund`, `set_status`, `revoke`, `rotate_key` | `ActorAllocation` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
 | `POST /v1/admin/grant/fund` | `payments.fund_grant` | `204` |
 | `GET /v1/admin/reconciliation` | `costs.reconcile` | `Reconciliation` |
@@ -798,9 +798,9 @@ classDiagram
     class NotProvisioned {
         402
     }
-    class AlreadyProvisioned {
+    class AlreadyAllotted {
         409 + actor
-        code already_provisioned
+        code already_allotted
     }
     class OperationExists {
         409 + Livepeer-Job-Id + job
@@ -838,7 +838,7 @@ classDiagram
     EngineError <|-- NotFound
     EngineError <|-- InvalidRequest
     EngineError <|-- NotProvisioned
-    EngineError <|-- AlreadyProvisioned
+    EngineError <|-- AlreadyAllotted
     EngineError <|-- OperationExists
     OperationExists <|-- OperationInProgress
     EngineError <|-- OperationConflict

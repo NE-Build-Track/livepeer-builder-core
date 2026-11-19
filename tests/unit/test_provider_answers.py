@@ -458,11 +458,11 @@ async def test_a_key_answer_without_its_required_values_is_a_provider_error(call
 
 
 @pytest.mark.parametrize("answer", UNUSABLE_KEYS)
-async def test_provisioning_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_not_a_done_command(
+async def test_allotment_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_not_a_done_command(
     make_engine: EngineFactory, store: SqlStore, answer: str
 ) -> None:
     """``POST /v1/api-keys`` answered 201 with null, empty or object values. They were turned into text:
-    provisioning answered 201 with ``allocation_id: "None"`` and the ledger recorded it done. An answer
+    allotment answered 201 with ``allocation_id: "None"`` and the ledger recorded it done. An answer
     that lacked a key raised ``KeyError`` and answered 500."""
     manager = BatteriesClient(BASE, "t", client=answering(UNUSABLE_KEYS[answer], status=201))
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))

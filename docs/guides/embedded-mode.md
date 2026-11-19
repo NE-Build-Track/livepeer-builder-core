@@ -104,25 +104,25 @@ The authenticator is still on the engine if you want it. You can issue `lpk_` ke
 and later call `engine.authenticator.authenticate(AuthRequest(...))` yourself. That is optional.
 This path skips it.
 
-## 3. Provision before paid work
+## 3. Allot before paid work
 
-Jobs that hit the network spend from an allocation. A job for an unprovisioned actor fails with
-`JobFailed` (`job.failure.kind == "not_provisioned"`; HTTP 402 in service mode). Provisioning is an admin operation. There is no automatic provisioning
+Jobs that hit the network spend from an allocation. A job for an actor with no allocation fails with
+`JobFailed` (`job.failure.kind == "not_provisioned"`; HTTP 402 in service mode). Allotment is an admin operation. There is no automatic allotment
 ([payments.md](../contracts/payments.md)).
 
 ```python
-from livepeer_builder import ActorContext, Money, ProvisionRequest
+from livepeer_builder import ActorContext, Money, AllotRequest
 
 admin = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
-await engine.payments.provision(
+await engine.payments.allot(
     admin,
-    ProvisionRequest(
+    AllotRequest(
         tenant_id="default",
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
         grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
-        operation_ref="provision-customer-42",  # required: a repeat is answered, never applied twice
+        operation_ref="allot-customer-42",  # required: a repeat is answered, never applied twice
     ),
 )
 ```
@@ -238,7 +238,7 @@ Health is `engine.health()`, not `GET /readyz`.
 3. Run `lpb migrate` (or rely on `auto_migrate`).
 4. Construct `BuilderEngine.create(settings)`, then `await engine.start()` once per process.
 5. Map each authenticated user to an `ActorContext` with the permissions they need.
-6. Provision that actor with an admin `ActorContext` before the first paid job.
+6. Allot that actor with an admin `ActorContext` before the first paid job.
 7. Call `engine.discovery`, `engine.jobs`, `engine.costs`, `engine.payments` in your request
    handlers. Catch `EngineError` subclasses and map them to your own API.
 8. Call `await engine.stop()` on shutdown. Back up the database and `LPB_SECRET_KEY` separately.

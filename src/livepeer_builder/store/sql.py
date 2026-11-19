@@ -17,13 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from sqlalchemy.pool import StaticPool
 
 from livepeer_builder.contracts import (
+    ActorAllocation,
     Attempt,
     Failure,
     Job,
     JobCost,
     JobState,
     MeasuredUsage,
-    ProvisionedActor,
     ResultRef,
     SeenActor,
     SetAsideUsage,
@@ -86,15 +86,15 @@ class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
 
     # -- actors -------------------------------------------------------------------------------------
 
-    async def get_actor(self, tenant_id: str, actor_id: str) -> ProvisionedActor | None:
+    async def get_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation | None:
         async with self.engine.connect() as conn:
             return await actors.get_actor(conn, tenant_id, actor_id)
 
-    async def save_actor(self, actor: ProvisionedActor) -> None:
+    async def save_actor(self, actor: ActorAllocation) -> None:
         async with self.engine.begin() as conn:
             await actors.save_actor(conn, actor)
 
-    async def list_actors(self, tenant_id: str | None = None) -> list[ProvisionedActor]:
+    async def list_actors(self, tenant_id: str | None = None) -> list[ActorAllocation]:
         async with self.engine.connect() as conn:
             return await actors.list_actors(conn, tenant_id)
 

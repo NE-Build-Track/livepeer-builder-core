@@ -22,10 +22,10 @@ from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
     OPERATION_REPLAYED,
     AccessKey,
+    ActorAllocation,
     ActorContext,
+    AllotRequest,
     Money,
-    ProvisionedActor,
-    ProvisionRequest,
     SecretRef,
     SeenActor,
 )
@@ -40,7 +40,7 @@ TABLES = (t.access_keys, t.jobs, t.actors, t.actor_sightings, t.operations)
 ADMIN = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 # What ``lpb_operations.fingerprint`` held for this provisioning before the rename
 # (tests/unit/test_hashed_forms.py): a digest, which no migration can recompute.
-PROVISION = ProvisionRequest(
+PROVISION = AllotRequest(
     tenant_id="default",
     actor_id="alice",
     amount=Money(amount=Decimal("5"), currency="USD"),
@@ -137,7 +137,11 @@ async def stored(engine: AsyncEngine, old_names: bool) -> dict[str, list[dict[st
             table.name: [dict(row) for row in (await conn.execute(select(table))).mappings()]
             for table in tables
         }
-    return {name: sorted(rows, key=lambda row: json.dumps(row, default=str)) for name, rows in found.items()}
+    return {name: in_order(rows) for name, rows in found.items()}
+
+
+def in_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(rows, key=lambda row: json.dumps(row, default=str))
 
 
 def renamed(row: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +173,7 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     assert await current_revision(engine) == head_revision() == "0014"
     store, now = SqlStore(engine), clock.now()
 
-    alice = ProvisionedActor(
+    alice = ActorAllocation(
         tenant_id="default", actor_id="alice", grant_id="grant_1", allocation_id="alloc_1",
         api_key_id="key_1", secret_ref=SecretRef(ref="db:1"), currency="USD", status="active",
         created_at=now, updated_at=now, label="Alice",
@@ -211,7 +215,9 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     done = await store.get_operation("default", "operator", "provision")
     assert done is not None and done.fingerprint == PROVISION_FINGERPRINT and done.state == "done"
     assert done.context == {"new_secret_ref": "db:1", "new_secret_key_id": "key_1"}
-    assert ProvisionedActor.model_validate(done.result) == alice  # the answer a repeat gets back
+    assert (
+        done.command == "allot" and ActorAllocation.model_validate(done.result) == alice
+    )  # the answer a repeat gets back
     issued = await store.get_operation("default", "operator", "issue")
     assert issued is not None and AccessKey.model_validate(issued.result) == auditor
     rotated = await store.get_operation("default", "operator", "rotate")
@@ -289,12 +295,12 @@ async def test_a_command_recorded_before_the_rename_is_replayed_and_not_run_agai
     manager = FakeAllocationManager()
     supply = EngineSupply(store=SqlStore(engine), allocation_manager=manager, grants_manager=manager)
     async with make_engine(supply=supply, auto_migrate=False) as built:
-        answered = await built.payments.provision(ADMIN, PROVISION)
+        answered = await built.payments.allot(ADMIN, PROVISION)
         assert OPERATION_REPLAYED.get() is True and manager.calls == []
         assert answered == await built.payments.get_actor(ADMIN, "default", "alice")
         more = PROVISION.model_copy(update={"amount": Money(amount=Decimal("50"), currency="USD")})
         with pytest.raises(OperationConflict):
-            await built.payments.provision(ADMIN, more)
+            await built.payments.allot(ADMIN, more)
         assert manager.calls == []
 
 
@@ -328,7 +334,7 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
         await upgrade(engine)
         head = await stored(engine, old_names=False)
         for name in ("lpb_access_keys", "lpb_jobs", "lpb_actors", "lpb_actor_sightings"):
-            assert head[name] == [renamed(row) for row in before[name]]
+            assert head[name] == in_order([renamed(row) for row in before[name]])
 
         await interrupted(engine, "down", "0013")
         assert await current_revision(engine) == head_revision()

@@ -353,7 +353,7 @@ async def build(
 
 
 async def _require_storable_payment_keys(parts: EngineParts) -> None:
-    """Provisioning would fund an allocation, then fail to keep its key (#112, C2). Judged on the parts the
+    """Allotment would fund an allocation, then fail to keep its key (#112, C2). Judged on the parts the
     engine will run with, so a decorator that turns the provider off or installs its own store is not
     refused, and one that adds a provider is. Only the built-in store is asked here: a plug-in store that
     cannot write at boot (a sealed vault) still starts, and is asked per request."""

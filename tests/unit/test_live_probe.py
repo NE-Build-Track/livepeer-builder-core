@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, ScriptedTransport, runner
 from tests.conftest import EngineFactory
@@ -28,12 +28,12 @@ ProbeSettings: Any = SCRIPT["ProbeSettings"]
 async def stack(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine, str]]:
-    """The engine behind its REST app, carol provisioned with 5 USD, and the bootstrap admin key."""
+    """The engine behind its REST app, carol allotted with 5 USD, and the bootstrap admin key."""
     engine = await make_engine()
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:carol", tenant_id="default", actor_id="carol",
+        AllotRequest(
+            operation_ref="allot:default:carol", tenant_id="default", actor_id="carol",
             amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
         ),
     )  # fmt: skip

@@ -9,10 +9,10 @@ import pytest
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     AuthRequest,
     Money,
     Operation,
-    ProvisionRequest,
     ResourceRef,
 )
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotAuthenticated, NotFound
@@ -248,9 +248,9 @@ async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
         assert await ApiKeyAuthenticator(engine.store).authenticate(bearer(issued.token)) is not None
         rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-access-249")
         await engine.keys.revoke(admin, rotated.key.key_id)
-        await engine.payments.provision(
+        await engine.payments.allot(
             admin,
-            ProvisionRequest(operation_ref="provision:default:alice",
+            AllotRequest(operation_ref="allot:default:alice",
                 tenant_id="default", actor_id="alice", amount=Money(amount=Decimal("1"), currency="USD"),
                 grant_id="g-1",
             ),

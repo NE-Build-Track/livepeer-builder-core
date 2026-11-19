@@ -14,7 +14,7 @@ from sqlalchemy import Text, func, insert, inspect, select, text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from livepeer_builder.contracts import ProvisionedActor, SecretRef
+from livepeer_builder.contracts import ActorAllocation, SecretRef
 from livepeer_builder.store import SqlStore, create_engine, current_revision, head_revision, upgrade
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.migrate import alembic_config, downgrade
@@ -33,8 +33,8 @@ async def sql(database_url: str) -> AsyncIterator[SqlStore]:
 
 def actor(
     clock: FixedClock, actor_id: str = "alice", allocation_id: str = "a1", ref: str = "db:1"
-) -> ProvisionedActor:
-    return ProvisionedActor(
+) -> ActorAllocation:
+    return ActorAllocation(
         tenant_id="default", actor_id=actor_id, grant_id="g", allocation_id=allocation_id,
         api_key_id="k1", secret_ref=SecretRef(ref=ref), currency="USD", status="active",
         created_at=clock.now(), updated_at=clock.now(), label="Alice",
@@ -46,22 +46,22 @@ def actor(
 ACTORS_AT_0012 = as_before_0014(t.actors)
 
 
-def row_at_0012(actor: ProvisionedActor) -> dict[str, object]:
+def row_at_0012(actor: ActorAllocation) -> dict[str, object]:
     values = actor.model_dump(exclude={"secret_ref", "tenant_id"})
     return values | {"application_id": actor.tenant_id, "secret_ref": actor.secret_ref.ref}
 
 
-async def save_at_0012(engine: AsyncEngine, actor: ProvisionedActor) -> None:
+async def save_at_0012(engine: AsyncEngine, actor: ActorAllocation) -> None:
     async with engine.begin() as conn:
         await conn.execute(insert(ACTORS_AT_0012).values(row_at_0012(actor)))
 
 
-async def alice_at_0012(engine: AsyncEngine) -> ProvisionedActor:
+async def alice_at_0012(engine: AsyncEngine) -> ActorAllocation:
     async with engine.connect() as conn:
         found = await conn.execute(select(ACTORS_AT_0012).where(ACTORS_AT_0012.c.actor_id == "alice"))
         row = dict(found.mappings().one())
     row["tenant_id"] = row.pop("application_id")
-    return ProvisionedActor.model_validate(row | {"secret_ref": SecretRef(ref=row["secret_ref"])})
+    return ActorAllocation.model_validate(row | {"secret_ref": SecretRef(ref=row["secret_ref"])})
 
 
 async def secret_ref_length(engine: AsyncEngine) -> int | None:

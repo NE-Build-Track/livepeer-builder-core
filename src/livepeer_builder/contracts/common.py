@@ -28,7 +28,7 @@ def _no_nul(value: str) -> str:
 
 
 # Text a record keeps (an id, a label, a reference): at most 200 characters (``store.schema.ID``) and no
-# NUL. SQLite takes anything; PostgreSQL refuses either when the row is written, which for provisioning
+# NUL. SQLite takes anything; PostgreSQL refuses either when the row is written, which for allotment
 # is after the provider key was funded. So it is refused where the request is parsed. A lone surrogate
 # (JSON's ``"\ud800"``) is refused there too, by pydantic itself: text with a length limit must be valid
 # Unicode (``string_unicode``). ``tests/unit/test_stored_text.py`` pins that.
@@ -108,5 +108,5 @@ def _unsigned(money: Money) -> Money:
 # check does not look at the sign, so a non-positive amount with more than 18 decimal places is refused
 # here first (422): invalid either way, with another status.
 FundingAmount = Annotated[Money, AfterValidator(_provider_amount)]
-# Provisioning: zero or more (zero sets up an identity with no money), within the same format and bound.
-ProvisionAmount = Annotated[Money, AfterValidator(_unsigned), AfterValidator(_provider_amount)]
+# Allotment: zero or more (zero sets up an identity with no money), within the same format and bound.
+AllotAmount = Annotated[Money, AfterValidator(_unsigned), AfterValidator(_provider_amount)]

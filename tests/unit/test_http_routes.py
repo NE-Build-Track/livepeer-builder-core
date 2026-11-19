@@ -85,7 +85,7 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "t2"},
         headers=admin,
     )
-    assert bad.status_code == 404  # revoked: no longer provisioned
+    assert bad.status_code == 404  # revoked: no longer allotted
 
 
 async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ignore[no-untyped-def]
@@ -401,7 +401,7 @@ async def test_a_raw_body_arrives_as_base64_over_rest(  # type: ignore[no-untype
 
 async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignore[no-untyped-def]
     client, engine, admin, alice = api
-    provisioned = await client.post(
+    allotted = await client.post(
         ALLOCATION,
         json={
             "amount": {"amount": "5", "currency": "USD"},
@@ -411,15 +411,13 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
         },
         headers=admin,
     )
-    assert provisioned.status_code == 201 and provisioned.json()["label"] == "Alice Smith"
+    assert allotted.status_code == 201 and allotted.json()["label"] == "Alice Smith"
     listed = await client.get("/v1/admin/actors", headers=admin)
     assert listed.status_code == 200
-    assert [
-        (a["actor_id"], a["label"], a["provisioned"], a["allocation"]["status"]) for a in listed.json()
-    ] == [
+    assert [(a["actor_id"], a["label"], a["allotted"], a["allocation"]["status"]) for a in listed.json()] == [
         ("alice", "Alice Smith", True, "active")
-    ]  # D48: each row says whether it is provisioned; the allocation is nested
-    assert (await client.get("/v1/admin/actors?provisioned=false", headers=admin)).json() == []
+    ]  # D48: each row says whether it is allotted; the allocation is nested
+    assert (await client.get("/v1/admin/actors?allotted=false", headers=admin)).json() == []
     assert (await client.get("/v1/admin/actors?status=paused", headers=admin)).json() == []
     one = await client.get(ALLOCATION, headers=admin)
     assert one.status_code == 200 and one.json()["actor_id"] == "alice"
@@ -462,8 +460,8 @@ async def test_a_label_too_long_to_store_is_refused_before_any_money_moves(  # t
 async def test_an_admin_ref_reused_with_another_body_is_409_operation_conflict(api) -> None:  # type: ignore[no-untyped-def]
     """D57, ISS-11: the same code as for jobs; an admin command has no job, so no job id header."""
     client, _engine, admin, _alice = api
-    provisioned = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
-    assert (await client.post(ALLOCATION, json=provisioned, headers=admin)).status_code == 201
+    allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
     assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 200
     other = fund | {"amount": {"amount": "6", "currency": "USD"}}
@@ -477,8 +475,8 @@ async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(
     api, manager: FakeAllocationManager
 ) -> None:
     client, _engine, admin, _alice = api
-    provisioned = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
-    assert (await client.post(ALLOCATION, json=provisioned, headers=admin)).status_code == 201
+    allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
     manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 503
@@ -491,8 +489,8 @@ async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(
 
 async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
-    provisioned = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
-    assert (await client.post(ALLOCATION, json=provisioned, headers=admin)).status_code == 201
+    allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
     first = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
     again = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
@@ -538,7 +536,7 @@ async def test_an_operation_ref_with_a_nul_is_422_on_fund_and_rotate(  # type: i
     ],
     ids=["actor", "tenant", "grant", "actor NUL", "tenant NUL"],
 )
-async def test_provisioning_an_id_longer_than_the_store_keeps_is_422_before_money_moves(  # type: ignore[no-untyped-def]
+async def test_allotment_an_id_longer_than_the_store_keeps_is_422_before_money_moves(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str, grant_id: str
 ) -> None:
     client, _engine, admin, _alice = api
@@ -552,17 +550,15 @@ async def test_provisioning_an_id_longer_than_the_store_keeps_is_422_before_mone
 async def test_an_amount_the_provider_would_not_take_is_422_before_the_ledger_and_the_provider(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, amount: str
 ) -> None:
-    """#112 C11: provisioning, funding and grants. Each reference is still free afterwards, so the ledger
+    """#112 C11: allotment, funding and grants. Each reference is still free afterwards, so the ledger
     recorded nothing."""
     client, _engine, admin, _alice = api
     bad, good = {"amount": amount, "currency": "USD"}, {"amount": "5", "currency": "USD"}
-    provision = {"grant_id": "grant_1", "operation_ref": "p1"}
-    answer = await client.post(ALLOCATION, json=provision | {"amount": bad}, headers=admin)
+    allot = {"grant_id": "grant_1", "operation_ref": "p1"}
+    answer = await client.post(ALLOCATION, json=allot | {"amount": bad}, headers=admin)
     assert answer.status_code == 422, answer.text
     assert manager.calls == []
-    assert (
-        await client.post(ALLOCATION, json=provision | {"amount": good}, headers=admin)
-    ).status_code == 201
+    assert (await client.post(ALLOCATION, json=allot | {"amount": good}, headers=admin)).status_code == 201
     funding = [
         (ALLOCATION + "/fund", {"operation_ref": "f1"}, 200),
         ("/v1/admin/grant/fund", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
@@ -627,7 +623,7 @@ async def test_a_replayed_key_issue_is_201_without_the_token(api) -> None:  # ty
     assert replayed.headers["Idempotent-Replayed"] == "true"
 
 
-async def test_replayed_provisioning_and_grant_creation_say_so(api) -> None:  # type: ignore[no-untyped-def]
+async def test_replayed_allotment_and_grant_creation_say_so(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
     body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
     grant = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
@@ -638,12 +634,12 @@ async def test_replayed_provisioning_and_grant_creation_say_so(api) -> None:  # 
         assert again.headers.get("Idempotent-Replayed") == "true", path
 
 
-async def test_provisioning_an_actor_already_provisioned_is_409_already_provisioned(api) -> None:  # type: ignore[no-untyped-def]
+async def test_allotment_an_actor_already_allotted_is_409_already_allotted(api) -> None:  # type: ignore[no-untyped-def]
     """Under a new reference nothing is applied, so the amount is not silently dropped: fund it instead."""
     client, _engine, admin, _alice = api
     body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
     first = await client.post(ALLOCATION, json=body, headers=admin)
     refused = await client.post(ALLOCATION, json=body | {"operation_ref": "p2"}, headers=admin)
-    assert refused.status_code == 409 and refused.json()["code"] == "already_provisioned"
+    assert refused.status_code == 409 and refused.json()["code"] == "already_allotted"
     assert refused.json()["actor"] == first.json()
     assert "Idempotent-Replayed" not in refused.headers

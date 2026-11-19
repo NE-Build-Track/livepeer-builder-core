@@ -10,6 +10,7 @@ from sqlalchemy import event, text
 
 from livepeer_builder.contracts import (
     AccessKey,
+    ActorAllocation,
     Attempt,
     AttemptCost,
     CallTimings,
@@ -17,7 +18,6 @@ from livepeer_builder.contracts import (
     Fees,
     JobCost,
     MeasuredUsage,
-    ProvisionedActor,
     ResultRef,
     SecretRef,
     SeenActor,
@@ -150,7 +150,7 @@ async def test_failure_and_listing(sql: SqlStore, clock: FixedClock) -> None:
 
 
 async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None:
-    actor = ProvisionedActor(
+    actor = ActorAllocation(
         tenant_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:x"), currency="USD", status="active", created_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip

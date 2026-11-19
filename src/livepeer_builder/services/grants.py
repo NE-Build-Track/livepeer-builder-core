@@ -1,7 +1,7 @@
 """Grants: the idempotency keys the engine sends Batteries, and the grant desk (D57).
 
 Split from ``payments.py`` by responsibility: grants fund every tenant and are an optional
-capability, while ``PaymentsService`` provisions and funds one actor's allocation.
+capability, while ``PaymentsService`` allots and funds one actor's allocation.
 """
 
 import base64
@@ -49,7 +49,7 @@ class GrantDesk:
         self._ledger = ledger
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        # The provisioning catalog: grants fund every tenant and carry none, so an auditor bound to
+        # The allotment catalog: grants fund every tenant and carry none, so an auditor bound to
         # one tenant never reads them (John, #53 review).
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         return await self._manager.list_grants()

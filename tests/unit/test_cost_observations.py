@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Job, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Job, JobRequest, Money
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
 from tests.conftest import EngineFactory
 from tests.unit.test_costs import row
@@ -31,10 +31,10 @@ async def paid_job(
 ) -> tuple[BuilderEngine, Job, str]:
     """An engine, a succeeded job of alice's that signed manifest ``m-1``, and her allocation."""
     engine = await make_engine(default_currency="ETH", **settings)
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice", tenant_id="default", actor_id="alice",
+        AllotRequest(
+            operation_ref="allot:default:alice", tenant_id="default", actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"), grant_id="grant_1",
         ),
     )  # fmt: skip

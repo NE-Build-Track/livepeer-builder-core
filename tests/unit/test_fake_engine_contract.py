@@ -30,7 +30,7 @@ from livepeer_builder import (
     OperationExists,
     OperationInProgress,
 )
-from livepeer_builder.contracts import AttemptOutcome, FailureKind, Fees, PaymentReason, ProvisionRequest
+from livepeer_builder.contracts import AllotRequest, AttemptOutcome, FailureKind, Fees, PaymentReason
 from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
@@ -121,14 +121,14 @@ async def real(
         transport = ScriptedTransport([ScriptedTransport.ok(), ScriptedTransport.ok()])
     async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport)) as engine:
         amount = Money(amount=Decimal("5"), currency="USD")
-        request = ProvisionRequest(
-            operation_ref="provision:default:alice",
+        request = AllotRequest(
+            operation_ref="allot:default:alice",
             tenant_id="default",
             actor_id="alice",
             amount=amount,
             grant_id="grant_1",
         )
-        await engine.payments.provision(ADMIN, request)
+        await engine.payments.allot(ADMIN, request)
         yield engine
 
 

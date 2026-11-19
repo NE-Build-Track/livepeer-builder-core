@@ -19,8 +19,10 @@ from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
     OPERATION_REPLAYED,
     AccessKey,
+    ActorAllocation,
     ActorContext,
     AllocationStatus,
+    AllotRequest,
     Allowance,
     AuthRequest,
     CostSummary,
@@ -33,8 +35,6 @@ from livepeer_builder.contracts import (
     JobCost,
     KnownActor,
     Offering,
-    ProvisionedActor,
-    ProvisionRequest,
     Reconciliation,
     Runner,
     Session,
@@ -44,7 +44,7 @@ from livepeer_builder.contracts import (
 from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.errors import (
     AccessDenied,
-    AlreadyProvisioned,
+    AlreadyAllotted,
     EngineError,
     InvalidRequest,
     JobFailed,
@@ -60,10 +60,10 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.http.bodies import (
+    AllotBody,
     GrantBody,
     IssueKeyBody,
     JobRequest,
-    ProvisionBody,
     RotateBody,
     RotateKeyBody,
     StatusBody,
@@ -311,29 +311,29 @@ def create_app(
         actor: Actor,
         tenant_id: QueryId = None,
         status: AllocationStatus | None = None,
-        provisioned: bool | None = None,
+        allotted: bool | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 500,
     ) -> list[KnownActor]:
-        """Provisioned actors and people an identity provider signed in (D46, D48)."""
+        """Allotted actors and people an identity provider signed in (D46, D48)."""
         return await engine.payments.list_actors(
-            actor, tenant_id=tenant_id, status=status, provisioned=provisioned, limit=limit
+            actor, tenant_id=tenant_id, status=status, allotted=allotted, limit=limit
         )
 
     base = "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation"
 
-    @app.get(base, response_model=ProvisionedActor)
-    async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ProvisionedActor:
+    @app.get(base, response_model=ActorAllocation)
+    async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.get_actor(actor, tenant_id, actor_id)
 
-    @app.post(base, response_model=ProvisionedActor, status_code=201)
-    async def provision(
+    @app.post(base, response_model=ActorAllocation, status_code=201)
+    async def allot(
         actor: Actor,
         tenant_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
         actor_id: Annotated[StoredText, Path()],
-        body: ProvisionBody,
+        body: AllotBody,
         response: Response,
-    ) -> ProvisionedActor:
-        request = ProvisionRequest(
+    ) -> ActorAllocation:
+        request = AllotRequest(
             tenant_id=tenant_id,
             actor_id=actor_id,
             amount=body.amount,
@@ -341,12 +341,12 @@ def create_app(
             grant_id=body.grant_id,
             operation_ref=body.operation_ref,
         )
-        return _replay(response, await engine.payments.provision(actor, request))
+        return _replay(response, await engine.payments.allot(actor, request))
 
-    @app.post(base + "/fund", response_model=ProvisionedActor)
+    @app.post(base + "/fund", response_model=ActorAllocation)
     async def fund(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: FundRequest, response: Response
-    ) -> ProvisionedActor:
+    ) -> ActorAllocation:
         return _replay(response, await engine.payments.fund(actor, tenant_id, actor_id, body))
 
     if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
@@ -367,20 +367,20 @@ def create_app(
         response = Response(status_code=204)
         return _replay(response, response)
 
-    @app.post(base + "/status", response_model=ProvisionedActor)
+    @app.post(base + "/status", response_model=ActorAllocation)
     async def set_status(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: StatusBody
-    ) -> ProvisionedActor:
+    ) -> ActorAllocation:
         return await engine.payments.set_status(actor, tenant_id, actor_id, body.status)
 
-    @app.post(base + "/revoke", response_model=ProvisionedActor)
-    async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ProvisionedActor:
+    @app.post(base + "/revoke", response_model=ActorAllocation)
+    async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.revoke(actor, tenant_id, actor_id)
 
-    @app.post(base + "/rotate-key", response_model=ProvisionedActor)
+    @app.post(base + "/rotate-key", response_model=ActorAllocation)
     async def rotate(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
-    ) -> ProvisionedActor:
+    ) -> ActorAllocation:
         rotated = await engine.payments.rotate_key(actor, tenant_id, actor_id, body.operation_ref)
         return _replay(response, rotated)
 
@@ -446,9 +446,9 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         held.pop("job", None)
         return problem(409, str(exc), headers, code="operation_conflict", **held)
 
-    @app.exception_handler(AlreadyProvisioned)
-    async def _provisioned(_: Request, exc: AlreadyProvisioned) -> Response:
-        return problem(409, str(exc), code="already_provisioned", actor=exc.actor.model_dump(mode="json"))
+    @app.exception_handler(AlreadyAllotted)
+    async def _allotted(_: Request, exc: AlreadyAllotted) -> Response:
+        return problem(409, str(exc), code="already_allotted", actor=exc.actor.model_dump(mode="json"))
 
     @app.exception_handler(NoCapacity)
     async def _capacity(_: Request, exc: NoCapacity) -> Response:

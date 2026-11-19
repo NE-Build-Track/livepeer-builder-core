@@ -17,12 +17,12 @@ import pytest
 from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     AuthProvenance,
     AuthRequest,
     JobRequest,
     Money,
     Operation,
-    ProvisionRequest,
     ResourceRef,
     Runner,
     SecretRef,
@@ -241,10 +241,10 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     with pytest.raises(NotAuthenticated):
         await engine.authenticator.authenticate(sso("alice", signature="forged"))
 
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:acme:alice",
+        AllotRequest(
+            operation_ref="allot:acme:alice",
             tenant_id="acme",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
@@ -267,10 +267,10 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     with pytest.raises(NotFound):
         await engine.jobs.get(carol, result.job.id)  # other team: invisible
     with pytest.raises(AccessDenied):
-        await engine.payments.provision(
+        await engine.payments.allot(
             bob,
-            ProvisionRequest(
-                operation_ref="provision:acme:bob",
+            AllotRequest(
+                operation_ref="allot:acme:bob",
                 tenant_id="acme",
                 actor_id="bob",
                 amount=Money(amount=Decimal(1), currency="USD"),

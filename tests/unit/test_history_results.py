@@ -17,7 +17,7 @@ from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FixedClock, ScriptedTransport
-from tests.conftest import EngineFactory, provision
+from tests.conftest import EngineFactory, allot
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_signing_intent import paid_engine
 
@@ -53,7 +53,7 @@ async def history(
     make_engine: EngineFactory, clock: FixedClock, transport: ScriptedTransport
 ) -> AsyncIterator[History]:
     engine = await make_engine()
-    await provision(engine, ActorContext(actor_id="alice"), ActorContext(actor_id="bob"))
+    await allot(engine, ActorContext(actor_id="alice"), ActorContext(actor_id="bob"))
     operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     admin = await engine.keys.bootstrap_admin()
     alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-alice")

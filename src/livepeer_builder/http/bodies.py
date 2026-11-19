@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from livepeer_builder import contracts
 from livepeer_builder.contracts import AllocationStatus, CredentialKind, OperationRef
-from livepeer_builder.contracts.common import FundingAmount, GrantId, ProvisionAmount, StoredText
+from livepeer_builder.contracts.common import AllotAmount, FundingAmount, GrantId, StoredText
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
 
@@ -31,9 +31,9 @@ class IssueKeyBody(BaseModel):
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class ProvisionBody(BaseModel):
-    amount: ProvisionAmount  # as ProvisionRequest: a 422 before money moves (#112, C11)
-    label: StoredText = ""  # ProvisionedActor.label; a 422 before money moves
+class AllotBody(BaseModel):
+    amount: AllotAmount  # as AllotRequest: a 422 before money moves (#112, C11)
+    label: StoredText = ""  # ActorAllocation.label; a 422 before money moves
     grant_id: GrantId = ""  # as stored, and one provider path segment: a 422 before money moves (#113, C10)
     operation_ref: OperationRef  # required (D57, Q4)
 

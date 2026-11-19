@@ -19,11 +19,11 @@ from decimal import Decimal
 from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     CredentialKind,
     FundRequest,
     JobRequest,
     Money,
-    ProvisionRequest,
 )
 from livepeer_builder.services.grants import GRANT_TAG
 from livepeer_builder.services.request_identity import request_fingerprint
@@ -60,7 +60,7 @@ async def run_every_command(engine: BuilderEngine, admin: ActorContext) -> None:
     access key is left out: its request is a random key id and a label, and holds no name."""
     payments, keys, desk = engine.payments, engine.keys, engine.payments.grants
     assert keys is not None and desk is not None
-    request = ProvisionRequest(
+    request = AllotRequest(
         tenant_id="default",
         actor_id="alice",
         amount=USD_5,
@@ -68,7 +68,7 @@ async def run_every_command(engine: BuilderEngine, admin: ActorContext) -> None:
         grant_id="grant_1",
         operation_ref="provision",
     )
-    await payments.provision(admin, request)
+    await payments.allot(admin, request)
     await payments.fund(admin, "default", "alice", FundRequest(amount=USD_5, operation_ref="fund"))
     await payments.fund_grant(
         admin, FundRequest(amount=USD_5, operation_ref="fund-grant", grant_id="grant_1")

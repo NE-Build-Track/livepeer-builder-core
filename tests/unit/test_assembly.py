@@ -110,7 +110,7 @@ PROVIDER_SETTINGS = {"batteries_url": "http://127.0.0.1:9", "batteries_token": "
 async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret_key(
     store: SqlStore, clock: FixedClock, configured: str
 ) -> None:
-    """#112 C2: provisioning would fund the allocation, then fail to keep its key. So the engine does not
+    """#112 C2: allotment would fund the allocation, then fail to keep its key. So the engine does not
     start, and the error names the setting."""
     supply = EngineSupply(store=store, clock=clock)
     values: dict[str, object] = {}
@@ -126,7 +126,7 @@ async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret
     ("values", "supplied"),
     [
         ({**PROVIDER_SETTINGS, "secret_key": generate_secret_key()}, {}),  # the key is set
-        ({}, {}),  # no provider: provisioning is refused before any call
+        ({}, {}),  # no provider: allotment is refused before any call
         (PROVIDER_SETTINGS, {"secret_store": MemorySecretStore()}),  # a plug-in store: asked per request
     ],
     ids=["key", "no-provider", "plug-in-store"],

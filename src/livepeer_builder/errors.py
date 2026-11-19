@@ -1,12 +1,12 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
 from livepeer_builder.contracts import (
+    ActorAllocation,
     AttemptOutcome,
     CallTimings,
     Job,
     OperationRecord,
     PaymentReason,
-    ProvisionedActor,
 )
 
 
@@ -93,17 +93,16 @@ class NoCapacity(EngineError):
 
 
 class NotProvisioned(EngineError):
-    """per_actor mode and this actor has no allocation. Provisioning is always explicit."""
+    """per_actor mode and this actor has no allocation. Allotment is always explicit."""
 
 
-class AlreadyProvisioned(EngineError):
-    """Provisioning an actor that already has an allocation, under a new reference (409; D57). Nothing is
+class AlreadyAllotted(EngineError):
+    """Allotting to an actor that already has an allocation, under a new reference (409; D57). Nothing is
     applied, the amount included: funding an existing actor is ``fund``."""
 
-    def __init__(self, actor: ProvisionedActor) -> None:
+    def __init__(self, actor: ActorAllocation) -> None:
         super().__init__(
-            f"actor {actor.actor_id!r} is already provisioned (allocation {actor.allocation_id}); "
-            "fund it instead"
+            f"actor {actor.actor_id!r} already has an allocation ({actor.allocation_id}); fund it instead"
         )
         self.actor = actor
 

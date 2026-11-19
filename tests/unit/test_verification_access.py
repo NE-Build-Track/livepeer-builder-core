@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, FundRequest, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, FundRequest, JobRequest, Money
 from livepeer_builder.errors import AccessDenied, InvalidRequest, JobFailed, NotFound
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
@@ -23,13 +23,13 @@ from tests.unit.test_costs import row
 APP = "example/echo"
 
 
-async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: str) -> BuilderEngine:
+async def allotted(make_engine: EngineFactory, admin: ActorContext, *actors: str) -> BuilderEngine:
     engine = await make_engine()
     for actor_id in actors:
-        await engine.payments.provision(
+        await engine.payments.allot(
             admin,
-            ProvisionRequest(
-                operation_ref=f"provision:default:{actor_id}", tenant_id="default", actor_id=actor_id,
+            AllotRequest(
+                operation_ref=f"allot:default:{actor_id}", tenant_id="default", actor_id=actor_id,
                 amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
             ),
         )  # fmt: skip
@@ -40,7 +40,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: 
 async def rest(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine]]:
-    engine = await provisioned(make_engine, admin, "alice", "bob")
+    engine = await allotted(make_engine, admin, "alice", "bob")
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield client, engine
@@ -58,7 +58,7 @@ async def test_another_actors_operation_ref_runs_their_own_job_and_never_shows_t
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport,
 ) -> None:  # fmt: skip
-    engine = await provisioned(make_engine, admin, "alice", "bob")
+    engine = await allotted(make_engine, admin, "alice", "bob")
     transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
     alices = (await engine.jobs.run(alice, JobRequest(app=APP, operation_ref="order-1"))).job
     bobs = (await engine.jobs.run(bob, JobRequest(app=APP, operation_ref="order-1"))).job
@@ -91,7 +91,7 @@ async def test_cost_summary_recent_costs_and_allowance_leave_out_another_actors_
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport, usage: FakeUsageSource, clock: FixedClock,
 ) -> None:  # fmt: skip
-    engine = await provisioned(make_engine, admin, "alice", "bob")
+    engine = await allotted(make_engine, admin, "alice", "bob")
     await engine.payments.fund(
         admin,
         "default",
@@ -131,7 +131,7 @@ async def test_cost_summary_recent_costs_and_allowance_leave_out_another_actors_
 async def test_a_job_after_the_allocation_is_revoked_fails_not_provisioned_without_a_runner_call(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     await engine.payments.revoke(admin, "default", "alice")
     transport.steps = [ScriptedTransport.ok()]
     with pytest.raises(JobFailed) as failed:
@@ -162,7 +162,7 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_changes_noth
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager,
     caplog: pytest.LogCaptureFixture,
 ) -> None:  # fmt: skip
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     allocation = (await engine.store.get_actor("default", "alice")).allocation_id  # type: ignore[union-attr]
     paused = [await engine.payments.set_status(admin, "default", "alice", "paused") for _ in range(2)]
     assert [actor.status for actor in paused] == ["paused", "paused"]
@@ -173,7 +173,7 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_changes_noth
     # a retry after a lost answer gets the first answer: the revoked actor, with nothing revoked twice (D61)
     assert await engine.payments.revoke(admin, "default", "alice") == revoked
     assert await engine.store.get_actor("default", "alice") == revoked
-    with pytest.raises(NotFound):  # an actor never provisioned is still not found
+    with pytest.raises(NotFound):  # an actor never allotted is still not found
         await engine.payments.revoke(admin, "default", "nobody")
     with pytest.raises(NotFound):
         await engine.payments.set_status(admin, "default", "alice", "active")  # no un-revoking by status

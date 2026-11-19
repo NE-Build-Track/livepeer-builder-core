@@ -66,7 +66,9 @@ from livepeer_builder.contracts.operations import (
     OperationState,
 )
 from livepeer_builder.contracts.payments import (
+    ActorAllocation,
     AllocationStatus,
+    AllotRequest,
     Allowance,
     FundRequest,
     GrantPage,
@@ -75,8 +77,6 @@ from livepeer_builder.contracts.payments import (
     NetworkRate,
     NewAllocationKey,
     PaymentCredential,
-    ProvisionedActor,
-    ProvisionRequest,
     SecretRef,
     SeenActor,
 )
@@ -86,8 +86,10 @@ __all__ = [
     "DEFAULT_ACTOR_PERMISSIONS",
     "OPERATION_REPLAYED",
     "AccessKey",
+    "ActorAllocation",
     "ActorContext",
     "AllocationStatus",
+    "AllotRequest",
     "Allowance",
     "Attempt",
     "AttemptCost",
@@ -135,8 +137,6 @@ __all__ = [
     "PaymentReason",
     "PaymentState",
     "PriceInfo",
-    "ProvisionRequest",
-    "ProvisionedActor",
     "PurgeReport",
     "Reconciliation",
     "ResourceRef",

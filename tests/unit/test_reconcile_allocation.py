@@ -1,7 +1,7 @@
-"""#115 C9: reconciliation balances again after a revoke and a re-provision.
+"""#115 C9: reconciliation balances again after a revoke and a second allotment.
 
 Reconciliation compared the provider's ``spent`` for the actor's current allocation with every charge of
-every job the actor ever ran. Once the actor was revoked and provisioned again, the jobs the first
+every job the actor ever ran. Once the actor was revoked and allotted again, the jobs the first
 allocation paid were still counted against the second, so it never balanced again. It now reconciles one
 allocation at a time: only the attempts that allocation paid.
 """
@@ -16,9 +16,9 @@ from sqlalchemy import update
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     JobRequest,
     Money,
-    ProvisionRequest,
     Reconciliation,
     UsageRow,
 )
@@ -41,8 +41,8 @@ def row(row_id: str, eth: str, allocation: str, manifest: str) -> UsageRow:
     )  # fmt: skip
 
 
-def provision(ref: str) -> ProvisionRequest:
-    return ProvisionRequest(
+def allot(ref: str) -> AllotRequest:
+    return AllotRequest(
         operation_ref=ref,
         tenant_id="default",
         actor_id="alice",
@@ -59,13 +59,13 @@ async def two_allocations(
     usage: FakeUsageSource,
     manager: FakeAllocationManager,
 ) -> tuple[str, str]:
-    """Alice pays one job (0.2) on her first allocation, is revoked and provisioned again, and pays one
+    """Alice pays one job (0.2) on her first allocation, is revoked and allotted again, and pays one
     job (0.3) and one forged charge (0.1) on the second. The provider reports what each spent."""
-    first = (await engine.payments.provision(admin, provision("provision-1"))).allocation_id
+    first = (await engine.payments.allot(admin, allot("allot-1"))).allocation_id
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
     await engine.jobs.run(alice, JobRequest(app=APP))
     await engine.payments.revoke(admin, "default", "alice")
-    second = (await engine.payments.provision(admin, provision("provision-2"))).allocation_id
+    second = (await engine.payments.allot(admin, allot("allot-2"))).allocation_id
     assert second != first
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-2",))]
     await engine.jobs.run(alice, JobRequest(app=APP))
@@ -80,7 +80,7 @@ def counted(report: Reconciliation) -> tuple[Decimal, Decimal]:
     return report.by_class["delivered"].fee_eth, report.unattributed.fee_eth
 
 
-async def test_reconciliation_balances_after_a_revoke_and_a_re_provision(
+async def test_reconciliation_balances_after_a_revoke_and_a_re_allot(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
     usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
@@ -116,9 +116,7 @@ async def test_an_allocation_that_never_paid_for_the_actor_is_not_found(
     """Otherwise an auditor of one tenant could read what any allocation spent."""
     engine = await make_engine(default_currency="ETH")
     await two_allocations(engine, admin, alice, transport, usage, manager)
-    other = await engine.payments.provision(
-        admin, provision("provision-bob").model_copy(update={"actor_id": "bob"})
-    )
+    other = await engine.payments.allot(admin, allot("allot-bob").model_copy(update={"actor_id": "bob"}))
     for unknown in (other.allocation_id, "alloc_none"):
         with pytest.raises(NotFound, match="never paid"):
             await engine.costs.reconcile(admin, "default", "alice", unknown)
@@ -131,7 +129,7 @@ async def test_an_actor_with_one_allocation_lists_no_other(
     usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    only = (await engine.payments.provision(admin, provision("provision-1"))).allocation_id
+    only = (await engine.payments.allot(admin, allot("allot-1"))).allocation_id
     assert (await engine.costs.reconcile(admin, "default", "alice")).other_allocations == ()
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
     await engine.jobs.run(alice, JobRequest(app=APP))
@@ -152,8 +150,8 @@ async def test_a_shared_allocation_of_the_removed_mode_still_reconciles_when_it_
     accounted for (#162)."""
     engine = await make_engine(default_currency="ETH")
     for actor_id in ("alice", "bob"):
-        mine = provision(f"provision-{actor_id}").model_copy(update={"actor_id": actor_id})
-        await engine.payments.provision(admin, mine)
+        mine = allot(f"allot-{actor_id}").model_copy(update={"actor_id": actor_id})
+        await engine.payments.allot(admin, mine)
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
     await engine.jobs.run(alice, JobRequest(app=APP))
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-2",))]
@@ -235,9 +233,7 @@ async def test_without_an_actor_a_named_allocation_reconciles_over_the_tenant(
     engine = await make_engine(default_currency="ETH")
     first, second = await two_allocations(engine, admin, alice, transport, usage, manager)
     bobs = (
-        await engine.payments.provision(
-            admin, provision("provision-bob").model_copy(update={"actor_id": "bob"})
-        )
+        await engine.payments.allot(admin, allot("allot-bob").model_copy(update={"actor_id": "bob"}))
     ).allocation_id
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-3",))]
     await engine.jobs.run(bob, JobRequest(app=APP))

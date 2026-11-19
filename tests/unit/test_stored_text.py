@@ -2,7 +2,7 @@
 
 Ids, labels and references are ``varchar(200)`` (``store.schema.ID``). SQLite ignores the length and
 PostgreSQL refuses a longer value, or one holding a NUL character, when the row is written: for
-provisioning that is after the provider key was funded. So each is checked where the request is parsed.
+allotment that is after the provider key was funded. So each is checked where the request is parsed.
 A lone surrogate is refused there too: no store, hash or response can encode it.
 An actor's secret reference is the exception: opaque text of any length (migration 0013, #115).
 """
@@ -16,7 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, SecretRef
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money, SecretRef
 from livepeer_builder.http import create_app
 from livepeer_builder.http.bodies import IssueKeyBody, RotateKeyBody
 from livepeer_builder.testing import ScriptedStreamTransport
@@ -39,9 +39,9 @@ PROVISION: dict[str, Any] = {
 
 @pytest.mark.parametrize("field", ["tenant_id", "actor_id", "grant_id", "label", "operation_ref"])
 @pytest.mark.parametrize("value", UNSTORABLE, ids=["too long", "NUL", "lone surrogate"])
-def test_provisioning_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
+def test_allotment_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
     with pytest.raises(ValidationError, match=field):
-        ProvisionRequest(**(PROVISION | {field: value}))
+        AllotRequest(**(PROVISION | {field: value}))
 
 
 @pytest.mark.parametrize("field", ["app", "capability", "model", "operation_ref"])
@@ -123,7 +123,7 @@ async def test_an_actor_whose_secret_reference_is_longer_than_200_characters_sti
     make_engine: EngineFactory, admin: ActorContext
 ) -> None:  # a SecretRef is opaque text of any length (#115; tests/store/test_secret_ref_text.py)
     engine = await make_engine(supply=EngineSupply(secret_store=VaultSecretStore()))
-    await engine.payments.provision(admin, ProvisionRequest(**PROVISION))
+    await engine.payments.allot(admin, AllotRequest(**PROVISION))
     read = await engine.payments.get_actor(admin, "default", "alice")
     assert read.secret_ref.ref.startswith("vault:") and len(read.secret_ref.ref) > 200
 

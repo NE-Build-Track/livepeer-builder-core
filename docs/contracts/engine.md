@@ -290,9 +290,9 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    ended increments the job's evidence version, so its stored cost projection is out of date and the
    next read and sync count it. If the engine dies mid-call, `recover_interrupted()` marks the job
    `uncertain` when anything may have paid, and `failed` otherwise.
-4. **Admission and provisioning are checked before any payment.** The admission limits
+4. **Admission and allotment are checked before any payment.** The admission limits
    (`max_concurrent_jobs`, `max_concurrent_jobs_per_app`) refuse with 503 and `Retry-After`. An
-   unprovisioned actor fails with `not_provisioned`.
+   actor with no allocation fails with `not_provisioned`.
 5. **A cost that hasn't arrived is `pending`.** So is a job still running, which may yet pay. Only a job
    that ended without reaching payment has cost status `none`.
 
@@ -318,7 +318,7 @@ answered as a repeat of the first. Send a real reference, or leave the field out
 | `failed` in any other way | 409 `OperationExists`, `code: operation_exists`, the job in the body | no |
 | no reference given | Runs it | yes |
 
-Every 409 for a job carries the job's id in `Livepeer-Job-Id`. Admin commands (provision, fund,
+Every 409 for a job carries the job's id in `Livepeer-Job-Id`. Admin commands (allot, fund,
 grants, rotations, keys) use the same codes, with the command in the body instead of a job: see
 [payments.md](payments.md#repeat-safe-commands). `OperationInProgress` is an `OperationExists`, so
 a caller that catches `OperationExists` keeps working; branch on `code` to tell them apart.
@@ -369,7 +369,7 @@ the last kind alone.
 | --- | --- | --- | --- | --- |
 | `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
 | `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: an attempt on a full priced runner can cost a ticket, because livepeer/node before v1.0.7 asks for payment before it checks capacity (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written |
-| `not_provisioned` | | no | 402 | The actor has no allocation. An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
+| `not_provisioned` | | no | 402 | The actor has no allocation. An operator allots one; retrying alone does not help. Then the same `operation_ref` runs again |
 | `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
 | `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
 | `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
@@ -408,7 +408,7 @@ async with stream:  # leaving the block ends the stream, however the block ends
         forward(chunk)
 ```
 
-Everything up to the runner's answer is `run`: admission, idempotency, provisioning, failover (a paid
+Everything up to the runner's answer is `run`: admission, idempotency, allotment, failover (a paid
 refusal at open moves to another orchestrator, as for `run`). The
 transport's `open` pays the 402 challenge before any byte flows, so `payment_sent` and the signed
 `manifest_ids` are known when the stream opens and are **written on the attempt before the first

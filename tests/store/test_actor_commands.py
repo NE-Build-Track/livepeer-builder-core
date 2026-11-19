@@ -11,7 +11,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from livepeer_builder.contracts import ProvisionedActor, SecretRef
+from livepeer_builder.contracts import ActorAllocation, SecretRef
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
 
@@ -24,8 +24,8 @@ async def sql(database_url: str) -> AsyncIterator[SqlStore]:
 
 
 @pytest.fixture
-async def actor(sql: SqlStore, clock: FixedClock) -> ProvisionedActor:
-    saved = ProvisionedActor(
+async def actor(sql: SqlStore, clock: FixedClock) -> ActorAllocation:
+    saved = ActorAllocation(
         tenant_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:1"), currency="USD", status="active", created_at=clock.now(),
         updated_at=clock.now(), label="Alice",
@@ -35,7 +35,7 @@ async def actor(sql: SqlStore, clock: FixedClock) -> ProvisionedActor:
 
 
 async def test_a_status_write_changes_the_status_and_the_time_only(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     later = clock.now() + timedelta(minutes=1)
     written = await sql.set_actor_status("default", "alice", "a1", "paused", later)
@@ -44,7 +44,7 @@ async def test_a_status_write_changes_the_status_and_the_time_only(
 
 
 async def test_a_key_write_changes_the_key_its_reference_and_the_time_only(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     later = clock.now() + timedelta(minutes=1)
     await sql.set_actor_status("default", "alice", "a1", "paused", clock.now())
@@ -57,7 +57,7 @@ async def test_a_key_write_changes_the_key_its_reference_and_the_time_only(
 
 
 async def test_a_status_write_limited_to_one_status_applies_only_from_it(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     """A fund moves ``exhausted`` to ``active`` and nothing else."""
     assert await sql.set_actor_status("default", "alice", "a1", "paused", clock.now()) is not None
@@ -74,7 +74,7 @@ async def test_a_status_write_limited_to_one_status_applies_only_from_it(
 
 
 async def test_no_write_applies_to_a_revoked_actor(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     later = clock.now() + timedelta(minutes=1)
     revoked = await sql.set_actor_status("default", "alice", "a1", "revoked", clock.now())
@@ -88,9 +88,9 @@ async def test_no_write_applies_to_a_revoked_actor(
 
 
 async def test_no_write_applies_to_another_allocation_or_an_unknown_actor(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
-    """A command that acted on an allocation since revoked never writes onto the one provisioned after."""
+    """A command that acted on an allocation since revoked never writes onto the one allotted after."""
     assert await sql.set_actor_status("default", "alice", "a0", "paused", clock.now()) is None
     key = ("default", "alice", "a0", "k2", SecretRef(ref="db:2"), clock.now())
     assert await sql.set_actor_key(*key, only_from="k1") is None
@@ -100,7 +100,7 @@ async def test_no_write_applies_to_another_allocation_or_an_unknown_actor(
 
 
 async def test_a_key_write_applies_only_over_the_key_the_rotation_began_from(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     """Two rotations that both began from ``k1``: the first write wins, and the second finds a key that
     is neither the one it began from nor its own, so it writes nothing. A repeat of the first still applies."""
@@ -119,7 +119,7 @@ async def test_a_key_write_applies_only_over_the_key_the_rotation_began_from(
 
 
 async def test_two_key_writes_from_one_key_at_the_same_time_leave_one(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     for round_ in range(1, 11):
         began_from = (await sql.get_actor("default", "alice")).api_key_id  # type: ignore[union-attr]
@@ -137,43 +137,43 @@ async def test_two_key_writes_from_one_key_at_the_same_time_leave_one(
         assert len(won) == 1 and await sql.get_actor("default", "alice") == won[0]
 
 
-async def test_provisioning_inserts_only_where_the_actor_has_no_row(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+async def test_allotment_inserts_only_where_the_actor_has_no_row(
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
-    """A second provisioning that read "no actor" finds the row the first one wrote, whatever was done
+    """A second allotment that read "no actor" finds the row the first one wrote, whatever was done
     to it since, and writes nothing."""
     bob = actor.model_copy(update={"actor_id": "bob", "allocation_id": "a2", "api_key_id": "k2"})
-    assert await sql.provision_actor(bob, replacing=None) is True
+    assert await sql.allot_actor(bob, replacing=None) is True
     assert await sql.get_actor("default", "bob") == bob
     late = bob.model_copy(update={"secret_ref": SecretRef(ref="db:9"), "label": "late"})
-    assert await sql.provision_actor(late, replacing=None) is False
+    assert await sql.allot_actor(late, replacing=None) is False
     paused = await sql.set_actor_status("default", "bob", "a2", "paused", clock.now())
-    assert await sql.provision_actor(late, replacing=None) is False
+    assert await sql.allot_actor(late, replacing=None) is False
     assert await sql.get_actor("default", "bob") == paused
 
 
-async def test_provisioning_replaces_only_the_revoked_row_it_read(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+async def test_allotment_replaces_only_the_revoked_row_it_read(
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     later = clock.now() + timedelta(minutes=1)
     again = actor.model_copy(
         update={"allocation_id": "a2", "api_key_id": "k2", "secret_ref": SecretRef(ref="db:2")}
     )
-    assert await sql.provision_actor(again, replacing="a1") is False  # not revoked: nothing to replace
+    assert await sql.allot_actor(again, replacing="a1") is False  # not revoked: nothing to replace
     assert await sql.get_actor("default", "alice") == actor
     await sql.set_actor_status("default", "alice", "a1", "revoked", later)
-    assert await sql.provision_actor(again, replacing="a0") is False  # not the row that was read
-    assert await sql.provision_actor(again, replacing="a1") is True
+    assert await sql.allot_actor(again, replacing="a0") is False  # not the row that was read
+    assert await sql.allot_actor(again, replacing="a1") is True
     assert await sql.get_actor("default", "alice") == again
     third = again.model_copy(update={"allocation_id": "a3", "api_key_id": "k3"})
-    assert await sql.provision_actor(third, replacing="a1") is False  # replaced already
+    assert await sql.allot_actor(third, replacing="a1") is False  # replaced already
     await sql.set_actor_status("default", "alice", "a2", "revoked", later)
-    assert await sql.provision_actor(third, replacing="a1") is False  # revoked, but another allocation
+    assert await sql.allot_actor(third, replacing="a1") is False  # revoked, but another allocation
     assert (await sql.get_actor("default", "alice")).allocation_id == "a2"  # type: ignore[union-attr]
 
 
-async def test_two_provisionings_of_a_new_actor_at_the_same_time_leave_one(
-    sql: SqlStore, actor: ProvisionedActor
+async def test_two_allotments_of_a_new_actor_at_the_same_time_leave_one(
+    sql: SqlStore, actor: ActorAllocation
 ) -> None:
     for round_ in range(1, 11):
         rivals = [
@@ -182,22 +182,22 @@ async def test_two_provisionings_of_a_new_actor_at_the_same_time_leave_one(
             )
             for label in ("one", "two")
         ]
-        wrote = await asyncio.gather(*(sql.provision_actor(rival, replacing=None) for rival in rivals))
+        wrote = await asyncio.gather(*(sql.allot_actor(rival, replacing=None) for rival in rivals))
         assert sorted(wrote) == [False, True]
         assert await sql.get_actor("default", f"new-{round_}") == rivals[wrote.index(True)]
 
 
 async def test_an_allocation_stored_as_another_actors_is_an_error_not_a_lost_race(
-    sql: SqlStore, actor: ProvisionedActor
+    sql: SqlStore, actor: ActorAllocation
 ) -> None:
     """``False`` means this actor's row was written first. The unique allocation is another matter."""
     with pytest.raises(IntegrityError):
-        await sql.provision_actor(actor.model_copy(update={"actor_id": "bob"}), replacing=None)
+        await sql.allot_actor(actor.model_copy(update={"actor_id": "bob"}), replacing=None)
     assert await sql.get_actor("default", "bob") is None
 
 
 async def test_a_status_write_and_a_key_write_at_the_same_time_both_last(
-    sql: SqlStore, actor: ProvisionedActor, clock: FixedClock
+    sql: SqlStore, actor: ActorAllocation, clock: FixedClock
 ) -> None:
     """Whole-row saves from two stale reads would keep one command's columns and lose the other's."""
     for round_ in range(1, 11):

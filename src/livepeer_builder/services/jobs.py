@@ -9,7 +9,7 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
    runner dispatches a new job under the same reference (D57, services/operations.py).
 3. An attempt row is written *before* the call and updated after it. Paid-but-unknown is
    ``uncertain``, never ``failed``. Jobs left ``running`` by a restart are resolved on start.
-4. Admission and provisioning are checked before any payment.
+4. Admission and allotment are checked before any payment.
 5. A streamed job (docs/contracts/engine.md#streaming) is bound to its runner once the stream is
    open; it ends ``succeeded``, or ``uncertain`` when the runner failed, timed out, or the caller
    stopped reading (``abandoned``). The admission slot is held until the stream ends.

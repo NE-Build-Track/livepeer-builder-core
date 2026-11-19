@@ -36,7 +36,7 @@ proprietary identity provider, or commerce.
 | Execution | SDK integration, jobs and attempts, status, result references, understandable failures | Application workflows, additional tools |
 | MCP and REST | Two interfaces to shared core services and authorization rules | Extra endpoints and tools; enterprise authentication, without forking |
 | Usage and cost | Execution measurements; correlated network-cost projections with uncertainty | Retail metering, subscriptions, invoices, refunds, margin |
-| Payments | Adapter to authorized provisioning, reporting and signing | Choose a provider or self-operate; fund the signer separately from customer billing |
+| Payments | Adapter to authorized allotment, reporting and signing | Choose a provider or self-operate; fund the signer separately from customer billing |
 | Persistence | Engine-owned records behind a supported interface | Customer and commerce stores, analytics, external-ID mappings |
 
 No CRM, retail wallet, subscription engine or asset-management product enters core. Enterprise code
@@ -61,7 +61,7 @@ through a backend or trusted access layer, and provider and admin credentials st
 | **B: hosted payment operator** | A third party runs Batteries, the signer and a provider-funded wallet for many builders | Scoped credentials and reports; **the contract is still to be established** (deferred to M4, [payments.md#mode-b](../contracts/payments.md#mode-b)) |
 
 The payment operator owns the funds, wallet operations, ledger and event ingestion in both modes.
-Provisioning an allowance is distinct from funding the wallet. Switching providers is not
+Allotment an allowance is distinct from funding the wallet. Switching providers is not
 automatically lossless.
 
 ## Execution scope
@@ -139,7 +139,7 @@ it. **No SLA, automatic refund or recovery guarantee** follows from the design. 
 | --- | --- |
 | Exact access/OAuth profile | **Decided:** D12–D16 ([access.md](../contracts/access.md)) |
 | Payment credential/allocation granularity | **Decided:** D17 (`per_actor`; the only mode since D82) |
-| Provider provisioning/reporting contracts | **Decided:** D18–D22 ([payments.md](../contracts/payments.md)) |
+| Provider allotment/reporting contracts | **Decided:** D18–D22 ([payments.md](../contracts/payments.md)) |
 | Example feature selection; reference app placement | Open (M3, ISS-21/22) |
 | Execution-process packaging | **Decided for M2:** one distribution with extras; in-process SDK adapter |
 | Representative acceptance capabilities | Open (ISS-19) |

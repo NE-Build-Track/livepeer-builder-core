@@ -13,10 +13,10 @@ keys, 404 across actors (on jobs for the run's own app, ``lpb-probe/<run>``, tha
 before any payment; none is sent if the catalog lists that app), then revokes a key and
 expects 401.
 
-It spends only with ``--yes`` and ``LPB_PROBE_FUND_ACTOR`` (an actor already provisioned in application
+It spends only with ``--yes`` and ``LPB_PROBE_FUND_ACTOR`` (an actor already allotted in application
 ``default``, the admin key's): one fund of ``LPB_PROBE_FUND_AMOUNT`` (default 0.01 USD or 0.000005 ETH,
 in the allocation's currency; at most 0.05 USD or 0.00002 ETH) sent twice under one ``operation_ref``,
-expecting the repeat to be a replay (D57) and the allowance to grow once. It never provisions and runs no
+expecting the repeat to be a replay (D57) and the allowance to grow once. It never allots and runs no
 paid job (ISS-25 does). It prints PASS, FAIL or SKIP per check and a summary, revokes the keys it issued,
 and exits 1 when a check failed.
 """
@@ -187,7 +187,7 @@ async def repeated_fund(probe: Probe, *, spend: bool, actor: str | None, amount:
         probe.record("SKIP", name, "pass --yes to spend one fund of a few cents")
         return
     if actor is None:
-        probe.record("SKIP", name, "set LPB_PROBE_FUND_ACTOR to an actor already provisioned")
+        probe.record("SKIP", name, "set LPB_PROBE_FUND_ACTOR to an actor already allotted")
         return
     before = await _granted(probe, actor)
     if before is None:

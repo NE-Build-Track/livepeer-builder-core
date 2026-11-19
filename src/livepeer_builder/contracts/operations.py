@@ -18,7 +18,7 @@ from pydantic import Field
 from livepeer_builder.contracts.common import Contract, StoredText
 
 OperationCommand = Literal[
-    "provision",
+    "allot",
     "fund",
     "fund_grant",
     "create_grant",

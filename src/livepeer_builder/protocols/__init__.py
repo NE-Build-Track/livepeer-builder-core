@@ -11,6 +11,7 @@ from uuid import UUID
 
 from livepeer_builder.contracts import (
     AccessKey,
+    ActorAllocation,
     ActorContext,
     Allowance,
     Attempt,
@@ -29,7 +30,6 @@ from livepeer_builder.contracts import (
     Operation,
     OperationRecord,
     PaymentCredential,
-    ProvisionedActor,
     PurgeReport,
     ResourceRef,
     ResultRef,
@@ -91,7 +91,7 @@ class SecretStore(Protocol):
 
 @runtime_checkable
 class WritableSecretStore(SecretStore, Protocol):
-    """A store that can say whether ``put`` would work now. Optional: provisioning and key rotation ask it
+    """A store that can say whether ``put`` would work now. Optional: allotment and key rotation ask it
     before the provider is called, and a ``False`` refuses the command with nothing sent (#112, C2). A
     store that leaves it out is not asked."""
 
@@ -237,11 +237,11 @@ class AllowanceReader(Protocol):
 
 
 class ActorRepo(Protocol):
-    async def get_actor(self, tenant_id: str, actor_id: str) -> ProvisionedActor | None: ...
+    async def get_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation | None: ...
 
-    async def save_actor(self, actor: ProvisionedActor) -> None: ...
+    async def save_actor(self, actor: ActorAllocation) -> None: ...
 
-    async def list_actors(self, tenant_id: str | None = None) -> list[ProvisionedActor]: ...
+    async def list_actors(self, tenant_id: str | None = None) -> list[ActorAllocation]: ...
 
     async def save_sighting(self, seen: SeenActor) -> None: ...  # keeps the first first_seen_at
 

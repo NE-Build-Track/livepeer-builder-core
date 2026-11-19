@@ -85,4 +85,4 @@ deploy/dev-stack/   optional payment stack (Batteries + node signer + node's sta
 
 - a change would alter an accepted decision in `docs/design-docs/m2-decisions.md`, `m3-decisions.md` or `m4-decisions.md`;
 - an upstream repository (SDK, node, Batteries) needs a change;
-- money could move: provisioning, funding, revocation semantics.
+- money could move: allotment, funding, revocation semantics.

@@ -6,7 +6,7 @@ does ``livepeer_builder.testing.FakeEngine`` for the actor API.
 
 - ``ActorApi``: what an application calls on behalf of its actors (its users), plus the engine's
   lifecycle. Type against this when you only run jobs.
-- ``AdminApi``: operator work (provisioning, grants, keys, reconciliation).
+- ``AdminApi``: operator work (allotment, grants, keys, reconciliation).
 - ``EngineApi``: both, plus authentication and the M4 placeholders. ``http/`` is typed against it.
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
@@ -23,8 +23,10 @@ from uuid import UUID
 
 from livepeer_builder.contracts import (
     AccessKey,
+    ActorAllocation,
     ActorContext,
     AllocationStatus,
+    AllotRequest,
     Allowance,
     CostSummary,
     CredentialKind,
@@ -39,8 +41,6 @@ from livepeer_builder.contracts import (
     KnownActor,
     Money,
     Offering,
-    ProvisionedActor,
-    ProvisionRequest,
     Reconciliation,
     Runner,
     SyncReport,
@@ -150,17 +150,17 @@ class GrantsApi(Protocol):
 
 
 class PaymentsAdminApi(Protocol):
-    async def provision(self, admin: ActorContext, request: ProvisionRequest) -> ProvisionedActor: ...
+    async def allot(self, admin: ActorContext, request: AllotRequest) -> ActorAllocation: ...
     async def fund(
         self, admin: ActorContext, tenant_id: str, actor_id: str, request: FundRequest
-    ) -> ProvisionedActor: ...
+    ) -> ActorAllocation: ...
     async def set_status(
         self, admin: ActorContext, tenant_id: str, actor_id: str, status: AllocationStatus
-    ) -> ProvisionedActor: ...
+    ) -> ActorAllocation: ...
     async def rotate_key(
         self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
-    ) -> ProvisionedActor: ...
-    async def revoke(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ProvisionedActor: ...
+    ) -> ActorAllocation: ...
+    async def revoke(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
     async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None: ...
     async def list_actors(
         self,
@@ -168,10 +168,10 @@ class PaymentsAdminApi(Protocol):
         *,
         tenant_id: str | None = None,
         status: AllocationStatus | None = None,
-        provisioned: bool | None = None,
+        allotted: bool | None = None,
         limit: int = 500,
     ) -> list[KnownActor]: ...
-    async def get_actor(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ProvisionedActor: ...
+    async def get_actor(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
     @property
     def grants(self) -> GrantsApi | None: ...
 
@@ -208,7 +208,7 @@ class CostsAdminApi(Protocol):
 
 
 class AdminApi(Protocol):
-    """Operator work: provisioning and funding, the grant desk, keys, reconciliation."""
+    """Operator work: allotment and funding, the grant desk, keys, reconciliation."""
 
     @property
     def payments(self) -> PaymentsAdminApi: ...

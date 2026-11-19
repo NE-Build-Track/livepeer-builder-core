@@ -16,7 +16,7 @@ import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.http import create_app
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, start
@@ -143,7 +143,7 @@ async def test_an_allowance_the_provider_cannot_read_has_a_fixed_message_and_its
     """``GET /v1/allowance`` is a builder's read: the provider's own words go to the log only (D58)."""
 
     def batteries(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":  # provisioning: one allocation and key
+        if request.method == "POST":  # allotment: one allocation and key
             return httpx.Response(201, json={"allocation_id": "alloc_1", "id": "key_1", "api_key": "lpg_k"})
         return httpx.Response(provider, json={"error": PROVIDER_WORDS})
 
@@ -151,10 +151,10 @@ async def test_an_allowance_the_provider_cannot_read_has_a_fixed_message_and_its
     manager = BatteriesClient("https://batteries.test", "t", client=client)
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     amount = Money(amount=Decimal(5), currency="USD")
-    request = ProvisionRequest(
+    request = AllotRequest(
         operation_ref="p", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     key = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-alice")
     app = create_app(engine, manage_lifecycle=False)
     with caplog.at_level(logging.WARNING, logger="livepeer_builder.services.payments"):
@@ -172,12 +172,12 @@ async def test_an_allowance_read_with_batteries_unreachable_says_so_in_the_engin
     make_engine: EngineFactory, admin: ActorContext, caplog: pytest.LogCaptureFixture
 ) -> None:
     """D58: httpx's own text (which can name the provider's host) goes to the log; the builder gets 503."""
-    provisioned = False
+    allotted = False
 
     def batteries(request: httpx.Request) -> httpx.Response:
-        nonlocal provisioned
-        if not provisioned:  # provisioning: one allocation and key
-            provisioned = True
+        nonlocal allotted
+        if not allotted:  # allotment: one allocation and key
+            allotted = True
             return httpx.Response(201, json={"allocation_id": "alloc_1", "id": "key_1", "api_key": "lpg_k"})
         raise httpx.ConnectError("UPSTREAM-HTTPX: connect to batteries.internal:8937 refused")
 
@@ -185,10 +185,10 @@ async def test_an_allowance_read_with_batteries_unreachable_says_so_in_the_engin
     manager = BatteriesClient("https://batteries.test", "t", client=client)
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     amount = Money(amount=Decimal(5), currency="USD")
-    request = ProvisionRequest(
+    request = AllotRequest(
         operation_ref="p", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     key = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-alice")
     app = create_app(engine, manage_lifecycle=False)
     with caplog.at_level(logging.WARNING, logger="livepeer_builder.services.payments"):

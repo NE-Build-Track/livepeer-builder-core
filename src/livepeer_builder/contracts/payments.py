@@ -1,4 +1,4 @@
-"""Payment contracts: explicit provisioning, allowance, and whether an advertised price can be paid
+"""Payment contracts: explicit allotment, allowance, and whether an advertised price can be paid
 (docs/contracts/payments.md)."""
 
 from datetime import datetime
@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import Field, SecretStr, computed_field, field_validator
 
 from livepeer_builder.contracts.common import (
+    AllotAmount,
     Contract,
     Currency,
     FundingAmount,
     GrantId,
     Money,
-    ProvisionAmount,
     StoredText,
 )
 from livepeer_builder.contracts.operations import OperationRef
@@ -37,16 +37,16 @@ class SecretRef(Contract):
     ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
 
-class ProvisionRequest(Contract):
-    """Explicit, admin-authorized provisioning. There is no automatic provisioning."""
+class AllotRequest(Contract):
+    """Explicit, admin-authorized allotment. There is no automatic allotment."""
 
-    # ``StoredText``: provisioning funds a provider key before it saves the actor, so an id or a label
+    # ``StoredText``: allotment funds a provider key before it saves the actor, so an id or a label
     # the store could not keep is refused here, before any provider call.
     tenant_id: StoredText
     actor_id: StoredText
     # may be zero: identity without money; fund later with an explicit command. Never negative, and within
     # the provider's format and the engine's bound (#112, C11)
-    amount: ProvisionAmount
+    amount: AllotAmount
     label: StoredText = ""
     grant_id: GrantId = ""  # empty uses the grant of the caller's own allocation; one path segment (C10)
     operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
@@ -72,7 +72,7 @@ class GrantPage(Contract):
     next_cursor: str | None = None
 
 
-class ProvisionedActor(Contract):
+class ActorAllocation(Contract):
     tenant_id: str
     actor_id: str
     grant_id: str
@@ -101,19 +101,19 @@ class SeenActor(Contract):
 
 
 class KnownActor(Contract):
-    """One row of the operator's actor list (D46, D48): provisioned, signed in, or both."""
+    """One row of the operator's actor list (D46, D48): allotted, signed in, or both."""
 
     tenant_id: str
     actor_id: str
     label: str  # the operator's label, else the name the provider gave, else ""
     name: str | None  # the provider's latest name; None until the person signs in with a token
-    allocation: ProvisionedActor | None  # None until an operator provisions the actor
+    allocation: ActorAllocation | None  # None until an operator allots one
     first_seen_at: datetime | None
     last_seen_at: datetime | None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def provisioned(self) -> bool:
+    def allotted(self) -> bool:
         return self.allocation is not None
 
 

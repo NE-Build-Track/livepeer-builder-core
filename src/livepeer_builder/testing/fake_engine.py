@@ -150,7 +150,7 @@ class FakeJobs:
     ) -> Job:
         """Store a job with one attempt on the first runner for the app, as the engine would record it.
 
-        A failure before dispatch (no offering, no capacity, not provisioned) has no attempt. A succeeded
+        A failure before dispatch (no offering, no capacity, no allocation) has no attempt. A succeeded
         ``reply`` sets the attempt's status and the job's ``ResultRef``.
         """
         now = datetime.now(UTC)

@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
@@ -26,7 +26,7 @@ USD = {"amount": "0.01", "currency": "USD"}
 SAMPLE_BODIES: dict[str, dict[str, Any]] = {
     "IssueKeyBody": {"actor_id": "mallory", "operation_ref": "sweep"},
     "RotateKeyBody": {"operation_ref": "sweep"},
-    "ProvisionBody": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
+    "AllotBody": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
     "FundRequest": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
     "GrantBody": {"name": "sweep", "amount": USD, "operation_ref": "sweep"},
     "StatusBody": {"status": "paused"},
@@ -57,12 +57,12 @@ def body_for(route: APIRoute) -> dict[str, Any] | None:
 async def surface(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient, BuilderEngine, dict[str, str]]]:
-    """An engine with keys and the grant desk on, alice provisioned, and real ids for every path."""
+    """An engine with keys and the grant desk on, alice allotted, and real ids for every path."""
     engine = await make_engine()
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice", tenant_id="default", actor_id="alice",
+        AllotRequest(
+            operation_ref="allot:default:alice", tenant_id="default", actor_id="alice",
             amount=Money.model_validate(USD), grant_id="grant_1",
         ),
     )  # fmt: skip

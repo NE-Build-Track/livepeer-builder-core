@@ -69,6 +69,113 @@
         "title": "AccessKey",
         "type": "object"
       },
+      "ActorAllocation": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ActorAllocation",
+        "type": "object"
+      },
+      "AllotBody": {
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "grant_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "AllotBody",
+        "type": "object"
+      },
       "Allowance": {
         "additionalProperties": false,
         "description": "The allocation as the provider reports it. A cap that can overshoot: funds are not reserved.",
@@ -1277,7 +1384,7 @@
       },
       "KnownActor": {
         "additionalProperties": false,
-        "description": "One row of the operator's actor list (D46, D48): provisioned, signed in, or both.",
+        "description": "One row of the operator's actor list (D46, D48): allotted, signed in, or both.",
         "properties": {
           "actor_id": {
             "title": "Actor Id",
@@ -1286,12 +1393,17 @@
           "allocation": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ProvisionedActor"
+                "$ref": "#/components/schemas/ActorAllocation"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "allotted": {
+            "readOnly": true,
+            "title": "Allotted",
+            "type": "boolean"
           },
           "first_seen_at": {
             "anyOf": [
@@ -1332,11 +1444,6 @@
             ],
             "title": "Name"
           },
-          "provisioned": {
-            "readOnly": true,
-            "title": "Provisioned",
-            "type": "boolean"
-          },
           "tenant_id": {
             "title": "Tenant Id",
             "type": "string"
@@ -1350,7 +1457,7 @@
           "allocation",
           "first_seen_at",
           "last_seen_at",
-          "provisioned"
+          "allotted"
         ],
         "title": "KnownActor",
         "type": "object"
@@ -1625,113 +1732,6 @@
           }
         },
         "title": "PriceInfo",
-        "type": "object"
-      },
-      "ProvisionBody": {
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Money-Input"
-          },
-          "grant_id": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "label": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "operation_ref": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Operation Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "amount",
-          "operation_ref"
-        ],
-        "title": "ProvisionBody",
-        "type": "object"
-      },
-      "ProvisionedActor": {
-        "additionalProperties": false,
-        "properties": {
-          "actor_id": {
-            "title": "Actor Id",
-            "type": "string"
-          },
-          "allocation_id": {
-            "title": "Allocation Id",
-            "type": "string"
-          },
-          "api_key_id": {
-            "title": "Api Key Id",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "currency": {
-            "enum": [
-              "USD",
-              "ETH"
-            ],
-            "title": "Currency",
-            "type": "string"
-          },
-          "grant_id": {
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "label": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "secret_ref": {
-            "$ref": "#/components/schemas/SecretRef"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "paused",
-              "exhausted",
-              "revoked"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "tenant_id": {
-            "title": "Tenant Id",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "tenant_id",
-          "actor_id",
-          "grant_id",
-          "allocation_id",
-          "api_key_id",
-          "secret_ref",
-          "currency",
-          "status",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "ProvisionedActor",
         "type": "object"
       },
       "Reconciliation": {
@@ -2399,7 +2399,7 @@
     },
     "/v1/admin/actors": {
       "get": {
-        "description": "Provisioned actors and people an identity provider signed in (D46, D48).",
+        "description": "Allotted actors and people an identity provider signed in (D46, D48).",
         "operationId": "list_actors_v1_admin_actors_get",
         "parameters": [
           {
@@ -2443,7 +2443,7 @@
           },
           {
             "in": "query",
-            "name": "provisioned",
+            "name": "allotted",
             "required": false,
             "schema": {
               "anyOf": [
@@ -2454,7 +2454,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Provisioned"
+              "title": "Allotted"
             }
           },
           {
@@ -2977,7 +2977,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3002,7 +3002,7 @@
         "summary": "Get Actor"
       },
       "post": {
-        "operationId": "provision_v1_admin_tenants__tenant_id__actors__actor_id__allocation_post",
+        "operationId": "allot_v1_admin_tenants__tenant_id__actors__actor_id__allocation_post",
         "parameters": [
           {
             "in": "path",
@@ -3029,7 +3029,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProvisionBody"
+                "$ref": "#/components/schemas/AllotBody"
               }
             }
           },
@@ -3040,7 +3040,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3062,7 +3062,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Provision"
+        "summary": "Allot"
       }
     },
     "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/fund": {
@@ -3105,7 +3105,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3160,7 +3160,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3225,7 +3225,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3290,7 +3290,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },

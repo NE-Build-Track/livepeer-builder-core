@@ -179,7 +179,7 @@ classDiagram
         +Decimal? fee_usd
         +int row_count
     }
-    class ProvisionedActor {
+    class ActorAllocation {
         +str tenant_id
         +str actor_id
         +str grant_id
@@ -206,6 +206,7 @@ classDiagram
         +Decimal amount
         +enum currency
     }
+    ActorAllocation *-- SecretRef : secret_ref
     ActorContext *-- AuthProvenance : auth
     Allowance *-- Money : available
     Allowance *-- Money : granted
@@ -221,7 +222,6 @@ classDiagram
     JobResult *-- Job : job
     Offering *-- ObservedRate : rate_high
     Offering *-- ObservedRate : rate_low
-    ProvisionedActor *-- SecretRef : secret_ref
     Runner *-- PriceInfo : price_info
     Runner *-- RunnerGPU : gpu
 ```

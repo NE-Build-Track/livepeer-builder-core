@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.contracts import ActorContext, CallTimings, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, CallTimings, JobRequest, Money
 from livepeer_builder.errors import JobFailed, OperationExists, OperationInProgress, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport, StreamScript, runner
@@ -18,18 +18,18 @@ APP = "example/chat"
 CHUNKS = [b"data: a\n\n", b"data: b\n\n", b"data: [DONE]\n\n"]
 
 
-async def provisioned(make_engine: EngineFactory, admin: ActorContext, **settings: object):  # type: ignore[no-untyped-def]
+async def allotted(make_engine: EngineFactory, admin: ActorContext, **settings: object):  # type: ignore[no-untyped-def]
     engine = await make_engine(
         runners=(runner(APP, url="https://r1"), runner(APP, url="https://r2")), **settings
     )
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     return engine
 
 
@@ -45,7 +45,7 @@ async def collect(stream, into: list[bytes]) -> None:  # type: ignore[no-untyped
 async def test_stream_delivers_chunks_then_records_a_succeeded_job(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=list(CHUNKS), manifest_ids=("m-1",))]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, path="/v1/chat/completions"))
     assert stream.job.state == "running" and stream.status_code == 200
@@ -68,7 +68,7 @@ async def test_stream_delivers_chunks_then_records_a_succeeded_job(
 async def test_payment_evidence_is_written_before_the_first_byte(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"x"], manifest_ids=("m-7",))]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     running = await engine.jobs.get(alice, stream.job.id)
@@ -82,7 +82,7 @@ async def test_payment_evidence_is_written_before_the_first_byte(
 async def test_open_fails_over_before_the_first_byte(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [RunnerCallError("refused", "503", payment_sent=False), StreamScript(events=[b"ok"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     await read_all(stream)
@@ -107,14 +107,14 @@ async def test_a_paid_refusal_at_open_fails_over_to_another_orchestrator(
             runner(APP, url="https://b1", orchestrator_url="https://orch-b.example"),
         )
     )
-    provision = ProvisionRequest(
-        operation_ref="provision:default:alice",
+    allot = AllotRequest(
+        operation_ref="allot:default:alice",
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",
     )
-    await engine.payments.provision(admin, provision)
+    await engine.payments.allot(admin, allot)
     transport.opens = [
         RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-1",), status_code=503),
         StreamScript(events=[b"ok"], manifest_ids=("m-2",)),
@@ -132,7 +132,7 @@ async def test_a_paid_refusal_at_open_fails_over_to_another_orchestrator(
 async def test_runner_failure_mid_stream_ends_the_job_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     boom = RunnerCallError("unreachable", "connection reset", payment_sent=True, manifest_ids=("m-1",))
     transport.opens = [StreamScript(events=[b"partial ", boom])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
@@ -150,7 +150,7 @@ async def test_runner_failure_mid_stream_ends_the_job_uncertain(
 async def test_runner_5xx_mid_stream_is_a_runner_error(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     error = RunnerCallError("http", "bad trailer", payment_sent=True, status_code=502, body="upstream")
     transport.opens = [StreamScript(events=[b"a", error])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
@@ -163,7 +163,7 @@ async def test_runner_5xx_mid_stream_is_a_runner_error(
 async def test_idle_and_total_timeouts_end_the_job_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", 0.2, b"never"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, idle_timeout_s=0.02))
     with pytest.raises(JobFailed):
@@ -183,7 +183,7 @@ async def test_idle_and_total_timeouts_end_the_job_uncertain(
 async def test_aclose_records_an_abandoned_attempt(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b", b"c"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     first = await stream.__aiter__().__anext__()
@@ -200,7 +200,7 @@ async def test_aclose_records_an_abandoned_attempt(
 async def test_cancelling_the_consumer_abandons_the_stream(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=0)
+    engine = await allotted(make_engine, admin, stream_settle_s=0)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
 
@@ -227,14 +227,14 @@ async def test_a_stream_obeys_the_paid_attempt_cap(
         ),
         max_paid_attempts=1,
     )
-    provision = ProvisionRequest(
-        operation_ref="provision:default:alice",
+    allot = AllotRequest(
+        operation_ref="allot:default:alice",
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",
     )
-    await engine.payments.provision(admin, provision)
+    await engine.payments.allot(admin, allot)
     transport.opens = [
         RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-1",), status_code=503),
         StreamScript(events=[b"ok"], manifest_ids=("m-2",)),
@@ -249,7 +249,7 @@ async def test_a_stream_obeys_the_paid_attempt_cap(
 async def test_unpaid_stream_failure_is_failed_not_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     error = RunnerCallError("unreachable", "reset", payment_sent=False)
     transport.opens = [StreamScript(events=[b"a", error], manifest_ids=(), payment_sent=False)]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
@@ -269,14 +269,14 @@ async def test_a_stream_failure_after_a_paid_failover_says_a_payment_went_out(
             runner(APP, url="https://b1", orchestrator_url="https://orch-b.example"),
         )
     )
-    provision = ProvisionRequest(
-        operation_ref="provision:default:alice",
+    allot = AllotRequest(
+        operation_ref="allot:default:alice",
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",
     )
-    await engine.payments.provision(admin, provision)
+    await engine.payments.allot(admin, allot)
     transport.opens = [
         RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-1",), status_code=503),
         StreamScript(
@@ -296,13 +296,13 @@ async def test_a_stream_failure_after_a_paid_failover_says_a_payment_went_out(
 async def test_stream_keeps_idempotency_and_needs_a_streaming_transport(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
     await read_all(stream)
     with pytest.raises(OperationExists):
         await engine.jobs.streaming.stream(alice, JobRequest(app=APP, operation_ref="op-1"))
-    plain = await provisioned(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
+    plain = await allotted(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
     assert plain.jobs.streaming is None  # a transport without open() offers no streaming (D33)
 
 
@@ -311,7 +311,7 @@ async def test_a_streamed_repeat_follows_the_same_rules_and_never_streams_again(
 ) -> None:
     """D57: while the stream is open the job runs, so a repeat is in progress; once it ended it ran, so a
     repeat is OperationExists. Neither opens the runner again: a replay never re-streams."""
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a"])]
     request = JobRequest(app=APP, operation_ref="op-1")
     stream = await engine.jobs.streaming.stream(alice, request)
@@ -330,7 +330,7 @@ async def test_a_streamed_repeat_follows_the_same_rules_and_never_streams_again(
 async def test_a_streamed_repeat_after_every_runner_refused_opens_a_new_stream(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [RunnerCallError("refused", "busy", payment_sent=False)] * 2  # both runners
     request = JobRequest(app=APP, operation_ref="op-1")
     with pytest.raises(JobFailed) as busy:
@@ -344,7 +344,7 @@ async def test_a_streamed_repeat_after_every_runner_refused_opens_a_new_stream(
 async def test_rest_streams_the_body_with_the_job_id_header(
     make_engine: EngineFactory, admin: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     issued = await engine.keys.issue(
         admin, kind="actor", actor_id="alice", tenant_id="default", operation_ref="issue-streaming-349"
     )
@@ -378,7 +378,7 @@ async def test_rest_streams_the_body_with_the_job_id_header(
 async def test_restart_resolves_an_open_stream_as_uncertain(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"], manifest_ids=("m-1",))]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     assert await engine.jobs.recover_interrupted() == 1  # as a fresh process would on start
@@ -390,7 +390,7 @@ async def test_restart_resolves_an_open_stream_as_uncertain(
 async def test_an_opened_stream_keeps_where_its_time_went(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=240)
     transport.opens = [StreamScript(events=list(CHUNKS), timings=timings)]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, path="/v1/chat/completions"))

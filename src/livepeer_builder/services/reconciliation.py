@@ -1,8 +1,8 @@
 """Reconcile one allocation at a time (#115, C9).
 
-The provider reports ``spent`` per allocation, and an actor revoked and provisioned again has a new one.
+The provider reports ``spent`` per allocation, and an actor revoked and allotted again has a new one.
 Reconciliation used to compare the current allocation's ``spent`` with every charge of every job the actor
-ever ran, so after a re-provision it never balanced again. The engine side now counts only the attempts
+ever ran, so after a second allotment it never balanced again. The engine side now counts only the attempts
 the reconciled allocation paid: each attempt records its allocation when it starts.
 
 The default is the actor's current allocation. An earlier one is named by the caller, and must be one the

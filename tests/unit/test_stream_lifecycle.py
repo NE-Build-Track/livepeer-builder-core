@@ -13,7 +13,7 @@ from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
-from tests.unit.test_streaming import APP, provisioned, read_all
+from tests.unit.test_streaming import APP, allotted, read_all
 
 
 async def ended(engine: BuilderEngine) -> None:
@@ -36,7 +36,7 @@ async def test_finishing_survives_repeated_cancellation(
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=0)
+    engine = await allotted(make_engine, admin, stream_settle_s=0)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     finish_job = store.finish_job
@@ -68,7 +68,7 @@ async def test_a_store_failure_still_releases_the_slot(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    engine = await provisioned(make_engine, admin, max_concurrent_jobs=1)
+    engine = await allotted(make_engine, admin, max_concurrent_jobs=1)
     transport.opens = [StreamScript(events=[b"a", b"b"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
 
@@ -94,7 +94,7 @@ async def test_a_hung_store_is_given_up_on_after_the_finalize_timeout(
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_finalize_timeout_s=0.05)
+    engine = await allotted(make_engine, admin, stream_finalize_timeout_s=0.05)
     transport.opens = [StreamScript(events=[b"a"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
 
@@ -112,7 +112,7 @@ async def test_a_hung_store_is_given_up_on_after_the_finalize_timeout(
 async def test_async_with_closes_a_stream_the_app_never_read(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     with pytest.raises(ValueError, match="app bug"):
@@ -131,7 +131,7 @@ async def test_async_with_closes_a_stream_the_app_never_read(
 async def test_a_stream_nobody_reads_still_ends_at_timeout_s(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, timeout_s=0.05))
     await ended(engine)
@@ -145,7 +145,7 @@ async def test_a_stream_nobody_reads_still_ends_at_timeout_s(
 async def test_engine_stop_drains_open_streams_then_abandons_the_rest(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_drain_timeout_s=0.3)
+    engine = await allotted(make_engine, admin, stream_drain_timeout_s=0.3)
     transport.opens = [
         StreamScript(events=[b"a", 0.05, b"b"]),  # finishes inside the drain window
         StreamScript(events=[b"a", 5.0, b"b"]),  # does not
@@ -170,7 +170,7 @@ async def test_engine_stop_waits_for_a_stream_that_is_still_recording_its_end(
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_drain_timeout_s=0.05)
+    engine = await allotted(make_engine, admin, stream_drain_timeout_s=0.05)
     transport.opens = [StreamScript(events=[b"a"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     finish_job = store.finish_job
@@ -198,7 +198,7 @@ async def test_a_failed_write_after_open_closes_the_stream(
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a"], manifest_ids=("m-5",))]
     finish_attempt = store.finish_attempt
     calls = 0
@@ -225,7 +225,7 @@ async def test_a_failed_write_after_open_closes_the_stream(
 async def test_complete_records_success_with_the_bytes_received(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"data: x\n\n", b"data: [DONE]\n\n", 5.0, b"trailing"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     async with stream:
@@ -242,7 +242,7 @@ async def test_complete_records_success_with_the_bytes_received(
 async def test_complete_leaves_out_a_chunk_the_caller_never_read(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     # no pause before "trailing": the engine has already read it ahead when the caller says done
     transport.opens = [StreamScript(events=[b"data: x\n\n", b"data: [DONE]\n\n", b"trailing"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
@@ -261,7 +261,7 @@ async def test_complete_leaves_out_a_chunk_the_caller_never_read(
 async def test_a_cancelled_reader_succeeds_when_the_runner_ends_within_the_settle_window(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    engine = await allotted(make_engine, admin, stream_settle_s=1.0)
     transport.opens = [StreamScript(events=[b"a", b"[DONE]", 0.05])]  # the runner closes 50 ms later
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     seen = asyncio.Event()
@@ -284,7 +284,7 @@ async def test_a_cancelled_reader_succeeds_when_the_runner_ends_within_the_settl
 async def test_a_cancelled_reader_is_abandoned_when_the_runner_keeps_going(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=0.05)
+    engine = await allotted(make_engine, admin, stream_settle_s=0.05)
     transport.opens = [StreamScript(events=[b"a", 5.0, b"b"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     task = asyncio.create_task(read_all(stream))
@@ -299,7 +299,7 @@ async def test_a_cancelled_reader_is_abandoned_when_the_runner_keeps_going(
 async def test_dropping_the_iterator_abandons_at_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    engine = await allotted(make_engine, admin, stream_settle_s=1.0)
     # the runner would close 50 ms later, inside the settle window
     transport.opens = [StreamScript(events=[b"data: x\n\n", b"data: [DONE]\n\n", b"trailing", 0.05])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
@@ -315,7 +315,7 @@ async def test_dropping_the_iterator_abandons_at_once(
 async def test_disconnected_gives_the_runner_the_settle_window(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    engine = await allotted(make_engine, admin, stream_settle_s=1.0)
     transport.opens = [StreamScript(events=[b"a", b"b", 0.05])]  # the runner closes 50 ms later
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     async with stream:
@@ -334,7 +334,7 @@ async def test_aclose_never_waits_for_the_runner(
     transport: ScriptedStreamTransport,
     settle: float,
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=settle)
+    engine = await allotted(make_engine, admin, stream_settle_s=settle)
     transport.opens = [StreamScript(events=[b"a", 0.05])]  # would end by itself 50 ms later
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP))
     loop = asyncio.get_running_loop()

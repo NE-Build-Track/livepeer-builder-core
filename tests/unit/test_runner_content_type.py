@@ -20,12 +20,12 @@ import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, JobRequest, JobResult, Money, ProvisionRequest, Runner
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, JobResult, Money, Runner
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript, runner
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, Reply, start
-from tests.unit.test_streaming import APP, provisioned
+from tests.unit.test_streaming import APP, allotted
 
 TYPES = [
     "text/plain",
@@ -85,7 +85,7 @@ async def test_the_transport_keeps_the_runner_s_content_type_as_sent(net: Net, c
 async def rest(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[httpx.AsyncClient, dict[str, str]]]:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     issued = await engine.keys.issue(
         admin, kind="actor", actor_id="alice", operation_ref="issue-content-type"
     )
@@ -143,13 +143,13 @@ async def test_a_stored_result_answers_with_its_content_type_unchanged(
 async def serving(
     make_engine: EngineFactory, admin: ActorContext, runner: Runner
 ) -> AsyncIterator[tuple[httpx.AsyncClient, dict[str, str]]]:
-    """REST over an engine whose SDK transport calls ``runner``, with alice provisioned and holding a key."""
+    """REST over an engine whose SDK transport calls ``runner``, with alice allotted and holding a key."""
     engine = await make_engine(runners=(runner,), supply=EngineSupply(transport=SdkRunnerTransport(None)))
     amount = Money(amount=Decimal(5), currency="USD")
-    request = ProvisionRequest(
+    request = AllotRequest(
         operation_ref="p1", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-live")
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:

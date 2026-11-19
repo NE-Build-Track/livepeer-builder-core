@@ -17,7 +17,7 @@ import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, Attempt, Job, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Attempt, Job, JobRequest, Money
 from livepeer_builder.errors import JobFailed
 from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store import SqlStore
@@ -80,14 +80,14 @@ async def paid_engine(
             transport=transport,
         ),
     )
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",
     )
-    actor = await engine.payments.provision(admin, request)
+    actor = await engine.payments.allot(admin, request)
     return engine, actor.allocation_id
 
 

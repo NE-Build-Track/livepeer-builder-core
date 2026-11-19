@@ -44,7 +44,7 @@ flowchart LR
     Core -->|"sign (SDK)"| Signer
     Core -->|"LPB_DISCOVERY_URL: GET /discovery"| DiscSvc
     DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
-    Core -->|"provision, fund, /v1/usage"| Bat
+    Core -->|"allot, fund, /v1/usage"| Bat
     Core -->|"paid call (adapters/runner_call.py)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat
     Signer -->|"events (durable outbox)"| Kafka --> Bat
@@ -149,7 +149,7 @@ sequenceDiagram
     end
 ```
 
-## 5. Explicit provisioning (per_actor)
+## 5. Explicit allotment (per_actor)
 
 Money moves only on an admin command, with an idempotency key. The key goes straight into the
 `SecretStore`; the database stores only a `SecretRef`.
@@ -165,11 +165,11 @@ sequenceDiagram
     participant Sec as EncryptedDbSecretStore
     participant DB as SqlStore (lpb_actors)
     Op->>H: POST {amount: {amount: "1", currency: "USD"}, grant_id: "g_…"}
-    H->>Pay: provision(admin, ProvisionRequest)
+    H->>Pay: allot(admin, AllotRequest)
     Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
     Pay->>DB: get_actor(app, actor)
-    alt already provisioned (under another reference)
-        Pay-->>Op: 409 already_provisioned, the actor (nothing applied: fund it instead)
+    alt already allotted (under another reference)
+        Pay-->>Op: 409 already_allotted, the actor (nothing applied: fund it instead)
     else new
         Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
         Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)
@@ -179,7 +179,7 @@ sequenceDiagram
         Pay->>Sec: put(name, lpg_…) → Fernet ciphertext in lpb_secrets
         Sec-->>Pay: SecretRef("db:…")
         Pay->>DB: save_actor(allocation_id, api_key_id, secret_ref)
-        Pay-->>Op: ProvisionedActor (never the key)
+        Pay-->>Op: ActorAllocation (never the key)
     end
 ```
 
@@ -342,7 +342,7 @@ stateDiagram-v2
     [*] --> running: run (immediate)
     queued --> running: worker picks it up (M4)
     running --> succeeded: runner 2xx
-    running --> failed: refused everywhere, not provisioned, runner 4xx/5xx, signer refusal
+    running --> failed: refused everywhere, no allocation, runner 4xx/5xx, signer refusal
     running --> uncertain: paid, then timeout or unreachable
     running --> uncertain: restart with an in_flight or paid attempt
     running --> failed: restart, nothing could have paid

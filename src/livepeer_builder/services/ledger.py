@@ -20,7 +20,7 @@ from pydantic import TypeAdapter
 from livepeer_builder.contracts import OPERATION_REPLAYED, ActorContext, OperationCommand, OperationRecord
 from livepeer_builder.errors import (
     AccessDenied,
-    AlreadyProvisioned,
+    AlreadyAllotted,
     InvalidRequest,
     NotFound,
     OperationConflict,
@@ -37,6 +37,7 @@ _REQUEST = TypeAdapter(dict[str, Any])
 # written before #163 renamed the words below, and no migration can recompute a digest. The hashed text
 # keeps the word it was first written with, so the repeat of a command recorded before the upgrade still
 # matches its record (tests/unit/test_hashed_forms.py). Nothing reads these words back.
+_HASHED_COMMANDS: dict[str, str] = {"allot": "provision"}
 _HASHED_FIELDS = {"tenant_id": "application_id"}
 _HASHED_KINDS = {"clearinghouse_admin": "admin"}  # the kind of key an ``issue_key`` asked for
 
@@ -47,17 +48,19 @@ def fingerprint(command: OperationCommand, request: Mapping[str, Any]) -> str:
     if "kind" in values:
         values["kind"] = _HASHED_KINDS.get(values["kind"], values["kind"])
     hashed = {_HASHED_FIELDS.get(name, name): value for name, value in values.items()}
-    canonical = json.dumps({"command": command, "request": hashed}, sort_keys=True)
+    canonical = json.dumps(
+        {"command": _HASHED_COMMANDS.get(command, command), "request": hashed}, sort_keys=True
+    )
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def definite_refusal(error: Exception) -> bool:
-    """The command was refused and applied nothing: invalid, not found, denied, already provisioned, or a
+    """The command was refused and applied nothing: invalid, not found, denied, already allotted, or a
     provider 4xx. A
     timeout, a transport error, a 5xx or a crash is an unknown outcome, never a refusal."""
     if isinstance(error, ProviderError):
         return 400 <= error.status_code < 500 and error.status_code != 408
-    return isinstance(error, InvalidRequest | NotFound | AccessDenied | AlreadyProvisioned)
+    return isinstance(error, InvalidRequest | NotFound | AccessDenied | AlreadyAllotted)
 
 
 class TakenOver(Exception):
@@ -179,11 +182,11 @@ class OperationLedger:
             # one) means the command is half done, and a resume must finish it from that context. A resumed
             # run follows an attempt whose outcome is unknown (a provider call that timed out may have been
             # applied, with nothing noted), so its refusal never frees the reference: freed, the next repeat
-            # would run as new, and another request could take the reference. An actor already provisioned
+            # would run as new, and another request could take the reference. An actor already allotted
             # is refused for good: the earlier run's actor was revoked or is another's.
             unchanged = running.record.context == record.context == dict(context or {})
             untouched = unchanged and not running.resumed
-            if definite_refusal(refused) and (untouched or isinstance(refused, AlreadyProvisioned)):
+            if definite_refusal(refused) and (untouched or isinstance(refused, AlreadyAllotted)):
                 await self._repo.abandon_operation(record)
             raise  # otherwise the record stays started, for a resume
         if await self._repo.complete_operation(

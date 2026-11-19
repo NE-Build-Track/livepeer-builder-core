@@ -16,9 +16,9 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder.adapters.batteries import BatteriesClient
-from livepeer_builder.contracts import FundRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import AllotRequest, FundRequest, Money
 from livepeer_builder.http import create_app
-from livepeer_builder.http.bodies import ProvisionBody
+from livepeer_builder.http.bodies import AllotBody
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
 
@@ -62,18 +62,16 @@ def test_a_grant_id_a_provider_path_cannot_hold_is_refused(grant_id: str) -> Non
     with pytest.raises(ValidationError, match="grant_id"):
         FundRequest(amount=USD, operation_ref="f1", grant_id=grant_id)
     with pytest.raises(ValidationError, match="grant_id"):
-        ProvisionRequest(
-            tenant_id="default", actor_id="alice", amount=USD, grant_id=grant_id, operation_ref="p1"
-        )
+        AllotRequest(tenant_id="default", actor_id="alice", amount=USD, grant_id=grant_id, operation_ref="p1")
     with pytest.raises(ValidationError, match="grant_id"):
-        ProvisionBody(amount=USD, grant_id=grant_id, operation_ref="p1")
+        AllotBody(amount=USD, grant_id=grant_id, operation_ref="p1")
 
 
 @pytest.mark.parametrize("grant_id", ALLOWED)
 def test_any_other_grant_id_is_kept_as_written(grant_id: str) -> None:
     """No pattern such as a UUID: the provider chooses its ids."""
     assert FundRequest(amount=USD, operation_ref="f1", grant_id=grant_id).grant_id == grant_id
-    request = ProvisionRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=grant_id, operation_ref="p1")
+    request = AllotRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=grant_id, operation_ref="p1")
     assert request.grant_id == grant_id
 
 
@@ -81,9 +79,9 @@ def test_any_other_grant_id_is_kept_as_written(grant_id: str) -> None:
 def test_whitespace_around_a_grant_id_is_removed_where_the_request_is_read(written: str, used: str) -> None:
     """The value checked is the value the engine uses: it stripped the id only after the check."""
     assert FundRequest(amount=USD, operation_ref="f1", grant_id=written).grant_id == used
-    request = ProvisionRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1")
+    request = AllotRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1")
     assert request.grant_id == used
-    assert ProvisionBody(amount=USD, grant_id=written, operation_ref="p1").grant_id == used
+    assert AllotBody(amount=USD, grant_id=written, operation_ref="p1").grant_id == used
 
 
 @pytest.fixture
@@ -129,12 +127,12 @@ async def test_rest_uses_a_padded_grant_id_without_its_padding(
     funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
     assert funded.status_code == 204, funded.text
     assert [grant for grant, _, _ in manager.funded_grants] == ["grant_1"]
-    provisioned = await client.post(
+    allotted = await client.post(
         ALLOCATION,
         json={"operation_ref": "p1", "amount": AMOUNT, "grant_id": "\u00a0grant_1 "},
         headers=admin,
     )
-    assert (provisioned.status_code, provisioned.json()["grant_id"]) == (201, "grant_1")
+    assert (allotted.status_code, allotted.json()["grant_id"]) == (201, "grant_1")
 
 
 # -- the adapter -------------------------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from livepeer_builder.adapters.runner_call import SdkRunnerStream
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
 from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import (
+    ActorAllocation,
     ActorContext,
     Allowance,
     Attempt,
@@ -38,7 +39,6 @@ from livepeer_builder.contracts import (
     ObservedRate,
     Offering,
     PriceInfo,
-    ProvisionedActor,
     ResourceRef,
     ResultRef,
     Runner,
@@ -87,7 +87,7 @@ CONTRACTS: tuple[type[BaseModel], ...] = (
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
     Runner, RunnerGPU, PriceInfo, NetworkRate, ObservedRate, Offering,
     JobCost, AttemptCost, Fees,
-    ProvisionedActor, SecretRef, Allowance, Money,
+    ActorAllocation, SecretRef, Allowance, Money,
 )  # fmt: skip
 
 

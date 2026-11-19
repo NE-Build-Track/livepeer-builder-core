@@ -55,7 +55,7 @@ curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"kind":"actor","actor_id":"alice","operation_ref":"dev-key-alice"}' \
   http://127.0.0.1:8080/v1/admin/keys                                                  # an actor key
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d '{"amount":{"amount":"1","currency":"USD"},"grant_id":"<grant id>","operation_ref":"dev-provision-alice"}' \
+  -d '{"amount":{"amount":"1","currency":"USD"},"grant_id":"<grant id>","operation_ref":"dev-allot-alice"}' \
   http://127.0.0.1:8080/v1/admin/tenants/default/actors/alice/allocation          # explicit funding
 ALICE=lpk_...
 curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key

@@ -4,7 +4,7 @@ Under JWT bearer an actor is the provider's immutable subject (``sub``), which a
 ``SightingRecorder`` wraps the engine's authenticator chain: when a credential from an identity provider
 names a builder (an actor credential, not an operator or the console's reader, and not an engine key,
 whose actors the key list already shows), it records that actor with the provider's display name. The
-operator's actor list then shows "alice, not provisioned" and provisions her by name.
+operator's actor list then shows "alice, no allocation" and allots one to her by name.
 
 A request writes nothing after the first: one write per person per process, then one an hour to move
 ``last_seen_at``, and one at once when the name changes. Recording never fails a request.

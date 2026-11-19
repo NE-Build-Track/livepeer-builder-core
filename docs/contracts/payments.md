@@ -55,7 +55,7 @@ being down reaches the engine as a signer 502, like any other signer fault.
 **What builders never see.** No builder-facing body carries a payment key, the signer URL or the
 signer's or Batteries' own text:
 
-- provisioning and key rotation return the actor, never the `lpg_` key; keys are encrypted at rest;
+- allotment and key rotation return the actor, never the `lpg_` key; keys are encrypted at rest;
 - a job's `failure.message` for a payment failure is the engine's own words, and `failure.body` is
   only ever the runner's; the SDK's text, with the signer URL and its body, goes to the
   `runner.signer_error` log line as `detail`;
@@ -84,26 +84,26 @@ only one tenant. It is gone with its settings, `LPB_ALLOCATION_MODE`, `LPB_SHARE
 
 - **From the environment.** The three variables name no setting and are ignored, like any variable the
   engine does not know. An engine that still has them set does not pay with the shared key: each job
-  fails `not_provisioned` until its actor is provisioned.
+  fails `not_provisioned` until its actor has an allocation.
 - **In code.** `EngineSettings` refuses the three fields as unknown, and the error does not repeat
   their values.
-- **What to do.** Provision an allocation for each actor, or run every job as one actor and provision
-  that one ([Provisioning](#provisioning)).
+- **What to do.** Allot an allocation for each actor, or run every job as one actor and allot
+  that one ([Allotment](#allotment)).
 - **Unpaid calls.** `per_application` with no key ran every job unpaid. Nothing replaces that: every job
-  needs an allocation. An engine with no `LPB_SIGNER_URL` still sends unpaid calls, for provisioned
+  needs an allocation. An engine with no `LPB_SIGNER_URL` still sends unpaid calls, for allotted
   actors only.
 - **What was paid before.** Attempts stored in that mode name the shared allocation, where
   `LPB_SHARED_ALLOCATION_ID` was set. It is no actor's allocation, so it is never the current one. It
   still reconciles when it is named, without an `actor_id`, over every actor of the tenant
   ([one allocation at a time](#cost-classification)).
 
-## Provisioning
+## Allotment
 
-**There is no automatic provisioning.** Every money-moving command is explicit and needs the
+**There is no automatic allotment.** Every money-moving command is explicit and needs the
 `admin.allocations` operation (an admin credential). Allocation and key writes carry an idempotency
 key of `base64url(sha256(engine_id:operation:step))`.
 
-Provisioning refuses an `tenant_id`, `actor_id`, `grant_id` or `label` that is longer than 200
+Allotment refuses a `tenant_id`, `actor_id`, `grant_id` or `label` that is longer than 200
 characters or holds a NUL character (422 over REST), before any provider call: every record stores them
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
@@ -112,7 +112,7 @@ The same limit applies to every id, label and reference a request carries (`Stor
 (`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
 because the 422 could not be sent.
 
-**A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on provisioning and on
+**A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on allotment and on
 `FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
 and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
 id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
@@ -123,7 +123,7 @@ as a UUID: the provider chooses its ids. Separately, the Batteries adapter perce
 places in a path, whatever its source (a grant, an allocation, a key, a created grant read back), so an id
 the provider itself returned cannot name another resource either.
 
-**The new key must have somewhere to go (#112, C2).** Provisioning funds the provider key before the
+**The new key must have somewhere to go (#112, C2).** Allotment funds the provider key before the
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:
 
@@ -133,7 +133,7 @@ checks stop that:
   decorator that turns the provider off, or installs a store of its own, is not refused, and one that
   adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
   at boot, such as a sealed vault, still starts and is asked per request.
-- **Per request.** Provisioning and key rotation ask the secret store whether it can write in the step
+- **Per request.** Allotment and key rotation ask the secret store whether it can write in the step
   that mints the key, just before the provider is called. The check is the store's optional
   `writable()` (`WritableSecretStore`); a supplied store that leaves it out is not asked. A `False` is
   `InvalidRequest` (HTTP 400).
@@ -143,7 +143,7 @@ checks stop that:
   - A resume whose key is already stored is not asked either: it goes on, for a rotation to revoke the
     old key. The stored key must be the one of the provider call about to be sent: the record notes the
     call's idempotency key beside the secret's reference, and only a match skips the check. A resume
-    after the actor was revoked, or provisioned again, or under another `LPB_ENGINE_ID`, sends another
+    after the actor was revoked, or allotted again, or under another `LPB_ENGINE_ID`, sends another
     provider call whose key is not stored yet, so it is asked before that call.
   - A record with the secret's reference and no idempotency key beside it was written by a release
     that did not yet note it (v0.2.x). A rotation resumed from such a record after the upgrade is not
@@ -157,7 +157,7 @@ checks stop that:
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `provision(ProvisionRequest(tenant, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |
+| `allot(AllotRequest(tenant, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; fund it instead |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
 | `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
@@ -168,7 +168,7 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit fund.
-- **One command never undoes another on the same actor (#115, C4).** `provision`, `fund`, `set_status`,
+- **One command never undoes another on the same actor (#115, C4).** `allot`, `fund`, `set_status`,
   `revoke` and `rotate_key` read the actor, call the provider, then write. Each writes only its own
   columns, with its condition in the SQL statement:
 
@@ -177,32 +177,32 @@ checks stop that:
   | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
   | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
   | `fund` | `status` = `active`, `updated_at` | the status is `exhausted` |
-  | `provision` | the whole row | the actor is as provisioning read it: it has no row, or it still has the `revoked` row being replaced |
+  | `allot` | the whole row | the actor is as allotment read it: it has no row, or it still has the `revoked` row being replaced |
 
   Every write also requires the allocation the command acted on, so none lands on an allocation
-  provisioned after a revoke. A key rotation also notes the allocation in its record when it begins:
-  resumed after the actor was revoked and provisioned again, it is refused before any provider call,
+  allotted after a revoke. A key rotation also notes the allocation in its record when it begins:
+  resumed after the actor was revoked and allotted again, it is refused before any provider call,
   404 with the two allocations named, and keeps its reference
   ([refused or unknown](#repeat-safe-commands)). The old key its record names belongs to the revoked
   allocation, so on the new one it would mint a key and leave the key that allocation had live. A
   record written before the allocation was noted is not checked.
 
-  No command moves an actor out of `revoked`; only a new provisioning gives the actor an allocation
+  No command moves an actor out of `revoked`; only a new allotment gives the actor an allocation
   again. A fund of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
   with the actor as stored. When a revoke finishes while another command is at
   the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
-  that is not provisioned (the rotation's new key is on a revoked allocation, and its secret is
+  that has no allocation (the rotation's new key is on a revoked allocation, and its secret is
   deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
   deletes the secret of a key a rotation stored meanwhile. A revoke that another revoke overtook
-  answers with the revoked actor as stored, as a repeat does. If the actor was provisioned again
+  answers with the revoked actor as stored, as a repeat does. If the actor was allotted again
   before it wrote, it writes nothing and answers with the allocation it revoked, `revoked`: the
   answer to a revoke is never an active actor, and the new allocation is read with
   `GET /v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation`. Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
   revoked, and any of them could put a revoked actor back to `active`.
 
-  **A provisioning that another command overtook.** Provisioning is the one command that writes the
-  whole row, so it writes only where the actor is still as it read it. Two provisionings of one actor
+  **An allotment that another command overtook.** Allotment is the one command that writes the
+  whole row, so it writes only where the actor is still as it read it. Two allotments of one actor
   under two references send the same provider operation (its idempotency key is derived from the
   actor, under one `LPB_ENGINE_ID`), so both get one allocation and one key, and the first to write
   stores them. The other then writes nothing, whatever was done to the actor since, deletes its own
@@ -210,10 +210,10 @@ checks stop that:
 
   | The actor as stored | Answer |
   | --- | --- |
-  | holds the allocation and the key this provisioning got | the actor, with the status it has now (a pause that finished meanwhile stays) |
+  | holds the allocation and the key this allotment got | the actor, with the status it has now (a pause that finished meanwhile stays) |
   | holds that allocation, `revoked` | the actor, `revoked`: the allocation was funded and then revoked, and it stays revoked, as for a fund |
-  | holds that allocation with another key (rotated meanwhile), or another allocation (revoked and provisioned again) | 409 `already_provisioned`, as below |
-  | holds another allocation, `revoked` | 404: revoked while this provisioning was at the provider. The record stays `started`; repeated after `LPB_OPERATION_STALE_S` it is a resumed provisioning of a revoked actor |
+  | holds that allocation with another key (rotated meanwhile), or another allocation (revoked and allotted again) | 409 `already_allotted`, as below |
+  | holds another allocation, `revoked` | 404: revoked while this allotment was at the provider. The record stays `started`; repeated after `LPB_OPERATION_STALE_S` it is a resumed allotment of a revoked actor |
 
   Before, it saved the row it had built from its first read: `active` on an allocation revoked or
   paused meanwhile, or the key a rotation had just revoked.
@@ -241,7 +241,7 @@ checks stop that:
   the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
 
   **What the guarantee covers, and the known gap.** It covers commands that write different columns,
-  and the cases named above: a revoke, two rotations, a provisioning that another command overtook.
+  and the cases named above: a revoke, two rotations, an allotment that another command overtook.
   Two status commands at the same moment (a pause and an activate) write the same column, and the last
   write wins at the provider and in the store separately. Each sets the status at the provider and
   then stores it, so when a pause is at the provider while an activate runs to its end, the provider
@@ -251,18 +251,18 @@ checks stop that:
   at the provider and in the store.
 
   The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
-  `set_actor_status`, `set_actor_key`, `provision_actor`). The packaged SQL store has them; a supplied
+  `set_actor_status`, `set_actor_key`, `allot_actor`). The packaged SQL store has them; a supplied
   store has all three or is treated as having none. With a supplied store without them, the engine
   reads the actor again after the provider call, checks the same conditions itself and saves the whole
   row with `save_actor`. The rules above then hold except in the moment between that read and the
   save, where a second command can still be overwritten, as it could before: for such a store two
   rotations that write at the same moment can still leave the slower one's key on the actor, and a
-  provisioning can still save over a command that wrote in that moment.
+  allotment can still save over a command that wrote in that moment.
 - **Amounts the provider takes (#112, C11).** The engine mirrors Batteries' amount format (v0.0.3,
   `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
   no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at
   most 1,000,000,000 (10^9) USD or ETH per command, since the provider's own (256 digits once scaled) is
-  effectively none. Provisioning takes zero or more (`ProvisionAmount`); funding an allocation, funding a
+  effectively none. Allotment takes zero or more (`AllotAmount`); funding an allocation, funding a
   grant and creating a grant take an amount within the format and bound (`FundingAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
@@ -275,7 +275,7 @@ checks stop that:
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
   which is opaque text of any length (#115): a supplied secret store may return a long path.
 - **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
-  caller's own allocation (the actor that key was provisioned as). When that caller has no allocation,
+  caller's own allocation (the actor that key belongs to). When that caller has no allocation,
   the engine returns 400 `choose a grant`. There is no deployment-wide default. An admin may name any
   grant. Batteries still applies `grants.fund` to every grant on the instance; the engine does not
   narrow that. An actor key cannot call these routes (`admin.allocations`).
@@ -285,7 +285,7 @@ checks stop that:
   The token is optional. Without it the grant desk is off: `engine.payments.grants` is `None` and the
   grant list and create routes are absent. Funding grants still works with `LPB_BATTERIES_TOKEN`.
 - **Cost sync** reads `GET /v1/usage` with no grant filter. Rows for allocations this engine did not
-  provision are stored and are not part of any actor's reconciliation. A cursor saved under the old
+  allot are stored and are not part of any actor's reconciliation. A cursor saved under the old
   `grant_id` filter does not match, so the first sync after this change restarts from the beginning
   and skips rows it already stored.
 
@@ -320,7 +320,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   run never frees the reference either (#112): the attempt it follows ended in an unknown outcome, and
   a provider call that timed out may have been applied with nothing noted. The record stays `started`,
   another request on that reference is still 409 `operation_conflict`, and the same request resumes
-  again after `LPB_OPERATION_STALE_S`. The one exception is `already_provisioned`, below.
+  again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
   answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
   nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
@@ -343,7 +343,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   not create. The same holds for every value a command's result is built from: the `id` a grant create
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
-  `null` there was recorded as the text `"None"` in a finished command (provisioning answered 201 with
+  `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with
   `allocation_id: "None"`), and an answer that lacked the key answered 500. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).
@@ -364,15 +364,15 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   allocation, and every step reads them from there, never from the actor as it is now. A resume after the new key was stored
   still revokes the old one, and a repeat never revokes the live key (B1). The new key's secret
   reference is recorded before the actor points at it, so a resume reuses that copy. A rotation that
-  another rotation of the same actor overtook, or that is resumed on an allocation provisioned since
-  it began, is refused and keeps its reference ([two rotations](#provisioning)).
-- **Provisioning** an actor that is already provisioned (not revoked) under a new reference is refused:
-  409 `code: already_provisioned` with the actor, and nothing is applied, the amount included (fund it
+  another rotation of the same actor overtook, or that is resumed on an allocation allotted since
+  it began, is refused and keeps its reference ([two rotations](#allotment)).
+- **Allotting** to an actor that already has an allocation (not revoked) under a new reference is refused:
+  409 `code: already_allotted` with the actor, and nothing is applied, the amount included (fund it
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor
   holds the provider key its earlier run recorded: that allocation is this command's (the provider key
   is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
-  resume that never got that far or an actor revoked and provisioned again under another reference,
-  it is refused the same way and the reference is freed. Re-provisioning after a revoke is a new
+  resume that never got that far or an actor revoked and allotted again under another reference,
+  it is refused the same way and the reference is freed. Re-allotment after a revoke is a new
   command: it needs a new reference.
 - **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
   grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
@@ -389,9 +389,9 @@ Which commands take a reference:
 
 | Command | `operation_ref` |
 | --- | --- |
-| Provision, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
+| Allot, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
 | Issue access key, rotate access key | **required**: creates a live engine credential |
-| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeated set-status sets the same status at the provider again and answers with the actor in that status; after a revoke it is `404`, as for an actor that is not provisioned. A repeated revoke answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
+| Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeated set-status sets the same status at the provider again and answers with the actor in that status; after a revoke it is `404`, as for an actor that is not allotted. A repeated revoke answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
 
 ## Allowance, signer funding and spending guarantees
 
@@ -399,7 +399,7 @@ Three different things, often all called "funding":
 
 | Term | What it is | Who moves it | Repeat-safe |
 | --- | --- | --- | --- |
-| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (provision, fund allocation, fund grant, create grant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
+| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (allot, fund allocation, fund grant, create grant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
 | **Signer funding** | The payer's TicketBroker deposit and reserve on Arbitrum, which back the tickets the signer signs | The payment operator, outside the engine | No engine command touches it |
 | **Spending guarantee** | A hard limit no job can exceed | Nobody in M3 | n/a: the allowance is a cap that [can overshoot](#allowance); hard limits are stretch scope |
 
@@ -561,10 +561,10 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 actor has its own allocation, so it balances exactly per user.
 
 **One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor
-revoked and provisioned again has a new one. The engine side therefore counts only the attempts the
+revoked and allotted again has a new one. The engine side therefore counts only the attempts the
 reconciled allocation paid (each attempt records its allocation when it starts), plus the unattributed
 rows on that allocation. Before, it counted every job the actor ever ran against the current
-allocation, so after a re-provision reconciliation never balanced again.
+allocation, so after a second allotment reconciliation never balanced again.
 
 - **The default** is the actor's current allocation (`allocation_id` in the answer).
 - **An earlier allocation** is reconciled by naming it: `costs.reconcile(admin, tenant_id,
@@ -683,3 +683,9 @@ D74 (13 November 2026) answered it with a separately operated engine in `per_app
 was not built. D82 (18 November 2026) replaces it with the payment clearinghouse, which needs no scoped
 credential: only the clearinghouse's own engine reaches Batteries and the signer, and no Batteries
 credential leaves it.
+
+### Provisioning
+
+"Provisioning" was the name of allotment until 18 November 2026 (D83, #163): an admin allots an
+allocation to an actor, where the engine said it provisioned the actor. See [Allotment](#allotment).
+The failure kind `not_provisioned` keeps its name: the failure table belongs to ISS-28.

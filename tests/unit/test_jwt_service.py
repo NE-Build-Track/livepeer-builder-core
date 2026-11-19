@@ -313,7 +313,7 @@ def test_the_dev_override_allows_an_http_issuer() -> None:
 
 
 async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: IdentityProvider) -> None:
-    """Registration on first sign-in (#52, D48): the operator sees alice by name before provisioning her."""
+    """Registration on first sign-in (#52, D48): the operator sees alice by name before allotment her."""
     async with make_engine(**jwt_settings(idp, jwt_admin_scope="livepeer:admin")) as engine:
         app = create_app(engine, manage_lifecycle=False)
         async with httpx.AsyncClient(
@@ -325,7 +325,7 @@ async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: Ide
                 idp.token(sub="b715dc36", scope="livepeer:admin", preferred_username="operator")
             )
             listed = (await client.get("/v1/admin/actors", headers=operator)).json()
-            assert [(a["actor_id"], a["label"], a["provisioned"]) for a in listed] == [
+            assert [(a["actor_id"], a["label"], a["allotted"]) for a in listed] == [
                 ("3c446b40-7123", "alice", False)
             ]  # the operator signing in is not an actor, so is not listed
 

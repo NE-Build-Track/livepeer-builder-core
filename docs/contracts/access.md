@@ -110,7 +110,7 @@ same test fails when a route declares a plain `datetime` query parameter.
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
-| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the provisioned ones and the people an identity provider signed in (D48), each with `provisioned`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `tenant_id`, `status` (allocations only), `provisioned` and `limit`. An admin lists every tenant unless it names one; an auditor lists its own. The single read returns the allocation (`ProvisionedActor`) |
+| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `tenant_id`, `status` (allocations only), `allotted` and `limit`. An admin lists every tenant unless it names one; an auditor lists its own. The single read returns the allocation (`ActorAllocation`) |
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -235,7 +235,7 @@ mode, with no code:
 
 | Field | From |
 | --- | --- |
-| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at provisioning (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
+| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at allotment (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
 | `tenant_id` | `LPB_JWT_TENANT_CLAIM` when set, otherwise `LPB_JWT_TENANT_ID` (`default`, at most 200 characters: a longer one fails at startup); a claim over 200 characters is a 401 |
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
 | `credential_kind` | `clearinghouse_admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
@@ -245,7 +245,7 @@ mode, with no code:
 **Registration on first sign-in (D48).** An actor is the provider's `sub`, which an operator cannot
 guess. So the first time a builder's token reaches the engine, the engine records that actor in
 `lpb_actor_sightings`, with the provider's display name. The operator's actor list then shows them
-before any allocation (`provisioned: false`), and provisioning them takes that name as the label
+before any allocation (`allotted: false`), and allotting to them takes that name as the label
 unless the operator gives one. The allocation still belongs to the `sub`: a renamed person keeps
 their actor, and a reused name never inherits one.
 - **Who:** actor credentials only. Operators (admin), auditors and engine-key actors are not recorded;
@@ -318,9 +318,9 @@ same steps run on the dev stack.
 | --- | --- | --- |
 | 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
 | 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
-| 3. Fund the user | `POST /v1/admin/tenants/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "provision-alice"}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 3. Fund the user | `POST /v1/admin/tenants/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "allot-alice"}` | `201` `ActorAllocation`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
-| 5. Inspect the key, and who is provisioned | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the provisioned actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 5. Inspect the key, and who is allotted | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the allotted actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
 | 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
 | 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
 

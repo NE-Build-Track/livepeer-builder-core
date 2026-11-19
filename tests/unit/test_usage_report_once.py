@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import delete
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, Job, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Job, JobRequest, Money
 from livepeer_builder.errors import InvalidRequest, NotFound
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import UsageOnceRepo
@@ -35,10 +35,10 @@ APP = "example/echo"
 async def succeeded_job(
     engine: BuilderEngine, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> Job:
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:alice",
+        AllotRequest(
+            operation_ref="allot:alice",
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="USD"),

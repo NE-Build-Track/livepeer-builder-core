@@ -17,7 +17,7 @@ from livepeer_builder.testing import (
     make_engine,
     runner,
 )
-from tests.conftest import provision
+from tests.conftest import allot
 
 # FakeEngine checks permissions before a job, as the engine does
 BUILDER = ActorContext(actor_id="a", permissions=frozenset({"jobs.run", "jobs.read"}))
@@ -85,7 +85,7 @@ async def test_raw_identity_and_headers_through_real_engine():
     )
     async with make_engine(runners=[runner("chat")], supply=EngineSupply(transport=transport)) as engine:
         actor = ActorContext(actor_id="a", tenant_id="app", permissions=frozenset({"jobs.run", "jobs.read"}))
-        await provision(engine, actor)
+        await allot(engine, actor)
         request = raw_request(operation_ref="op")
         stream = await engine.jobs.streaming.stream(actor, request)
         async with stream:
@@ -111,7 +111,7 @@ async def test_returned_http_errors_are_failed_jobs_not_successes(status, ending
     transport = ScriptedStreamTransport(opens=[StreamScript(events=[b"backend error"], status_code=status)])
     async with make_engine(runners=[runner("chat")], supply=EngineSupply(transport=transport)) as engine:
         actor = ActorContext(actor_id="a", tenant_id="app", permissions=frozenset({"jobs.run", "jobs.read"}))
-        await provision(engine, actor)
+        await allot(engine, actor)
         stream = await engine.jobs.streaming.stream(actor, raw_request(return_http_errors=True))
         async with stream:
             if ending == "eof":

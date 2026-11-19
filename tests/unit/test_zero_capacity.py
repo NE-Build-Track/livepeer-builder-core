@@ -25,7 +25,7 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, Runner
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money, Runner
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport
@@ -78,18 +78,18 @@ OPERATOR = ActorContext(actor_id="operator", credential_kind="clearinghouse_admi
 async def engine_offering(
     inventory: bytes, transport: ScriptedTransport, *, then: bytes | None = None, **supply: Any
 ) -> AsyncIterator[BuilderEngine]:
-    """An engine whose discovery answered ``inventory``, with alice provisioned to run and pay for jobs.
+    """An engine whose discovery answered ``inventory``, with alice allotted to run and pay for jobs.
     The next refresh reads ``then``."""
     answers = (inventory,) if then is None else (inventory, then)
     async with wire_engine(*answers, supply=EngineSupply(transport=transport, **supply)) as engine:
-        request = ProvisionRequest(
-            operation_ref="provision:default:alice",
+        request = AllotRequest(
+            operation_ref="allot:default:alice",
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",
         )
-        await engine.payments.provision(OPERATOR, request)
+        await engine.payments.allot(OPERATOR, request)
         yield engine
 
 

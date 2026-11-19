@@ -2,7 +2,7 @@
 
 | Term | Meaning |
 | --- | --- |
-| **Actor** | Whoever a job runs for. An opaque `actor_id` within an `tenant_id`; the engine never sees customer identity |
+| **Actor** | Whoever a job runs for. An opaque `actor_id` within a `tenant_id`; the engine never sees customer identity |
 | **ActorContext** | The validated actor the core receives: IDs, permissions, credential kind, non-secret attributes |
 | **Admin credential** | A credential kind (not a permission) required for `admin.*` operations. The first one comes from `lpb bootstrap-admin` |
 | **Allocation** | A Batteries budget carved from a grant, with its own balance, status and API keys |

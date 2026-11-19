@@ -31,7 +31,7 @@ flowchart TB
     AD -->|"management API, /v1/usage"| Bat
 ```
 
-Diagrams for the components and the key flows (authentication, provisioning, a paid job with
+Diagrams for the components and the key flows (authentication, allotment, a paid job with
 failover, cost sync, reconciliation, recovery) are in
 [docs/design-docs/architecture-diagrams.md](docs/design-docs/architecture-diagrams.md). The database ER
 diagram is generated into [docs/generated/db-schema.md](docs/generated/db-schema.md#entity-relationship-diagram). Class and

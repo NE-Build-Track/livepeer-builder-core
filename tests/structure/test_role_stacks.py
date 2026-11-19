@@ -232,6 +232,24 @@ def test_the_wallets_key_folder_is_mounted_read_only_from_a_variable() -> None:
         assert "WALLET_KEY_DIR" not in service(CLEARINGHOUSE, name), f"{name} is given the wallet's key"
 
 
+def test_the_signer_reads_the_password_without_its_trailing_newline() -> None:
+    """The signer reads its password file as exact bytes, and a password file usually ends in a newline
+    (the funded wallet's does). The signer's own start strips it into the container's memory: nothing is
+    written to the key folder, which is read-only, or to the project."""
+    signer = service(CLEARINGHOUSE, "signer")
+    assert "--keystore-password-file /dev/shm/wallet-password" in signer
+    assert "--keystore-password-file /run/wallet" not in signer, "the signer is given the file as it is"
+    assert "umask 077" in signer and "> /dev/shm/wallet-password" in signer
+    assert "exec /usr/local/bin/livepeer-signer" in signer, "the signer is the container's first process"
+
+
+def test_a_service_that_reads_an_owner_only_file_runs_as_root() -> None:
+    """The runbook works under ``umask 077``, so the key folder, ``secrets/`` and ``config/discovery.toml``
+    are owner-only on the host. The images' own user could not read them."""
+    for name in ("signer", "discovery"):
+        assert 'user: "0:0"' in service(CLEARINGHOUSE, name), f"{name} cannot read an owner-only file"
+
+
 def test_the_committed_files_hold_placeholders_and_no_real_address_or_path() -> None:
     env = example_env(CLEARINGHOUSE) | example_env(ENTERPRISE)
     secrets = sorted(name for name in env if name.endswith(("_TOKEN", "_KEY")))

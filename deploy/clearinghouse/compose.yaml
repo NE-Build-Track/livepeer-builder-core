@@ -47,16 +47,17 @@ services:
       dockerfile: docker/Dockerfile
     user: "0:0"  # reads the owner-only key folder and secrets whatever the host uid is
     network_mode: service:batteries  # Kafka and the webhook listen on this namespace's loopback
-    entrypoint: ["/usr/local/bin/livepeer-signer"]
+    # The signer reads its password file as exact bytes, and a password file usually ends in a newline.
+    # So the password is passed on without it, from a file in this container's memory: nothing is
+    # written to the key folder, which is read-only, or to this project.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --data-dir
-      - /data/node
-      - --config
-      - /etc/signer.toml
-      - --keystore-file
-      - /run/wallet/${WALLET_KEYSTORE_FILE:?set WALLET_KEYSTORE_FILE in .env to the name of the key file in WALLET_KEY_DIR}
-      - --keystore-password-file
-      - /run/wallet/${WALLET_PASSWORD_FILE:?set WALLET_PASSWORD_FILE in .env to the name of the password file in WALLET_KEY_DIR}
+      - |
+        umask 077
+        printf %s "$$(cat '/run/wallet/${WALLET_PASSWORD_FILE:?set WALLET_PASSWORD_FILE in .env to the name of the password file in WALLET_KEY_DIR}')" > /dev/shm/wallet-password
+        exec /usr/local/bin/livepeer-signer --data-dir /data/node --config /etc/signer.toml \
+          --keystore-file '/run/wallet/${WALLET_KEYSTORE_FILE:?set WALLET_KEYSTORE_FILE in .env to the name of the key file in WALLET_KEY_DIR}' \
+          --keystore-password-file /dev/shm/wallet-password
     volumes:
       - paid-state:/data
       - ./config/signer.toml:/etc/signer.toml:ro
@@ -77,6 +78,7 @@ services:
     build:
       context: https://github.com/livepeer/node.git#eee09c41f46d64a34bfd9ed3c9cb649536490f13
       dockerfile: docker/Dockerfile
+    user: "0:0"  # reads config/discovery.toml, which is owner-only on the host
     entrypoint: ["/usr/local/bin/livepeer-discovery"]
     command: [--config, /etc/livepeer/discovery.toml]
     volumes:

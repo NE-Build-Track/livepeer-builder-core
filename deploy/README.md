@@ -63,7 +63,7 @@ Nothing real is committed. Each project's `.env`, the clearinghouse's `secrets/`
 
 | What | Where it comes from | Committed stand-in |
 | --- | --- | --- |
-| The wallet's key file and its password file | The folder `WALLET_KEY_DIR` names, mounted read-only into the signer; the two file names are `WALLET_KEYSTORE_FILE` and `WALLET_PASSWORD_FILE`. Nothing is copied | Placeholders in `clearinghouse/.env.example` |
+| The wallet's key file and its password file | The folder `WALLET_KEY_DIR` names, mounted read-only into the signer; the two file names are `WALLET_KEYSTORE_FILE` and `WALLET_PASSWORD_FILE`. Nothing is copied: the signer reads the password from its own memory, without the newline a password file usually ends in | Placeholders in `clearinghouse/.env.example` |
 | The wallet's public address | `WALLET_ADDRESS` in `clearinghouse/.env`, for Batteries' on-chain listener | The zero address |
 | The RPC address | `clearinghouse/secrets/rpc-url` (mode 0600, no trailing newline). The signer and Batteries' on-chain listener read it | None |
 | The orchestrators' addresses | `clearinghouse/config/discovery.toml` | `config/discovery.example.toml`, which names `orchestrator.example` |

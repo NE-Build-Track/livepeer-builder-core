@@ -345,7 +345,7 @@ async def test_the_operation_ledger_outlives_retention_and_downgrades(
     await upgrade(engine)
     store = SqlStore(engine)
     record = OperationRecord(
-        tenant_id="default", actor_id="operator", operation_ref="op-1", command="fund",
+        tenant_id="default", actor_id="operator", operation_ref="op-1", command="top_up",
         fingerprint="f", state="started", started_at=clock.now(),
     )  # fmt: skip
     await store.begin_operation(record)

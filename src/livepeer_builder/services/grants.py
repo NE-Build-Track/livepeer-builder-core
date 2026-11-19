@@ -1,7 +1,7 @@
 """Grants: the idempotency keys the engine sends Batteries, and the grant desk (D57).
 
 Split from ``payments.py`` by responsibility: grants fund every tenant and are an optional
-capability, while ``PaymentsService`` allots and funds one actor's allocation.
+capability, while ``PaymentsService`` allots and tops up one actor's allocation.
 """
 
 import base64
@@ -10,13 +10,13 @@ import hashlib
 from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import ActorContext, Currency, GrantRecord, Money, Operation
-from livepeer_builder.contracts.common import FundingAmount
+from livepeer_builder.contracts.common import TopUpAmount
 from livepeer_builder.errors import InvalidRequest, ProviderError
 from livepeer_builder.protocols import AccessPolicy, AllocationManager
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 
 _GRANT = TypeAdapter(GrantRecord)
-_AMOUNT = TypeAdapter(FundingAmount)
+_AMOUNT = TypeAdapter(TopUpAmount)
 GRANT_TAG = "lpb_operation"  # the metadata key that tags a grant the engine created (D57, Q5)
 
 
@@ -30,7 +30,7 @@ class GrantDesk:
     """Listing and creating grants: an optional capability (decision 7 in the DI refactor plan).
 
     Present only when a grants manager exists (``LPB_BATTERIES_OPERATOR_TOKEN``, or one supplied).
-    The engine's own token can fund grants but not list or create them, so without the operator
+    The engine's own token can top up grants but not list or create them, so without the operator
     credential the desk is absent rather than failing at first use.
     """
 

@@ -56,7 +56,7 @@ curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   http://127.0.0.1:8080/v1/admin/keys                                                  # an actor key
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"amount":{"amount":"1","currency":"USD"},"grant_id":"<grant id>","operation_ref":"dev-allot-alice"}' \
-  http://127.0.0.1:8080/v1/admin/tenants/default/actors/alice/allocation          # explicit funding
+  http://127.0.0.1:8080/v1/admin/tenants/default/actors/alice/allocation          # explicit allotment
 ALICE=lpk_...
 curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key
 curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
@@ -113,7 +113,7 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   `docker compose run --rm --user 0 engine chown -R 10001:10001 /data`.
 - **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) may
   `grants.fund` and has no `grants.*`. Batteries does not scope that permission to one grant, and an
-  engine admin may fund any grant it names. `grant-desk` has `grants.read` and `grants.create` for
+  engine admin may top up any grant it names. `grant-desk` has `grants.read` and `grants.create` for
   `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
   `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine's grant desk can
   list or create grants.

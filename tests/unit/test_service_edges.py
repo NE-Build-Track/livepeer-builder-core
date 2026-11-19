@@ -11,10 +11,10 @@ from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply, genera
 from livepeer_builder.contracts import (
     ActorContext,
     AllotRequest,
-    FundRequest,
     JobRequest,
     Money,
     SyncCheckpoint,
+    TopUpRequest,
     UsagePage,
 )
 from livepeer_builder.errors import (
@@ -75,7 +75,9 @@ async def test_payments_guard_clauses(
             ),
         )
     with pytest.raises(NotFound):
-        await engine.payments.fund(admin, "default", "ghost", FundRequest(amount=usd("1"), operation_ref="x"))
+        await engine.payments.top_up(
+            admin, "default", "ghost", TopUpRequest(amount=usd("1"), operation_ref="x")
+        )
     with pytest.raises(NotFound, match="no allocation"):
         await engine.payments.allowance(alice)
 
@@ -112,11 +114,11 @@ async def test_allotment_needs_a_provider_and_a_grant(
     with pytest.raises(InvalidRequest, match="choose a grant"):
         await no_grant.payments.allot(admin, allot(grant_id=""))
     with pytest.raises(ProviderUnavailable, match="management API"):
-        await no_provider.payments.fund_grant(
-            admin, FundRequest(amount=usd("1"), operation_ref="g", grant_id="grant_1")
+        await no_provider.payments.top_up_grant(
+            admin, TopUpRequest(amount=usd("1"), operation_ref="g", grant_id="grant_1")
         )
     with pytest.raises(InvalidRequest, match="choose a grant"):
-        await no_grant.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
+        await no_grant.payments.top_up_grant(admin, TopUpRequest(amount=usd("1"), operation_ref="g"))
 
 
 # -- costs ---------------------------------------------------------------------------------------------

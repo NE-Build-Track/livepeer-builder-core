@@ -113,12 +113,12 @@ The same limit applies to every id, label and reference a request carries (`Stor
 because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on allotment and on
-`FundRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
+`TopUpRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
 and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
 id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
 `..`, `" grant_1"` is used as `grant_1`, and an id of only whitespace is no grant chosen. It is a 422 over REST (a
 `ValidationError` in process) before the operation ledger records anything or the provider is called, and
-it applies to the allocation fund route too, whose body is a `FundRequest`. It is held to no pattern such
+it applies to the allocation top-up route too, whose body is a `TopUpRequest`. It is held to no pattern such
 as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it
 places in a path, whatever its source (a grant, an allocation, a key, a created grant read back), so an id
 the provider itself returned cannot name another resource either.
@@ -158,8 +158,8 @@ checks stop that:
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
 | `allot(AllotRequest(tenant, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; fund it instead |
-| `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
-| `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
+| `top_up(…, TopUpRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
+| `top_up_grant(TopUpRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
 | `grants.create_grant(name, amount, operation_ref=…)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN`, tagged `metadata.lpb_operation` | the ledger; Batteries has none on grants, so a resume finds the tagged grant (Q5) |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
@@ -167,8 +167,8 @@ checks stop that:
 | `rotate_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
-  explicit fund.
-- **One command never undoes another on the same actor (#115, C4).** `allot`, `fund`, `set_status`,
+  explicit top-up.
+- **One command never undoes another on the same actor (#115, C4).** `allot`, `top_up`, `set_status`,
   `revoke` and `rotate_key` read the actor, call the provider, then write. Each writes only its own
   columns, with its condition in the SQL statement:
 
@@ -176,7 +176,7 @@ checks stop that:
   | --- | --- | --- |
   | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
   | `rotate_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
-  | `fund` | `status` = `active`, `updated_at` | the status is `exhausted` |
+  | `top_up` | `status` = `active`, `updated_at` | the status is `exhausted` |
   | `allot` | the whole row | the actor is as allotment read it: it has no row, or it still has the `revoked` row being replaced |
 
   Every write also requires the allocation the command acted on, so none lands on an allocation
@@ -188,11 +188,11 @@ checks stop that:
   record written before the allocation was noted is not checked.
 
   No command moves an actor out of `revoked`; only a new allotment gives the actor an allocation
-  again. A fund of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
+  again. A top-up of an actor that is not `exhausted` writes nothing, `updated_at` included, and answers
   with the actor as stored. When a revoke finishes while another command is at
   the provider, the actor stays `revoked`: `set_status` and `rotate_key` then answer 404 as for an actor
   that has no allocation (the rotation's new key is on a revoked allocation, and its secret is
-  deleted), and a fund, whose money was already sent, answers with the revoked actor. A revoke also
+  deleted), and a top-up, whose money was already sent, answers with the revoked actor. A revoke also
   deletes the secret of a key a rotation stored meanwhile. A revoke that another revoke overtook
   answers with the revoked actor as stored, as a repeat does. If the actor was allotted again
   before it wrote, it writes nothing and answers with the allocation it revoked, `revoked`: the
@@ -211,7 +211,7 @@ checks stop that:
   | The actor as stored | Answer |
   | --- | --- |
   | holds the allocation and the key this allotment got | the actor, with the status it has now (a pause that finished meanwhile stays) |
-  | holds that allocation, `revoked` | the actor, `revoked`: the allocation was funded and then revoked, and it stays revoked, as for a fund |
+  | holds that allocation, `revoked` | the actor, `revoked`: the allocation was allotted and then revoked, and it stays revoked, as for a top-up |
   | holds that allocation with another key (rotated meanwhile), or another allocation (revoked and allotted again) | 409 `already_allotted`, as below |
   | holds another allocation, `revoked` | 404: revoked while this allotment was at the provider. The record stays `started`; repeated after `LPB_OPERATION_STALE_S` it is a resumed allotment of a revoked actor |
 
@@ -262,11 +262,11 @@ checks stop that:
   `internal/units/eth.go`): unsigned, with at most 18 decimal places, sent as a plain decimal string with
   no exponent (`format(amount, "f")`). It also sets its own bound, a fixed constant and not a setting: at
   most 1,000,000,000 (10^9) USD or ETH per command, since the provider's own (256 digits once scaled) is
-  effectively none. Allotment takes zero or more (`AllotAmount`); funding an allocation, funding a
-  grant and creating a grant take an amount within the format and bound (`FundingAmount`) and still need
+  effectively none. Allotment takes zero or more (`AllotAmount`); topping up an allocation, topping up a
+  grant and creating a grant take an amount within the format and bound (`TopUpAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
-  ledger records anything and before any provider call. A zero or negative funding or grant amount is
+  ledger records anything and before any provider call. A zero or negative top-up or grant amount is
   still the command's own refusal, 400, unless it also breaks the format: one with more than 18
   decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
@@ -283,7 +283,7 @@ checks stop that:
   `usage.read`, and `grants.fund`. It has **no `grants.*`**.
 - **Listing and creating grants** uses `LPB_BATTERIES_OPERATOR_TOKEN` (`grants.read`, `grants.create`).
   The token is optional. Without it the grant desk is off: `engine.payments.grants` is `None` and the
-  grant list and create routes are absent. Funding grants still works with `LPB_BATTERIES_TOKEN`.
+  grant list and create routes are absent. Topping up grants still works with `LPB_BATTERIES_TOKEN`.
 - **Cost sync** reads `GET /v1/usage` with no grant filter. Rows for allocations this engine did not
   allot are stored and are not part of any actor's reconciliation. A cursor saved under the old
   `grant_id` filter does not match, so the first sync after this change restarts from the beginning
@@ -367,7 +367,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   another rotation of the same actor overtook, or that is resumed on an allocation allotted since
   it began, is refused and keeps its reference ([two rotations](#allotment)).
 - **Allotting** to an actor that already has an allocation (not revoked) under a new reference is refused:
-  409 `code: already_allotted` with the actor, and nothing is applied, the amount included (fund it
+  409 `code: already_allotted` with the actor, and nothing is applied, the amount included (top it up
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor
   holds the provider key its earlier run recorded: that allocation is this command's (the provider key
   is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
@@ -389,7 +389,7 @@ Which commands take a reference:
 
 | Command | `operation_ref` |
 | --- | --- |
-| Allot, fund allocation, fund grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
+| Allot, top up allocation, top up grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
 | Issue access key, rotate access key | **required**: creates a live engine credential |
 | Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeated set-status sets the same status at the provider again and answers with the actor in that status; after a revoke it is `404`, as for an actor that is not allotted. A repeated revoke answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
 
@@ -399,7 +399,7 @@ Three different things, often all called "funding":
 
 | Term | What it is | Who moves it | Repeat-safe |
 | --- | --- | --- | --- |
-| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (allot, fund allocation, fund grant, create grant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
+| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (allot, top up allocation, top up grant, create grant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
 | **Signer funding** | The payer's TicketBroker deposit and reserve on Arbitrum, which back the tickets the signer signs | The payment operator, outside the engine | No engine command touches it |
 | **Spending guarantee** | A hard limit no job can exceed | Nobody in M3 | n/a: the allowance is a cap that [can overshoot](#allowance); hard limits are stretch scope |
 

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from livepeer_builder import contracts
 from livepeer_builder.contracts import AllocationStatus, CredentialKind, OperationRef
-from livepeer_builder.contracts.common import AllotAmount, FundingAmount, GrantId, StoredText
+from livepeer_builder.contracts.common import AllotAmount, GrantId, StoredText, TopUpAmount
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
 
@@ -40,7 +40,7 @@ class AllotBody(BaseModel):
 
 class GrantBody(BaseModel):
     name: str
-    amount: FundingAmount  # a 422 before the ledger and the provider (#112, C11)
+    amount: TopUpAmount  # a 422 before the ledger and the provider (#112, C11)
     operation_ref: OperationRef  # required (D57, Q4)
 
 

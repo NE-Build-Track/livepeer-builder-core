@@ -32,7 +32,6 @@ from livepeer_builder.contracts import (
     EventPage,
     Failure,
     Fees,
-    FundRequest,
     GrantRecord,
     IssuedKey,
     Job,
@@ -57,6 +56,7 @@ from livepeer_builder.contracts import (
     SessionRequest,
     SignedSession,
     SyncReport,
+    TopUpRequest,
 )
 from livepeer_builder.errors import (
     AccessDenied,
@@ -112,7 +112,6 @@ __all__ = [
     "EventPage",
     "Failure",
     "Fees",
-    "FundRequest",
     "GrantRecord",
     "GrantsApi",
     "InvalidRequest",
@@ -155,6 +154,7 @@ __all__ = [
     "SignedSession",
     "StreamingApi",
     "SyncReport",
+    "TopUpRequest",
     "UnsupportedForBackend",
     "generate_secret_key",
 ]

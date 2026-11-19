@@ -81,7 +81,7 @@ class BatteriesClient:
         )
         return _new_key(body)
 
-    async def fund_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
+    async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         await self._request(
             "POST",
             f"/v1/allocations/{segment(allocation_id)}/fund",
@@ -89,7 +89,7 @@ class BatteriesClient:
             idempotency_key=idempotency_key,
         )
 
-    async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
+    async def top_up_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
         await self._request(
             "POST",
             f"/v1/grants/{segment(grant_id)}/fund",

@@ -61,7 +61,7 @@ through a backend or trusted access layer, and provider and admin credentials st
 | **B: hosted payment operator** | A third party runs Batteries, the signer and a provider-funded wallet for many builders | Scoped credentials and reports; **the contract is still to be established** (deferred to M4, [payments.md#mode-b](../contracts/payments.md#mode-b)) |
 
 The payment operator owns the funds, wallet operations, ledger and event ingestion in both modes.
-Allotment an allowance is distinct from funding the wallet. Switching providers is not
+Allotting an allowance is distinct from funding the wallet. Switching providers is not
 automatically lossless.
 
 ## Execution scope

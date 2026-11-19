@@ -70,7 +70,6 @@ from livepeer_builder.contracts.payments import (
     AllocationStatus,
     AllotRequest,
     Allowance,
-    FundRequest,
     GrantPage,
     GrantRecord,
     KnownActor,
@@ -79,6 +78,7 @@ from livepeer_builder.contracts.payments import (
     PaymentCredential,
     SecretRef,
     SeenActor,
+    TopUpRequest,
 )
 from livepeer_builder.contracts.reserved import EngineEvent, EventPage, Session, SessionRequest
 
@@ -112,7 +112,6 @@ __all__ = [
     "FailureCode",
     "FailureKind",
     "Fees",
-    "FundRequest",
     "GrantPage",
     "GrantRecord",
     "IssuedKey",
@@ -155,6 +154,7 @@ __all__ = [
     "SourceFailureCode",
     "SyncCheckpoint",
     "SyncReport",
+    "TopUpRequest",
     "UsagePage",
     "UsageRow",
     "add_fees",

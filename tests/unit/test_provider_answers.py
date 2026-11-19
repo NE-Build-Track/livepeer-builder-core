@@ -59,8 +59,8 @@ NOT_AN_OBJECT = {
 CALLS: dict[str, Callable[[BatteriesClient], Awaitable[object]]] = {
     "create_key_for_grant": lambda client: client.create_key_for_grant("g1", "alice", USD, "idem-1"),
     "create_key": lambda client: client.create_key("a1", "rotated", "idem-2"),
-    "fund_allocation": lambda client: client.fund_allocation("a1", USD, "idem-3"),
-    "fund_grant": lambda client: client.fund_grant("g1", USD, "idem-4"),
+    "top_up_allocation": lambda client: client.top_up_allocation("a1", USD, "idem-3"),
+    "top_up_grant": lambda client: client.top_up_grant("g1", USD, "idem-4"),
     "set_allocation_status": lambda client: client.set_allocation_status("a1", "paused"),
     "revoke_allocation": lambda client: client.revoke_allocation("a1"),
     "revoke_key": lambda client: client.revoke_key("k1"),
@@ -99,7 +99,7 @@ async def test_an_error_status_whose_body_cannot_be_decoded_is_still_that_provid
     provider's refusal or outage."""
     client = BatteriesClient(BASE, "t", client=answering(NO_ERROR_TEXT[body], status=status))
     with pytest.raises(ProviderError) as refused:
-        await client.fund_grant("g1", USD, "idem-4")
+        await client.top_up_grant("g1", USD, "idem-4")
     assert refused.value.status_code == status
     source = BatteriesUsageSource(BASE, "t", client=answering(NO_ERROR_TEXT[body], status=status))
     with pytest.raises(ProviderError) as failed:

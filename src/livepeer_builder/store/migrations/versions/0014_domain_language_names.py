@@ -16,7 +16,7 @@ The account an enterprise app holds is a tenant, and the kind of credential that
   changes the type in place. SQLite has no such statement: Alembic's batch mode copies the rows into a new
   table with the same key, constraints and defaults, as revision 0013 did for ``lpb_actors``.
 - The command a ledger record names in ``lpb_operations.command`` follows the command's new name:
-  ``provision`` becomes ``allot``.
+  ``provision`` becomes ``allot``, ``fund`` becomes ``top_up`` and ``fund_grant`` becomes ``top_up_grant``.
 - The result an admin command recorded in ``lpb_operations.result`` is the answer a repeat gets back. It
   names the tenant, and for an issued or rotated access key the kind, in the same words, so both are
   renamed inside the stored JSON too.
@@ -47,7 +47,7 @@ depends_on: str | Sequence[str] | None = None
 TENANT_TABLES = ("lpb_access_keys", "lpb_jobs", "lpb_actors", "lpb_actor_sightings", "lpb_operations")
 ADMIN, CLEARINGHOUSE_ADMIN = "admin", "clearinghouse_admin"
 KEY_COMMANDS = ("issue_key", "rotate_access_key")  # their recorded result is an access key
-COMMANDS = {"provision": "allot"}
+COMMANDS = {"provision": "allot", "fund": "top_up", "fund_grant": "top_up_grant"}
 
 
 def _in_one_transaction() -> None:

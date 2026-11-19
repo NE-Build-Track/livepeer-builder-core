@@ -28,7 +28,6 @@ from livepeer_builder.contracts import (
     CostSummary,
     EngineHealth,
     EventPage,
-    FundRequest,
     GrantRecord,
     IssuedKey,
     Job,
@@ -40,6 +39,7 @@ from livepeer_builder.contracts import (
     Session,
     SessionRequest,
     SyncReport,
+    TopUpRequest,
 )
 from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.errors import (
@@ -343,11 +343,11 @@ def create_app(
         )
         return _replay(response, await engine.payments.allot(actor, request))
 
-    @app.post(base + "/fund", response_model=ActorAllocation)
-    async def fund(
-        actor: Actor, tenant_id: PathId, actor_id: PathId, body: FundRequest, response: Response
+    @app.post(base + "/top-up", response_model=ActorAllocation)
+    async def top_up(
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: TopUpRequest, response: Response
     ) -> ActorAllocation:
-        return _replay(response, await engine.payments.fund(actor, tenant_id, actor_id, body))
+        return _replay(response, await engine.payments.top_up(actor, tenant_id, actor_id, body))
 
     if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
         desk = engine.payments.grants
@@ -361,9 +361,9 @@ def create_app(
             created = await desk.create_grant(actor, body.name, body.amount, operation_ref=body.operation_ref)
             return _replay(response, created)
 
-    @app.post("/v1/admin/grant/fund", status_code=204)
-    async def fund_grant(actor: Actor, body: FundRequest) -> Response:
-        await engine.payments.fund_grant(actor, body)
+    @app.post("/v1/admin/grant/top-up", status_code=204)
+    async def top_up_grant(actor: Actor, body: TopUpRequest) -> Response:
+        await engine.payments.top_up_grant(actor, body)
         response = Response(status_code=204)
         return _replay(response, response)
 

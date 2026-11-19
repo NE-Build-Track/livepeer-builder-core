@@ -19,13 +19,13 @@ from livepeer_builder.contracts import (
     AllotRequest,
     Allowance,
     Currency,
-    FundRequest,
     KnownActor,
     Operation,
     PaymentCredential,
     ResourceRef,
     SecretRef,
     SeenActor,
+    TopUpRequest,
 )
 from livepeer_builder.errors import (
     AlreadyAllotted,
@@ -219,47 +219,47 @@ class PaymentsService:
             raise NotFound(f"actor {actor_id!r} has no allocation")
         return actor
 
-    async def fund(
-        self, admin: ActorContext, tenant_id: str, actor_id: str, request: FundRequest
+    async def top_up(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
     ) -> ActorAllocation:
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         actor = await self._require_actor(tenant_id, actor_id)
         if request.amount.currency != actor.currency or request.amount.amount <= 0:
-            raise InvalidRequest(f"funding must be a positive amount in {actor.currency}")
+            raise InvalidRequest(f"a top-up must be a positive amount in {actor.currency}")
         manager = self._require_manager()
 
         async def steps(_: RunningOperation) -> ActorAllocation:
-            await manager.fund_allocation(
+            await manager.top_up_allocation(
                 actor.allocation_id,
                 request.amount,
                 idempotency_key(
                     self._engine_id, f"fund:{actor.allocation_id}:{request.operation_ref}", "fund"
                 ),
             )
-            return await self._writes.funded(actor)  # exhausted becomes active; nothing else (#115, C4)
+            return await self._writes.topped_up(actor)  # exhausted becomes active; nothing else (#115, C4)
 
         target = {"tenant_id": tenant_id, "actor_id": actor_id, "amount": request.amount}
-        return await self._ledger.run(admin, "fund", request.operation_ref, target, steps, _ACTOR)
+        return await self._ledger.run(admin, "top_up", request.operation_ref, target, steps, _ACTOR)
 
-    async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None:
+    async def top_up_grant(self, admin: ActorContext, request: TopUpRequest) -> None:
         """Add funds to the named grant, or to the grant of the caller's own allocation."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         if request.amount.currency != self._currency or request.amount.amount <= 0:
-            raise InvalidRequest(f"funding must be a positive amount in {self._currency}")
+            raise InvalidRequest(f"a top-up must be a positive amount in {self._currency}")
         grant_id = await self._resolved_grant(admin, request.grant_id)
         if not grant_id:
             raise InvalidRequest("choose a grant")
         manager = self._require_manager()
 
         async def steps(_: RunningOperation) -> None:
-            await manager.fund_grant(
+            await manager.top_up_grant(
                 grant_id,
                 request.amount,
                 idempotency_key(self._engine_id, f"fund-grant:{grant_id}:{request.operation_ref}", "fund"),
             )
 
         target = {"grant_id": grant_id, "amount": request.amount}
-        await self._ledger.run(admin, "fund_grant", request.operation_ref, target, steps, _NOTHING)
+        await self._ledger.run(admin, "top_up_grant", request.operation_ref, target, steps, _NOTHING)
 
     async def set_status(
         self, admin: ActorContext, tenant_id: str, actor_id: str, status: AllocationStatus

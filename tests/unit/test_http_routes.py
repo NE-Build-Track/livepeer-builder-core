@@ -62,7 +62,7 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
         )
     ).status_code == 201
     funded = await client.post(
-        ALLOCATION + "/fund",
+        ALLOCATION + "/top-up",
         json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"},
         headers=admin,
     )
@@ -81,7 +81,7 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert reconciliation.status_code == 200
     assert (await client.post(ALLOCATION + "/revoke", headers=admin)).json()["status"] == "revoked"
     bad = await client.post(
-        ALLOCATION + "/fund",
+        ALLOCATION + "/top-up",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "t2"},
         headers=admin,
     )
@@ -102,15 +102,15 @@ async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ig
     assert (await client.get("/v1/admin/grants", headers=admin)).json() == [created.json()]
 
 
-async def test_grant_fund_is_admin_only(api, manager: FakeAllocationManager) -> None:  # type: ignore[no-untyped-def]
+async def test_grant_top_up_is_admin_only(api, manager: FakeAllocationManager) -> None:  # type: ignore[no-untyped-def]
     client, _, admin, alice = api
     body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
-    assert (await client.post("/v1/admin/grant/fund", json=body, headers=alice)).status_code == 403
+    assert (await client.post("/v1/admin/grant/top-up", json=body, headers=alice)).status_code == 403
     missing = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g2"}
-    assert (await client.post("/v1/admin/grant/fund", json=missing, headers=admin)).status_code == 400
-    funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    assert (await client.post("/v1/admin/grant/top-up", json=missing, headers=admin)).status_code == 400
+    funded = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
     assert funded.status_code == 204 and funded.content == b""
-    assert manager.funded_grants[0][0] == "grant_chosen"
+    assert manager.topped_up_grants[0][0] == "grant_chosen"
 
 
 async def test_keys_jobs_usage_and_costs_over_rest(
@@ -245,9 +245,9 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
         async def provider_fails(*_: object, status: int = status) -> object:
             raise ProviderError(status, "nope")
 
-        monkeypatch.setattr(engine.payments, "fund", provider_fails)
+        monkeypatch.setattr(engine.payments, "top_up", provider_fails)
         response = await client.post(
-            ALLOCATION + "/fund",
+            ALLOCATION + "/top-up",
             json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
             headers=admin,
         )
@@ -431,7 +431,7 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
     assert (await client.get("/v1/admin/actors", headers=as_auditor)).status_code == 200
     assert (await client.get("/v1/admin/grants", headers=as_auditor)).status_code == 403  # every tenant's
     funded = await client.post(
-        ALLOCATION + "/fund",
+        ALLOCATION + "/top-up",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
         headers=as_auditor,
     )
@@ -463,12 +463,12 @@ async def test_an_admin_ref_reused_with_another_body_is_409_operation_conflict(a
     allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
     assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
-    assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 200
+    assert (await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)).status_code == 200
     other = fund | {"amount": {"amount": "6", "currency": "USD"}}
-    conflict = await client.post(ALLOCATION + "/fund", json=other, headers=admin)
+    conflict = await client.post(ALLOCATION + "/top-up", json=other, headers=admin)
     assert conflict.status_code == 409 and "Livepeer-Job-Id" not in conflict.headers
     assert conflict.json()["code"] == "operation_conflict"
-    assert conflict.json()["operation"] == {"command": "fund", "operation_ref": "t1", "state": "done"}
+    assert conflict.json()["operation"] == {"command": "top_up", "operation_ref": "t1", "state": "done"}
 
 
 async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(  # type: ignore[no-untyped-def]
@@ -478,13 +478,13 @@ async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(
     allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
     assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
-    assert (await client.post(ALLOCATION + "/fund", json=fund, headers=admin)).status_code == 503
-    running = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    assert (await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)).status_code == 503
+    running = await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)
     # a repeat may resume it once it is LPB_OPERATION_STALE_S (120 s) old, not before
     assert running.status_code == 409 and running.headers["Retry-After"] == "120"
     assert running.json()["code"] == "operation_in_progress"
-    assert running.json()["operation"] == {"command": "fund", "operation_ref": "t1", "state": "started"}
+    assert running.json()["operation"] == {"command": "top_up", "operation_ref": "t1", "state": "started"}
 
 
 async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
@@ -492,24 +492,26 @@ async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(a
     allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
     assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
-    first = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
-    again = await client.post(ALLOCATION + "/fund", json=fund, headers=admin)
+    first = await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)
+    again = await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)
     assert "Idempotent-Replayed" not in first.headers
     assert (again.status_code, again.json()) == (first.status_code, first.json())
     assert again.headers["Idempotent-Replayed"] == "true"
 
 
-async def test_a_replayed_grant_funding_is_204_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
+async def test_a_replayed_grant_top_up_is_204_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
     body = {"amount": {"amount": "10", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
-    first = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
-    again = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    first = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
+    again = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
     assert (first.status_code, again.status_code) == (204, 204)
     assert "Idempotent-Replayed" not in first.headers and again.headers["Idempotent-Replayed"] == "true"
 
 
-@pytest.mark.parametrize("path", [ALLOCATION + "/fund", "/v1/admin/grant/fund", ALLOCATION + "/rotate-key"])
-async def test_an_operation_ref_with_a_nul_is_422_on_fund_and_rotate(  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize(
+    "path", [ALLOCATION + "/top-up", "/v1/admin/grant/top-up", ALLOCATION + "/rotate-key"]
+)
+async def test_an_operation_ref_with_a_nul_is_422_on_top_up_and_rotate(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str
 ) -> None:  # the ledger's OperationRecord refuses it; unparsed here, that was a 500 inside the handler
     client, _engine, admin, _alice = api
@@ -560,8 +562,8 @@ async def test_an_amount_the_provider_would_not_take_is_422_before_the_ledger_an
     assert manager.calls == []
     assert (await client.post(ALLOCATION, json=allot | {"amount": good}, headers=admin)).status_code == 201
     funding = [
-        (ALLOCATION + "/fund", {"operation_ref": "f1"}, 200),
-        ("/v1/admin/grant/fund", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
+        (ALLOCATION + "/top-up", {"operation_ref": "f1"}, 200),
+        ("/v1/admin/grant/top-up", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
         ("/v1/admin/grants", {"operation_ref": "c1", "name": "ops"}, 201),
     ]
     if amount.startswith("-"):  # a funding amount stays positive, refused as before (400)
@@ -586,8 +588,8 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
     )[0].key_id
     commands = [
         (ALLOCATION, {"amount": usd, "grant_id": "grant_1"}),
-        (ALLOCATION + "/fund", {"amount": usd}),
-        ("/v1/admin/grant/fund", {"amount": usd, "grant_id": "grant_1"}),
+        (ALLOCATION + "/top-up", {"amount": usd}),
+        ("/v1/admin/grant/top-up", {"amount": usd, "grant_id": "grant_1"}),
         ("/v1/admin/grants", {"name": "ops", "amount": usd}),
         (ALLOCATION + "/rotate-key", {}),
         ("/v1/admin/keys", {"actor_id": "bob"}),

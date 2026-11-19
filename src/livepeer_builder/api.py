@@ -31,7 +31,6 @@ from livepeer_builder.contracts import (
     CostSummary,
     CredentialKind,
     EngineHealth,
-    FundRequest,
     GrantRecord,
     IssuedKey,
     Job,
@@ -44,6 +43,7 @@ from livepeer_builder.contracts import (
     Reconciliation,
     Runner,
     SyncReport,
+    TopUpRequest,
 )
 from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
@@ -151,8 +151,8 @@ class GrantsApi(Protocol):
 
 class PaymentsAdminApi(Protocol):
     async def allot(self, admin: ActorContext, request: AllotRequest) -> ActorAllocation: ...
-    async def fund(
-        self, admin: ActorContext, tenant_id: str, actor_id: str, request: FundRequest
+    async def top_up(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
     ) -> ActorAllocation: ...
     async def set_status(
         self, admin: ActorContext, tenant_id: str, actor_id: str, status: AllocationStatus
@@ -161,7 +161,7 @@ class PaymentsAdminApi(Protocol):
         self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
     ) -> ActorAllocation: ...
     async def revoke(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
-    async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None: ...
+    async def top_up_grant(self, admin: ActorContext, request: TopUpRequest) -> None: ...
     async def list_actors(
         self,
         admin: ActorContext,
@@ -208,7 +208,7 @@ class CostsAdminApi(Protocol):
 
 
 class AdminApi(Protocol):
-    """Operator work: allotment and funding, the grant desk, keys, reconciliation."""
+    """Operator work: allotment and top-ups, the grant desk, keys, reconciliation."""
 
     @property
     def payments(self) -> PaymentsAdminApi: ...

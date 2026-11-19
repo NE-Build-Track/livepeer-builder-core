@@ -13,7 +13,7 @@ keys, 404 across actors (on jobs for the run's own app, ``lpb-probe/<run>``, tha
 before any payment; none is sent if the catalog lists that app), then revokes a key and
 expects 401.
 
-It spends only with ``--yes`` and ``LPB_PROBE_FUND_ACTOR`` (an actor already allotted in application
+It spends only with ``--yes`` and ``LPB_PROBE_FUND_ACTOR`` (an actor already allotted in tenant
 ``default``, the admin key's): one fund of ``LPB_PROBE_FUND_AMOUNT`` (default 0.01 USD or 0.000005 ETH,
 in the allocation's currency; at most 0.05 USD or 0.00002 ETH) sent twice under one ``operation_ref``,
 expecting the repeat to be a replay (D57) and the allowance to grow once. It never allots and runs no
@@ -34,7 +34,7 @@ from typing import Any
 
 import httpx
 
-APPLICATION = "default"  # the fund actor's application; the allowance is read in the admin key's
+TENANT = "default"  # the fund actor's tenant; the allowance is read in the admin key's
 SYNC = "/v1/admin/costs/sync"  # a harmless admin write: if a key were wrongly allowed, nothing moves
 
 
@@ -198,7 +198,7 @@ async def repeated_fund(probe: Probe, *, spend: bool, actor: str | None, amount:
         cap = FUND_CAP.get(before[1], 0)
         probe.record("FAIL", name, f"refused to spend: not a number above 0 and at most {cap} {before[1]}")
         return
-    path = f"/v1/admin/tenants/{APPLICATION}/actors/{actor}/allocation/fund"
+    path = f"/v1/admin/tenants/{TENANT}/actors/{actor}/allocation/top-up"
     body = {"amount": {"amount": str(chosen), "currency": before[1]}, "operation_ref": f"{probe.run}-fund"}
     first = await probe.call("POST", path, probe.admin_key, json=body)
     again = await probe.call("POST", path, probe.admin_key, json=body)

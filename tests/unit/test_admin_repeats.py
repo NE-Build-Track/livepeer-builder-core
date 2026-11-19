@@ -19,10 +19,10 @@ from livepeer_builder.contracts import (
     ActorAllocation,
     ActorContext,
     AllotRequest,
-    FundRequest,
     GrantRecord,
     Money,
     OperationRecord,
+    TopUpRequest,
 )
 from livepeer_builder.errors import (
     AccessDenied,
@@ -55,33 +55,33 @@ def allot_request(actor_id: str = "alice", amount: str = "5", *, ref: str = "") 
     )
 
 
-async def test_funding_repeated_with_one_ref_is_answered_without_calling_the_provider_again(
+async def test_top_up_repeated_with_one_ref_is_answered_without_calling_the_provider_again(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    first = await engine.payments.fund(admin, "default", "alice", request)
-    again = await engine.payments.fund(admin, "default", "alice", request)  # a lost response
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    first = await engine.payments.top_up(admin, "default", "alice", request)
+    again = await engine.payments.top_up(admin, "default", "alice", request)  # a lost response
     assert again == first
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
 
 
-async def test_funding_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call(
+async def test_top_up_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    await engine.payments.fund(
-        admin, "default", "alice", FundRequest(amount=usd("10"), operation_ref="topup-1")
+    await engine.payments.top_up(
+        admin, "default", "alice", TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     )
     with pytest.raises(OperationConflict) as conflict:
-        await engine.payments.fund(
-            admin, "default", "alice", FundRequest(amount=usd("11"), operation_ref="topup-1")
+        await engine.payments.top_up(
+            admin, "default", "alice", TopUpRequest(amount=usd("11"), operation_ref="topup-1")
         )
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
     assert conflict.value.job is None
-    assert conflict.value.operation is not None and conflict.value.operation.command == "fund"
+    assert conflict.value.operation is not None and conflict.value.operation.command == "top_up"
 
 
 async def test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress(
@@ -90,20 +90,20 @@ async def test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress(
     """The first call's outcome is unknown (the provider timed out), so its record stays started."""
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(30)
     with pytest.raises(OperationInProgress) as early:
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     assert early.value.retry_after_s == 90  # the seconds until a repeat may resume it
     clock.advance(89)  # 119 s: younger than LPB_OPERATION_STALE_S (120 s)
     with pytest.raises(OperationInProgress) as running:
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     assert running.value.operation is not None and running.value.operation.state == "started"
     assert running.value.retry_after_s == 1
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
 
 
 async def test_a_repeat_after_the_first_run_went_stale_resumes_it_and_applies_once(
@@ -111,16 +111,16 @@ async def test_a_repeat_after_the_first_run_went_stale_resumes_it_and_applies_on
 ) -> None:
     engine = await make_engine()
     actor = await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(120)  # LPB_OPERATION_STALE_S: the first run is presumed dead
-    funded = await engine.payments.fund(admin, "default", "alice", request)
+    funded = await engine.payments.top_up(admin, "default", "alice", request)
     assert funded.status == "active"
     assert manager.allocations[actor.allocation_id].granted == Decimal(10)
-    assert await engine.payments.fund(admin, "default", "alice", request) == funded  # done: a replay
-    assert manager.calls.count("fund_allocation") == 2  # the timed-out call and the resume
+    assert await engine.payments.top_up(admin, "default", "alice", request) == funded  # done: a replay
+    assert manager.calls.count("top_up_allocation") == 2  # the timed-out call and the resume
 
 
 async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
@@ -134,10 +134,10 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
     """Both repeats read the stale record before either takes it over; the fencing token lets one win."""
     engine = await make_engine()
     actor = await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(600)
     both_read = asyncio.Barrier(2)
     resume = store.resume_operation
@@ -148,9 +148,10 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
 
     monkeypatch.setattr(store, "resume_operation", after_both_read)
     answers = await asyncio.gather(
-        *(engine.payments.fund(admin, "default", "alice", request) for _ in range(2)), return_exceptions=True
+        *(engine.payments.top_up(admin, "default", "alice", request) for _ in range(2)),
+        return_exceptions=True,
     )
-    assert manager.calls.count("fund_allocation") == 2  # the timed-out call and one resume
+    assert manager.calls.count("top_up_allocation") == 2  # the timed-out call and one resume
     assert manager.allocations[actor.allocation_id].granted == Decimal(10)
     # The loser answers from the record as it is now: the winner's result once done, else in progress
     # with a full stale window, since the winner restarted it now (Cursor, #76 review: it said 1 s).
@@ -160,17 +161,17 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
     assert lost, "the race should leave the loser in progress here: the winner is still funding"
 
 
-async def test_funding_a_grant_with_one_ref_and_another_grant_is_a_conflict(
+async def test_top_up_a_grant_with_one_ref_and_another_grant_is_a_conflict(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    request = FundRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_a")
-    await engine.payments.fund_grant(admin, request)
+    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_a")
+    await engine.payments.top_up_grant(admin, request)
     with pytest.raises(OperationConflict):
-        await engine.payments.fund_grant(admin, request.model_copy(update={"grant_id": "grant_b"}))
-    await engine.payments.fund_grant(admin, request)  # a lost response: answered from the ledger
-    assert [grant for grant, _, _ in manager.funded_grants] == ["grant_a"]
-    assert manager.calls.count("fund_grant") == 1
+        await engine.payments.top_up_grant(admin, request.model_copy(update={"grant_id": "grant_b"}))
+    await engine.payments.top_up_grant(admin, request)  # a lost response: answered from the ledger
+    assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_a"]
+    assert manager.calls.count("top_up_grant") == 1
 
 
 async def test_a_definite_refusal_frees_the_ref_for_a_corrected_repeat(
@@ -178,13 +179,13 @@ async def test_a_definite_refusal_frees_the_ref_for_a_corrected_repeat(
 ) -> None:
     """A 4xx from the provider applied nothing, so the caller may fix the request and repeat it."""
     engine = await make_engine()
-    request = FundRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_typo")
-    manager.fail_once("fund_grant", ProviderError(404, "grant not found"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_typo")
+    manager.fail_once("top_up_grant", ProviderError(404, "grant not found"))
     with pytest.raises(ProviderError):
-        await engine.payments.fund_grant(admin, request)
+        await engine.payments.top_up_grant(admin, request)
     assert await store.get_operation("default", "operator", "grant-topup-1") is None
-    await engine.payments.fund_grant(admin, request.model_copy(update={"grant_id": "grant_a"}))
-    assert [grant for grant, _, _ in manager.funded_grants] == ["grant_a"]
+    await engine.payments.top_up_grant(admin, request.model_copy(update={"grant_id": "grant_a"}))
+    assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_a"]
 
 
 @pytest.mark.parametrize(
@@ -259,12 +260,12 @@ async def test_a_command_refused_before_any_step_applied_still_frees_its_referen
     """The other side of the rule: nothing was applied, so the caller may fix the request and repeat it."""
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderError(400, "bad amount"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderError(400, "bad amount"))
     with pytest.raises(ProviderError):
-        await engine.payments.fund(admin, "default", "alice", request)
-    await engine.payments.fund(admin, "default", "alice", request)  # not in progress: the record was freed
-    assert manager.calls.count("fund_allocation") == 2
+        await engine.payments.top_up(admin, "default", "alice", request)
+    await engine.payments.top_up(admin, "default", "alice", request)  # not in progress: the record was freed
+    assert manager.calls.count("top_up_allocation") == 2
 
 
 async def test_a_refusal_on_a_resumed_run_keeps_its_reference(
@@ -279,21 +280,21 @@ async def test_a_refusal_on_a_resumed_run_keeps_its_reference(
     freed, the next repeat would run as a new command, and another request could take the reference."""
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(120)
-    manager.fail_once("fund_allocation", ProviderError(400, "bad amount"))
+    manager.fail_once("top_up_allocation", ProviderError(400, "bad amount"))
     with pytest.raises(ProviderError):
-        await engine.payments.fund(admin, "default", "alice", request)  # resumed, and refused
+        await engine.payments.top_up(admin, "default", "alice", request)  # resumed, and refused
     held = await store.get_operation("default", "operator", "topup-1")
     assert held is not None and held.state == "started"
     other = request.model_copy(update={"amount": usd("9")})
     with pytest.raises(OperationConflict):
-        await engine.payments.fund(admin, "default", "alice", other)
+        await engine.payments.top_up(admin, "default", "alice", other)
     clock.advance(120)
-    await engine.payments.fund(admin, "default", "alice", request)  # the same request still resumes
+    await engine.payments.top_up(admin, "default", "alice", request)  # the same request still resumes
     assert manager.allocations["alloc_1"].granted == Decimal("10")
 
 
@@ -372,21 +373,21 @@ async def test_a_slow_run_taken_over_by_a_resume_answers_with_the_recorded_resul
     both callers get the one recorded answer and the money moved once."""
     engine = await make_engine()
     actor = await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     stalled, release = asyncio.Event(), asyncio.Event()
-    fund_allocation = manager.fund_allocation
+    top_up_allocation = manager.top_up_allocation
 
     async def slow_once(*args: object) -> None:
-        monkeypatch.setattr(manager, "fund_allocation", fund_allocation)
-        await fund_allocation(*args)  # type: ignore[arg-type]
+        monkeypatch.setattr(manager, "top_up_allocation", top_up_allocation)
+        await top_up_allocation(*args)  # type: ignore[arg-type]
         stalled.set()
         await release.wait()
 
-    monkeypatch.setattr(manager, "fund_allocation", slow_once)
-    slow = asyncio.create_task(engine.payments.fund(admin, "default", "alice", request))
+    monkeypatch.setattr(manager, "top_up_allocation", slow_once)
+    slow = asyncio.create_task(engine.payments.top_up(admin, "default", "alice", request))
     await stalled.wait()
     clock.advance(120)
-    resumed = await engine.payments.fund(admin, "default", "alice", request)
+    resumed = await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(1)
     release.set()
     assert await slow == resumed
@@ -441,17 +442,17 @@ async def test_a_slow_run_whose_resume_is_still_going_is_told_it_is_in_progress(
 ) -> None:
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     stalled, release = asyncio.Event(), asyncio.Event()
-    fund_allocation = manager.fund_allocation
+    top_up_allocation = manager.top_up_allocation
 
     async def slow(*args: object) -> None:
-        await fund_allocation(*args)  # type: ignore[arg-type]
+        await top_up_allocation(*args)  # type: ignore[arg-type]
         stalled.set()
         await release.wait()
 
-    monkeypatch.setattr(manager, "fund_allocation", slow)
-    first = asyncio.create_task(engine.payments.fund(admin, "default", "alice", request))
+    monkeypatch.setattr(manager, "top_up_allocation", slow)
+    first = asyncio.create_task(engine.payments.top_up(admin, "default", "alice", request))
     await stalled.wait()
     clock.advance(120)
     held = await store.get_operation("default", "operator", "topup-1")
@@ -499,13 +500,13 @@ async def test_a_run_that_outlives_half_the_stale_window_is_cancelled_and_left_f
             cancelled.set()
             raise
 
-    monkeypatch.setattr(manager, "fund_allocation", hangs)
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    monkeypatch.setattr(manager, "top_up_allocation", hangs)
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     with pytest.raises(ProviderUnavailable, match=r"0\.2 s"):
-        await asyncio.wait_for(engine.payments.fund(admin, "default", "alice", request), timeout=2)
+        await asyncio.wait_for(engine.payments.top_up(admin, "default", "alice", request), timeout=2)
     assert cancelled.is_set()
     with pytest.raises(OperationInProgress):  # unknown outcome: the record stays started, for a resume
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
 
 
 async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
@@ -520,12 +521,12 @@ async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
     assert EngineSettings.from_env(shorter).operation_stale_s == 30
     engine = await make_engine(operation_stale_s=30, batteries_timeout_s=5)
     await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(30)
-    assert (await engine.payments.fund(admin, "default", "alice", request)).status == "active"
+    assert (await engine.payments.top_up(admin, "default", "alice", request)).status == "active"
 
 
 async def test_one_ref_used_for_another_command_is_a_conflict(
@@ -533,7 +534,9 @@ async def test_one_ref_used_for_another_command_is_a_conflict(
 ) -> None:
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(amount="0"))
-    await engine.payments.fund(admin, "default", "alice", FundRequest(amount=usd("10"), operation_ref="op-1"))
+    await engine.payments.top_up(
+        admin, "default", "alice", TopUpRequest(amount=usd("10"), operation_ref="op-1")
+    )
     with pytest.raises(OperationConflict):
         await engine.payments.rotate_key(admin, "default", "alice", "op-1")
     assert "create_key" not in manager.calls

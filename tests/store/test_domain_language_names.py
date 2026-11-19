@@ -223,7 +223,8 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     rotated = await store.get_operation("default", "operator", "rotate")
     assert rotated is not None and AccessKey.model_validate(rotated.result) == admin
     started = await store.get_operation("acme", "operator", "fund-1")
-    assert started is not None and (started.state, started.fencing_token, started.result) == (
+    assert started is not None and started.command == "top_up"
+    assert (started.state, started.fencing_token, started.result) == (
         "started",
         2,
         None,

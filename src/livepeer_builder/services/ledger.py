@@ -37,7 +37,7 @@ _REQUEST = TypeAdapter(dict[str, Any])
 # written before #163 renamed the words below, and no migration can recompute a digest. The hashed text
 # keeps the word it was first written with, so the repeat of a command recorded before the upgrade still
 # matches its record (tests/unit/test_hashed_forms.py). Nothing reads these words back.
-_HASHED_COMMANDS: dict[str, str] = {"allot": "provision"}
+_HASHED_COMMANDS: dict[str, str] = {"allot": "provision", "top_up": "fund", "top_up_grant": "fund_grant"}
 _HASHED_FIELDS = {"tenant_id": "application_id"}
 _HASHED_KINDS = {"clearinghouse_admin": "admin"}  # the kind of key an ``issue_key`` asked for
 

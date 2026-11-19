@@ -1,13 +1,13 @@
 """Each admin command writes only its own actor columns, under a condition (#115, C4).
 
-``fund``, ``set_status``, ``revoke`` and ``rotate_key`` read the actor, call the provider, then write. They
+``top_up``, ``set_status``, ``revoke`` and ``rotate_key`` read the actor, call the provider, then write. They
 used to save the whole row from that read, so a command that finished in between was overwritten: a
 rotation's new key by a pause, a pause by a rotation, a revoke by any of them. Now:
 
 - a status command writes ``status`` and ``updated_at``;
 - a key rotation writes ``api_key_id``, ``secret_ref`` and ``updated_at``, and only over the key it began
   from: an actor holding another key got it from a rotation that finished first;
-- a fund moves ``exhausted`` to ``active`` and writes nothing else;
+- a top-up moves ``exhausted`` to ``active`` and writes nothing else;
 - no write applies to a ``revoked`` actor, or to an allocation other than the one the command acted on
   (one allotted after a revoke);
 - allotment, the one command that writes the whole row, writes it only where the actor is as it read
@@ -86,8 +86,8 @@ class ActorWrites:
         await self._store.save_actor(actor)
         return True
 
-    async def funded(self, actor: ActorAllocation) -> ActorAllocation:
-        """After a fund: ``exhausted`` becomes ``active``. Any other status stays as it is stored, one
+    async def topped_up(self, actor: ActorAllocation) -> ActorAllocation:
+        """After a top-up: ``exhausted`` becomes ``active``. Any other status stays as it is stored, one
         another command wrote meanwhile included, and the answer is the actor as stored."""
         activated = await self.status(actor, "active", only_from="exhausted")
         return activated or await self._store.get_actor(actor.tenant_id, actor.actor_id) or actor

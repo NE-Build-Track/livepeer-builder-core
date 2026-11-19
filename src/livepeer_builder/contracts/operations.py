@@ -19,8 +19,8 @@ from livepeer_builder.contracts.common import Contract, StoredText
 
 OperationCommand = Literal[
     "allot",
-    "fund",
-    "fund_grant",
+    "top_up",
+    "top_up_grant",
     "create_grant",
     "rotate_payment_key",
     "issue_key",

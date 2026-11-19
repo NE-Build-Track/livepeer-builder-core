@@ -275,7 +275,7 @@ async def test_without_a_grants_manager_the_grant_desk_routes_do_not_exist(store
         on = create_app(with_desk, manage_lifecycle=False).openapi()["paths"]
         off = create_app(without, manage_lifecycle=False).openapi()["paths"]
         assert "/v1/admin/grants" in on and "/v1/admin/grants" not in off
-        assert "/v1/admin/grant/fund" in off  # funding uses the engine token and stays
+        assert "/v1/admin/grant/top-up" in off  # funding uses the engine token and stays
     finally:
         await with_desk.stop()
         await without.stop()

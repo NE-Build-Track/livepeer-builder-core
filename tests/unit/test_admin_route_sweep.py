@@ -27,7 +27,7 @@ SAMPLE_BODIES: dict[str, dict[str, Any]] = {
     "IssueKeyBody": {"actor_id": "mallory", "operation_ref": "sweep"},
     "RotateKeyBody": {"operation_ref": "sweep"},
     "AllotBody": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
-    "FundRequest": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
+    "TopUpRequest": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
     "GrantBody": {"name": "sweep", "amount": USD, "operation_ref": "sweep"},
     "StatusBody": {"status": "paused"},
     "RotateBody": {"operation_ref": "sweep"},

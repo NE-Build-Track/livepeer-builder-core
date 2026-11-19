@@ -81,8 +81,8 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 
 | Behavior | Check | Level | Evidence | Ticket |
 | --- | --- | --- | --- | --- |
-| A repeated fund is answered from the ledger without calling the provider again | `tests/unit/test_admin_repeats.py::test_funding_repeated_with_one_ref_is_answered_without_calling_the_provider_again` | U | fixture | ISS-11/14 |
-| The same reference with another amount, or on another command, is a conflict | `tests/unit/test_admin_repeats.py::test_funding_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call`, `tests/unit/test_admin_repeats.py::test_one_ref_used_for_another_command_is_a_conflict` | U | fixture | ISS-11/14 |
+| A repeated fund is answered from the ledger without calling the provider again | `tests/unit/test_admin_repeats.py::test_top_up_repeated_with_one_ref_is_answered_without_calling_the_provider_again` | U | fixture | ISS-11/14 |
+| The same reference with another amount, or on another command, is a conflict | `tests/unit/test_admin_repeats.py::test_top_up_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call`, `tests/unit/test_admin_repeats.py::test_one_ref_used_for_another_command_is_a_conflict` | U | fixture | ISS-11/14 |
 | A repeat while the first may still run is in progress; after it went stale, a resume applies once | `tests/unit/test_admin_repeats.py::test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress`, `tests/unit/test_admin_repeats.py::test_a_repeat_after_the_first_run_went_stale_resumes_it_and_applies_once` | U | fixture | ISS-11/14 |
 | Two concurrent provisions with one reference create one allocation | `tests/unit/test_admin_repeats.py::test_two_concurrent_allots_with_one_ref_create_one_allocation` | U | fixture | ISS-11/14 |
 | A repeated payment-key rotation keeps the new key live (B1) | `tests/unit/test_payments.py::test_repeating_a_rotation_with_the_same_ref_keeps_the_new_key_live` | U | fixture | ISS-11/14 |

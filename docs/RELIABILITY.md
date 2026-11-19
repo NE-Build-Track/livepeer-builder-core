@@ -84,7 +84,7 @@ The codes are a closed set in the contract (`SourceFailureCode` for `discovery_e
 adapters decide the code where they read the answer; a supplied source's failure is read by its
 exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
 
-`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
+`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated top-up
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
 `LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).
 

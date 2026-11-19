@@ -95,7 +95,7 @@ async def test_every_check_passes_against_the_engine_and_the_fund_applies_once(
     out = capsys.readouterr().out
     assert "FAIL  " not in out and "SKIP  " not in out and ": 26 passed, 0 failed, 0 skipped" in out, out
     assert manager.allocations[allocation].granted == Decimal("5.01")  # one cent, applied once
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
     probe_keys = [
         key for key in await engine.store.list_access_keys(None) if key.actor_id.startswith("lpb-probe-")
     ]
@@ -108,7 +108,7 @@ async def test_without_yes_the_probe_spends_nothing(
 ) -> None:  # fmt: skip
     assert await run(stack, spend=False, fund_actor="carol") == 0
     assert "SKIP  a fund repeated under one operation_ref applies once: pass --yes" in capsys.readouterr().out
-    assert "fund_allocation" not in manager.calls
+    assert "top_up_allocation" not in manager.calls
 
 
 async def test_a_fund_above_the_cap_is_refused_before_any_call(
@@ -117,7 +117,7 @@ async def test_a_fund_above_the_cap_is_refused_before_any_call(
 ) -> None:  # fmt: skip
     assert await run(stack, spend=True, fund_actor="carol", fund_amount="1") == 1
     assert "FAIL  a fund repeated under one operation_ref applies once: refused" in capsys.readouterr().out
-    assert "fund_allocation" not in manager.calls
+    assert "top_up_allocation" not in manager.calls
 
 
 async def test_an_engine_that_answers_wrongly_fails_the_probe(capsys: pytest.CaptureFixture[str]) -> None:

@@ -98,11 +98,11 @@ class NotProvisioned(EngineError):
 
 class AlreadyAllotted(EngineError):
     """Allotting to an actor that already has an allocation, under a new reference (409; D57). Nothing is
-    applied, the amount included: funding an existing actor is ``fund``."""
+    applied, the amount included: adding to an allocation is ``top_up``."""
 
     def __init__(self, actor: ActorAllocation) -> None:
         super().__init__(
-            f"actor {actor.actor_id!r} already has an allocation ({actor.allocation_id}); fund it instead"
+            f"actor {actor.actor_id!r} already has an allocation ({actor.allocation_id}); top it up instead"
         )
         self.actor = actor
 

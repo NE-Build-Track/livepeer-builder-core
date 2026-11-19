@@ -11,10 +11,10 @@ from livepeer_builder.contracts.common import (
     AllotAmount,
     Contract,
     Currency,
-    FundingAmount,
     GrantId,
     Money,
     StoredText,
+    TopUpAmount,
 )
 from livepeer_builder.contracts.operations import OperationRef
 
@@ -44,7 +44,7 @@ class AllotRequest(Contract):
     # the store could not keep is refused here, before any provider call.
     tenant_id: StoredText
     actor_id: StoredText
-    # may be zero: identity without money; fund later with an explicit command. Never negative, and within
+    # may be zero: identity without money; top up later with an explicit command. Never negative, and within
     # the provider's format and the engine's bound (#112, C11)
     amount: AllotAmount
     label: StoredText = ""
@@ -53,7 +53,7 @@ class AllotRequest(Contract):
 
 
 class GrantRecord(Contract):
-    """A Batteries grant the operator can fund actors from."""
+    """A Batteries grant the operator can allot allocations from."""
 
     id: str
     name: str
@@ -117,10 +117,12 @@ class KnownActor(Contract):
         return self.allocation is not None
 
 
-class FundRequest(Contract):
-    amount: FundingAmount  # the provider's format and the engine's bound (#112, C11)
-    operation_ref: OperationRef  # required: makes a retried fund safe
-    grant_id: GrantId = ""  # grant funding only; allocation funding ignores it. One path segment (#113, C10)
+class TopUpRequest(Contract):
+    amount: TopUpAmount  # the provider's format and the engine's bound (#112, C11)
+    operation_ref: OperationRef  # required: makes a retried top-up safe
+    grant_id: GrantId = (
+        ""  # a grant top-up only; an allocation top-up ignores it. One path segment (#113, C10)
+    )
 
 
 class Allowance(Contract):

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorAllocation, ActorContext, AllotRequest, FundRequest, Money
+from livepeer_builder.contracts import ActorAllocation, ActorContext, AllotRequest, Money, TopUpRequest
 from livepeer_builder.errors import (
     AlreadyAllotted,
     InvalidRequest,
@@ -73,9 +73,9 @@ class Desk:
     async def activate(self) -> ActorAllocation:
         return await self.payments.set_status(self.admin, "default", "alice", "active")
 
-    async def fund(self) -> ActorAllocation:
-        request = FundRequest(amount=usd("1"), operation_ref="fund-1")
-        return await self.payments.fund(self.admin, "default", "alice", request)
+    async def top_up(self) -> ActorAllocation:
+        request = TopUpRequest(amount=usd("1"), operation_ref="fund-1")
+        return await self.payments.top_up(self.admin, "default", "alice", request)
 
     async def revoke(self) -> ActorAllocation:
         return await self.payments.revoke(self.admin, "default", "alice")
@@ -87,7 +87,7 @@ class Desk:
 PROVIDER_CALL = {
     "pause": "set_allocation_status",
     "activate": "set_allocation_status",
-    "fund": "fund_allocation",
+    "top_up": "top_up_allocation",
     "revoke": "revoke_allocation",
     "rotate": "create_key",
 }
@@ -104,7 +104,7 @@ async def desk(make_engine: EngineFactory, admin: ActorContext, vault: MemorySec
     return Desk(engine, admin)
 
 
-@pytest.mark.parametrize("command", ["pause", "fund"])
+@pytest.mark.parametrize("command", ["pause", "top_up"])
 async def test_a_status_command_does_not_undo_a_key_rotation_that_finished_meanwhile(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, command: str
 ) -> None:
@@ -149,17 +149,17 @@ async def test_a_key_rotation_does_not_undo_a_pause_that_finished_meanwhile(
     assert rotated == stored
 
 
-@pytest.mark.parametrize("command", ["pause", "activate", "fund", "rotate"])
+@pytest.mark.parametrize("command", ["pause", "activate", "top_up", "rotate"])
 async def test_no_command_moves_an_actor_out_of_revoked(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, command: str
 ) -> None:
     """A revoke finishes while another command is at the provider. Before, that command then saved its
     stale row: the actor was ``active`` or ``paused`` again here, on an allocation the provider had
     revoked, with a secret reference the revoke had deleted."""
-    await desk.payments.allot(desk.admin, allot_request("0" if command == "fund" else "5"))
+    await desk.payments.allot(desk.admin, allot_request("0" if command == "top_up" else "5"))
     during(manager, PROVIDER_CALL[command], desk.revoke)
-    if command == "fund":  # the funds were sent: the answer is the actor as it is stored
-        assert (await desk.fund()).status == "revoked"
+    if command == "top_up":  # the funds were sent: the answer is the actor as it is stored
+        assert (await desk.top_up()).status == "revoked"
     else:
         with pytest.raises(NotFound, match="has no allocation"):
             await getattr(desk, command)()
@@ -210,32 +210,32 @@ async def test_a_revoke_overtaken_by_a_revoke_and_a_new_allotment_answers_for_it
     assert list(vault.values) == [stored.secret_ref.ref]
 
 
-async def test_a_fund_moves_exhausted_to_active(desk: Desk) -> None:
+async def test_a_top_up_moves_exhausted_to_active(desk: Desk) -> None:
     allotted = await desk.payments.allot(desk.admin, allot_request("0"))
     assert allotted.status == "exhausted"
-    funded = await desk.fund()
+    funded = await desk.top_up()
     assert funded.status == "active"
     assert (await desk.payments.get_actor(desk.admin, "default", "alice")).status == "active"
 
 
 @pytest.mark.parametrize("amount", ["5", "0"], ids=["active", "exhausted"])
-async def test_a_fund_does_not_undo_a_pause_that_finished_meanwhile(
+async def test_a_top_up_does_not_undo_a_pause_that_finished_meanwhile(
     desk: Desk, manager: FakeAllocationManager, amount: str
 ) -> None:
     """A fund moves ``exhausted`` to ``active`` and nothing else. Before, it wrote the status it had read
     (``active``), or ``active`` for the ``exhausted`` it had read, over the pause."""
     await desk.payments.allot(desk.admin, allot_request(amount))
-    during(manager, "fund_allocation", desk.pause)
-    funded = await desk.fund()
+    during(manager, "top_up_allocation", desk.pause)
+    funded = await desk.top_up()
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
     assert stored.status == "paused" and funded == stored
 
 
-async def test_a_fund_that_changes_no_status_writes_nothing(desk: Desk, clock: FixedClock) -> None:
+async def test_a_top_up_that_changes_no_status_writes_nothing(desk: Desk, clock: FixedClock) -> None:
     allotted = await desk.payments.allot(desk.admin, allot_request())
     clock.advance(60)
-    assert await desk.fund() == allotted  # ``updated_at`` included
+    assert await desk.top_up() == allotted  # ``updated_at`` included
     assert await desk.payments.get_actor(desk.admin, "default", "alice") == allotted
 
 
@@ -560,7 +560,7 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
     desk = whole_row_desk
     allotted = await desk.payments.allot(desk.admin, allot_request("0"))
     clock.advance(60)
-    funded = await desk.fund()
+    funded = await desk.top_up()
     assert funded == allotted.model_copy(update={"status": "active", "updated_at": clock.now()})
     assert (await desk.pause()).status == "paused"
     assert (await desk.activate()).status == "active"
@@ -578,7 +578,7 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
         await desk.pause()
 
 
-@pytest.mark.parametrize("command", ["pause", "fund", "rotate"])
+@pytest.mark.parametrize("command", ["pause", "top_up", "rotate"])
 async def test_a_store_without_the_column_writes_gets_the_rules_from_the_engines_own_check(
     whole_row_desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, command: str
 ) -> None:
@@ -586,10 +586,10 @@ async def test_a_store_without_the_column_writes_gets_the_rules_from_the_engines
     was at the provider is seen. What stays open for such a store is the moment between that read and the
     save, which only a condition in the store's own write can close."""
     desk = whole_row_desk
-    await desk.payments.allot(desk.admin, allot_request("0" if command == "fund" else "5"))
+    await desk.payments.allot(desk.admin, allot_request("0" if command == "top_up" else "5"))
     during(manager, PROVIDER_CALL[command], desk.revoke)
-    if command == "fund":
-        assert (await desk.fund()).status == "revoked"
+    if command == "top_up":
+        assert (await desk.top_up()).status == "revoked"
     else:
         with pytest.raises(NotFound, match="has no allocation"):
             await getattr(desk, command)()
@@ -597,13 +597,13 @@ async def test_a_store_without_the_column_writes_gets_the_rules_from_the_engines
     assert vault.values == {}
 
 
-async def test_a_store_without_the_column_writes_keeps_a_pause_through_a_fund(
+async def test_a_store_without_the_column_writes_keeps_a_pause_through_a_top_up(
     whole_row_desk: Desk, manager: FakeAllocationManager
 ) -> None:
     desk = whole_row_desk
     await desk.payments.allot(desk.admin, allot_request("0"))
-    during(manager, "fund_allocation", desk.pause)
-    assert (await desk.fund()).status == "paused"
+    during(manager, "top_up_allocation", desk.pause)
+    assert (await desk.top_up()).status == "paused"
 
 
 async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_meanwhile(

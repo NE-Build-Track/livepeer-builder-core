@@ -29,7 +29,7 @@ def started(
         tenant_id="default",
         actor_id=actor,
         operation_ref=ref,
-        command="fund",
+        command="top_up",
         fingerprint=fingerprint,
         state="started",
         context={"previous_api_key_id": "key_1"},

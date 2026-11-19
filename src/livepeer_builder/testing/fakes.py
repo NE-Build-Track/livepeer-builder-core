@@ -254,7 +254,7 @@ class FakeAllocationManager:
         self.keys: dict[str, tuple[str, str, bool]] = {}  # api_key_id -> (allocation, secret, revoked)
         self.replays: dict[str, object] = {}
         self.calls: list[str] = []
-        self.funded_grants: list[tuple[str, Money, str]] = []
+        self.topped_up_grants: list[tuple[str, Money, str]] = []
         self.grants: list[GrantRecord] = []
         self.grant_page_size = 1000  # Batteries' largest page
         self.grant_page_delay_s = 0.0  # each page's latency, for a slow catalog (D57)
@@ -292,9 +292,9 @@ class FakeAllocationManager:
         self.replays[idempotency_key] = key
         return key
 
-    async def fund_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
-        self.calls.append("fund_allocation")
-        self._fail("fund_allocation")
+    async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
+        self.calls.append("top_up_allocation")
+        self._fail("top_up_allocation")
         if idempotency_key in self.replays:
             return
         self.replays[idempotency_key] = True
@@ -303,13 +303,13 @@ class FakeAllocationManager:
         if allocation.status == "exhausted":
             allocation.status = "active"
 
-    async def fund_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
-        self.calls.append("fund_grant")
-        self._fail("fund_grant")
+    async def top_up_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
+        self.calls.append("top_up_grant")
+        self._fail("top_up_grant")
         if idempotency_key in self.replays:
             return
         self.replays[idempotency_key] = True
-        self.funded_grants.append((grant_id, amount, idempotency_key))
+        self.topped_up_grants.append((grant_id, amount, idempotency_key))
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
         self._fail("set_allocation_status")

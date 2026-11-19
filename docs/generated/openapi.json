@@ -796,32 +796,6 @@
         "title": "Fees",
         "type": "object"
       },
-      "FundRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Money-Input"
-          },
-          "grant_id": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "operation_ref": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Operation Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "amount",
-          "operation_ref"
-        ],
-        "title": "FundRequest",
-        "type": "object"
-      },
       "GrantBody": {
         "properties": {
           "amount": {
@@ -848,7 +822,7 @@
       },
       "GrantRecord": {
         "additionalProperties": false,
-        "description": "A Batteries grant the operator can fund actors from.",
+        "description": "A Batteries grant the operator can allot allocations from.",
         "properties": {
           "currency": {
             "title": "Currency",
@@ -2307,6 +2281,32 @@
         "title": "SyncReport",
         "type": "object"
       },
+      "TopUpRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "grant_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "TopUpRequest",
+        "type": "object"
+      },
       "UsageBody": {
         "properties": {
           "quantities": {
@@ -2527,14 +2527,14 @@
         "summary": "Sync Costs"
       }
     },
-    "/v1/admin/grant/fund": {
+    "/v1/admin/grant/top-up": {
       "post": {
-        "operationId": "fund_grant_v1_admin_grant_fund_post",
+        "operationId": "top_up_grant_v1_admin_grant_top_up_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FundRequest"
+                "$ref": "#/components/schemas/TopUpRequest"
               }
             }
           },
@@ -2560,7 +2560,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Fund Grant"
+        "summary": "Top Up Grant"
       }
     },
     "/v1/admin/grants": {
@@ -3065,71 +3065,6 @@
         "summary": "Allot"
       }
     },
-    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/fund": {
-      "post": {
-        "operationId": "fund_v1_admin_tenants__tenant_id__actors__actor_id__allocation_fund_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FundRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActorAllocation"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Fund"
-      }
-    },
     "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/revoke": {
       "post": {
         "operationId": "revoke_v1_admin_tenants__tenant_id__actors__actor_id__allocation_revoke_post",
@@ -3313,6 +3248,71 @@
           }
         ],
         "summary": "Set Status"
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/top-up": {
+      "post": {
+        "operationId": "top_up_v1_admin_tenants__tenant_id__actors__actor_id__allocation_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Up"
       }
     },
     "/v1/allowance": {

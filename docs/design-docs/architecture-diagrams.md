@@ -44,7 +44,7 @@ flowchart LR
     Core -->|"sign (SDK)"| Signer
     Core -->|"LPB_DISCOVERY_URL: GET /discovery"| DiscSvc
     DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
-    Core -->|"allot, fund, /v1/usage"| Bat
+    Core -->|"allot, top up, /v1/usage"| Bat
     Core -->|"paid call (adapters/runner_call.py)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat
     Signer -->|"events (durable outbox)"| Kafka --> Bat
@@ -169,7 +169,7 @@ sequenceDiagram
     Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
     Pay->>DB: get_actor(app, actor)
     alt already allotted (under another reference)
-        Pay-->>Op: 409 already_allotted, the actor (nothing applied: fund it instead)
+        Pay-->>Op: 409 already_allotted, the actor (nothing applied: top it up instead)
     else new
         Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
         Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)

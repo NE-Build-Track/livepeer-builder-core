@@ -63,7 +63,9 @@ class PaymentKeys:
         if current is not None and current.status != "revoked":  # rotated, or revoked and allotted again
             raise AlreadyAllotted(current)
         if current is not None and current.allocation_id == key.allocation_id:
-            return current  # funded, then revoked: it stays revoked, and that is the answer, as for a fund
+            return (
+                current  # allotted, then revoked: it stays revoked, and that is the answer, as for a top-up
+            )
         raise NotFound(
             f"actor {actor_id!r} was revoked while this allotment was at the provider; it has no allocation"
         )

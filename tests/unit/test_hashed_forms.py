@@ -21,9 +21,9 @@ from livepeer_builder.contracts import (
     ActorContext,
     AllotRequest,
     CredentialKind,
-    FundRequest,
     JobRequest,
     Money,
+    TopUpRequest,
 )
 from livepeer_builder.services.grants import GRANT_TAG
 from livepeer_builder.services.request_identity import request_fingerprint
@@ -69,9 +69,9 @@ async def run_every_command(engine: BuilderEngine, admin: ActorContext) -> None:
         operation_ref="provision",
     )
     await payments.allot(admin, request)
-    await payments.fund(admin, "default", "alice", FundRequest(amount=USD_5, operation_ref="fund"))
-    await payments.fund_grant(
-        admin, FundRequest(amount=USD_5, operation_ref="fund-grant", grant_id="grant_1")
+    await payments.top_up(admin, "default", "alice", TopUpRequest(amount=USD_5, operation_ref="fund"))
+    await payments.top_up_grant(
+        admin, TopUpRequest(amount=USD_5, operation_ref="fund-grant", grant_id="grant_1")
     )
     await desk.create_grant(admin, "Team", USD_5, operation_ref="create-grant")
     await payments.rotate_key(admin, "default", "alice", "rotate-payment-key")

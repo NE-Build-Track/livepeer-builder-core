@@ -144,11 +144,11 @@ classDiagram
     class PaymentsAdminApi {
         <<interface>>
         +async allot(admin, request) ActorAllocation
-        +async fund(admin, tenant_id, actor_id, request) ActorAllocation
+        +async top_up(admin, tenant_id, actor_id, request) ActorAllocation
         +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
         +async rotate_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
         +async revoke(admin, tenant_id, actor_id) ActorAllocation
-        +async fund_grant(admin, request) None
+        +async top_up_grant(admin, request) None
         +grants GrantsApi?
     }
     class GrantsApi {
@@ -351,8 +351,8 @@ classDiagram
         <<interface>>
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
-        +async fund_allocation(allocation_id, amount, idempotency_key) None
-        +async fund_grant(grant_id, amount, idempotency_key) None
+        +async top_up_allocation(allocation_id, amount, idempotency_key) None
+        +async top_up_grant(grant_id, amount, idempotency_key) None
         +async set_allocation_status(allocation_id, status) None
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None
@@ -766,9 +766,9 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
-| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.allot`, `fund`, `set_status`, `revoke`, `rotate_key` | `ActorAllocation` |
+| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_key` | `ActorAllocation` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
-| `POST /v1/admin/grant/fund` | `payments.fund_grant` | `204` |
+| `POST /v1/admin/grant/top-up` | `payments.top_up_grant` | `204` |
 | `GET /v1/admin/reconciliation` | `costs.reconcile` | `Reconciliation` |
 | `POST /v1/admin/costs/sync` | `costs.sync_now` | `SyncReport` |
 
@@ -1013,7 +1013,7 @@ Points worth deciding, noticed while drawing these:
    document that, or move readiness to a policy-checked call?
 2. **`ProviderError` passes some provider statuses through.** A Batteries `400`, `404`, `409` or `422`
    becomes the engine's own status, so a client cannot tell a provider rejection from an engine one.
-3. **Route naming.** Grants are `/v1/admin/grants` but funding one is `/v1/admin/grant/fund`, with no
+3. **Route naming.** Grants are `/v1/admin/grants` but topping one up is `/v1/admin/grant/top-up`, with no
    grant id in the path.
 4. **Reserved members.** `EngineApi.events`, `sessions` and `jobs.result` are on the facade and answer
    `501` until M4. Keep them visible so the contract is fixed early, or add them when they work?

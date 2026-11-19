@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, AllotRequest, FundRequest, JobRequest, Money
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money, TopUpRequest
 from livepeer_builder.errors import AccessDenied, InvalidRequest, JobFailed, NotFound
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
@@ -92,11 +92,11 @@ async def test_cost_summary_recent_costs_and_allowance_leave_out_another_actors_
     transport: ScriptedTransport, usage: FakeUsageSource, clock: FixedClock,
 ) -> None:  # fmt: skip
     engine = await allotted(make_engine, admin, "alice", "bob")
-    await engine.payments.fund(
+    await engine.payments.top_up(
         admin,
         "default",
         "bob",
-        FundRequest(amount=Money(amount=Decimal("2"), currency="USD"), operation_ref="b"),
+        TopUpRequest(amount=Money(amount=Decimal("2"), currency="USD"), operation_ref="b"),
     )
     transport.steps = [
         ScriptedTransport.ok(manifest_ids=("m-alice",)),

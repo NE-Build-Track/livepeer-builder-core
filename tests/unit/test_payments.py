@@ -11,10 +11,10 @@ from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
     AllotRequest,
-    FundRequest,
     Money,
     SecretRef,
     SeenActor,
+    TopUpRequest,
 )
 from livepeer_builder.errors import (
     AccessDenied,
@@ -152,22 +152,22 @@ async def test_payment_key_is_stored_encrypted_and_only_referenced(
     assert (await engine.payments.credential(alice)).token == secret
 
 
-async def test_funding_needs_an_operation_ref_and_applies_once(
+async def test_top_up_needs_an_operation_ref_and_applies_once(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
     actor = await engine.payments.allot(admin, allot_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    funded = await engine.payments.fund(admin, "default", "alice", request)
-    await engine.payments.fund(admin, "default", "alice", request)  # a retry
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    funded = await engine.payments.top_up(admin, "default", "alice", request)
+    await engine.payments.top_up(admin, "default", "alice", request)  # a retry
     assert funded.status == "active"
     assert manager.allocations[actor.allocation_id].granted == Decimal(10)
     with pytest.raises(InvalidRequest):
-        await engine.payments.fund(
+        await engine.payments.top_up(
             admin,
             "default",
             "alice",
-            FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="x"),
+            TopUpRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="x"),
         )
 
 
@@ -256,9 +256,9 @@ def test_a_allotment_amount_within_the_providers_format_is_kept(amount: str) -> 
     [(amount, "18 decimal places") for amount in TOO_PRECISE]
     + [(amount, "at most 1000000000") for amount in TOO_LARGE],
 )
-def test_a_funding_amount_the_provider_would_not_take_is_refused_when_built(amount: str, rule: str) -> None:
+def test_a_top_up_amount_the_provider_would_not_take_is_refused_when_built(amount: str, rule: str) -> None:
     with pytest.raises(ValidationError, match=rule):
-        FundRequest(amount=usd(amount), operation_ref="f", grant_id="g")
+        TopUpRequest(amount=usd(amount), operation_ref="f", grant_id="g")
 
 
 async def test_a_grant_amount_the_provider_would_not_take_is_refused_before_the_ledger(
@@ -275,26 +275,26 @@ async def test_a_grant_amount_the_provider_would_not_take_is_refused_before_the_
     assert created.total == "5"
 
 
-async def test_funding_a_named_grant_applies_once(
+async def test_top_up_a_named_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1", grant_id="grant_chosen")
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1", grant_id="grant_chosen")
     with pytest.raises(AccessDenied):
-        await engine.payments.fund_grant(alice, request)
-    await engine.payments.fund_grant(admin, request)
-    await engine.payments.fund_grant(admin, request)  # a retry
+        await engine.payments.top_up_grant(alice, request)
+    await engine.payments.top_up_grant(admin, request)
+    await engine.payments.top_up_grant(admin, request)  # a retry
     key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_chosen:topup-1", "fund")
-    assert manager.funded_grants == [("grant_chosen", usd("10"), key)]
+    assert manager.topped_up_grants == [("grant_chosen", usd("10"), key)]
     assert 1 <= len(key) <= 256 and all(character.isalnum() or character in "_-" for character in key)
     with pytest.raises(InvalidRequest):
-        await engine.payments.fund_grant(
-            admin, FundRequest(amount=usd("0"), operation_ref="zero", grant_id="g")
+        await engine.payments.top_up_grant(
+            admin, TopUpRequest(amount=usd("0"), operation_ref="zero", grant_id="g")
         )
     with pytest.raises(InvalidRequest):
-        await engine.payments.fund_grant(
+        await engine.payments.top_up_grant(
             admin,
-            FundRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth", grant_id="g"),
+            TopUpRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth", grant_id="g"),
         )
 
 
@@ -305,9 +305,9 @@ async def test_omitted_grant_uses_the_callers_allocation(
     await engine.payments.allot(admin, allot_request(actor_id="operator", grant_id="grant_ops"))
     await engine.payments.allot(admin, allot_request(grant_id=""))
     assert manager.last_grant_id == "grant_ops"
-    await engine.payments.fund_grant(admin, FundRequest(amount=usd("3"), operation_ref="top"))
+    await engine.payments.top_up_grant(admin, TopUpRequest(amount=usd("3"), operation_ref="top"))
     key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_ops:top", "fund")
-    assert manager.funded_grants == [("grant_ops", usd("3"), key)]
+    assert manager.topped_up_grants == [("grant_ops", usd("3"), key)]
 
 
 async def test_a_grant_is_required_when_the_caller_has_no_allocation(
@@ -318,7 +318,7 @@ async def test_a_grant_is_required_when_the_caller_has_no_allocation(
     with pytest.raises(InvalidRequest, match="choose a grant"):
         await engine.payments.allot(admin, missing)
     with pytest.raises(InvalidRequest, match="choose a grant"):
-        await engine.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
+        await engine.payments.top_up_grant(admin, TopUpRequest(amount=usd("1"), operation_ref="g"))
 
 
 async def test_revoke_forgets_the_key(

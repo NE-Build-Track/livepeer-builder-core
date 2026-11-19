@@ -55,6 +55,15 @@ def purges(caplog: pytest.LogCaptureFixture) -> int:
     return len([r for r in caplog.records if getattr(r, "event", None) == "store.purged"])
 
 
+async def until_purged(caplog: pytest.LogCaptureFixture, count: int) -> None:
+    """Wait for ``count`` purges: a condition, with a bound of five seconds, never a length of time."""
+    for _ in range(500):
+        if purges(caplog) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{purges(caplog)} purges, not {count}")
+
+
 @pytest.mark.parametrize(
     ("retention", "at_start"),
     [
@@ -82,7 +91,10 @@ async def test_a_purge_runs_at_start_only_where_one_did_before(
     engine = await BuilderEngine.create(settings, supply=EngineSupply(store=store, clock=clock))
     with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
         await engine.start()
-        await asyncio.sleep(0.05)
+        if at_start:
+            await until_purged(caplog, 1)
+        else:
+            await asyncio.sleep(0.05)  # what a purge at start would have taken, many times over
         await engine.stop()
     assert purges(caplog) == (1 if at_start else 0)
 
@@ -100,6 +112,5 @@ async def test_results_retention_alone_purges_every_interval(
     engine = await BuilderEngine.create(settings, supply=EngineSupply(store=store, clock=clock))
     with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
         await engine.start()
-        await asyncio.sleep(0.15)  # about seven intervals
+        await until_purged(caplog, 3)
         await engine.stop()
-    assert purges(caplog) >= 3

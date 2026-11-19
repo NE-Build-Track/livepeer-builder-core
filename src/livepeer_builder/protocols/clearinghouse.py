@@ -8,7 +8,7 @@ on each. They are re-exported from ``livepeer_builder.protocols``.
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from livepeer_builder.contracts import ActorAllocation, UsagePage
+from livepeer_builder.contracts import ActorAllocation, SignerAnswer, SignerCall, UsagePage
 
 
 @runtime_checkable
@@ -71,3 +71,23 @@ class DiscoveryDocumentSource(Protocol):
     the engine serves no runner list: the discovery route is absent."""
 
     def document(self) -> bytes | None: ...
+
+
+@runtime_checkable
+class SignerForwarder(Protocol):
+    """Optional for a runner transport: hand one signer call to the signer it pays through, with a
+    credential the caller names (D87, #166). ``SdkRunnerTransport`` has it. A clearinghouse serves the
+    signer's two paths to the engines of its tenants, and forwards each call here with the actor's
+    Batteries key in place of the payment key it was called with.
+
+    ``body`` goes out as it is, and the answer comes back as the signer gave it: nothing is parsed. The
+    call is made once, inside the 5 seconds the gateway SDK gives a signer call. It raises
+    ``SignerNotReached`` when nothing was sent, and ``SignerOutcomeUnknown`` when the call left and no
+    usable answer came back: the first signed nothing, the second may have signed.
+
+    Without it (a supplied transport that forwards nothing), or with a transport that does not pay
+    (``pays`` is false: it has no signer), the engine serves neither path."""
+
+    async def forward_signer_call(
+        self, call: SignerCall, credential: str, body: bytes, content_type: str
+    ) -> SignerAnswer: ...

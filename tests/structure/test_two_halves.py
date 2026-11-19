@@ -104,6 +104,8 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # PaymentKeyRepo is where a clearinghouse keeps the payment keys it issues (#166): the work half is
 # handed one through CredentialResolver and never looks one up. TenantUsageSource is how a clearinghouse
 # reads one tenant's usage at the provider: the work half reads usage through UsageSource.
+# SignerForwarder hands a signer call to the signer with an actor's Batteries key, for a clearinghouse
+# (#166): the work half signs inside RunnerTransport and never forwards another engine's call.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
@@ -112,6 +114,7 @@ BEHIND_THE_PORTS = {
     "ActorCommandRepo",
     "PaymentKeyRepo",
     "TenantUsageSource",
+    "SignerForwarder",
     "EngineStore",
 }
 NOT_PAYMENTS = {

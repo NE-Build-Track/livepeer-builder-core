@@ -41,6 +41,7 @@ from livepeer_builder.http.work import mount_work_routes
 from livepeer_builder.testing import FakeAllocationManager, FakeSigningTransport
 from tests.conftest import EngineFactory
 from tests.unit.test_admin_route_sweep import SAMPLE_BODIES, everything_stored, filled
+from tests.unit.test_tenant_from_credential import SHORT_PATHS
 
 TENANTS = "/v1/clearinghouse/tenants"
 TENANT = TENANTS + "/{tenant_id}"
@@ -265,11 +266,14 @@ async def test_the_routes_that_take_no_credential_are_the_ones_named_here(
 async def test_the_private_listener_serves_every_route_to_a_clearinghouse_admin(
     clearinghouse: Clearinghouse,
 ) -> None:
-    """Every public route is also served on the private listener, for any tenant, and the private group
-    with them: one listener for everything a clearinghouse admin does."""
+    """Every route of one listener is served on the private listener, for any tenant, but a tenant's own
+    routes, which name no tenant and take a tenant admin's or an auditor's credential: one listener for
+    everything a clearinghouse admin does."""
     house = clearinghouse
-    assert served(house.private).keys() == served(create_app(house.engine, manage_lifecycle=False)).keys()
-    assert served(house.private).keys() > served(house.public).keys()
+    only = served(create_app(house.engine, manage_lifecycle=False)).keys()
+    public_only = served(house.public).keys() - served(house.private).keys()
+    assert public_only == SHORT_PATHS
+    assert served(house.private).keys() == only - SHORT_PATHS
     admin = house.clearinghouse_admin
     body = {"name": "acme", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "onboard-acme"}
     async with client_of(house.private) as client:
@@ -364,13 +368,14 @@ def test_every_group_of_routes_is_given_to_a_listener() -> None:
         for name, value in vars(importlib.import_module(f"{package.__name__}.{module.name}")).items()
         if name.startswith("mount_") and callable(value) and value.__module__.endswith(module.name)
     }
-    given = {mount.__name__ for mount in (*listeners.EVERY_LISTENER, *listeners.PRIVATE_ONLY)}
-    assert not set(listeners.EVERY_LISTENER) & set(listeners.PRIVATE_ONLY)
+    sides = (listeners.EVERY_LISTENER, listeners.PUBLIC_ONLY, listeners.PRIVATE_ONLY)
+    given = {mount.__name__ for side in sides for mount in side}
+    assert sum(len(side) for side in sides) == len(given), "a group is given to two sides"
     assert groups - COMPOSERS == given, (
         f"not given to a listener: {sorted(groups - COMPOSERS - given)}. Add the group as a RouteGroup "
         "to ROUTE_GROUPS in src/livepeer_builder/http/listeners.py, with the half of the engine it "
-        "belongs to, and private=True when only a clearinghouse admin calls it, so it is never served "
-        "on the public listener."
+        'belongs to, and served_on="private" when only a clearinghouse admin calls it, so it is never '
+        'served on the public listener, or served_on="public" when only a tenant\'s own credentials do.'
     )
 
 
@@ -381,7 +386,7 @@ def test_every_group_of_routes_belongs_to_one_half_and_so_to_a_role() -> None:
     above fails for it."""
     mounts = [group.mount for group in listeners.ROUTE_GROUPS]
     assert len(mounts) == len(set(mounts)), "a group is in ROUTE_GROUPS twice"
-    assert set(mounts) == {*listeners.EVERY_LISTENER, *listeners.PRIVATE_ONLY}
+    assert set(mounts) == {*listeners.EVERY_LISTENER, *listeners.PUBLIC_ONLY, *listeners.PRIVATE_ONLY}
     halves = {"work", "clearinghouse"}
     assert {group.half for group in listeners.ROUTE_GROUPS} == halves  # neither half is empty
     roles = listeners.ROLE_HALVES
@@ -390,17 +395,27 @@ def test_every_group_of_routes_belongs_to_one_half_and_so_to_a_role() -> None:
     for group in listeners.ROUTE_GROUPS:
         serving = sorted(role for role, served_halves in roles.items() if group.half in served_halves)
         assert serving == sorted(["both", group.half]), group.mount.__name__
-    # what only a clearinghouse admin does is the clearinghouse half's: the work half has no private group
-    assert {group.half for group in listeners.ROUTE_GROUPS if group.private} == {"clearinghouse"}
+    # what only a clearinghouse admin does, and a tenant's own routes, are the clearinghouse half's: the
+    # work half serves every listener alike
+    assert {group.half for group in listeners.ROUTE_GROUPS if group.served_on != "every"} == {"clearinghouse"}
+    # one listener serves every group, and each of two serves its own side and what every listener serves
+    for group in listeners.ROUTE_GROUPS:
+        assert group.served_by("only"), group.mount.__name__
+        sides = {name for name in ("public", "private") if group.served_by(name)}
+        expected = {"public", "private"} if group.served_on == "every" else {group.served_on}
+        assert sides == expected, group.mount.__name__
 
 
 async def test_the_listeners_serve_what_the_two_sets_of_routes_mount(clearinghouse: Clearinghouse) -> None:
     """``mount_work_routes`` and ``mount_clearinghouse_routes`` are the two halves' sets. A group one of
-    them gains is on a listener, or this fails: the table in ``http/listeners.py`` names every group."""
+    them gains is on a listener, or this fails: the table in ``http/listeners.py`` names every group. One
+    listener serves them all, and the public and the private listener serve them between them."""
     sets = shared_app(clearinghouse.engine, manage_lifecycle=False)
     mount_work_routes(sets, clearinghouse.engine)
     mount_clearinghouse_routes(sets, clearinghouse.engine)
-    assert served(clearinghouse.private).keys() == served(sets).keys()
+    only = create_app(clearinghouse.engine, manage_lifecycle=False)
+    assert served(only).keys() == served(sets).keys()
+    assert served(clearinghouse.public).keys() | served(clearinghouse.private).keys() == served(sets).keys()
 
 
 async def test_the_published_schema_says_which_routes_are_private(clearinghouse: Clearinghouse) -> None:
@@ -418,11 +433,18 @@ async def test_the_published_schema_says_which_routes_are_private(clearinghouse:
             if tag is None or tag in operation.get("tags", [])
         }
 
+    public_only = served(house.public).keys() - served(house.private).keys()
     for app in (house.private, create_app(house.engine, manage_lifecycle=False)):
         assert operations(app, listeners.PRIVATE_TAG) == private_only
         assert listeners.PRIVATE_TAG in {tag["name"] for tag in app.openapi()["tags"]}
     assert not operations(house.public, listeners.PRIVATE_TAG)
     assert not operations(house.public) & private_only
+    # and the other way round: a tenant's own routes are tagged as the public listener's alone
+    for app in (house.public, create_app(house.engine, manage_lifecycle=False)):
+        assert operations(app, listeners.PUBLIC_TAG) == public_only == SHORT_PATHS
+        assert listeners.PUBLIC_TAG in {tag["name"] for tag in app.openapi()["tags"]}
+    assert not operations(house.private, listeners.PUBLIC_TAG)
+    assert not operations(house.private) & public_only
     async with client_of(house.public) as client:  # as served: /openapi.json and the docs page read it
         assert "/v1/clearinghouse/tenants" not in (await client.get("/openapi.json")).json()["paths"]
 

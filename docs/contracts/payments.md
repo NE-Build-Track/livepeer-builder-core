@@ -1115,7 +1115,7 @@ remote adapters (#169), and three settings, set together, say which clearinghous
 | --- | --- |
 | `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port]` and nothing after it: a path, a query, a fragment or userinfo is refused at startup, and the refusal does not echo the value. The gateway SDK, which the engine signs through, keeps that much of an address and drops the rest, so the signer's two paths are called at the root. A trailing slash alone is taken off |
 | `LPB_CLEARINGHOUSE_TOKEN` | The tenant admin key the clearinghouse admin handed over at onboarding. A secret: it is sent as a bearer to the clearinghouse and is in no log line, error text or `repr` |
-| `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83) |
+| `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83). No path carries it: the clearinghouse takes the tenant from the key. The engine refuses a command about any other tenant with it, and `lpb payments check` compares it with the key's grant. Tech debt T38 |
 
 - **A half setting is refused at startup**, and so is any of them beside `LPB_BATTERIES_URL`,
   `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` or `LPB_SIGNER_URL`: an engine that uses a
@@ -1133,8 +1133,10 @@ remote adapters (#169), and three settings, set together, say which clearinghous
 
 ### Each port and its route
 
-`{t}` is the tenant and `{a}` the actor. Every path but the two signer paths begins
-`/v1/clearinghouse/tenants/{t}`.
+`{a}` is the actor. Every path but the two signer paths begins `/v1/clearinghouse`, and none names the
+tenant: they are the tenant's own routes, which act on the tenant of the key (D87 point 3, as Mike
+amended it on 19 November 2026). The paths that name a tenant are the clearinghouse admin's, on its
+private listener.
 
 | Port and member | Route | The answer becomes |
 | --- | --- | --- |
@@ -1152,6 +1154,11 @@ remote adapters (#169), and three settings, set together, say which clearinghous
 | `CredentialResolver.credential` | None: the engine's own actor record and secret store | The actor's payment key (`lpp_`), and never any other secret |
 | Signing, inside `RunnerTransport` | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, at the root of the address, with the actor's payment key | The signer's own answer ([what signs](#what-signs-for-an-engine-that-uses-a-clearinghouse)) |
 
+- **A command about another tenant is refused before it is sent.** The routes name no tenant, so the
+  clearinghouse would apply it to the key's own tenant. Each member that names an actor, and
+  `read_grant`, compares the tenant it is given with `LPB_CLEARINGHOUSE_TENANT_ID` first and refuses
+  another with a `ProviderError` 403, "resource belongs to another tenant": a refusal that applied
+  nothing, as the clearinghouse's own 403 was when the paths named the tenant.
 - **The port names an allocation and the routes name an actor.** `AllocationManager` was written for
   Batteries, which takes an allocation's id. A manager that needs the actor has the optional protocol
   `AllocationsByActor`: the engine calls `for_actor(tenant_id, actor_id)` and sends the command to the
@@ -1202,8 +1209,11 @@ A tenant's id is its grant's id (D83), and the engine passes the tenant of an al
 as the grant. So every actor an enterprise's engine allots must be in the tenant the clearinghouse
 gave it: `LPB_CLEARINGHOUSE_TENANT_ID` is that id, and so is `LPB_JWT_TENANT_ID` or the value of the
 tenant claim, the `tenant_id` of the access keys the engine issues, and the `tenant_id` of the
-`ActorContext` an embedding app builds. Nothing is mapped. An actor in any other tenant is refused by
-the clearinghouse (403).
+`ActorContext` an embedding app builds. Nothing is mapped. An actor in any other tenant is refused by the
+engine, before anything is sent (403): the routes it calls name no tenant, and the clearinghouse acts on
+the tenant of the key. That the key is that tenant's is what `lpb payments check` confirms: the grant
+the clearinghouse answers with is the key's tenant's, and the check fails when it is another than
+`LPB_CLEARINGHOUSE_TENANT_ID`.
 
 The key the engine holds is a tenant admin's. A clearinghouse admin's key does nothing on the public
 listener ([access.md](access.md#listeners)), so the engine can never onboard a tenant, top up a grant or
@@ -1306,8 +1316,8 @@ its configuration is `self_hosted`; an engine in its `work` role has the configu
 | Self-hosted | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
 | Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
-| Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
-| Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
+| Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/grant` with the tenant admin key | The key's tenant's grant is answered, and its id is `LPB_CLEARINGHOUSE_TENANT_ID`. It is printed as `tenant`. Another id fails the probe as `unexpected`, naming that setting; a 403 means the key is not a tenant admin's or an auditor's, and names `LPB_CLEARINGHOUSE_TOKEN` |
+| Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/usage?limit=1` | A usage page is answered |
 | Clearinghouse | `clearinghouse_signer` | `GET /sign-orchestrator-info` at the clearinghouse's address, with no credential | The answer is 405, as at a signer: the clearinghouse serves the signer's two paths, where the engine signs. A clearinghouse with no signer answers 404 |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 

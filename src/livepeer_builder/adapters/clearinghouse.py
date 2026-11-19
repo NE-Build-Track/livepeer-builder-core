@@ -1,9 +1,15 @@
 """The payment ports of an engine that uses a payment clearinghouse: the remote adapters (D84, #168).
 
 An enterprise's engine keeps its own jobs and records and reaches the clearinghouse for payments only.
-Four of its five payment ports are here, each calling the clearinghouse's public routes with the tenant
-admin key (``adapters/clearinghouse_wire.py``). The fifth, signing, is inside the runner transport: the
-gateway SDK's, pointed at the clearinghouse, with the actor's payment key (``runtime/payment_defaults.py``).
+Four of its five payment ports are here, each calling the tenant's own routes at the clearinghouse with
+the tenant admin key (``adapters/clearinghouse_wire.py``). The fifth, signing, is inside the runner
+transport: the gateway SDK's, pointed at the clearinghouse, with the actor's payment key
+(``runtime/payment_defaults.py``).
+
+The tenant's own routes name no tenant: the clearinghouse takes it from the key (D87 point 3, as amended
+on 19 November 2026). So a command about another tenant cannot be sent at all: sent, it would act on this
+tenant. It is refused here, before anything is sent, as the clearinghouse refused a path that named
+another tenant: 403, "another tenant". The tenant is the wire's, ``LPB_CLEARINGHOUSE_TENANT_ID``.
 
 - ``ClearinghouseAllocations`` is the ``AllocationManager``. The port names an allocation by its id and
   the routes name an actor, so the manager is asked for the one actor a command is about
@@ -52,14 +58,26 @@ from livepeer_builder.protocols import ActorRepo, AllocationManager, SecretStore
 
 _LOG = logging.getLogger(__name__)
 _LISTS_EVERY_TENANT = "lists every tenant"  # what three members of the port would do, and may not
+OWN_TENANT = "/v1/clearinghouse"  # the tenant's own routes: no tenant in the path, the key's is used
+GRANT_PATH = OWN_TENANT + "/grant"
+USAGE_PATH = OWN_TENANT + "/usage"
 
 
-def tenant_path(tenant_id: str, rest: str = "") -> str:
-    return f"/v1/clearinghouse/tenants/{segment(tenant_id)}{rest}"
+def allocation_path(actor_id: str, rest: str = "") -> str:
+    """The actor's allocation route, among the tenant's own routes."""
+    return OWN_TENANT + "/actors/" + segment(actor_id) + "/allocation" + rest
 
 
-def allocation_path(tenant_id: str, actor_id: str, rest: str = "") -> str:
-    return tenant_path(tenant_id, f"/actors/{segment(actor_id)}/allocation{rest}")
+def own_tenant(wire: ClearinghouseWire, tenant_id: str) -> None:
+    """Refuse a command about another tenant than the key's, before anything is sent. The clearinghouse
+    would apply it to the key's own tenant, whose routes name none. A refusal (403), as the clearinghouse
+    refused a path that named another tenant: applied nowhere."""
+    if tenant_id != wire.tenant_id:
+        raise ProviderError(
+            403,
+            f"resource belongs to another tenant: this engine's tenant at the clearinghouse is "
+            f"{wire.tenant_id!r} (LPB_CLEARINGHOUSE_TENANT_ID), not {tenant_id!r}",
+        )
 
 
 def _money(amount: Money) -> dict[str, str]:
@@ -74,7 +92,8 @@ class ClearinghouseAllocations:
         self._wire = wire
 
     def for_actor(self, tenant_id: str, actor_id: str) -> AllocationManager:
-        """The manager for one actor's allocation (``AllocationsByActor``)."""
+        """The manager for one actor's allocation (``AllocationsByActor``). Each of its members refuses an
+        actor of another tenant before it sends anything."""
         return _ActorAllocation(self, self._wire, tenant_id, actor_id)
 
     # -- the grant ----------------------------------------------------------------------------------
@@ -82,8 +101,9 @@ class ClearinghouseAllocations:
     # nothing to do, before anything is sent. Each says so to SonarQube, as the provider fakes do.
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
-        """The tenant's grant. Another tenant's id is the clearinghouse's 403."""
-        return await self._wire.read_as(TenantGrant, tenant_path(grant_id, "/grant"))
+        """The tenant's grant. Another tenant's is refused (403) and never asked for."""
+        own_tenant(self._wire, grant_id)
+        return await self._wire.read_as(TenantGrant, GRANT_PATH)
 
     async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager)
         self, grant_id: str, amount: Money, idempotency_key: str
@@ -176,7 +196,8 @@ class _ActorAllocation(ClearinghouseAllocations):
         self._actor_id = actor_id
 
     def _path(self, rest: str = "") -> str:
-        return allocation_path(self._tenant_id, self._actor_id, rest)
+        own_tenant(self._wire, self._tenant_id)  # before any request about this actor
+        return allocation_path(self._actor_id, rest)
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
@@ -186,9 +207,10 @@ class _ActorAllocation(ClearinghouseAllocations):
         the allocation by its own default."""
         if grant_id != self._tenant_id:  # a tenant's id is its grant's id (D83)
             raise InvalidRequest("an allocation is allotted from its own tenant's grant")
+        path = self._path()
         label = "" if name == f"{self._tenant_id}/{self._actor_id}" else name
         body = {"amount": _money(amount), "label": label, "operation_ref": idempotency_key}
-        return await self._keyed(await self._wire.write_as(KeyedAllocation, self._path(), body))
+        return await self._keyed(await self._wire.write_as(KeyedAllocation, path, body))
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
         """Rotate the payment key: one command at the clearinghouse, which ends the old key itself."""
@@ -291,7 +313,7 @@ class ClearinghouseUsage:
 
     async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
         params = {"limit": str(limit)} | ({"cursor": cursor} if cursor else {})
-        return await self._wire.read_as(UsagePage, tenant_path(self._wire.tenant_id, "/usage"), params)
+        return await self._wire.read_as(UsagePage, USAGE_PATH, params)
 
 
 class ClearinghouseCredentials:
@@ -340,10 +362,11 @@ async def read_allowance(
     wire: ClearinghouseWire, tenant_id: str, actor_id: str, allocation_id: str
 ) -> Allowance:
     """The allowance of the allocation ``allocation_id``, which ``actor_id`` must hold now: read from the
-    actor's allocation route, which answers it with the record. The route names the tenant, so another
-    tenant's actor is the clearinghouse's 403. An allowance the clearinghouse could not read at its own
-    provider (``null``) is ``ProviderUnavailable``: unknown, and never read as zero."""
-    read = await wire.read_as(AllocationRead, allocation_path(tenant_id, actor_id))
+    actor's allocation route, which answers it with the record. Another tenant's actor is refused (403)
+    and never asked for. An allowance the clearinghouse could not read at its own provider (``null``) is
+    ``ProviderUnavailable``: unknown, and never read as zero."""
+    own_tenant(wire, tenant_id)
+    read = await wire.read_as(AllocationRead, allocation_path(actor_id))
     if read.allocation_id != allocation_id:
         raise _not_held(actor_id, allocation_id)
     if read.allowance is None:

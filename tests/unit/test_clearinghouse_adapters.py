@@ -365,6 +365,9 @@ async def test_a_member_that_names_an_allocation_needs_its_actor_and_revoke_key_
 
 
 async def test_the_tenant_admin_key_reaches_no_other_tenant(ports: Ports) -> None:
+    """The tenant's own routes name no tenant, so a command about another tenant is refused before it is
+    sent, as the clearinghouse refused a path that named another tenant: sent, it would act on this
+    tenant (D87 point 3, as amended on 19 November 2026)."""
     other = ports.other_tenant
     with pytest.raises(ProviderError) as grant:
         await ports.manager.read_grant(other)
@@ -376,8 +379,9 @@ async def test_the_tenant_admin_key_reaches_no_other_tenant(ports: Ports) -> Non
 
     assert [grant.value.status_code, allot.value.status_code] == [403, 403]
     assert "another tenant" in grant.value.message and definite_refusal(allot.value)
-    assert allowance.value.status_code == 403  # the allocation route names the tenant, as every other does
+    assert allowance.value.status_code == 403 and "another tenant" in allowance.value.message
     assert ports.provider.unallocated(other) == Decimal(100) and not ports.provider.allocations
+    assert ports.requests == []  # nothing was sent
 
 
 async def test_the_usage_is_the_tenant_own_and_none_of_another_tenant(ports: Ports) -> None:

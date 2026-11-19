@@ -372,8 +372,10 @@ their own changes nothing. No hashed text changes: the idempotency keys and fing
 
 ### `AllocationManager`
 
-`{t}` is the tenant, `{a}` the actor, and every path begins `/v1/clearinghouse/tenants/{t}`. Each
-request carries the tenant admin key as a bearer.
+`{t}` is the tenant and `{a}` the actor. Every path begins `/v1/clearinghouse` and names no tenant: they
+are the tenant's own routes, and the clearinghouse takes the tenant from the key (D87 point 3, as Mike
+amended it on 19 November 2026; until then they began `/v1/clearinghouse/tenants/{t}`). Each request
+carries the tenant admin key as a bearer.
 
 | Member | Route | What the answer becomes |
 | --- | --- | --- |
@@ -392,7 +394,9 @@ request carries the tenant admin key as a bearer.
   that key, unchanged, as the route's `operation_ref`. A repeat at the enterprise's engine derives the
   same key, so it is a repeat at the clearinghouse, which answers it from its own operation ledger and
   sends Batteries the idempotency key it derived the first time.
-- **The grant is the tenant.** `grant_id` is the tenant's id (D83), and it is the `{t}` of the path.
+- **The grant is the tenant.** `grant_id` is the tenant's id (D83), and it must be
+  `LPB_CLEARINGHOUSE_TENANT_ID`. No path names it, so a command about another tenant would act on the
+  key's own: the adapter refuses it before anything is sent (403, "another tenant").
 - **The label.** `name` is the actor's label, or `{t}/{a}` when it has none. The adapter sends an empty
   label in the second case, so the clearinghouse makes the same default itself.
 - **The allocation is checked before a write.** `top_up_allocation`, `set_allocation_status`,
@@ -443,10 +447,13 @@ A tenant's id is its grant's id (D83), and the engine already passes the tenant 
 provider as the grant. So the tenant of every actor the enterprise's engine allots must be the id the
 clearinghouse gave the tenant at onboarding: in `LPB_JWT_TENANT_ID` or the tenant claim, in the
 `tenant_id` of the access keys it issues, and in the `ActorContext` an embedding app builds. Nothing is
-mapped. An actor in any other tenant is refused by the clearinghouse (403, "another tenant").
+mapped. An actor in any other tenant is refused (403, "another tenant"): by the clearinghouse while its
+paths named the tenant, and since 19 November 2026 by the engine itself, before anything is sent, since
+the routes it calls name none.
 
-The usage read and `lpb payments check` name no actor, so they need the tenant's id from a setting,
-`LPB_CLEARINGHOUSE_TENANT_ID`, until `GET /v1/me` (ISS-29) can say it.
+The usage read and `lpb payments check` name no actor, so they needed the tenant's id from a setting,
+`LPB_CLEARINGHOUSE_TENANT_ID`, until `GET /v1/me` (ISS-29) can say it. Since 19 November no path needs
+it. The engine compares a command's tenant with it, and the check compares the key's grant with it.
 
 ### Not clean
 
@@ -455,7 +462,7 @@ The usage read and `lpb payments check` name no actor, so they need the tenant's
 | Five members of `AllocationManager` | No actor in their arguments | Built: the optional `AllocationsByActor` protocol |
 | `read_allocation`, `read_allowance` | The guide gives this read to `GET /actors/{a}/allocation` ("allotted, spent, available and status"), and that route answered the allocation's record, with no amounts. The only route that answered an allowance was the work half's `GET /v1/allowance` | Decided by the owner on 19 November and built: the allocation route answers the amounts as `allowance`, and the adapters read them there. No work route of the clearinghouse is called (T36, closed) |
 | `read_allowance(allocation_id)` for an earlier allocation | The clearinghouse reads an actor's current allocation only. Reconciling an earlier allocation of an actor (#115, C9) reads the provider's `spent` by allocation id | Refused with the provider's 404 (T40). A route that reads an allocation by its id, if the read is wanted |
-| The tenant's id | `UsageSource.page` and the check command name no tenant, and the engine cannot ask who it is | Built: `LPB_CLEARINGHOUSE_TENANT_ID` (T38). `GET /v1/me` (ISS-29) can replace it |
+| The tenant's id | `UsageSource.page` and the check command name no tenant, and the engine cannot ask who it is | Built: `LPB_CLEARINGHOUSE_TENANT_ID` (T38). Since 19 November no path carries it, and the key's own grant (`GET /v1/clearinghouse/grant`) says it: reading it there at start, or `GET /v1/me` (ISS-29), can replace it |
 | `revoke_key` | A rotation at the clearinghouse is one command, and the port's is two | Built: the second call sends nothing |
 | The grant members | Only a clearinghouse admin calls them | Built: refused in the engine, plainly |
 

@@ -1,10 +1,13 @@
-"""#168: an enterprise's engine needs no work route of its clearinghouse.
+"""#168: an enterprise's engine needs no work route of its clearinghouse, and since 19 November 2026 no
+path that names a tenant either.
 
 A payment clearinghouse does payments only and never runs jobs, so it will serve no work route (the role
 setting, #169). Everything an enterprise's engine asks of it is therefore a clearinghouse route: the
-tenant's routes, the runner list and the signer's two paths. Here the clearinghouse's app is built from
-those groups alone, with the work routes left out, and the remote adapters, the discovery reader and
-``lpb payments check`` do all they do against it.
+tenant's own routes, the runner list and the signer's two paths. The tenant's own routes name no tenant:
+the clearinghouse takes it from the tenant admin key (D87 point 3, as amended). Here the clearinghouse's
+app is built from those groups alone, with the work routes and the paths a clearinghouse admin names a
+tenant in left out, and the remote adapters, the discovery reader and ``lpb payments check`` do all they
+do against it. Every request is recorded: each test names the paths it expects, and none names a tenant.
 """
 
 from collections.abc import AsyncIterator
@@ -20,25 +23,35 @@ from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.contracts import AllotRequest, TopUpRequest
 from livepeer_builder.errors import ProviderError, ProviderUnavailable
 from livepeer_builder.http.app import shared_app
-from livepeer_builder.http.clearinghouse import mount_tenant_routes
+from livepeer_builder.http.clearinghouse import mount_runner_list_routes, mount_tenant_routes
 from livepeer_builder.http.signing import mount_signing_routes
+from livepeer_builder.services.ledger import definite_refusal
 from tests.unit.payment_ports import CLEARINGHOUSE_URL, Ports, open_ports, usd
 
 WORK_ROUTES = ("/v1/allowance", "/v1/jobs", "/v1/runners", "/v1/costs/summary", "/v1/keys", "/v1/offerings")
 
 
 def payments_only(house: BuilderEngine) -> FastAPI:
-    """A clearinghouse's app with the routes of its own half and no work route."""
+    """A clearinghouse's app with a tenant's own routes, the runner list and the signer's two paths: no
+    work route, and no path that names a tenant."""
     app = shared_app(house, manage_lifecycle=False)
     mount_tenant_routes(app, house)
+    mount_runner_list_routes(app, house)
     mount_signing_routes(app, house)
     return app
 
 
+def naming_a_tenant(requests: list[httpx.Request]) -> list[str]:
+    """The paths of ``requests`` that name a tenant: a clearinghouse admin's paths, never the engine's."""
+    return [request.url.path for request in requests if "/tenants" in request.url.path]
+
+
 @pytest.fixture
 async def ports() -> AsyncIterator[Ports]:
+    """After each test, no request it sent named a tenant."""
     async with open_ports("remote", payments_only) as opened:
         yield opened
+        assert naming_a_tenant(opened.requests) == []
 
 
 def client_of(ports: Ports) -> httpx.AsyncClient:
@@ -70,7 +83,7 @@ async def test_the_allowance_is_read_from_the_allocation_route(ports: Ports) -> 
     assert allowance == by_id and allowance.allocation_id == allocation_id
     assert (allowance.granted, allowance.spent, allowance.available) == (usd(5), usd("1.25"), usd("3.75"))
     assert reconciled.provider_spent == usd("1.25")
-    assert set(ports.sent("GET")) == {f"/v1/clearinghouse/tenants/{ports.tenant_id}/actors/alice/allocation"}
+    assert set(ports.sent("GET")) == {"/v1/clearinghouse/actors/alice/allocation"}
 
 
 async def test_every_command_and_read_of_the_adapters_is_a_clearinghouse_route(ports: Ports) -> None:
@@ -89,9 +102,16 @@ async def test_every_command_and_read_of_the_adapters_is_a_clearinghouse_route(p
     await payments.revoke(ports.admin, ports.tenant_id, "alice")
 
     assert ports.provider.allocations[allocation_id].status == "revoked"
-    tenant = f"/v1/clearinghouse/tenants/{ports.tenant_id}/"
     paths = {request.url.path for request in ports.requests}
-    assert paths and all(path.startswith(tenant) for path in paths), sorted(paths)
+    assert paths == {
+        "/v1/clearinghouse/actors/alice/allocation",
+        "/v1/clearinghouse/actors/alice/allocation/top-up",
+        "/v1/clearinghouse/actors/alice/allocation/status",
+        "/v1/clearinghouse/actors/alice/allocation/rotate-payment-key",
+        "/v1/clearinghouse/actors/alice/allocation/revoke",
+        "/v1/clearinghouse/grant",
+        "/v1/clearinghouse/usage",
+    }
 
 
 async def test_an_allowance_the_clearinghouse_could_not_read_is_unavailable_and_never_a_zero(
@@ -104,11 +124,36 @@ async def test_an_allowance_the_clearinghouse_could_not_read_is_unavailable_and_
     assert (await ports.allowances.read_allowance(allocation_id)).granted == usd(5)
 
 
-async def test_an_actor_of_another_tenant_is_refused_by_the_clearinghouse(ports: Ports) -> None:
-    theirs = ports.manager.for_actor(ports.other_tenant, "mallory")  # type: ignore[attr-defined]
-    with pytest.raises(ProviderError) as refused:
-        await theirs.read_allocation("alloc_1")
-    assert refused.value.status_code == 403 and "another tenant" in refused.value.message
+async def test_a_command_about_another_tenant_is_refused_before_anything_is_sent(ports: Ports) -> None:
+    """The tenant's own routes name no tenant: they act on the tenant of the key. So a command about an
+    actor of another tenant is refused here, as the clearinghouse refused a path that named that tenant
+    (403), and is never sent: sent, it would act on this tenant's actor of the same id."""
+    await allotted(ports)  # this tenant's alice, whom a command sent for the other tenant's would reach
+    before = list(ports.requests)
+    other = ports.other_tenant
+    theirs = ports.manager.for_actor(other, "alice")  # type: ignore[attr-defined]
+    refused: list[ProviderError] = []
+    for call in (
+        theirs.create_key_for_grant(other, "alice", usd(1), "k"),
+        theirs.create_key("alloc_1", "alice", "k"),
+        theirs.top_up_allocation("alloc_1", usd(1), "k"),
+        theirs.set_allocation_status("alloc_1", "paused"),
+        theirs.revoke_allocation("alloc_1"),
+        theirs.read_allocation("alloc_1"),
+        ports.manager.read_grant(other),
+    ):
+        with pytest.raises(ProviderError) as error:
+            await call
+        refused.append(error.value)
+    by_the_engine = AllotRequest(tenant_id=other, actor_id="alice", amount=usd(1), operation_ref="theirs")
+    with pytest.raises(ProviderError) as error:
+        await ports.engine.payments.allot(ports.admin, by_the_engine)
+    refused.append(error.value)
+
+    assert {(error.status_code, "another tenant" in error.message) for error in refused} == {(403, True)}
+    assert all(definite_refusal(error) for error in refused)
+    assert ports.requests == before  # nothing was sent
+    assert ports.provider.unallocated(other) == Decimal(100)
 
 
 async def test_the_discovery_reader_reads_the_runner_list_there(ports: Ports) -> None:
@@ -140,6 +185,9 @@ async def test_the_payments_check_passes_there_with_every_probe(ports: Ports) ->
     assert report.tenant is not None and report.tenant.tenant_id == ports.tenant_id
     asked = ports.requests[before:]
     assert {request.method for request in asked} == {"GET"}
-    for request in asked:
-        path = request.url.path
-        assert path.startswith("/v1/clearinghouse/") or path == "/sign-orchestrator-info", path
+    assert [request.url.path for request in asked] == [
+        "/v1/clearinghouse/grant",
+        "/v1/clearinghouse/usage",
+        "/sign-orchestrator-info",
+        "/v1/clearinghouse/discovery",
+    ]

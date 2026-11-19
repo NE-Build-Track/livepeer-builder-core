@@ -287,8 +287,7 @@ From the locked answers (D69) and the amendment of 18 November
     (store/job_queue.py), where the event is written in the same transaction when the feed is built
 [x] Q8: an access key revoked while its job is queued: the job runs
     (test_async_repeats::test_a_job_runs_as_the_actor_it_was_submitted_by_after_its_access_key_is_revoked)
-[x] Q6: the defaults are 4 workers, 1000 queued, 1 hour, 16 MiB, 7 days (config.py; test_async_jobs and
-    test_async_results read them through make_engine)
+[x] Q6: the defaults are 4 workers, 1000 queued, 1 hour, 16 MiB, 7 days (config.py; test_async_settings.py)
 [x] the migration keeps every job; a downgrade ends a queued job; an interrupted run changes nothing
     (test_async_migration.py)
 [x] a clearinghouse queues no job and runs no worker, for an embedding caller too; its job routes are 404

@@ -28,9 +28,12 @@ of a command recorded before this revision matches its record.
 A run is one transaction, in both directions: one that dies before its commit changes nothing. SQLite's
 driver opens a transaction at the first ``INSERT``, ``UPDATE`` or ``DELETE`` and not at an ``ALTER TABLE``,
 so a rename that ran before any of those was committed at once, and a run that died later left renamed
-columns under the old revision. Each direction therefore starts with a ``DELETE`` that matches no row. Each
-step also looks at the database first and does only what is left to do. A downgrade puts the old names
-back.
+columns under the old revision, which the engine cannot read. Each direction therefore starts with a
+``DELETE`` that matches no row. That also keeps the batch copy of ``lpb_access_keys`` inside the
+transaction, so no leftover copy can block the next run, as one did for revision 0013.
+
+A downgrade puts the old names back. On PostgreSQL it fails, changing nothing, while a key has a kind
+longer than 16 characters other than ``clearinghouse_admin``: one a later revision added.
 """
 
 from collections.abc import Sequence
@@ -51,6 +54,7 @@ COMMANDS = {"provision": "allot", "fund": "top_up", "fund_grant": "top_up_grant"
 
 
 def _in_one_transaction() -> None:
+    """Open the driver's transaction before the first ``ALTER TABLE`` (see the module's last paragraphs)."""
     if op.get_bind().dialect.name == "sqlite":
         op.execute("DELETE FROM lpb_operations WHERE 1 = 0")
 
@@ -66,9 +70,6 @@ def _rename_column(table: str, old: str, new: str) -> None:
 
 
 def _resize_kind(old: int, new: int) -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":  # a copy an interrupted run of an older release left behind
-        op.execute("DROP TABLE IF EXISTS _alembic_tmp_lpb_access_keys")
     with op.batch_alter_table("lpb_access_keys") as batch:
         batch.alter_column(
             "kind", existing_type=sa.String(old), type_=sa.String(new), existing_nullable=False

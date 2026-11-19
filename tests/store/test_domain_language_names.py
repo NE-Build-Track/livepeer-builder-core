@@ -322,6 +322,11 @@ async def interrupted(engine: AsyncEngine, direction: str, revision: str) -> Non
         pass
 
 
+async def table_names(engine: AsyncEngine) -> list[str]:
+    async with engine.connect() as conn:
+        return sorted(await conn.run_sync(lambda sync: inspect(sync).get_table_names()))
+
+
 async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, clock: FixedClock) -> None:
     """SQLite's driver commits an ``ALTER TABLE`` that runs before any row is written, so a run that died
     after its renames left columns of the next revision under the old one: the engine could read nothing,
@@ -329,9 +334,11 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
     engine, _ = await at_0013(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}", clock)
     try:
         before = await stored(engine, old_names=True)
+        tables = await table_names(engine)
         await interrupted(engine, "up", "head")
         assert await current_revision(engine) == "0013"
         assert await stored(engine, old_names=True) == before
+        assert await table_names(engine) == tables  # no copy of lpb_access_keys is left behind
         await upgrade(engine)
         head = await stored(engine, old_names=False)
         for name in ("lpb_access_keys", "lpb_jobs", "lpb_actors", "lpb_actor_sightings"):
@@ -340,6 +347,7 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
         await interrupted(engine, "down", "0013")
         assert await current_revision(engine) == head_revision()
         assert await stored(engine, old_names=False) == head
+        assert await table_names(engine) == tables
         async with engine.connect() as conn:
             assert (await conn.execute(select(func.count()).select_from(t.operations))).scalar_one() == 4
     finally:

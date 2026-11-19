@@ -30,6 +30,7 @@ from livepeer_builder.protocols import (
     AllocationManager,
     Authenticator,
     Clock,
+    DiscoveryDocumentSource,
     DiscoverySource,
     EngineStore,
     EventFeed,
@@ -50,6 +51,7 @@ from livepeer_builder.services.ledger import OperationLedger
 from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
+from livepeer_builder.services.runner_list import RunnerList
 from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
 from livepeer_builder.services.tenant_usage import TenantUsage
@@ -264,6 +266,7 @@ class EngineServices:
     payments: PaymentsService
     costs: CostService
     keys: KeyService | None
+    runner_list: RunnerList | None  # None: the discovery source holds no document to serve (#166)
     admission: AdmissionLimiter
     events: EventFeed
     sessions: SessionManager
@@ -290,6 +293,9 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         tenants = TenantDesk(
             parts.grants_manager, parts.policy, settings.default_currency, ledger, settings.engine_id, keys
         )
+    runner_list: RunnerList | None = None
+    if isinstance(parts.discovery_source, DiscoveryDocumentSource):  # otherwise no list is served (#166)
+        runner_list = RunnerList(parts.discovery_source, parts.policy)
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
@@ -337,6 +343,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         payments=payments,
         costs=costs,
         keys=keys,
+        runner_list=runner_list,
         admission=admission,
         events=parts.events,
         sessions=parts.sessions,

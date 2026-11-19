@@ -70,6 +70,7 @@ CLEARINGHOUSE = {
     "services/issued_payment_keys.py",
     "services/payment_keys.py",
     "services/payments.py",
+    "services/runner_list.py",  # the list a clearinghouse publishes: it reaches no work module
     "services/tenant_usage.py",
     "services/tenants.py",
     "http/clearinghouse.py",
@@ -118,6 +119,7 @@ NOT_PAYMENTS = {
     "Authenticator",
     "AccessPolicy",
     "DiscoverySource",
+    "DiscoveryDocumentSource",
     "SelectionPolicy",
     "KeyRepo",
     "JobRepo",

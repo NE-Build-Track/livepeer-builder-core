@@ -2677,6 +2677,31 @@
         "summary": "Allowance"
       }
     },
+    "/v1/clearinghouse/discovery": {
+      "get": {
+        "description": "The clearinghouse's runner list, in livepeer/node's discovery format: what an enterprise's\nengine reads as its ``LPB_DISCOVERY_URL``. The document is served as the clearinghouse read\nit. Any credential of a tenant may read it.",
+        "operationId": "discovery_v1_clearinghouse_discovery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "The livepeer/node `/discovery` document the clearinghouse last read."
+          },
+          "503": {
+            "description": "The clearinghouse has read no runner list yet."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Discovery"
+      }
+    },
     "/v1/clearinghouse/tenants": {
       "get": {
         "operationId": "list_tenants_v1_clearinghouse_tenants_get",

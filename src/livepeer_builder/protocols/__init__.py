@@ -32,6 +32,7 @@ from livepeer_builder.contracts import (
     TenantGrant,
     UsagePage,
 )
+from livepeer_builder.protocols.clearinghouse import DiscoveryDocumentSource as DiscoveryDocumentSource
 from livepeer_builder.protocols.clearinghouse import PaymentKeyRepo as PaymentKeyRepo
 from livepeer_builder.protocols.clearinghouse import TenantUsageSource as TenantUsageSource
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo

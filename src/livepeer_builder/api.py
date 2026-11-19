@@ -16,9 +16,9 @@ The engine has two halves (D84), and the facade follows them:
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
 (the transport can stream), ``keys`` (engine API keys are on), ``payments.tenants`` (the tenant desk
-is on), ``payments.usage`` (the usage source reads one tenant's records). Check for ``None`` before use;
-never probe with ``hasattr``. Members are read-only properties so a wider protocol can narrow a member it
-combines.
+is on), ``payments.usage`` (the usage source reads one tenant's records), ``runner_list`` (the discovery
+source holds the document it read). Check for ``None`` before use; never probe with ``hasattr``. Members
+are read-only properties so a wider protocol can narrow a member it combines.
 """
 
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
@@ -271,15 +271,24 @@ class PaymentsAdminApi(Protocol):
     def usage(self) -> TenantUsageApi | None: ...
 
 
+class RunnerListApi(Protocol):
+    """The clearinghouse's runner list: present only when the discovery source holds the livepeer/node
+    document it read (``DiscoveryDocumentSource``, as the HTTP reader does)."""
+
+    def document(self, reader: ActorContext) -> bytes | None: ...
+
+
 class ClearinghouseApi(Protocol):
-    """The clearinghouse half: tenants and their grants, allotment and top-ups, and a tenant's access
-    keys. It runs no job. Like the work half, it authenticates its callers, reports health and has the
-    engine's lifecycle."""
+    """The clearinghouse half: tenants and their grants, allotment and top-ups, a tenant's access keys
+    and usage, and the runner list it publishes. It runs no job. Like the work half, it authenticates
+    its callers, reports health and has the engine's lifecycle."""
 
     @property
     def payments(self) -> PaymentsAdminApi: ...
     @property
     def keys(self) -> KeysApi | None: ...
+    @property
+    def runner_list(self) -> RunnerListApi | None: ...
     @property
     def authenticator(self) -> Authenticator: ...
     def health(self) -> EngineHealth: ...
@@ -315,6 +324,7 @@ __all__ = [
     "KeysApi",
     "PaymentsAdminApi",
     "PaymentsApi",
+    "RunnerListApi",
     "StreamingApi",
     "TenantUsageApi",
     "TenantsApi",

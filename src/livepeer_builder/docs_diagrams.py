@@ -60,6 +60,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "SecretStore": (RoutingSecretStore, EncryptedDbSecretStore),
     "WritableSecretStore": (RoutingSecretStore,),
     "DiscoverySource": (HttpDiscoverySource,),
+    "DiscoveryDocumentSource": (HttpDiscoverySource,),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),

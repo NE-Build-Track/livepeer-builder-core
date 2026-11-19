@@ -58,3 +58,16 @@ class TenantUsageSource(Protocol):
     no tenant's usage: the usage route is absent."""
 
     async def tenant_page(self, tenant_id: str, cursor: str | None, limit: int = 1000) -> UsagePage: ...
+
+
+@runtime_checkable
+class DiscoveryDocumentSource(Protocol):
+    """Optional for a discovery source: the livepeer/node ``/discovery`` document its last successful
+    fetch read, as it was served (#166). ``HttpDiscoverySource`` has it. A clearinghouse serves that
+    document to the engines of its tenants, which read it as they read node's own.
+
+    ``None`` until a fetch has succeeded. A fetch that fails leaves the last good document in place, as
+    the engine keeps its last good snapshot. Without it (a supplied source that reads no such document)
+    the engine serves no runner list: the discovery route is absent."""
+
+    def document(self) -> bytes | None: ...

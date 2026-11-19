@@ -35,6 +35,10 @@ classDiagram
         <<interface>>
         +async fetch() Runner[]
     }
+    class DiscoveryDocumentSource {
+        <<interface>>
+        +document() bytes?
+    }
     class SelectionPolicy {
         <<interface>>
         +order(candidates, request) Runner[]
@@ -181,6 +185,7 @@ classDiagram
     SecretStore <|.. EncryptedDbSecretStore
     WritableSecretStore <|.. RoutingSecretStore
     DiscoverySource <|.. HttpDiscoverySource
+    DiscoveryDocumentSource <|.. HttpDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
@@ -215,6 +220,7 @@ classDiagram
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
 | `WritableSecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
+| `DiscoveryDocumentSource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |

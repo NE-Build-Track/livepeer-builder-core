@@ -1194,8 +1194,10 @@ pause a tenant, whatever it is asked.
 ### What a failure at the clearinghouse means
 
 A clearinghouse failure is classified like a signer failure (D87): unreachable or not ready is `retry`,
-an unknown outcome is `check`, and a refusal keeps its reason. For these four ports that is three
-errors. The words `retry` and `check` are ISS-28's, which will read them from these.
+an unknown outcome is `check`, and a refusal keeps its reason. On the tenant's routes, which four of the
+five ports call, that is three errors. The words `retry` and `check` are ISS-28's, which will read them
+from these. What a failed signer call means is under
+[what signs](#what-signs-for-an-engine-that-uses-a-clearinghouse).
 
 | What happened | A read | A command |
 | --- | --- | --- |

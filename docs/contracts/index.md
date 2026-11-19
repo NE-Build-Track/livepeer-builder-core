@@ -260,6 +260,9 @@ keys ([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghou
 | Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id)`. A supplied manager without it is called as before |
 | Errors | | `ProviderOutcomeUnknown`, a `ProviderUnavailable` (503): a command left and no answer says whether it applied |
 | Adapters | | `ClearinghouseAllocations`, `ClearinghouseAllowances`, `ClearinghouseUsage`, `ClearinghouseCredentials` (`livepeer_builder.adapters.clearinghouse`) |
+| `SdkRunnerTransport` | `SdkRunnerTransport(signer_url, max_payment_challenge_retries)` | and `signer_is_clearinghouse` (false unless said): the address is a clearinghouse's, whose `signer_not_reached` is then read as `signer_unavailable`. The engine says it from its settings |
+| A job met by a clearinghouse that could not reach its signer, while signing | | `failed`, `payment` / `signer_unavailable`, nothing paid. Every other 5xx while signing is `uncertain`, as with a signer |
+| An engine that uses a clearinghouse | | Serves neither the signer's two paths nor the wallet report: `payments.signing` and `payments.wallet` are `None` |
 | `HttpDiscoverySource` | `HttpDiscoverySource(discovery_url, *, client, timeout_s)` | and `bearer`, a credential for the discovery address |
 | CLI | | `lpb payments check`: exit 0, 1 or 2 ([payments.md](payments.md#lpb-payments-check)) |
 | `livepeer_builder.runtime` | | `check_payments(settings)` |
@@ -273,7 +276,11 @@ keys ([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghou
 - **Nothing, for self-hosted payments.** Leave the clearinghouse settings unset.
 - **To use a clearinghouse,** set the three settings from what the clearinghouse admin handed over at
   onboarding (the address of the public listener, the tenant admin key and the tenant's id), keep
-  `LPB_SECRET_KEY`, and unset every Batteries and signer setting. Run `lpb payments check`.
+  `LPB_SECRET_KEY`, and unset every Batteries and signer setting. The address is a scheme, a host and
+  an optional port: a path is refused, because the signer's two paths are called at its root. Run
+  `lpb payments check`.
+- **A caller's own implementation of `PaymentsAdminApi`** states `get_allocation`.
+- **A reader of the allocation route** that refuses a field it does not know meets `allowance`.
 - **Put every actor in the tenant.** `LPB_JWT_TENANT_ID` or the tenant claim, the `tenant_id` of the
   access keys the engine issues, and the `ActorContext` an embedding app builds all carry the tenant's
   id at the clearinghouse. An actor in another tenant is refused there.

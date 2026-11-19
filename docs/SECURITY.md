@@ -10,8 +10,8 @@
 | `LPB_SECRET_KEY` (Fernet KEK) | The deployment's secret manager | The database, backups |
 | `LPB_BATTERIES_TOKEN` | The deployment's secret manager | Clients, responses |
 | `LPB_BATTERIES_GRANTS_TOKEN` (optional, the tenant desk) | The deployment's secret manager | Clients, responses |
-| `LPB_CLEARINGHOUSE_TOKEN` (#168): the tenant admin key of an engine that uses a payment clearinghouse | The deployment's secret manager. It is sent as a bearer to `LPB_CLEARINGHOUSE_URL`, and to the discovery address only when that is the clearinghouse's runner list. No redirect is followed | Logs, error text, `repr`, the output of `lpb payments check`, any other address |
-| The payment keys an enterprise's engine is handed by its clearinghouse (`lpp_`, #168) | The enterprise's `SecretStore`, where an allocation key is kept with self-hosted payments; the actor's record holds a `SecretRef` | The engine's own answers (`payment_key: null`), DB plaintext, the operation ledger, logs |
+| `LPB_CLEARINGHOUSE_TOKEN` (#168): the tenant admin key of an engine that uses a payment clearinghouse | The deployment's secret manager. It is sent as a bearer to the tenant's routes at `LPB_CLEARINGHOUSE_URL`, and to the discovery address only when that is the clearinghouse's runner list. No redirect is followed | Logs, error text, `repr`, the output of `lpb payments check`, the clearinghouse's two signer paths, any runner, any other address |
+| The payment keys an enterprise's engine is handed by its clearinghouse (`lpp_`, #168) | The enterprise's `SecretStore`, where an allocation key is kept with self-hosted payments; the actor's record holds a `SecretRef`. It is sent as the bearer of that actor's signer calls, at the clearinghouse's two signer paths and nowhere else | The engine's own answers (`payment_key: null`), DB plaintext, the operation ledger, logs, the tenant's routes, any runner |
 
 Settings use `SecretStr`, so secrets don't print in reprs. `tests/unit/test_payments.py` checks that
 no plaintext payment key is stored, and `tests/unit/test_http.py` checks that none is returned.

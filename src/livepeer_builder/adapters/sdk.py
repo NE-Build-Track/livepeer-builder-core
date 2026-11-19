@@ -14,6 +14,7 @@ import logging
 import httpx
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
 from livepeer_gateway.remote_signer import get_signer_info
+from pydantic import SecretStr
 
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_address import runner_address
@@ -46,7 +47,9 @@ def memory_discovery_client(body: bytes) -> httpx.AsyncClient:
 
 class HttpDiscoverySource:
     """Reads ``GET LPB_DISCOVERY_URL`` as livepeer/node's ``/discovery`` contract (D63). Sends no
-    credentials; the signer is not involved in discovery (#45).
+    credentials; the signer is not involved in discovery (#45). The one exception is ``bearer``: the
+    tenant admin key of an engine whose discovery address is its clearinghouse's runner list, which needs
+    one (D87, #168). It goes to the discovery address only, since no redirect is followed.
 
     The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
@@ -60,8 +63,10 @@ class HttpDiscoverySource:
         *,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
+        bearer: str | None = None,
     ) -> None:
         self._discovery_url = discovery_url
+        self._bearer = SecretStr(bearer) if bearer else None  # never a plain attribute, never in a repr
         self._client = client or httpx.AsyncClient(
             timeout=timeout_s
         )  # one per source: polls reuse its connection
@@ -92,7 +97,10 @@ class HttpDiscoverySource:
         return runners
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
-        request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if self._bearer is not None:
+            headers["Authorization"] = f"Bearer {self._bearer.get_secret_value()}"
+        request = client.build_request("GET", self._discovery_url, headers=headers)
         response = await client.send(request, stream=True, follow_redirects=False)
         async with contextlib.aclosing(response):
             response.raise_for_status()  # the status decides first: an error's body is not read

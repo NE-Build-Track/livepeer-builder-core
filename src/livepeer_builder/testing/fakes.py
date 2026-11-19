@@ -292,7 +292,9 @@ class FakeAllocationManager:
         self.replays[idempotency_key] = key
         return key
 
-    async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
+    async def top_up_allocation(  # NOSONAR - async by protocol (AllocationManager); the fake awaits nothing
+        self, allocation_id: str, amount: Money, idempotency_key: str
+    ) -> None:
         self.calls.append("top_up_allocation")
         self._fail("top_up_allocation")
         if idempotency_key in self.replays:
@@ -303,7 +305,9 @@ class FakeAllocationManager:
         if allocation.status == "exhausted":
             allocation.status = "active"
 
-    async def top_up_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
+    async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager); the fake awaits nothing
+        self, grant_id: str, amount: Money, idempotency_key: str
+    ) -> None:
         self.calls.append("top_up_grant")
         self._fail("top_up_grant")
         if idempotency_key in self.replays:

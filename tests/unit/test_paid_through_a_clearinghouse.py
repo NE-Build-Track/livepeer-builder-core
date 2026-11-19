@@ -147,8 +147,11 @@ async def test_a_live_job_is_funded_through_the_clearinghouse_cycle_after_cycle(
     assert bearers(net) == {f"Bearer {batteries_key}"}  # one key for every cycle of the session
     await asyncio.sleep(0.15)
     assert net.log.count("sign m-1") == cycles  # the funding stopped with the work
+    # Every cycle the signer signed came through the clearinghouse. One more may have arrived there and
+    # gone no further: the cycle that was on its way when the work ended, which the SDK cancels.
     paths = [path for path, _ in clearinghouse.served.seen]
-    assert paths.count("/generate-live-payment") == cycles and paths.count("/sign-orchestrator-info") == 1
+    assert paths.count("/generate-live-payment") in (cycles, cycles + 1)
+    assert paths.count("/sign-orchestrator-info") == 1
 
 
 async def test_each_actors_job_is_paid_from_its_own_allocation(

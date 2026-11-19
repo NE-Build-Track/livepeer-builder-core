@@ -36,8 +36,8 @@ from livepeer_builder.errors import NotAuthenticated, SignerNotReached, SignerOu
 
 _IDENTITY: SignerCall = "sign-orchestrator-info"
 _PAYMENT: SignerCall = "generate-live-payment"
-IDENTITY_PATH = f"/{_IDENTITY}"  # the path is the call's name: where the gateway SDK posts it
-PAYMENT_PATH = f"/{_PAYMENT}"
+IDENTITY_PATH = "/sign-orchestrator-info"  # the path is the call's name: where the gateway SDK posts it
+PAYMENT_PATH = "/generate-live-payment"
 MAX_SIGNER_BODY_BYTES = 1 << 20  # what livepeer/node's signer reads of a payment request (signer/service.go)
 NOT_REACHED_CODE = "signer_not_reached"
 OUTCOME_UNKNOWN_CODE = "signer_outcome_unknown"

@@ -207,6 +207,7 @@ PROXY_ANSWERS: dict[str, tuple[int, str]] = {
     "503 with the code inside the error": (503, json.dumps({"error": {"code": "signer_not_reached"}})),
     "503 with a body that is a list": (503, json.dumps(["signer_not_reached"])),
     "502 with the code": (502, json.dumps({"code": "signer_not_reached"})),  # the code belongs to a 503
+    "503 nested past what a decoder reads": (503, "[" * 100_000 + "]" * 100_000),
     "500 with the code": (500, json.dumps({"code": "signer_not_reached"})),
 }
 

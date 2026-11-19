@@ -95,7 +95,7 @@ def clearinghouse_sent_nothing(error: LivepeerHTTPError) -> bool:
         return False
     try:
         body = json.loads(error.body)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):  # not JSON, or nested past the decoder's depth
         return False
     return isinstance(body, dict) and body.get("code") == NOT_REACHED_CODE
 

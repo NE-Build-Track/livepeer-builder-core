@@ -156,67 +156,28 @@ async def default_parts(
 ) -> EngineParts:
     """Build every part that was not supplied. Resources go on ``stack`` the moment they open.
 
-    The default adapters and the SQL store are imported here, not at module level, so importing the
-    package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
+    The default adapters and the SQL store are imported where they are built, not at module level, so
+    importing the package loads no database, HTTP, crypto or SDK library
+    (tests/structure/test_import_weight.py).
     """
     from livepeer_builder.adapters.sdk import HttpDiscoverySource
-    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
-    from livepeer_builder.store import SqlStore
 
     supply = supply or EngineSupply()
-    clock = supply.clock if not isinstance(supply.clock, _Unset) else SystemClock()
-    policy = supply.policy if not isinstance(supply.policy, _Unset) else DefaultPolicy()
-
-    store: EngineStore
-    if isinstance(supply.store, _Unset):
-        sql = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
-        own(stack, sql, sql.close)
-        store = sql
-    else:
-        store = supply.store
-
-    if isinstance(supply.api_keys, _Unset):
-        api_keys = ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
-    else:
-        api_keys = supply.api_keys
-
-    authenticators: tuple[Authenticator, ...]
-    if not isinstance(supply.authenticators, _Unset):
-        authenticators = supply.authenticators
-    elif "jwt" in settings.auth:
-        from livepeer_builder.adapters.jwt import jwt_authenticator
-
-        bearer = jwt_authenticator(settings)
-        own(stack, bearer, bearer.aclose)
-        authenticators = (bearer,)
-    else:
-        authenticators = ()
-
-    secret_store: SecretStore
-    if isinstance(supply.secret_store, _Unset):
-        database = (
-            EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
-            if settings.secret_key
-            else None
-        )
-        secret_store = RoutingSecretStore(database)
-    else:
-        secret_store = supply.secret_store
+    clock = _supplied(supply.clock, SystemClock)
+    policy = _supplied(supply.policy, DefaultPolicy)
+    store = await _sql_store(settings, stack) if isinstance(supply.store, _Unset) else supply.store
+    api_keys = _supplied(supply.api_keys, lambda: _engine_keys(settings, store))
+    authenticators = _supplied(supply.authenticators, lambda: _own_authenticators(settings, stack))
+    secret_store = _supplied(supply.secret_store, lambda: _built_in_secret_store(settings, store, clock))
 
     # Each payment part the caller did not supply: Batteries and the signer, or a payment clearinghouse
     # (runtime/payment_defaults.py). Asked for one by one, so a supplied part is never built.
     defaults = payment_defaults(
         settings, lambda resource, close: own(stack, resource, close), store, secret_store
     )
-    allocation_manager = (
-        defaults.allocation_manager()
-        if isinstance(supply.allocation_manager, _Unset)
-        else supply.allocation_manager
-    )
-    grants_manager = (
-        defaults.grants_manager() if isinstance(supply.grants_manager, _Unset) else supply.grants_manager
-    )
-    usage_source = defaults.usage_source() if isinstance(supply.usage_source, _Unset) else supply.usage_source
+    allocation_manager = _supplied(supply.allocation_manager, defaults.allocation_manager)
+    grants_manager = _supplied(supply.grants_manager, defaults.grants_manager)
+    usage_source = _supplied(supply.usage_source, defaults.usage_source)
 
     # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
     # carries the tenant admin key only when the address is the clearinghouse's runner list (D87).
@@ -231,17 +192,58 @@ async def default_parts(
         authenticators=authenticators,
         api_keys=api_keys,
         discovery_source=discovery_source,
-        transport=defaults.transport() if isinstance(supply.transport, _Unset) else supply.transport,
-        selection=supply.selection if not isinstance(supply.selection, _Unset) else MostCapacityFirst(),
+        transport=_supplied(supply.transport, defaults.transport),
+        selection=_supplied(supply.selection, MostCapacityFirst),
         allocation_manager=allocation_manager,
         grants_manager=grants_manager,
         usage_source=usage_source,
         secret_store=secret_store,
-        events=supply.events if not isinstance(supply.events, _Unset) else ReservedEventFeed(),
-        sessions=supply.sessions if not isinstance(supply.sessions, _Unset) else ReservedSessions(),
-        credentials=defaults.credentials() if isinstance(supply.credentials, _Unset) else supply.credentials,
-        allowances=defaults.allowances() if isinstance(supply.allowances, _Unset) else supply.allowances,
+        events=_supplied(supply.events, ReservedEventFeed),
+        sessions=_supplied(supply.sessions, ReservedSessions),
+        credentials=_supplied(supply.credentials, defaults.credentials),
+        allowances=_supplied(supply.allowances, defaults.allowances),
     )
+
+
+def _supplied[T](part: T | _Unset, default: Callable[[], T]) -> T:
+    """The part the caller supplied, or its default, which is built only when none was supplied."""
+    return default() if isinstance(part, _Unset) else part
+
+
+async def _sql_store(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> EngineStore:
+    from livepeer_builder.store import SqlStore
+
+    sql = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
+    own(stack, sql, sql.close)
+    return sql
+
+
+def _engine_keys(settings: EngineSettings, store: EngineStore) -> ApiKeys | None:
+    return ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
+
+
+def _own_authenticators(
+    settings: EngineSettings, stack: contextlib.AsyncExitStack
+) -> tuple[Authenticator, ...]:
+    """The deployment's own authenticators when it supplies none: the JWT bearer, with LPB_AUTH=jwt."""
+    if "jwt" not in settings.auth:
+        return ()
+    from livepeer_builder.adapters.jwt import jwt_authenticator
+
+    bearer = jwt_authenticator(settings)
+    own(stack, bearer, bearer.aclose)
+    return (bearer,)
+
+
+def _built_in_secret_store(settings: EngineSettings, store: EngineStore, clock: Clock) -> SecretStore:
+    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
+
+    database = (
+        EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
+        if settings.secret_key
+        else None
+    )
+    return RoutingSecretStore(database)
 
 
 @dataclass(frozen=True)

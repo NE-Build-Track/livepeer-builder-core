@@ -45,6 +45,7 @@ from livepeer_builder.protocols import ActorRepo, AllocationManager, SecretStore
 
 _LOG = logging.getLogger(__name__)
 ALLOWANCE = "/v1/allowance"  # the one read that is no clearinghouse route yet (payments.md)
+_LISTS_EVERY_TENANT = "lists every tenant"  # what three members of the port would do, and may not
 
 
 def tenant_path(tenant_id: str, rest: str = "") -> str:
@@ -71,64 +72,88 @@ class ClearinghouseAllocations:
         return _ActorAllocation(self, self._wire, tenant_id, actor_id)
 
     # -- the grant ----------------------------------------------------------------------------------
+    # Every member below but ``read_grant`` is async by protocol and awaits nothing: it refuses, or has
+    # nothing to do, before anything is sent. Each says so to SonarQube, as the provider fakes do.
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
         """The tenant's grant. Another tenant's id is the clearinghouse's 403."""
         return await self._wire.read_as(TenantGrant, tenant_path(grant_id, "/grant"))
 
-    async def top_up_grant(self, grant_id: str, amount: Money, idempotency_key: str) -> None:
+    async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager)
+        self, grant_id: str, amount: Money, idempotency_key: str
+    ) -> None:
         del grant_id, amount, idempotency_key
         _clearinghouse_admin_only("tops up a tenant's grant")
 
-    async def set_grant_status(self, grant_id: str, status: str) -> None:
+    async def set_grant_status(  # NOSONAR - async by protocol (AllocationManager)
+        self, grant_id: str, status: str
+    ) -> None:
         del grant_id, status
         _clearinghouse_admin_only("pauses or resumes a tenant")
 
-    async def create_grant(
+    async def create_grant(  # NOSONAR - async by protocol (AllocationManager)
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
     ) -> GrantRecord:
         del name, amount, metadata
         _clearinghouse_admin_only("onboards a tenant")
 
-    async def list_grants(self) -> list[GrantRecord]:
-        _clearinghouse_admin_only("lists every tenant")
+    async def list_grants(  # NOSONAR - async by protocol (AllocationManager)
+        self,
+    ) -> list[GrantRecord]:
+        _clearinghouse_admin_only(_LISTS_EVERY_TENANT)
 
-    async def grant_page(self, cursor: str | None) -> GrantPage:
+    async def grant_page(  # NOSONAR - async by protocol (AllocationManager)
+        self, cursor: str | None
+    ) -> GrantPage:
         del cursor
-        _clearinghouse_admin_only("lists every tenant")
+        _clearinghouse_admin_only(_LISTS_EVERY_TENANT)
 
-    async def grant_balances(self) -> list[TenantGrant]:
-        _clearinghouse_admin_only("lists every tenant")
+    async def grant_balances(  # NOSONAR - async by protocol (AllocationManager)
+        self,
+    ) -> list[TenantGrant]:
+        _clearinghouse_admin_only(_LISTS_EVERY_TENANT)
 
     # -- an allocation, with no actor named -----------------------------------------------------------
 
-    async def create_key_for_grant(
+    async def create_key_for_grant(  # NOSONAR - async by protocol (AllocationManager)
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
         del grant_id, name, amount, idempotency_key
         _needs_the_actor("create_key_for_grant")
 
-    async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
+    async def create_key(  # NOSONAR - async by protocol (AllocationManager)
+        self, allocation_id: str, name: str, idempotency_key: str
+    ) -> NewAllocationKey:
         del allocation_id, name, idempotency_key
         _needs_the_actor("create_key")
 
-    async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
+    async def top_up_allocation(  # NOSONAR - async by protocol (AllocationManager)
+        self, allocation_id: str, amount: Money, idempotency_key: str
+    ) -> None:
         del allocation_id, amount, idempotency_key
         _needs_the_actor("top_up_allocation")
 
-    async def set_allocation_status(self, allocation_id: str, status: str) -> None:
+    async def set_allocation_status(  # NOSONAR - async by protocol (AllocationManager)
+        self, allocation_id: str, status: str
+    ) -> None:
         del allocation_id, status
         _needs_the_actor("set_allocation_status")
 
-    async def revoke_allocation(self, allocation_id: str) -> None:
+    async def revoke_allocation(  # NOSONAR - async by protocol (AllocationManager)
+        self, allocation_id: str
+    ) -> None:
         del allocation_id
         _needs_the_actor("revoke_allocation")
 
-    async def read_allocation(self, allocation_id: str) -> Allowance:
+    async def read_allocation(  # NOSONAR - async by protocol (AllocationManager)
+        self, allocation_id: str
+    ) -> Allowance:
         del allocation_id
         _needs_the_actor("read_allocation")
 
-    async def revoke_key(self, api_key_id: str) -> None:
+    async def revoke_key(  # NOSONAR - async by protocol (AllocationManager); nothing is sent
+        self, api_key_id: str
+    ) -> None:
         """Nothing is sent: a rotation at the clearinghouse ends the old key in the same command."""
         del api_key_id
 

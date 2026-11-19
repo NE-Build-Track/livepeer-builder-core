@@ -26,7 +26,7 @@ clearinghouse's address only. The key is in no error text, log line or ``repr``.
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -121,32 +121,33 @@ class ClearinghouseWire:
                 _named(error)
             )
         if response.status_code >= 400:
-            raise self._failed(method, response)
+            self._refuse(method, response)
         if not response.is_success:  # a redirect is not followed: the key goes to this address only
             raise ProviderError(
                 response.status_code, "the clearinghouse answered with a redirect, which is not followed"
             )
         return response
 
-    def _failed(self, method: Method, response: httpx.Response) -> Exception:
+    def _refuse(self, method: Method, response: httpx.Response) -> NoReturn:
+        """Raise what an error status means, each kind of failure by its own error."""
         status = response.status_code
         message, code = _problem(response)
         message = message.replace(self._token.get_secret_value(), "[the tenant admin key]")[:BODY_LIMIT]
         if status == 400 and code == _CURSOR_MISMATCH:
-            return CursorMismatch(message)
+            raise CursorMismatch(message)
         if status == 409 and code == _STILL_RUNNING:
-            return ProviderOutcomeUnknown(
+            raise ProviderOutcomeUnknown(
                 f"the clearinghouse is still running this command; {_APPLIED_OR_NOT}"
             )
         if status in _REFUSALS:
-            return ProviderError(status, message)
+            raise ProviderError(status, message)
         if status == 429:  # turned away before it was handled
-            return ProviderUnavailable("the clearinghouse is not taking requests now (HTTP 429)")
+            raise ProviderUnavailable("the clearinghouse is not taking requests now (HTTP 429)")
         if method == "POST":  # a 5xx or a 408 to a command: it may have been applied on the way
-            return ProviderOutcomeUnknown(f"the clearinghouse answered HTTP {status}; {_APPLIED_OR_NOT}")
+            raise ProviderOutcomeUnknown(f"the clearinghouse answered HTTP {status}; {_APPLIED_OR_NOT}")
         if status in (408, 503):
-            return ProviderUnavailable(f"the clearinghouse is not ready (HTTP {status})")
-        return ProviderError(status, message)
+            raise ProviderUnavailable(f"the clearinghouse is not ready (HTTP {status})")
+        raise ProviderError(status, message)
 
 
 def _no_answer(method: Method, what: str) -> ProviderUnavailable:

@@ -30,6 +30,7 @@ from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
+_JSON = "application/json"  # what the discovery reader asks for, and a runner's default content type
 # The SDK's identity call without its cache, which remembers a signer for the life of the process: a
 # probe has to ask the signer, not the memory of one (tests/unit/test_signer_probe.py).
 _ask_signer_identity = get_signer_info.__wrapped__
@@ -97,7 +98,7 @@ class HttpDiscoverySource:
         return runners
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": _JSON}
         if self._bearer is not None:
             headers["Authorization"] = f"Bearer {self._bearer.get_secret_value()}"
         request = client.build_request("GET", self._discovery_url, headers=headers)
@@ -165,7 +166,7 @@ class SdkRunnerTransport:
             body=request.raw_body
             if request.raw_body is not None
             else json.dumps({} if request.payload is None else request.payload).encode(),
-            content_type=request.content_type or "application/json",
+            content_type=request.content_type or _JSON,
             headers=request.headers,
             return_http_errors=request.return_http_errors,
             app=runner.app,
@@ -190,7 +191,7 @@ class SdkRunnerTransport:
         return RunnerReply(
             status_code=status,
             content=body,
-            content_type=content_type or "application/json",
+            content_type=content_type or _JSON,
             data=json_object(body, content_type),
             manifest_ids=events.ids,
             payment_sent=events.signed,

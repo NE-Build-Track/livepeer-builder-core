@@ -182,81 +182,69 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     tenant_path = f"/v1/clearinghouse/tenants/{segment(tenant_id)}"
 
-    grant_request = f"GET {tenant_path}/grant"
-    answer = await _get(client, base + tenant_path + "/grant", headers=headers)
-    grant: TenantGrant | None = None
-    refusal = _refused("clearinghouse_grant", grant_request, answer)
-    if refusal is None and answer is not None:
-        try:
-            grant = TenantGrant.model_validate_json(answer.content)
-        except ValidationError:
-            refusal = _unexpected("clearinghouse_grant", grant_request, "the grant could not be read", answer)
-        else:
-            if grant.tenant_id != tenant_id:
-                grant = None
-                detail = "the clearinghouse answered with another tenant's grant"
-                refusal = _unexpected("clearinghouse_grant", grant_request, detail, answer)
-    probes = [
-        refusal
-        or _probe(
-            "clearinghouse_grant",
-            "LPB_CLEARINGHOUSE_TENANT_ID",
-            grant_request,
-            "ok",
-            "the clearinghouse answered with this tenant's grant",
-            200,
-        )
-    ]
-
-    usage_request = f"GET {tenant_path}/usage"
-    answer = await _get(client, base + tenant_path + "/usage", params={"limit": "1"}, headers=headers)
-    refusal = _refused("clearinghouse_usage", usage_request, answer)
-    if refusal is None and answer is not None:
-        body = _json(answer)
-        if not isinstance(body, dict) or not isinstance(body.get("items"), list):
-            refusal = _unexpected(
-                "clearinghouse_usage", usage_request, "the usage page could not be read", answer
-            )
-    probes.append(
-        refusal
-        or _probe(
-            "clearinghouse_usage",
-            "LPB_CLEARINGHOUSE_TENANT_ID",
-            usage_request,
-            "ok",
-            "the clearinghouse answered with a page of this tenant's payment records",
-            200,
-        )
-    )
-
+    grant_probe, grant = await _tenant_grant(client, base, tenant_path, tenant_id, headers)
+    probes = [grant_probe, await _tenant_usage(client, base, tenant_path, headers)]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
-        list_request = f"GET {CLEARINGHOUSE_RUNNER_LIST}"
-        answer = await _get(client, settings.discovery_url, headers=headers)
-        refusal = _refused("clearinghouse_runner_list", list_request, answer)
-        if refusal is None and answer is not None and not isinstance(_json(answer), list):
-            refusal = _unexpected(
-                "clearinghouse_runner_list", list_request, "the runner list could not be read", answer
-            )
-        probes.append(
-            refusal
-            or _probe(
-                "clearinghouse_runner_list",
-                "LPB_DISCOVERY_URL",
-                list_request,
-                "ok",
-                "the clearinghouse answered with its runner list",
-                200,
-            )
-        )
+        probes.append(await _runner_list(client, settings.discovery_url, headers))
     return _checked("clearinghouse", probes, grant)
 
 
-def _refused(name: str, request: str, answer: Answer) -> PaymentProbe | None:
-    """What an answer that is no 2xx means, in the settings a person can look at; ``None`` for a 2xx."""
+async def _tenant_grant(
+    client: httpx.AsyncClient, base: str, tenant_path: str, tenant_id: str, headers: Mapping[str, str]
+) -> tuple[PaymentProbe, TenantGrant | None]:
+    """Who the engine is at the clearinghouse: its tenant's grant, when the read answered with it."""
+    name, request = "clearinghouse_grant", f"GET {tenant_path}/grant"
+    answer = _answered(name, request, await _get(client, base + tenant_path + "/grant", headers=headers))
+    if isinstance(answer, PaymentProbe):
+        return answer, None
+    try:
+        grant = TenantGrant.model_validate_json(answer.content)
+    except ValidationError:
+        return _unexpected(name, request, "the grant could not be read", answer), None
+    if grant.tenant_id != tenant_id:
+        detail = "the clearinghouse answered with another tenant's grant"
+        return _unexpected(name, request, detail, answer), None
+    detail = "the clearinghouse answered with this tenant's grant"
+    return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "ok", detail, 200), grant
+
+
+async def _tenant_usage(
+    client: httpx.AsyncClient, base: str, tenant_path: str, headers: Mapping[str, str]
+) -> PaymentProbe:
+    name, request = "clearinghouse_usage", f"GET {tenant_path}/usage"
+    url = base + tenant_path + "/usage"
+    answer = _answered(name, request, await _get(client, url, params={"limit": "1"}, headers=headers))
+    if isinstance(answer, PaymentProbe):
+        return answer
+    body = _json(answer)
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+        return _unexpected(name, request, "the usage page could not be read", answer)
+    detail = "the clearinghouse answered with a page of this tenant's payment records"
+    return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "ok", detail, 200)
+
+
+async def _runner_list(client: httpx.AsyncClient, url: str, headers: Mapping[str, str]) -> PaymentProbe:
+    name, request = "clearinghouse_runner_list", f"GET {CLEARINGHOUSE_RUNNER_LIST}"
+    answer = _answered(name, request, await _get(client, url, headers=headers))
+    if isinstance(answer, PaymentProbe):
+        return answer
+    if not isinstance(_json(answer), list):
+        return _unexpected(name, request, "the runner list could not be read", answer)
+    detail = "the clearinghouse answered with its runner list"
+    return _probe(name, "LPB_DISCOVERY_URL", request, "ok", detail, 200)
+
+
+def _answered(name: str, request: str, answer: Answer) -> PaymentProbe | httpx.Response:
+    """The answer when it is a 2xx; otherwise the probe that says what came in its place."""
     if answer is None:
         return _probe(
             name, "LPB_CLEARINGHOUSE_URL", request, "unavailable", "the clearinghouse did not answer"
         )
+    return _refused(name, request, answer) or answer
+
+
+def _refused(name: str, request: str, answer: httpx.Response) -> PaymentProbe | None:
+    """What an answer that is no 2xx means, in the settings a person can look at; ``None`` for a 2xx."""
     status = answer.status_code
     if answer.is_success:
         return None

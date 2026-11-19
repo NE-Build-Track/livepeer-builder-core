@@ -144,11 +144,7 @@ async def default_parts(
     """
     from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
     from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
-    from livepeer_builder.adapters.secrets import (
-        EncryptedDbSecretStore,
-        RoutingSecretStore,
-        SettingsSecretStore,
-    )
+    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
     from livepeer_builder.store import SqlStore
 
     supply = supply or EngineSupply()
@@ -187,7 +183,7 @@ async def default_parts(
             if settings.secret_key
             else None
         )
-        secret_store = RoutingSecretStore(SettingsSecretStore({}), database)  # no setting holds a secret
+        secret_store = RoutingSecretStore(database)
     else:
         secret_store = supply.secret_store
 

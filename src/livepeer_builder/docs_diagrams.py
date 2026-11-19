@@ -18,7 +18,7 @@ from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
 from livepeer_builder.adapters.runner_call import SdkRunnerStream
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import (
     ActorContext,
     Allowance,
@@ -57,7 +57,7 @@ from livepeer_builder.store.maintenance import SqlMaintenance
 DEFAULTS: dict[str, tuple[type, ...]] = {
     "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain, JwtBearerAuthenticator),
     "AccessPolicy": (DefaultPolicy,),
-    "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
+    "SecretStore": (RoutingSecretStore, EncryptedDbSecretStore),
     "WritableSecretStore": (RoutingSecretStore,),
     "DiscoverySource": (HttpDiscoverySource,),
     "SelectionPolicy": (MostCapacityFirst,),

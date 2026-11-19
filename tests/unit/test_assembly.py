@@ -11,7 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livepeer_builder import BuilderEngine, EngineSettings, generate_secret_key
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import ActorContext, AuthRequest, Runner
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import DiscoverySource
@@ -181,7 +181,7 @@ async def test_the_built_in_store_supplied_without_its_database_needs_the_secret
         store=store,
         clock=clock,
         allocation_manager=FakeAllocationManager(),
-        secret_store=RoutingSecretStore(SettingsSecretStore({}), None),
+        secret_store=RoutingSecretStore(None),
     )
     with pytest.raises(ValueError, match="LPB_SECRET_KEY"):
         await BuilderEngine.create(settings(), supply=supply)

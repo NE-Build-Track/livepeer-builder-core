@@ -402,7 +402,6 @@ classDiagram
         GET /v1/usage
     }
     class RoutingSecretStore
-    class SettingsSecretStore
     class EncryptedDbSecretStore {
         Fernet, lpb_secrets
     }
@@ -420,7 +419,6 @@ classDiagram
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
     SecretStore <|.. RoutingSecretStore
-    RoutingSecretStore o-- SettingsSecretStore
     RoutingSecretStore o-- EncryptedDbSecretStore
 ```
 

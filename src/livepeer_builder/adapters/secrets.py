@@ -1,11 +1,13 @@
 """SecretStore implementations. Enterprises may plug in Vault or a cloud secret manager instead.
 
-- SettingsSecretStore: read-only secrets supplied at startup.
-- EncryptedDbSecretStore: Fernet-encrypted rows in the engine database (the default for payment keys).
+- EncryptedDbSecretStore: Fernet-encrypted rows in the engine database, where payment keys are kept.
+- RoutingSecretStore: the engine's default, which is that store when ``LPB_SECRET_KEY`` is set.
+
+No secret is read from settings: the shared payment key was the only one, and it went with the
+``per_application`` mode (D82).
 """
 
 import secrets as _random
-from collections.abc import Mapping
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -13,33 +15,7 @@ from livepeer_builder.contracts import SecretRef
 from livepeer_builder.errors import InvalidRequest, NotFound
 from livepeer_builder.protocols import Clock, SecretRepo
 
-SETTINGS_PREFIX = "settings:"
 DB_PREFIX = "db:"
-
-
-class SettingsSecretStore:
-    """Secrets supplied by the operator at startup. Refs look like ``settings:<name>``."""
-
-    def __init__(self, values: Mapping[str, str]) -> None:
-        self._values = dict(values)
-
-    def ref(self, name: str) -> SecretRef:
-        if name not in self._values:
-            raise NotFound(f"no configured secret {name!r}")
-        return SecretRef(ref=SETTINGS_PREFIX + name)
-
-    async def put(self, name: str, secret: str) -> SecretRef:
-        del name, secret
-        raise InvalidRequest("configured secrets are read-only")
-
-    async def get(self, ref: SecretRef) -> str:
-        name = ref.ref.removeprefix(SETTINGS_PREFIX)
-        if not ref.ref.startswith(SETTINGS_PREFIX) or name not in self._values:
-            raise NotFound("unknown secret reference")
-        return self._values[name]
-
-    async def delete(self, ref: SecretRef) -> None:
-        del ref  # nothing to delete: configuration owns these values
 
 
 class EncryptedDbSecretStore:
@@ -74,10 +50,10 @@ class EncryptedDbSecretStore:
 
 
 class RoutingSecretStore:
-    """Routes refs by prefix, so configured and database secrets coexist behind one SecretStore."""
+    """The engine's default SecretStore: the encrypted database store, or none without ``LPB_SECRET_KEY``.
+    With none it stores and reads nothing, and says which setting is missing."""
 
-    def __init__(self, settings: SettingsSecretStore, database: EncryptedDbSecretStore | None) -> None:
-        self._settings = settings
+    def __init__(self, database: EncryptedDbSecretStore | None) -> None:
         self._database = database
 
     # async by protocol (WritableSecretStore): a plug-in store may need I/O to answer. Nothing to await here.
@@ -91,8 +67,6 @@ class RoutingSecretStore:
         return await self._database.put(name, secret)
 
     async def get(self, ref: SecretRef) -> str:
-        if ref.ref.startswith(SETTINGS_PREFIX):
-            return await self._settings.get(ref)
         if self._database is None:
             raise InvalidRequest("reading stored secrets needs LPB_SECRET_KEY")
         return await self._database.get(ref)

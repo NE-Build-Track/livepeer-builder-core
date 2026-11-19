@@ -17,12 +17,13 @@ from livepeer_builder.adapters.batteries import (
     batteries_http_client,
 )
 from livepeer_builder.adapters.discovery_inventory import read_inventory
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     CursorMismatch,
     InvalidRequest,
+    NotFound,
     ProviderError,
     ProviderUnavailable,
 )
@@ -262,11 +263,6 @@ def test_discovery_entries_become_runners() -> None:
 
 
 async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
-    configured = SettingsSecretStore({"shared": "lpg_shared"})
-    assert await configured.get(configured.ref("shared")) == "lpg_shared"
-    with pytest.raises(InvalidRequest):
-        await configured.put("x", "y")
-
     key = generate_secret_key()
     database = EncryptedDbSecretStore(store, key, clock)
     ref = await database.put("lpg/default/alice", "lpg_alice")
@@ -274,13 +270,20 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
     with pytest.raises(InvalidRequest, match="decrypted"):
         await EncryptedDbSecretStore(store, generate_secret_key(), clock).get(ref)
 
-    routing = RoutingSecretStore(configured, database)
-    assert await routing.get(SecretRef(ref="settings:shared")) == "lpg_shared"
-    assert await routing.get(ref) == "lpg_alice"
+    built_in = RoutingSecretStore(database)
+    assert await built_in.get(ref) == "lpg_alice"
     with pytest.raises(InvalidRequest, match="LPB_SECRET_KEY"):
-        await RoutingSecretStore(configured, None).put("x", "y")
+        await RoutingSecretStore(None).put("x", "y")
     # #112 C2: the optional check provisioning asks before the provider is called
-    assert await routing.writable() and not await RoutingSecretStore(configured, None).writable()
+    assert await built_in.writable() and not await RoutingSecretStore(None).writable()
+
+
+async def test_no_secret_comes_from_settings(store: SqlStore, clock: FixedClock) -> None:
+    """The shared payment key was the one secret the built-in store read from settings, under a
+    ``settings:`` reference. It went with per_application (#162): such a reference is unknown."""
+    built_in = RoutingSecretStore(EncryptedDbSecretStore(store, generate_secret_key(), clock))
+    with pytest.raises(NotFound, match="unknown secret reference"):
+        await built_in.get(SecretRef(ref="settings:shared_payment_key"))
 
 
 def test_settings_from_environment() -> None:

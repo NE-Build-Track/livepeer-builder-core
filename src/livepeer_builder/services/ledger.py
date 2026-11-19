@@ -160,10 +160,7 @@ class OperationLedger:
         )
         held = await self._repo.begin_operation(record)
         if held is not None:
-            if held.fingerprint != record.fingerprint and not (
-                earlier_request is not None
-                and held.fingerprint == fingerprint(command, await earlier_request())
-            ):
+            if not await _same_command(held, record, earlier_request):
                 raise OperationConflict(held)  # before any provider call
             if held.state == "done":
                 return _replayed(held, answer)
@@ -223,6 +220,20 @@ class OperationLedger:
         if (now - held.started_at).total_seconds() < self._stale_s:
             raise OperationInProgress(held, self._until_stale(held))
         return await self._repo.resume_operation(held, now)
+
+
+async def _same_command(
+    held: OperationRecord,
+    record: OperationRecord,
+    earlier_request: Callable[[], Awaitable[Mapping[str, Any]]] | None,
+) -> bool:
+    """Whether the record holding a reference is this command's: it has the command's fingerprint, or
+    the fingerprint of the request as an earlier release recorded it."""
+    if held.fingerprint == record.fingerprint:
+        return True
+    if earlier_request is None:
+        return False
+    return held.fingerprint == fingerprint(record.command, await earlier_request())
 
 
 def _replayed[T](held: OperationRecord, answer: TypeAdapter[T]) -> T:

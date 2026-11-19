@@ -112,7 +112,7 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
             """The grant's total, its unallocated balance and its status."""
             return await desk.grant(actor, tenant_id)
 
-    @app.get(TENANT + "/actors", response_model=list[KnownActor])
+    @app.get(TENANT + "/actors")
     async def list_actors(
         actor: Actor,
         tenant_id: PathId,
@@ -125,11 +125,11 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
             actor, tenant_id=tenant_id, status=status, allotted=allotted, limit=limit
         )
 
-    @app.get(ALLOCATION, response_model=ActorAllocation)
+    @app.get(ALLOCATION)
     async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.get_actor(actor, tenant_id, actor_id)
 
-    @app.post(ALLOCATION, response_model=ActorAllocation, status_code=201)
+    @app.post(ALLOCATION, status_code=201)
     async def allot(
         actor: Actor,
         tenant_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
@@ -146,23 +146,23 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         )
         return replay(response, await engine.payments.allot(actor, request))
 
-    @app.post(ALLOCATION + "/top-up", response_model=ActorAllocation)
+    @app.post(ALLOCATION + "/top-up")
     async def top_up(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: TopUpRequest, response: Response
     ) -> ActorAllocation:
         return replay(response, await engine.payments.top_up(actor, tenant_id, actor_id, body))
 
-    @app.post(ALLOCATION + "/status", response_model=ActorAllocation)
+    @app.post(ALLOCATION + "/status")
     async def set_status(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: StatusBody
     ) -> ActorAllocation:
         return await engine.payments.set_status(actor, tenant_id, actor_id, body.status)
 
-    @app.post(ALLOCATION + "/revoke", response_model=ActorAllocation)
+    @app.post(ALLOCATION + "/revoke")
     async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.revoke(actor, tenant_id, actor_id)
 
-    @app.post(ALLOCATION + "/rotate-payment-key", response_model=ActorAllocation)
+    @app.post(ALLOCATION + "/rotate-payment-key")
     async def rotate_payment_key(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
     ) -> ActorAllocation:

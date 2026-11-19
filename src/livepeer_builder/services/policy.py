@@ -30,6 +30,7 @@ BEYOND_A_TENANT = frozenset({Operation.ADMIN_TENANTS, Operation.ADMIN_COSTS, Ope
 TENANT_WRITES = frozenset({Operation.ADMIN_KEYS, Operation.ADMIN_ALLOCATIONS})
 # The kinds of key a tenant admin never issues, rotates or revokes.
 ADMIN_KINDS: frozenset[CredentialKind] = frozenset({"clearinghouse_admin", "tenant_admin"})
+OTHER_TENANT = "resource belongs to another tenant"
 
 
 class DefaultPolicy:
@@ -54,7 +55,7 @@ class DefaultPolicy:
             if operation not in AUDITOR_OPERATIONS:
                 raise AccessDenied(f"{operation} is not a read; an auditor credential only reads")
             if resource is not None and resource.tenant_id != actor.tenant_id:
-                raise AccessDenied("resource belongs to another tenant")
+                raise AccessDenied(OTHER_TENANT)
             return
         if operation in ADMIN_OPERATIONS:
             raise AccessDenied(f"{operation} requires an admin credential")
@@ -63,7 +64,7 @@ class DefaultPolicy:
         if resource is None:
             return
         if resource.tenant_id != actor.tenant_id:
-            raise AccessDenied("resource belongs to another tenant")
+            raise AccessDenied(OTHER_TENANT)
         if resource.owner_actor_id is not None and resource.owner_actor_id != actor.actor_id:
             raise AccessDenied("resource belongs to another actor")
 
@@ -78,7 +79,7 @@ def _check_tenant_admin(actor: ActorContext, operation: Operation, resource: Res
             raise AccessDenied(f"{operation} names no tenant; a tenant admin acts on its own tenant only")
         return
     if resource.tenant_id != actor.tenant_id:
-        raise AccessDenied("resource belongs to another tenant")
+        raise AccessDenied(OTHER_TENANT)
     if operation == Operation.ADMIN_KEYS and resource.credential_kind in ADMIN_KINDS:
         raise AccessDenied(
             f"a tenant admin does not issue, rotate or revoke a {resource.credential_kind} key"

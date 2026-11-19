@@ -426,15 +426,15 @@ class FakeAllocationManager:
         self._held[grant.id] = _Grant(grant, amount.amount, amount.amount)
         return grant
 
-    async def read_grant(self, grant_id: str) -> TenantGrant:
+    async def read_grant(self, grant_id: str) -> TenantGrant:  # NOSONAR - async by protocol
         self._called("read_grant")
         return _tenant_grant(self._grant(grant_id))
 
-    async def grant_balances(self) -> list[TenantGrant]:
+    async def grant_balances(self) -> list[TenantGrant]:  # NOSONAR - async by protocol
         self._called("grant_balances")
         return [_tenant_grant(self._held[grant.id]) for grant in self.grants]
 
-    async def set_grant_status(self, grant_id: str, status: str) -> None:
+    async def set_grant_status(self, grant_id: str, status: str) -> None:  # NOSONAR - async by protocol
         self._called("set_grant_status")
         grant = self._grant(grant_id)
         grant.record = grant.record.model_copy(update={"status": status})

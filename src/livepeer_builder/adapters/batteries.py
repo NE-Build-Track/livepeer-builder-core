@@ -35,6 +35,7 @@ from livepeer_builder.contracts.costs import set_aside_record, unstorable_field,
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
+_GRANTS = "/v1/grants"
 _USAGE_STATUSES = frozenset({"applied", "quarantined", "ignored", "duplicate"})
 _NO_FEE = ("", "[error]")  # what Batteries serves, with null, for a fee it has not or could not convert
 # A usage item's text fields: Batteries serves each as a string or null
@@ -114,12 +115,12 @@ class BatteriesClient:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{segment(allocation_id)}"))
 
     async def list_grants(self) -> list[GrantRecord]:
-        return [grant_from_item(item) for item in await self._pages("/v1/grants", {})]
+        return [grant_from_item(item) for item in await self._pages(_GRANTS, {})]
 
     async def grant_page(self, cursor: str | None) -> GrantPage:
         """One page, oldest first: a resumed grant create looks for its tag page by page (D57)."""
         params = {"limit": "1000"} | ({"cursor": cursor} if cursor else {})  # Batteries' largest page
-        items, following = list_page(await self._request("GET", "/v1/grants", params=params))
+        items, following = list_page(await self._request("GET", _GRANTS, params=params))
         return GrantPage(grants=tuple(grant_from_item(item) for item in items), next_cursor=following or None)
 
     async def create_grant(
@@ -128,7 +129,7 @@ class BatteriesClient:
         body = {"name": name, "status": "active", "sponsor": name, **_amount_fields(amount)}
         if metadata:  # Batteries takes string fields only: the object travels as JSON text
             body["metadata"] = json.dumps(dict(metadata), sort_keys=True)
-        grant_id = _required(await self._request("POST", "/v1/grants", json=body), "id")
+        grant_id = _required(await self._request("POST", _GRANTS, json=body), "id")
         # Batteries answers the create with the id only; the record is the grant as it stored it. The grant
         # exists by now, so a failed read is an unknown outcome, never a refusal that frees the reference.
         try:
@@ -143,7 +144,7 @@ class BatteriesClient:
 
     async def grant_balances(self) -> list[TenantGrant]:
         """Every grant with its unallocated balance, oldest first."""
-        grants = await self._pages("/v1/grants", {})
+        grants = await self._pages(_GRANTS, {})
         allotted = await self._allotted(None)
         return [tenant_grant(grant, allotted.get(_required(grant, "id"), Decimal(0))) for grant in grants]
 

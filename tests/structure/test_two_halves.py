@@ -82,6 +82,7 @@ CLEARINGHOUSE = {
 # that mounts the sets. A shared module may be imported by either half.
 SHARED = {
     "services/__init__.py",
+    "services/arguments.py",  # an in-process argument checked by the REST body's rule (#106 review)
     "services/keys.py",
     "services/ledger.py",
     "services/ownership.py",

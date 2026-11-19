@@ -76,6 +76,16 @@ REFUSED_IN_CODE = [
         ("value_error", (), "Value error, LPB_JWT_ISSUER is required when LPB_AUTH includes jwt"),
         id="the rule on JWT settings",
     ),
+    pytest.param(  # #167
+        {"http_private_port": 8080},
+        (
+            "value_error",
+            (),
+            "Value error, LPB_HTTP_PRIVATE_PORT (8080) is the public listener's port on the same host: "
+            "the private listener needs an address of its own",
+        ),
+        id="the rule on the two listeners",
+    ),
     pytest.param(
         {"discovery_url": ABSENT},
         ("missing", ("discovery_url",), "Field required"),

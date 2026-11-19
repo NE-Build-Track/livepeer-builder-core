@@ -165,7 +165,7 @@ sequenceDiagram
     participant Bat as Batteries management API
     participant Sec as EncryptedDbSecretStore
     participant DB as SqlStore (lpb_actors)
-    Op->>H: POST {amount: {amount: "1", currency: "USD"}} (the path names the tenant)
+    Op->>H: POST {amount: {amount: "1", currency: "USD"}} (the path names the tenant, and a tenant admin's names none)
     H->>Pay: allot(admin, AllotRequest)
     Pay->>Pay: policy.check(ADMIN_ALLOCATIONS, the tenant)
     Pay->>DB: get_actor(app, actor)

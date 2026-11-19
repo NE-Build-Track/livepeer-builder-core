@@ -105,9 +105,9 @@ STATUSES: dict[int, tuple[str, str]] = {
 
 async def send(house: Clearinghouse, method: str) -> None:
     if method == "POST":
-        await house.wire.write("/v1/clearinghouse/tenants/grant_1/x", {"operation_ref": "r"})
+        await house.wire.write("/v1/clearinghouse/x", {"operation_ref": "r"})
     else:
-        await house.wire.read("/v1/clearinghouse/tenants/grant_1/x")
+        await house.wire.read("/v1/clearinghouse/x")
 
 
 async def failure_of(house: Clearinghouse, method: str) -> Exception:
@@ -181,7 +181,7 @@ async def test_a_command_the_clearinghouse_is_still_running_is_an_unknown_outcom
 async def test_a_refused_cursor_is_a_cursor_mismatch() -> None:
     house = Clearinghouse(problem(400, "invalid cursor", code="cursor_mismatch"))
     with pytest.raises(CursorMismatch):
-        await house.wire.read("/v1/clearinghouse/tenants/grant_1/usage", {"cursor": "c9"})
+        await house.wire.read("/v1/clearinghouse/usage", {"cursor": "c9"})
 
 
 @pytest.mark.parametrize("body", [b"not json", b"[1, 2]", b'"text"', b"", b'{"tenant_id": 7}'])
@@ -229,12 +229,12 @@ async def test_a_request_past_its_deadline_is_stopped_and_classified() -> None:
 
 async def test_every_request_carries_the_key_as_a_bearer_and_goes_to_the_clearinghouse() -> None:
     house = Clearinghouse(answers(200, {}))
-    await house.wire.read("/v1/clearinghouse/tenants/grant_1/grant", {"limit": "1"})
-    await house.wire.write("/v1/clearinghouse/tenants/grant_1/actors/a/allocation/revoke")
+    await house.wire.read("/v1/clearinghouse/grant", {"limit": "1"})
+    await house.wire.write("/v1/clearinghouse/actors/a/allocation/revoke")
     assert [request.headers["authorization"] for request in house.requests] == [f"Bearer {TOKEN}"] * 2
     assert [str(request.url) for request in house.requests] == [
-        BASE + "/v1/clearinghouse/tenants/grant_1/grant?limit=1",
-        BASE + "/v1/clearinghouse/tenants/grant_1/actors/a/allocation/revoke",
+        BASE + "/v1/clearinghouse/grant?limit=1",
+        BASE + "/v1/clearinghouse/actors/a/allocation/revoke",
     ]
 
 

@@ -119,8 +119,10 @@ services:
     depends_on: [signer, discovery]
 
   # How a clearinghouse admin reaches the private listener: a curl in the engine's own network
-  # namespace, where 127.0.0.1:8081 is that listener. Not started by `up`:
+  # namespace, where 127.0.0.1:8081 is that listener. Not started by `up`. There the clearinghouse admin
+  # names the tenant in the path; a tenant's own routes, which name none, are on the public listener:
   #   docker compose run --rm private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants
+  #   docker compose run --rm private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants/$TENANT/grant
   private:
     image: *batteries-image  # for its curl; nothing of Batteries runs here
     profiles: [admin]

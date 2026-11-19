@@ -14,11 +14,22 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
 
+## Upgrading to the M4 hardening (#112 to #115)
+
+- **An empty `operation_ref` is refused** (#113, C19). A job or session request that sends
+  `operation_ref: ""` is a 422 that names the field (a `ValidationError` in process), before anything
+  is written; it used to count as a reference. A client that sends an empty string for "no retry key"
+  leaves the field out instead ([engine.md](engine.md#idempotency)).
+
 ## Upgrading to the domain-language names
 
 On 18 November 2026 the names in every contract followed the domain language (D83, #163). Only names
-changed: no behaviour, no status code and no permission. No old name is kept as an alias: an old route
-is 404, an old field is refused as unknown, and an old environment variable is ignored.
+changed: no behaviour, no status code and no permission, except where an old name would otherwise be
+ignored without a word (#163 review): an engine with JWT must name where a token's tenant comes from,
+a key request and a reconciliation must name their tenant, and every request body refuses a field it
+does not know.
+No old name is kept as an alias: an old route is 404, an old field is refused as unknown, and an old
+environment variable is ignored.
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -41,15 +52,17 @@ is 404, an old field is refused as unknown, and an old environment variable is i
 **Before you start the new release:**
 
 - **Rename the environment variables.** An old one names no setting and is ignored, like any variable
-  the engine does not know, and the engine still starts. With `LPB_JWT_APPLICATION_CLAIM` ignored, every
-  token is read as the tenant `LPB_JWT_TENANT_ID` (`default`), so tenants that the claim kept apart are
-  one tenant. With `LPB_JWT_APPLICATION_ID` ignored, tokens are read as `default` and no longer reach
-  the records of the tenant they had. With `LPB_BATTERIES_OPERATOR_TOKEN` ignored, the grant desk is
-  off.
+  the engine does not know. With `jwt` in `LPB_AUTH`, an engine still set with
+  `LPB_JWT_APPLICATION_CLAIM` or `LPB_JWT_APPLICATION_ID` refuses to start: exactly one of
+  `LPB_JWT_TENANT_CLAIM` and `LPB_JWT_TENANT_ID` must be set, and neither has a default (#163 review),
+  so tokens are never put in a tenant nobody chose. With `LPB_BATTERIES_OPERATOR_TOKEN` ignored, the
+  grant desk is off.
 - **Migrate.** `lpb migrate` applies revision 0014, or the engine does at start with
   `LPB_AUTO_MIGRATE` ([persistence.md](persistence.md#migrations)). Every row is kept.
 - **Move the clients.** A client that sends `application_id`, the kind `admin` or an old path is
-  refused. The builder console and the sample apps move with their next pin.
+  refused. So is a key request without `tenant_id` and a reconciliation without `?tenant_id=`: neither
+  is read as `default` any more, and any field a request body does not know is a 422 (#163 review).
+  The builder console and the sample apps move with their next pin.
 
 **What a repeat gets.** An admin command recorded before the upgrade is still answered from its record
 when it is repeated under the new names: the ledger compares the same fingerprint, and the provider
@@ -115,7 +128,7 @@ field is kept as an alias: an old path is 404, and an old field is a 422.
 | Key commands, in embedded mode | `keys.get(admin, key_id)`, `keys.rotate(...)`, `keys.revoke(admin, key_id)` | Each also takes an optional `tenant_id`, the tenant a route named |
 | The `AllocationManager` port | | Three more methods, which the tenant desk calls on the grants manager: `read_grant`, `grant_balances`, `set_grant_status` |
 | The command a ledger record names | `create_grant` | `onboard_tenant`, and `set_tenant_status`. Records of `create_grant` are kept |
-| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id. `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
+| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id, and `create_grant` the next `grant_<n>` no grant holds (#165 review). `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
 | The `engine.started` log line | `grant_desk` | `tenant_desk` |
 
 **Before you start the new release:**
@@ -332,6 +345,45 @@ own.
 - **A caller's own implementation of `EngineApi`** states `role`.
 - **An entrypoint that calls `create_app` for a clearinghouse** builds two apps, `listener="public"` and
   `listener="private"`, or calls `serve`.
+
+## Upgrading to a tenant's routes that name no tenant
+
+On 19 November 2026 Mike amended D87 point 3 after the reviewer's comment on #175 (#165, #166). A
+tenant's routes come in two forms, which call the same service with the tenant they resolve. On the
+public listener they name no tenant: the tenant is the credential's, a tenant admin's or an auditor's.
+On the private listener the clearinghouse admin names the tenant, at the paths it used before. One rule
+holds on every listener, one listener included: a path that names no tenant refuses a clearinghouse
+admin, and a path that names a tenant refuses a tenant credential, its own tenant's included. No service
+rule changed: grant limits, repeat-safety, the allocation answer's amounts and payment keys are as they
+were. There is no migration.
+
+| What | Before | Now |
+| --- | --- | --- |
+| A tenant admin's or an auditor's routes | `/v1/clearinghouse/tenants/{tenant_id}/grant`, `.../usage`, `.../actors`, `.../actors/{actor_id}/allocation` and its `/top-up`, `/status`, `/revoke` and `/rotate-payment-key`, and `.../keys`, `.../keys/{key_id}` and its `/rotate` and `/revoke` | The same routes without `tenants/{tenant_id}`: `GET /v1/clearinghouse/grant`, `GET /v1/clearinghouse/usage`, `GET /v1/clearinghouse/actors`, `/v1/clearinghouse/actors/{actor_id}/allocation` and its commands, and `/v1/clearinghouse/keys` and its commands. The tenant is the credential's. Who may call each, its body and its answers are as they were |
+| A tenant credential at a path that names a tenant | Its own tenant was answered; another tenant was 403 (`resource belongs to another tenant`) | 403 for its own tenant too, before any lookup or provider call. On the public listener such a path is 404 |
+| A clearinghouse admin at a path that names a tenant | Answered on the private listener and with one listener | The same |
+| A clearinghouse admin at a path that names no tenant | | 403: it has no tenant of its own |
+| An actor or a service credential at a tenant's routes | 403 (the policy's) | 403, in either form |
+| The public listener | Every route but the private group | Every route but the private group, which now holds the paths that name a tenant |
+| The private listener | Every route | Every route but a tenant's own routes, which name no tenant (404 there) |
+| `/v1/clearinghouse/keys`, `/v1/clearinghouse/keys/{key_id}` and its commands | 404: an engine's own keys left them for `/v1/keys` in #164 | A tenant's own access keys. A clearinghouse admin is 403 there, and the engine's own keys stay at `/v1/keys` |
+| `GET /v1/clearinghouse/actors` | 404 since #165 | A tenant's own actor list. A `tenant_id` in its query is not read |
+| An engine in its `work` role | Called `/v1/clearinghouse/tenants/{LPB_CLEARINGHOUSE_TENANT_ID}/...`, and the clearinghouse refused another tenant (403) | Calls the paths that name no tenant. A command about another tenant than `LPB_CLEARINGHOUSE_TENANT_ID` is refused in the engine before anything is sent: a `ProviderError` 403, `resource belongs to another tenant`, as the clearinghouse's was |
+| `lpb payments check` | `GET /v1/clearinghouse/tenants/{t}/grant` and `.../usage` | `GET /v1/clearinghouse/grant` and `GET /v1/clearinghouse/usage`. A 403 names `LPB_CLEARINGHOUSE_TOKEN`: the key is not a tenant admin's or an auditor's. A grant of another tenant than `LPB_CLEARINGHOUSE_TENANT_ID` is `unexpected` and names that setting |
+| `http/clearinghouse.py` | `mount_tenant_routes` (a tenant's routes and the runner list) and `mount_clearinghouse_admin_routes` | `mount_tenant_routes` (a tenant's own routes, which name no tenant), `mount_named_tenant_routes`, `mount_runner_list_routes` and `mount_clearinghouse_admin_routes`. `mount_clearinghouse_routes` mounts them all with the signer's two paths |
+| `http/listeners.py` | `RouteGroup(mount, half, private=False)`, `Listener.serves_private_routes`, `EVERY_LISTENER` and `PRIVATE_ONLY` | `RouteGroup(mount, half, served_on="every")`, where `served_on` is `every`, `public` or `private`, and `RouteGroup.served_by(listener)`; `Listener` has its name alone; and `PUBLIC_ONLY` beside the two tuples |
+| The published schema | The private group's routes carry the tag `private listener` | and a tenant's own routes carry `public listener` |
+
+**Before you start the new release:**
+
+- **A tenant's admin and auditor** (an enterprise app, a dashboard, a console's tenant view) drop
+  `tenants/{tenant_id}` from every path they call. Nothing else in the request changes.
+- **A clearinghouse admin** keeps its paths, on the private listener, or on the one listener of a
+  deployment that has one. A script that used a tenant admin key at those paths moves to the paths that
+  name no tenant.
+- **Upgrade a clearinghouse and the engines that use it together.** An engine in its `work` role of this
+  release calls paths that an earlier clearinghouse does not serve, and one of an earlier release calls
+  paths that this clearinghouse serves on its private listener only. Run `lpb payments check` after.
 
 ## Upgrading to async jobs
 

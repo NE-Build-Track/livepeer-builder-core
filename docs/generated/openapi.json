@@ -959,6 +959,7 @@
         "type": "object"
       },
       "IssueKeyBody": {
+        "additionalProperties": false,
         "properties": {
           "actor_id": {
             "maxLength": 200,
@@ -1005,7 +1006,6 @@
             "title": "Permissions"
           },
           "tenant_id": {
-            "default": "default",
             "maxLength": 200,
             "minLength": 1,
             "title": "Tenant Id",
@@ -1014,6 +1014,7 @@
         },
         "required": [
           "actor_id",
+          "tenant_id",
           "operation_ref"
         ],
         "title": "IssueKeyBody",
@@ -2124,6 +2125,7 @@
         "type": "object"
       },
       "RotateBody": {
+        "additionalProperties": false,
         "properties": {
           "operation_ref": {
             "maxLength": 200,
@@ -2139,6 +2141,7 @@
         "type": "object"
       },
       "RotateKeyBody": {
+        "additionalProperties": false,
         "properties": {
           "label": {
             "anyOf": [
@@ -2547,6 +2550,7 @@
         "type": "object"
       },
       "StatusBody": {
+        "additionalProperties": false,
         "properties": {
           "status": {
             "enum": [
@@ -2699,6 +2703,7 @@
         "type": "object"
       },
       "TenantStatusBody": {
+        "additionalProperties": false,
         "properties": {
           "operation_ref": {
             "maxLength": 200,
@@ -2763,6 +2768,7 @@
         "type": "object"
       },
       "UsageBody": {
+        "additionalProperties": false,
         "properties": {
           "quantities": {
             "additionalProperties": {
@@ -3011,9 +3017,438 @@
         ]
       }
     },
+    "/v1/clearinghouse/actors": {
+      "get": {
+        "description": "The tenant's allotted actors and the people an identity provider signed in (D46, D48).",
+        "operationId": "list_actors_v1_clearinghouse_actors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "exhausted",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "allotted",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allotted"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KnownActor"
+                  },
+                  "title": "Response List Actors V1 Clearinghouse Actors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Actors",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/actors/{actor_id}/allocation": {
+      "get": {
+        "description": "The actor's allocation: its record, and as `allowance` what the payment provider reports for\nit now (allotted, spent, available, status). `allowance` is `null` when the provider could not\nbe read.",
+        "operationId": "get_actor_v1_clearinghouse_actors__actor_id__allocation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllocationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Actor",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      },
+      "post": {
+        "description": "Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment\nkey, whose token is shown once.",
+        "operationId": "allot_v1_clearinghouse_actors__actor_id__allocation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllotBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyedAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Allot",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/actors/{actor_id}/allocation/revoke": {
+      "post": {
+        "operationId": "revoke_v1_clearinghouse_actors__actor_id__allocation_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/actors/{actor_id}/allocation/rotate-payment-key": {
+      "post": {
+        "description": "Replace the actor's payment key, and the Batteries key behind it. The old one stops at once.",
+        "operationId": "rotate_payment_key_v1_clearinghouse_actors__actor_id__allocation_rotate_payment_key_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyedAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Payment Key",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/actors/{actor_id}/allocation/status": {
+      "post": {
+        "operationId": "set_status_v1_clearinghouse_actors__actor_id__allocation_status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Status",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/actors/{actor_id}/allocation/top-up": {
+      "post": {
+        "operationId": "top_up_v1_clearinghouse_actors__actor_id__allocation_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Up",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
     "/v1/clearinghouse/discovery": {
       "get": {
-        "description": "The clearinghouse's runner list, in livepeer/node's discovery format: what an enterprise's\nengine reads as its ``LPB_DISCOVERY_URL``. The document is served as the clearinghouse read\nit. Any credential of a tenant may read it.",
+        "description": "The clearinghouse's runner list, in livepeer/node's discovery format: what an enterprise's\nengine reads as its ``LPB_DISCOVERY_URL``. The document is served as the clearinghouse read it.\nAny credential of a tenant may read it.",
         "operationId": "discovery_v1_clearinghouse_discovery_get",
         "responses": {
           "200": {
@@ -3036,6 +3471,261 @@
         "summary": "Discovery",
         "tags": [
           "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/grant": {
+      "get": {
+        "description": "The grant's total, its unallocated balance and its status.",
+        "operationId": "get_grant_v1_clearinghouse_grant_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grant",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/keys": {
+      "get": {
+        "operationId": "list_tenant_keys_v1_clearinghouse_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccessKey"
+                  },
+                  "title": "Response List Tenant Keys V1 Clearinghouse Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tenant Keys",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      },
+      "post": {
+        "description": "Issue an auditor key for the tenant, or, as a clearinghouse admin, another tenant admin key.",
+        "operationId": "issue_tenant_key_v1_clearinghouse_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Tenant Key",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/keys/{key_id}": {
+      "get": {
+        "operationId": "get_tenant_key_v1_clearinghouse_keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tenant Key",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/keys/{key_id}/revoke": {
+      "post": {
+        "operationId": "revoke_tenant_key_v1_clearinghouse_keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Tenant Key",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_tenant_key_v1_clearinghouse_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Tenant Key",
+        "tags": [
+          "clearinghouse half",
+          "public listener"
         ]
       }
     },
@@ -3215,7 +3905,8 @@
         ],
         "summary": "List Actors",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3226,21 +3917,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "actor_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3274,7 +3965,8 @@
         ],
         "summary": "Get Actor",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       },
       "post": {
@@ -3283,21 +3975,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "actor_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3341,7 +4033,8 @@
         ],
         "summary": "Allot",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3351,21 +4044,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "actor_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3399,7 +4092,8 @@
         ],
         "summary": "Revoke",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3410,21 +4104,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "actor_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3468,7 +4162,8 @@
         ],
         "summary": "Rotate Payment Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3478,21 +4173,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "actor_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3536,7 +4231,8 @@
         ],
         "summary": "Set Status",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3546,21 +4242,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "actor_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3604,7 +4300,8 @@
         ],
         "summary": "Top Up",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3653,7 +4350,8 @@
         ],
         "summary": "Get Grant",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3757,7 +4455,8 @@
         ],
         "summary": "List Tenant Keys",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       },
       "post": {
@@ -3814,7 +4513,8 @@
         ],
         "summary": "Issue Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3824,21 +4524,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "key_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3872,7 +4572,8 @@
         ],
         "summary": "Get Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3882,21 +4583,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "key_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3923,7 +4624,8 @@
         ],
         "summary": "Revoke Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3933,21 +4635,21 @@
         "parameters": [
           {
             "in": "path",
-            "name": "tenant_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
             "name": "key_id",
             "required": true,
             "schema": {
               "maxLength": 200,
               "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           }
@@ -3991,7 +4693,8 @@
         ],
         "summary": "Rotate Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4144,9 +4847,8 @@
           {
             "in": "query",
             "name": "tenant_id",
-            "required": false,
+            "required": true,
             "schema": {
-              "default": "default",
               "maxLength": 200,
               "title": "Tenant Id",
               "type": "string"
@@ -5193,6 +5895,10 @@
     {
       "description": "Served by an engine in its `both` or its `clearinghouse` role (`LPB_ROLE`): these routes are 404 on an engine in its `work` role, which pays through a payment clearinghouse and is not one.",
       "name": "clearinghouse half"
+    },
+    {
+      "description": "Served on the public listener only, when the deployment has a private one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the private listener. A deployment with one listener serves them there. They are a tenant's own routes: they name no tenant, act on the tenant of the credential, and take a tenant admin or auditor credential only.",
+      "name": "public listener"
     },
     {
       "description": "Served on the private listener only, when the deployment has one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one listener serves them there. An engine in its `clearinghouse` role always has a private listener.",

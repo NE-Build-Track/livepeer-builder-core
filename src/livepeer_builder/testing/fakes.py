@@ -260,10 +260,11 @@ class FakeAllocationManager(FakeEscrow):
 
     A tenant's id is its grant's id (D83), so an allotment names a grant the fake must hold. ``add_grant``
     gives it one under an id the test chooses (a tenant such as ``"default"``); ``create_grant``, which
-    onboarding a tenant calls, makes one under the next ``grant_<n>``. An unknown grant is refused as
-    Batteries refuses it (404), and so is an allocation or a top-up larger than the grant's unallocated
-    balance (409, "insufficient unallocated grant balance"). A revoke returns what the allocation had not
-    spent. A paused grant still takes allotments and top-ups, as at Batteries: pausing stops its payments.
+    onboarding a tenant calls, makes one under the next ``grant_<n>`` that no grant holds. An unknown
+    grant is refused as Batteries refuses it (404), and so is an allocation or a top-up larger than the
+    grant's unallocated balance (409, "insufficient unallocated grant balance"). A revoke returns what the
+    allocation had not spent. A paused grant still takes allotments and top-ups, as at Batteries: pausing
+    stops its payments.
 
     ``calls`` lists every call in order. ``fail_once(call, error)`` makes the next call of that method
     raise ``error`` before it does anything: a provider that timed out or refused, for the
@@ -417,6 +418,8 @@ class FakeAllocationManager(FakeEscrow):
     ) -> GrantRecord:
         self._called("create_grant")
         self._created += 1
+        while f"grant_{self._created}" in self._held:  # one add_grant seeded: never replace it (#165 review)
+            self._created += 1
         grant = GrantRecord(
             id=f"grant_{self._created}",
             name=name,

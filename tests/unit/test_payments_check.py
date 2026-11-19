@@ -121,10 +121,10 @@ def self_hosted(monkeypatch: pytest.MonkeyPatch, url: str, recorder: Recorder, *
 
 
 def clearinghouse(monkeypatch: pytest.MonkeyPatch, url: str, recorder: Recorder, **env: str) -> None:
-    tenant = "/v1/clearinghouse/tenants/grant_7"
+    own = "/v1/clearinghouse"  # the tenant's own routes: no tenant in the path, the key's is answered for
     recorder.answers |= {
-        tenant + "/grant": (200, GRANT),
-        tenant + "/usage": (200, USAGE),
+        own + "/grant": (200, GRANT),
+        own + "/usage": (200, USAGE),
         "/v1/clearinghouse/discovery": (200, []),
     }
     values = {
@@ -289,12 +289,15 @@ def test_an_engine_that_uses_a_clearinghouse_probes_the_clearinghouse_with_get_r
 
     assert code == 0 and report["ok"] is True and report["configuration"] == "clearinghouse"
     assert recorder.methods == {"GET"}
-    assert recorder.targets == [
-        "/v1/clearinghouse/tenants/grant_7/grant",
-        "/v1/clearinghouse/tenants/grant_7/usage?limit=1",
-        "/sign-orchestrator-info",
-        "/v1/clearinghouse/discovery",
-    ]
+    assert (
+        recorder.targets
+        == [  # no path names the tenant: LPB_CLEARINGHOUSE_TENANT_ID is checked against the grant
+            "/v1/clearinghouse/grant",
+            "/v1/clearinghouse/usage?limit=1",
+            "/sign-orchestrator-info",
+            "/v1/clearinghouse/discovery",
+        ]
+    )
     assert list(probes(report)) == [
         "clearinghouse_grant",
         "clearinghouse_usage",
@@ -339,12 +342,32 @@ def test_a_runner_list_of_the_enterprise_own_is_not_probed_and_gets_no_key(
             "refused",
             "LPB_CLEARINGHOUSE_TOKEN",
         ),
-        ("/grant", (403, {"error": "another tenant"}), "clearinghouse_grant", "refused", "TENANT_ID"),
+        # the path names no tenant, so a 403 is about the key: not a tenant admin's or an auditor's
+        (
+            "/grant",
+            (403, {"error": "no tenant"}),
+            "clearinghouse_grant",
+            "refused",
+            "LPB_CLEARINGHOUSE_TOKEN",
+        ),
         ("/grant", (404, {"error": "nope"}), "clearinghouse_grant", "refused", "LPB_CLEARINGHOUSE_URL"),
         ("/grant", (503, {"error": "down"}), "clearinghouse_grant", "unavailable", "HTTP 503"),
-        ("/grant", (200, GRANT | {"tenant_id": "grant_8"}), "clearinghouse_grant", "unexpected", "another"),
+        # the key's tenant is not the one the setting names
+        (
+            "/grant",
+            (200, GRANT | {"tenant_id": "grant_8"}),
+            "clearinghouse_grant",
+            "unexpected",
+            "LPB_CLEARINGHOUSE_TENANT_ID",
+        ),
         ("/grant", (200, {"not": "a grant"}), "clearinghouse_grant", "unexpected", "could not be read"),
-        ("/usage", (403, {"error": "another tenant"}), "clearinghouse_usage", "refused", "TENANT_ID"),
+        (
+            "/usage",
+            (403, {"error": "no tenant"}),
+            "clearinghouse_usage",
+            "refused",
+            "LPB_CLEARINGHOUSE_TOKEN",
+        ),
         ("/discovery", (503, {"error": "no list"}), "clearinghouse_runner_list", "unavailable", "503"),
         ("/discovery", (307, None), "clearinghouse_runner_list", "unexpected", "redirect"),
         # a clearinghouse with no signer serves neither signer path: it cannot sign for anyone

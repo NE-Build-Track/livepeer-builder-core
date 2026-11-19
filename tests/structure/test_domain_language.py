@@ -11,8 +11,9 @@ No old name is kept beside the new one: no alias, no deprecated route, no fallba
 environment variable names no setting and is ignored.
 
 Since #164 the work routes that #163 left under ``/v1/clearinghouse`` are at their own paths: an engine's
-own access keys under ``/v1/keys``, and reconciliation and cost sync under ``/v1/costs`` (D87). Their old
-paths are old names too.
+own access keys under ``/v1/keys``, and reconciliation and cost sync under ``/v1/costs`` (D87). The old
+paths of reconciliation and cost sync are old names too. ``/v1/clearinghouse/keys`` is not: since
+19 November 2026 it is a tenant's own access keys (D87 point 3, as amended).
 
 Not checked here, because they are not these names: an app id (``app`` on offerings and jobs, ISS-48), the
 failure kind ``not_provisioned`` (ISS-28), and the words Batteries and the signer use on their own wire.
@@ -52,9 +53,9 @@ OLD_NAMES = {
     r"\bPaymentCredential\b": "PaymentKey",
     r"(?i)operator_token": "batteries_grants_token (LPB_BATTERIES_GRANTS_TOKEN)",
     r"rotate-key\b": "rotate-payment-key",
-    # work routes, which #164 moved out of the clearinghouse prefix (a tenant's keys, from #165, are under
-    # /v1/clearinghouse/tenants/{tenant_id}/keys, which none of these matches)
-    r"/v1/clearinghouse/keys\b": "/v1/keys (an engine's own access keys are work routes)",
+    # work routes, which #164 moved out of the clearinghouse prefix. An engine's own access keys moved
+    # from /v1/clearinghouse/keys to /v1/keys too; since 19 November 2026 /v1/clearinghouse/keys is a
+    # tenant's own access keys (D87 point 3, as amended), so that path is no old name any more
     r"/v1/clearinghouse/reconciliation\b": "/v1/costs/reconciliation",
     r"/v1/clearinghouse/costs\b": "/v1/costs/sync",
 }
@@ -218,8 +219,23 @@ def test_an_old_environment_variable_is_ignored() -> None:
         "LPB_BATTERIES_OPERATOR_TOKEN": "not-read",
     }
     settings = EngineSettings.from_env(old)
-    assert settings.jwt_tenant_claim is None and settings.jwt_tenant_id == "default"
+    assert settings.jwt_tenant_claim is None and settings.jwt_tenant_id is None
     assert settings.batteries_grants_token is None
+
+
+def test_an_engine_with_jwt_still_set_with_the_old_tenant_variables_refuses_to_start() -> None:
+    """#163 review: ignored, the old claim variable left every token in one tenant, so users of different
+    organisations shared it. Neither new variable has a default, so the engine refuses to start and
+    names them."""
+    jwt = {
+        "LPB_DISCOVERY_URL": "http://discovery:8939/discovery",
+        "LPB_AUTH": "jwt",
+        "LPB_JWT_ISSUER": "https://idp.example/",
+        "LPB_JWT_AUDIENCE": "engine",
+    }
+    for old in ({"LPB_JWT_APPLICATION_CLAIM": "org"}, {"LPB_JWT_APPLICATION_ID": "acme"}):
+        with pytest.raises(ValidationError, match="LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID"):
+            EngineSettings.from_env(jwt | old)
 
 
 def test_the_public_api_exports_no_old_name() -> None:

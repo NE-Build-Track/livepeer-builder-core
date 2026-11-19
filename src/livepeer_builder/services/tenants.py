@@ -29,6 +29,7 @@ from livepeer_builder.contracts import (
 from livepeer_builder.contracts.common import AllotAmount, StoredText
 from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.protocols import AccessPolicy, AllocationManager
+from livepeer_builder.services.arguments import checked
 from livepeer_builder.services.grants import GRANT_TAG, idempotency_key, tagged_grant
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
@@ -79,14 +80,15 @@ class TenantDesk:
         keeps its hash. A repeat, or a resume after the key was stored, answers ``token: null``; a
         clearinghouse admin then issues another tenant admin key."""
         self._policy.check(admin, Operation.ADMIN_TENANTS)
-        name = _TEXT.validate_python(name.strip())
+        # The body's rules, for an in-process call (#112, C11), refused as InvalidRequest (#106 review)
+        name = checked(_TEXT, name.strip(), "name")
         if not name:
             raise InvalidRequest("a tenant name is required")
-        if not _TEXT.validate_python(admin_actor_id):
+        if not checked(_TEXT, admin_actor_id, "admin_actor_id"):
             raise InvalidRequest("the tenant admin key needs an actor id")
         if amount.currency != self._currency:
             raise InvalidRequest(f"a grant's amount must be in {self._currency}")
-        amount = _AMOUNT.validate_python(amount)  # the body's rule, for an in-process call (#112, C11)
+        amount = checked(_AMOUNT, amount, "amount")
         # This text is hashed into the tag, so it keeps its first wording, as every provider key does
         # (tests/unit/test_hashed_forms.py).
         tag = idempotency_key(

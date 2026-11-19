@@ -94,18 +94,25 @@ async def test_a_paused_and_a_revoked_allocation_are_answered_with_their_amounts
 
 
 async def test_an_auditor_and_a_clearinghouse_admin_read_it_and_another_tenant_does_not(house: House) -> None:
+    """The tenant's auditor at its own route, which names no tenant, and a clearinghouse admin at the
+    route that names the tenant (D87 point 3, as amended on 19 November 2026)."""
     await allotted(house, house.one, "alice")
-    path = house.one.allocation("alice")
     engine = house.engine
     assert engine.keys is not None
     auditor = await engine.keys.issue(
         OPERATOR, kind="auditor", actor_id="audit", tenant_id=house.one.id, operation_ref="audit-key"
     )
-    for headers in ({"Authorization": f"Bearer {auditor.token}"}, house.admin):
+    for path, headers in (
+        (house.one.allocation("alice"), {"Authorization": f"Bearer {auditor.token}"}),
+        (house.one.named_allocation("alice"), house.admin),
+    ):
         read = await house.client.get(path, headers=headers)
         assert read.status_code == 200 and read.json()["allowance"]["granted"] == usd("5")
-    other = await house.client.get(path, headers=house.two.admin)
-    assert other.status_code == 403 and "allowance" not in other.text
+    # the other tenant's admin: refused where the tenant is named, and its own route is its own tenant's
+    named = await house.client.get(house.one.named_allocation("alice"), headers=house.two.admin)
+    assert named.status_code == 403 and "allowance" not in named.text
+    own = await house.client.get(house.two.allocation("alice"), headers=house.two.admin)
+    assert own.status_code == 404 and "allowance" not in own.text
 
 
 @pytest.mark.parametrize(

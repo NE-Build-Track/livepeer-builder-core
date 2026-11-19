@@ -18,7 +18,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read`, `grants.create`, `grants.fund`, `grants.status`, `allocations.read` and, for the wallet report (#167), `escrow.read`. Optional: without it the tenant desk is off (`payments.tenants` is `None`; onboarding, the tenant list, a grant's read, a tenant's status and the wallet report are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
-| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it the engine refuses to start ([payments.md](contracts/payments.md#allotment)) |
+| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |
@@ -47,7 +47,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_JWT_TOKEN_TYPES` | `at+jwt,application/at+jwt` | Accepted `typ` headers (RFC 9068). Adding `jwt` accepts plain JWTs and drops the `client_id` and `jti` requirements: weaker |
 | `LPB_JWT_MAX_LIFETIME_S` | `3600` | A token whose `exp - iat` is longer is refused |
 | `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms, asymmetric only |
-| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_TENANT_CLAIM`, `LPB_JWT_TENANT_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `tenant_id` |
+| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_TENANT_CLAIM`, `LPB_JWT_TENANT_ID` | `sub`, unset, unset | Which claims become `actor_id` and `tenant_id`. With `jwt` in `LPB_AUTH`, set exactly one of `LPB_JWT_TENANT_CLAIM` (the claim that names each token's tenant) and `LPB_JWT_TENANT_ID` (the one tenant every token is in): neither has a default, and with neither or both the engine refuses to start (#163 review) |
 | `LPB_JWT_SCOPE_CLAIM`, `LPB_JWT_SCOPE_PREFIX`, `LPB_JWT_ADMIN_SCOPE` | `scope`, empty, unset | Scopes named after operations become permissions; the admin scope makes an engine-wide admin credential, so it may not be an operation or a standard OpenID scope |
 | `LPB_JWT_NAME_CLAIM` | `preferred_username` | The person's display name, recorded on first sign-in for the operator's actor list (D48); empty turns it off |
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
@@ -55,7 +55,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging. With a private listener, this address is the public listener |
 | `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` | unset | The payment clearinghouse of an engine in its `work` role (D84, #168, #169): the address of its public listener (a scheme, a host and an optional port, and nothing after them), the tenant admin key (a secret) and the tenant's id. Required with `LPB_ROLE=work`, set together, and refused at startup with any other role or beside a Batteries or signer setting. The payment ports then reach the clearinghouse, and `LPB_DISCOVERY_URL` defaults to its runner list ([payments.md](contracts/payments.md#the-remote-adapters)). `LPB_SECRET_KEY` is still required |
 | `LPB_CLEARINGHOUSE_TIMEOUT_S` | `30` | Each request to the clearinghouse. `LPB_OPERATION_STALE_S` must be at least four times it |
-| `LPB_HTTP_PRIVATE_PORT` | unset | Turns the private listener on (D84, #167). Unset, the engine serves one listener with every route, as before. Set (1 to 65535), `lpb serve` serves two: the public one without the routes only a clearinghouse admin calls, where a clearinghouse admin credential is 403, and the private one with every route, for a clearinghouse admin only ([access.md](contracts/access.md#listeners)). Required with `LPB_ROLE=clearinghouse` (#169). Refused at startup when it is the public listener's port on the same host |
+| `LPB_HTTP_PRIVATE_PORT` | unset | Turns the private listener on (D84, #167). Unset, the engine serves one listener with every route, as before. Set (1 to 65535), `lpb serve` serves two: the public one without the routes only a clearinghouse admin calls, where a clearinghouse admin credential is 403, and the private one with every route but a tenant's own routes, which name no tenant, for a clearinghouse admin only ([access.md](contracts/access.md#listeners)). Required with `LPB_ROLE=clearinghouse` (#169). Refused at startup when it is the public listener's port on the same host |
 | `LPB_HTTP_PRIVATE_HOST` | `127.0.0.1` | Where the private listener binds. Read only with `LPB_HTTP_PRIVATE_PORT`. Loopback unless set: publish the public listener, never this one |
 | `LPB_HTTP_MAX_REQUEST_BYTES` | `16777216` (16 MiB) | A `/v1/` request body over it is refused with 413 `request_too_large` before it is read (D59); at least 1024. It fits an 8 MiB `raw_body` as base64 |
 
@@ -93,8 +93,9 @@ One program covers three deployments (D84, #169). `LPB_ROLE` says which one this
 `lpb migrate`, `revision`, `backup` and `restore` read only `LPB_DATABASE_URL`, so another setting
 that would not load does not stop them. `lpb purge`, `bootstrap-admin` and `smoke` load every setting but
 do not need `LPB_DISCOVERY_URL`, since they serve nothing. `lpb serve`, and any engine an application
-starts from its settings, still require it (#112, C23). `gen-secret-key`, `verify` and `gen-docs` read
-no setting.
+starts from its settings, still require it (#112, C23). With a payment provider, `purge` and
+`bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing; `smoke` and `serve` do.
+`gen-secret-key`, `verify` and `gen-docs` read no setting.
 
 | Command | When |
 | --- | --- |

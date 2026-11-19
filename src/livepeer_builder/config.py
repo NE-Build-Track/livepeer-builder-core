@@ -6,7 +6,15 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from livepeer_builder.contracts import Contract, Currency, Operation, Role
 from livepeer_builder.contracts.common import GrantId
@@ -54,7 +62,8 @@ def _runner_list_by_default(values: dict[str, Any]) -> dict[str, Any]:
 
 
 class EngineSettings(Contract):
-    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url).
+    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url). This
+    # hides it from str(error); _a_refusal_holds_no_value, below every rule, from every other form.
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
@@ -132,8 +141,10 @@ class EngineSettings(Contract):
     jwt_audience: str | None = None  # must be in aud: this engine
     jwt_algorithms: tuple[str, ...] = ("RS256", "ES256")
     jwt_actor_claim: str = Field(default="sub", min_length=1)
-    jwt_tenant_claim: str | None = None  # None: every token is in jwt_tenant_id
-    jwt_tenant_id: str = Field(default="default", min_length=1, max_length=200)  # as records store it
+    # With jwt, exactly one says a token's tenant, and neither has a default (#163 review): the claim that
+    # names it, or the one tenant every token is in, at most 200 characters as records store it
+    jwt_tenant_claim: str | None = Field(default=None, min_length=1)
+    jwt_tenant_id: str | None = Field(default=None, min_length=1, max_length=200)
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential
@@ -406,6 +417,39 @@ class EngineSettings(Contract):
             )
         return self
 
+    @model_validator(mode="after")
+    def _jwt_names_one_tenant_source(self) -> "EngineSettings":
+        """An engine still set with a variable the rename retired reads none of the two, and with a default
+        it put every token in one tenant: users of different organisations shared it (#163 review)."""
+        if "jwt" not in self.auth:
+            return self
+        named = (self.jwt_tenant_claim is not None) + (self.jwt_tenant_id is not None)
+        if named != 1:
+            raise ValueError(
+                "LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID must be "
+                "set: the claim that names each token's tenant, or the one tenant every token is in; "
+                + ("both are set" if named else "neither is set")
+            )
+        return self
+
+    # The last model validator: pydantic runs each one defined after it outside it, where its refusal would
+    # carry every setting given (tests/unit/test_settings_refusals.py fails if one is).
+    @model_validator(mode="wrap")
+    @classmethod
+    def _a_refusal_holds_no_value(
+        cls, values: Any, handler: ModelWrapValidatorHandler["EngineSettings"]
+    ) -> "EngineSettings":
+        """A refusal names each setting, with its type and its words, and holds no value given (#162
+        review). ``hide_input_in_errors`` hides values from ``str(error)`` only: ``errors()`` and
+        ``json()`` keep them, and a whole-settings rule's or a missing setting's is every setting given,
+        credentials too. A rule's exception is kept as its words: its traceback holds the settings."""
+        try:
+            return handler(values)
+        except ValidationError as refused:
+            title, details = refused.title, refused.errors(include_url=False)
+        # Raised here, outside the except block, so the refusal does not chain the error that holds them.
+        raise ValidationError.from_exception_data(title, [_without_input(detail) for detail in details])
+
     @classmethod
     def from_env(
         cls, env: Mapping[str, str] | None = None, *, defaults: Mapping[str, Any] | None = None
@@ -430,6 +474,21 @@ class EngineSettings(Contract):
         (#112, C23)."""
         source = os.environ if env is None else env
         return source.get(ENV_PREFIX + "DATABASE_URL") or DEFAULT_DATABASE_URL
+
+
+_HIDDEN_INPUT = "[hidden]"  # what a refusal's errors() and json() say was given
+
+
+def _without_input(detail: Mapping[str, Any]) -> Any:  # one of pydantic's InitErrorDetails
+    """A refused setting as pydantic reported it, with ``_HIDDEN_INPUT`` for what was given. A rule's
+    exception in the context becomes its message, so the refusal's words stay the rule's own."""
+    line = {"type": detail["type"], "loc": detail["loc"], "input": _HIDDEN_INPUT}
+    if "ctx" in detail:
+        line["ctx"] = {
+            name: str(value) if isinstance(value, BaseException) else value
+            for name, value in detail["ctx"].items()
+        }
+    return line
 
 
 def generate_secret_key() -> str:

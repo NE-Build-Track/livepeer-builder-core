@@ -37,7 +37,7 @@ from fastapi import FastAPI
 from livepeer_builder import api, protocols
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.http.work import mount_work_routes
-from livepeer_builder.protocols import conditional_writes
+from livepeer_builder.protocols import conditional_writes, persistence
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.jobs import JobService
 
@@ -204,7 +204,7 @@ def protocol_names(relative: str) -> set[str]:
 def declared_protocols() -> set[str]:
     return {
         name
-        for module in (protocols, conditional_writes)
+        for module in (protocols, conditional_writes, persistence)
         for name, value in vars(module).items()
         if isinstance(value, type)
         and getattr(value, "_is_protocol", False)

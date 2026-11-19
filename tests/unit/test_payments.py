@@ -188,7 +188,7 @@ async def test_a_clearinghouse_admin_onboards_and_lists_tenants(
         await desk.list_tenants(alice)
     with pytest.raises(InvalidRequest, match="name"):
         await desk.onboard(admin, "  ", usd("1"), operation_ref="grant-1")
-    with pytest.raises(ValidationError, match="zero or more"):
+    with pytest.raises(InvalidRequest, match=r"^amount: amount must be zero or more"):
         await desk.onboard(admin, "ops", usd("-1"), operation_ref="grant-2")
     with pytest.raises(InvalidRequest, match="USD"):
         await desk.onboard(admin, "ops", Money(amount=Decimal("1"), currency="ETH"), operation_ref="grant-3")
@@ -277,11 +277,41 @@ async def test_a_grant_amount_the_provider_would_not_take_is_refused_before_the_
     desk = engine.payments.tenants
     assert desk is not None
     for amount in [*TOO_PRECISE, *TOO_LARGE]:
-        with pytest.raises(ValidationError):
+        # #106 review: an in-process call is refused as the checks above it are, naming the field, not
+        # the value, and chaining nothing that holds it
+        with pytest.raises(InvalidRequest, match=r"^amount: ") as refused:
             await desk.onboard(admin, "ops", usd(amount), operation_ref="grant-1")
+        assert amount not in str(refused.value)
+        assert refused.value.__cause__ is None and refused.value.__context__ is None
     assert manager.calls == []
     created = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")  # the ref is free
     assert (await desk.grant(admin, created.tenant_id)).total == usd("5")
+
+
+@pytest.mark.parametrize(
+    ("name", "admin_actor_id", "field"),
+    [
+        ("ops\x00throwaway", "tenant-admin", "name"),
+        ("throwaway" * 23, "tenant-admin", "name"),
+        ("ops", "throwaway" * 23, "admin_actor_id"),
+        ("ops", "admin\x00throwaway", "admin_actor_id"),
+    ],
+    ids=["name with a NUL", "name too long", "admin too long", "admin with a NUL"],
+)
+async def test_an_onboarding_the_body_rule_refuses_in_process_is_invalid_request_naming_the_field(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager,
+    name: str, admin_actor_id: str, field: str,
+) -> None:  # fmt: skip
+    """#106 review: ``onboard`` checks its name and its first admin's actor id by the REST body's rule,
+    and refuses as its other checks do, with ``InvalidRequest`` naming the field, never the value."""
+    engine = await make_engine()
+    desk = engine.payments.tenants
+    assert desk is not None
+    with pytest.raises(InvalidRequest, match=f"^{field}: ") as refused:
+        await desk.onboard(admin, name, usd("5"), operation_ref="o-1", admin_actor_id=admin_actor_id)
+    assert "throwaway" not in str(refused.value)
+    assert refused.value.__cause__ is None and refused.value.__context__ is None
+    assert manager.calls == []
 
 
 async def test_top_up_a_tenants_grant_applies_once(

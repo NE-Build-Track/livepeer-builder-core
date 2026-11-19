@@ -348,10 +348,10 @@ checks stop that:
   grant and creating a grant take an amount within the format and bound (`TopUpAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` when an in-process request is built, and `InvalidRequest` (400) from
-  `grants.create_grant`, which takes the amount itself and names the field, not the value (#106
-  review). Each comes before the operation ledger records anything and before any provider call. A
-  zero or negative top-up or grant amount is
-  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  `tenants.onboard`, which takes the grant's amount, the tenant's name and its first admin's actor id
+  itself and names the field, not the value (#106 review). Each comes before the operation ledger
+  records anything and before any provider call. A zero or negative top-up or grant amount is still
+  the command's own refusal, 400, unless it also breaks the format: one with more than 18
   decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before

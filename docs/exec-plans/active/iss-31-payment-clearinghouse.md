@@ -13,7 +13,9 @@
   Merges are merge commits, so the stack needs no rebase.
 - **Progress:** P1 to P8 are built and in review. The three paid proofs of P8 were run on
   19 November 2026 from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
-  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
+  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md). The amendment
+  of D87 point 3 of the same day (a tenant's routes from the credential) is built and in review, on
+  top of P8.
 
 ## Goal
 
@@ -58,6 +60,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   review: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
   review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
+- [ ] **A tenant's routes from the credential (#165, #166; D87 point 3 as amended on 19 November 2026).**
+  Built and in review: pull request to come.
 
 Each pull request ticks its own line here in the same change.
 
@@ -128,3 +132,21 @@ Each pull request ticks its own line here in the same change.
   listener without the guide's proxy (T43), and the enterprise project allots through the embedded
   API, because an engine server in its `work` role serves no route that allots (T41). Source: D84, D87
   and the guide's table of roles; the rest for Mike's review.
+- **19 November 2026, a tenant's routes from the credential.** Mike accepted the reviewer's comment on
+  #175 and amended D87 point 3: on the public listener a tenant's routes name no tenant and take it from
+  a tenant admin's or an auditor's credential; the clearinghouse admin names the tenant, at the paths
+  under `/v1/clearinghouse/tenants/{tenant_id}`, on the private listener; one listener serves both. One
+  rule holds on every listener, so the policy's check of a tenant in a path has nothing left to refuse
+  at the routes; it still guards the embedded API and a body under `/v1/keys`. Both forms call the same
+  service, and no service rule changed. The remote adapters and `lpb payments check` call the paths that
+  name no tenant, with the tenant admin key, and `LPB_CLEARINGHOUSE_TENANT_ID` stays (T38). Built where
+  the decision is silent: an actor or a service credential is refused on both forms, as the policy
+  refused it before; an auditor still reads the tenant's keys; the runner list is a group of its own,
+  served on every listener as before; the adapters refuse a command about another tenant than
+  `LPB_CLEARINGHOUSE_TENANT_ID` before anything is sent, with the `ProviderError` 403 the
+  clearinghouse's own refusal was; `lpb payments check` names `LPB_CLEARINGHOUSE_TOKEN` for a 403, and
+  `LPB_CLEARINGHOUSE_TENANT_ID` when the key's grant is another tenant's; two of the new paths had been
+  retired, `/v1/clearinghouse/keys` (an engine's own keys until #164) and `GET /v1/clearinghouse/actors`
+  (the actor list with the tenant in its query until #165), and now serve a tenant's own; the
+  published schema tags a tenant's own routes `public listener`. Source: Mike (the decision, as dated
+  notes on #165 and #166); the rest for his review.

@@ -61,7 +61,7 @@ Funded evidence for both configurations is ISS-36, not this plan.
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
   review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
 - [ ] **A tenant's routes from the credential (#165, #166; D87 point 3 as amended on 19 November 2026).**
-  Built and in review: pull request to come.
+  Built and in review: [#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185).
 
 Each pull request ticks its own line here in the same change.
 

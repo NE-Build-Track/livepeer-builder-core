@@ -1,0 +1,14 @@
+# Batteries (livepeer/clearinghouse-batteries), from its examples/compose sample. Its own keys say
+# "clearinghouse"; in this project it is the service `batteries`.
+# The webhook and Kafka stay on loopback (the signer shares this container's network namespace; `:8080`
+# is 127.0.0.1). The management API binds all interfaces so the engine can reach it over the project's
+# inside network, which Batteries v0.0.3 and later accept only with the unsafe@ prefix. No port of this
+# container is published. The on-chain listener is turned on in compose.yaml.
+DBPath = "/data/clearinghouse.db"
+CredsFile = "/run/secrets/batteries.toml"
+EnableAuthWebhook = ":8080"
+EnableManagementAPI = "unsafe@0.0.0.0:8081"
+EnableKafka = true
+EnableAccounting = true
+KafkaBind = "127.0.0.1:9092"
+KafkaTopic = "livepeer-signing"

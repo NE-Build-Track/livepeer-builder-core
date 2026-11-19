@@ -1071,7 +1071,7 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Configuration | Who runs Batteries, the signer and the wallet | State |
 | --- | --- | --- |
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
-| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built (M4, #162 to #169) |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built (M4, #162 to #169). The two Compose projects that run it on one host are in [deploy/](../../deploy/README.md) |
 
 **The engine's role says which side a deployment is** (`LPB_ROLE`, D84, #169):
 

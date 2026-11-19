@@ -78,6 +78,8 @@ One program covers three deployments (D84, #169). `LPB_ROLE` says which one this
 - **An engine server in its `work` role serves no route that allots.** The allocation routes are the
   clearinghouse half's. An embedding app allots through `engine.payments.allot`, which calls the
   clearinghouse and keeps the actor's payment key (tech debt T41).
+- **Health, the two Compose projects and a proof runbook** for a clearinghouse and an enterprise on one
+  host are in [deploy/README.md](../deploy/README.md).
 
 ## Operations
 

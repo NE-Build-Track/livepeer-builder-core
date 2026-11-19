@@ -42,7 +42,7 @@ See [contracts/access.md](contracts/access.md#boundaries).
   its `clearinghouse` role serves no job route and no other work route, runs no job, and does not start
   without the private listener: onboarding, a grant's top-up, a tenant's status and the wallet report
   are never on the address it publishes. Batteries and the signer are reached by that engine alone and
-  are published nowhere. A
+  are published nowhere (the [two Compose projects](../deploy/README.md) show the arrangement). A
   setting that contradicts the role is refused at startup by name, with no value echoed
   (`tests/unit/test_role_settings.py`, `tests/unit/test_roles.py`).
 - **Payment keys (D87, #166):** a clearinghouse gives an enterprise's engine one payment key for each

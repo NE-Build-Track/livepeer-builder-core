@@ -291,7 +291,8 @@ keys ([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghou
 
 ## Upgrading to the engine's role setting
 
-On 19 November 2026 the engine gained its role setting (D84, #169). A deployment that sets nothing new is in
+On 19 November 2026 the engine gained its role setting and the two Compose projects that run a payment
+clearinghouse and an enterprise that uses it (D84, D87, #169). A deployment that sets nothing new is in
 its `both` role and serves, wires and starts what it did: self-hosted payments, as one deployment.
 There is no migration. Two things changed for deployments that had set something new: an engine that
 names a clearinghouse now needs `LPB_ROLE=work`, and it no longer serves clearinghouse routes of its
@@ -316,6 +317,7 @@ own.
 | `AdmissionLimiter` | `AdmissionLimiter(max_concurrent, max_per_app)` | and `runs_jobs` (true unless said) |
 | Contracts | | `Role` (`livepeer_builder.contracts`) |
 | The log line `engine.started` | | and `role` |
+| Compose projects | `deploy/dev-stack` | and `deploy/clearinghouse` and `deploy/enterprise` ([deploy/README.md](../../deploy/README.md)) |
 
 **Before you start the new release:**
 

@@ -25,7 +25,7 @@ from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.http.auth import actor_dependency
 from livepeer_builder.http.bodies import AllotBody, GrantBody, RotateBody, StatusBody
 from livepeer_builder.http.params import PathId, QueryId
-from livepeer_builder.http.replies import replay
+from livepeer_builder.http.replies import replay, replayed
 
 
 def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
@@ -90,8 +90,7 @@ def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     @app.post("/v1/clearinghouse/grant/top-up", status_code=204)
     async def top_up_grant(actor: Actor, body: TopUpRequest) -> Response:
         await engine.payments.top_up_grant(actor, body)
-        response = Response(status_code=204)
-        return replay(response, response)
+        return Response(status_code=204, headers=replayed())
 
     @app.post(base + "/status", response_model=ActorAllocation)
     async def set_status(

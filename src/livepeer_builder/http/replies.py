@@ -9,6 +9,10 @@ JOB_ID_HEADER = "Livepeer-Job-Id"
 
 def replay[T](response: Response, answer: T) -> T:
     """Mark an admin command answered from the operation ledger: ``Idempotent-Replayed: true`` (D57)."""
-    if OPERATION_REPLAYED.get():
-        response.headers["Idempotent-Replayed"] = "true"
+    response.headers.update(replayed())
     return answer
+
+
+def replayed() -> dict[str, str]:
+    """That mark as headers, for a route that builds its own answer; none when the command ran now."""
+    return {"Idempotent-Replayed": "true"} if OPERATION_REPLAYED.get() else {}

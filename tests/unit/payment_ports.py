@@ -16,6 +16,7 @@ from typing import Literal
 
 import httpx
 from fastapi import FastAPI
+from multidict import CIMultiDict
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.clearinghouse import ClearinghousePorts
@@ -54,6 +55,8 @@ class Ports:
     requests: list[httpx.Request] = field(default_factory=list)  # what crossed the wire (remote)
     token: str = ""  # the tenant admin key (remote)
     lost: list[str] = field(default_factory=list)  # see ``lose_the_answer_to``
+    # every request that arrived at the clearinghouse's socket, as (path, headers), when it has one
+    seen: list[tuple[str, CIMultiDict[str]]] = field(default_factory=list)
 
     @property
     def admin(self) -> ActorContext:

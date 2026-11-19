@@ -294,16 +294,21 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
+    # An engine that uses a clearinghouse is not one (#168): it signs at the clearinghouse with the same
+    # transport a clearinghouse forwards with, and offers neither of the two things below to anybody.
+    clearinghouse_transport = None if settings.uses_clearinghouse else parts.transport
     wallet: Wallet | None = None
     # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
     # and the transport asks the signer it pays through
-    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
-        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(clearinghouse_transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, clearinghouse_transport, parts.policy)
     forwarder: SignerForwarder | None = None
     # Otherwise the signer's two paths are not served (#166): a transport that forwards no signer call,
     # or one that does not pay, which has no signer to forward to.
-    if isinstance(parts.transport, SignerForwarder) and getattr(parts.transport, "pays", True):
-        forwarder = parts.transport
+    if isinstance(clearinghouse_transport, SignerForwarder) and getattr(
+        clearinghouse_transport, "pays", True
+    ):
+        forwarder = clearinghouse_transport
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,

@@ -2,8 +2,8 @@
 
 An enterprise's engine keeps its own jobs and records and reaches the clearinghouse for payments only.
 Four of its five payment ports are here, each calling the clearinghouse's public routes with the tenant
-admin key (``adapters/clearinghouse_wire.py``). The fifth, signing, is inside the runner transport
-(``adapters/clearinghouse_signing.py``).
+admin key (``adapters/clearinghouse_wire.py``). The fifth, signing, is inside the runner transport: the
+gateway SDK's, pointed at the clearinghouse, with the actor's payment key (``runtime/payment_defaults.py``).
 
 - ``ClearinghouseAllocations`` is the ``AllocationManager``. The port names an allocation by its id and
   the routes name an actor, so the manager is asked for the one actor a command is about

@@ -6,27 +6,32 @@ clearinghouse app's public listener in this process (``tests/unit/payment_ports.
 must leave the same money at the provider and the same records in the engine, whichever way they went.
 
 The suite covers ``AllocationManager`` (allot, top up, pause, resume, revoke, rotate, read the grant),
-``AllowanceReader``, ``UsageSource`` and ``CredentialResolver``, and the refusals. **Signing is not in
-it yet**: it happens inside ``RunnerTransport``, and it is the last section here, skipped, until the
-payments route is built (#166).
+``AllowanceReader``, ``UsageSource`` and ``CredentialResolver``, the refusals, and **signing**, which
+happens inside ``RunnerTransport``: its last section runs a whole fixed job and a whole live job, with a
+real signer and runner on loopback sockets behind both sets (``tests/unit/paying_ports.py``).
 """
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
+from livepeer_gateway import remote_signer
 
-from livepeer_builder.contracts import AllotRequest, TopUpRequest, UsageRow
+from livepeer_builder.contracts import AllotRequest, JobCost, JobRequest, TopUpRequest, UsageRow
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyAllotted,
     CursorMismatch,
+    JobFailed,
     NotFound,
     NotProvisioned,
     ProviderError,
 )
 from livepeer_builder.services.ledger import definite_refusal
+from tests.unit.livepeer_net import Net, Reply, start
+from tests.unit.paying_ports import FIXED_APP, LIVE_APP, open_paying_ports
 from tests.unit.payment_ports import SIDES, Ports, Side, open_ports, usd
 
 
@@ -377,9 +382,94 @@ async def test_a_grant_the_provider_does_not_hold_is_a_tenant_that_was_never_onb
 # -- signing, inside RunnerTransport ------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="signing through a clearinghouse is the second part of #168: it waits for the payments route "
-    "(#166), whose path is not decided. The local side is covered by the runner-call tests."
-)
-async def test_a_fixed_job_and_a_live_job_are_paid_through_each_set_of_adapters(ports: Ports) -> None:
-    raise AssertionError("to be written with the payments route: one paid fixed job, one paid live job")
+@pytest.fixture
+async def net() -> AsyncIterator[Net]:
+    async for value in start():
+        yield value
+
+
+@pytest.fixture(params=SIDES)
+async def paying(request: pytest.FixtureRequest, net: Net) -> AsyncIterator[Ports]:
+    side: Side = request.param
+    async with open_paying_ports(side, net) as opened:
+        yield opened
+
+
+def batteries_key(ports: Ports, allocation_id: str) -> str:
+    """The key the provider minted for the allocation: what the signer must be called with."""
+    [secret] = [secret for held, secret, revoked in ports.provider.keys.values() if held == allocation_id]
+    return secret
+
+
+async def cost_of(ports: Ports, job_id: UUID, allocation_id: str, manifest_id: str, fee: str) -> JobCost:
+    """The job's cost once the provider's usage row for its payment has been synced through the port."""
+    usage_row = row(len(ports.provider_usage.rows) + 1, allocation_id).model_copy(
+        update={"manifest_id": manifest_id, "computed_fee_usd": Decimal(fee)}
+    )
+    ports.provider_usage.rows.append(usage_row)
+    ports.provider_usage.grant_of[allocation_id] = ports.tenant_id
+    await ports.engine.costs.sync_now(ports.admin)
+    return await ports.engine.costs.for_job(ports.actor("alice"), job_id)
+
+
+async def test_a_fixed_job_and_a_live_job_are_paid_through_each_set_of_adapters(
+    paying: Ports, net: Net, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A whole job of each kind, from the engine's ``jobs.run`` to its record and its cost. The same
+    runner and the same signer are behind both sets of adapters, and the signer is called with the
+    Batteries key of the actor's allocation either way: by the engine itself, or by the clearinghouse in
+    place of the payment key it was shown."""
+    ports, alice = paying, paying.actor("alice")
+    allocation_id = await allotted(ports)
+    signs_with = f"Bearer {batteries_key(ports, allocation_id)}"
+
+    # fixed work: one payment, up front
+    fixed = await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={"prompt": "hello"}))
+    assert (fixed.status_code, fixed.job.state) == (200, "succeeded")
+    [attempt] = fixed.job.attempts
+    assert attempt.payment_sent and attempt.allocation_id == allocation_id
+    assert [session.manifest_id for session in attempt.sessions] == ["m-1"]
+    assert net.log.count("sign m-1") == 1 and "request pay-m-1" in net.log
+    assert {headers.get("Authorization") for headers in net.signer_headers} == {signs_with}
+    cost = await cost_of(ports, fixed.job.id, allocation_id, "m-1", "0.25")
+    assert cost.status == "observed" and cost.fees.fee_usd == Decimal("0.25")
+    assert [attempt_cost.cost_class for attempt_cost in cost.attempts] == ["delivered"]
+
+    # live work: a payment each cycle, for as long as the work runs
+    monkeypatch.setattr(remote_signer, "PAYMENT_INTERVAL_S", 0.02)
+    net.replies = [Reply(hang_s=0.5)]
+    live = await ports.engine.jobs.run(alice, JobRequest(app=LIVE_APP, payload={"n": 1}))
+    assert (live.status_code, live.job.state) == (200, "succeeded")
+    assert [session.manifest_id for session in live.job.attempts[0].sessions] == ["m-2"]
+    assert net.log.count("sign m-2") >= 3  # the opening payment, then the cycles
+    assert all(call["type"] == "live" for call in net.signer_requests[1:])
+    assert {headers.get("Authorization") for headers in net.signer_headers} == {signs_with}
+    cost = await cost_of(ports, live.job.id, allocation_id, "m-2", "0.5")
+    assert cost.status == "observed" and cost.billable.fee_usd == Decimal("0.5")
+
+
+async def test_a_job_the_signer_refuses_fails_with_its_reason_and_nothing_paid(
+    paying: Ports, net: Net
+) -> None:
+    """An empty allocation is the signer's 402, whichever way the engine reached the signer, and the job
+    records it: ``payment``, ``allowance_exhausted``, nothing paid."""
+    ports, alice = paying, paying.actor("alice")
+    await allotted(ports)
+    net.sign = [402]
+
+    with pytest.raises(JobFailed) as failed:
+        await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={}))
+
+    recorded = await ports.engine.jobs.get(alice, failed.value.job.id)
+    assert recorded.state == "failed" and recorded.failure is not None
+    failure = recorded.failure
+    assert (failure.kind, failure.reason, failure.status_code) == ("payment", "allowance_exhausted", 402)
+    assert not failure.payment_sent and [attempt.payment_sent for attempt in recorded.attempts] == [False]
+    assert "request pay-m-1" not in net.log  # the runner did no work
+
+
+async def test_an_actor_with_no_allocation_never_reaches_a_signer(paying: Ports, net: Net) -> None:
+    with pytest.raises(JobFailed) as failed:
+        await paying.engine.jobs.run(paying.actor("nobody"), JobRequest(app=FIXED_APP, payload={}))
+    assert failed.value.job.failure is not None and failed.value.job.failure.kind == "not_provisioned"
+    assert net.log == [] and net.signer_headers == []

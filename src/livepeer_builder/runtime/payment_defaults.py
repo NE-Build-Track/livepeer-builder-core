@@ -6,8 +6,10 @@ built. ``LPB_CLEARINGHOUSE_URL`` (with the tenant admin key and the tenant's id)
 clearinghouse: every payment port then reaches it, and nothing of Batteries or a signer is built. The
 settings refuse a mix of the two (``config.py``).
 
-**Signing** is inside the runner transport. ``ThroughClearinghouse.transport`` is the one place that
-decides how an engine that uses a clearinghouse signs. It builds ``ClearinghouseSigningNotBuilt`` today.
+**Signing** is inside the runner transport, and it is the same transport either way: the gateway SDK's.
+A clearinghouse serves the signer's two paths at the root of its listener (D87), so an engine that uses
+one gives the transport the clearinghouse's address where a signer's goes, and the actor's payment key,
+which ``CredentialResolver`` returns, is the credential it signs with. The SDK is unmodified.
 
 The adapters are imported inside the methods, not at module level, so importing the package loads no
 HTTP client or SDK (tests/structure/test_import_weight.py).
@@ -129,10 +131,14 @@ class ThroughClearinghouse:
         return self._ports().allowances
 
     def transport(self) -> RunnerTransport:
-        """The signing seam: how an engine that uses a clearinghouse signs is decided here alone."""
-        from livepeer_builder.adapters.clearinghouse_signing import ClearinghouseSigningNotBuilt
+        """The SDK's transport, signing at the clearinghouse: its address is the signer's address. The
+        credential of each call is the actor's payment key, and never the tenant admin key, which this
+        transport is not given."""
+        from livepeer_builder.adapters.sdk import SdkRunnerTransport
 
-        return ClearinghouseSigningNotBuilt(self._settings.max_payment_challenge_retries)
+        return SdkRunnerTransport(
+            self._settings.clearinghouse_url, self._settings.max_payment_challenge_retries
+        )
 
     def _ports(self) -> "ClearinghousePorts":
         from livepeer_builder.adapters.clearinghouse import ClearinghousePorts

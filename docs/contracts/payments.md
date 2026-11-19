@@ -1071,15 +1071,15 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Configuration | Who runs Batteries, the signer and the wallet | State |
 | --- | --- | --- |
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
-| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Partly built. M4 builds it as #162 to #169 |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built but for the role setting and the two Compose projects that prove it (#169). M4 builds it as #162 to #169 |
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
 ([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166):
 [the signer's two paths](#signing-through-a-clearinghouse), with a [payment key](#payment-keys);
 [a tenant's usage](#a-tenants-usage); and the [runner list](discovery.md#the-clearinghouses-runner-list).
 The engine that calls them is #168: it reaches the usage, the runner list and the tenant's
-allocation routes through [the remote adapters](#the-remote-adapters), and does not sign through a
-clearinghouse yet.
+allocation routes through [the remote adapters](#the-remote-adapters), and
+[signs at the two paths](#what-signs-for-an-engine-that-uses-a-clearinghouse) with the SDK's transport.
 
 The engine's routes are two sets (D84, #164). The **clearinghouse routes** are tenants and their grants,
 a tenant's actors and their allocations, and a tenant's access keys and usage, all under
@@ -1115,7 +1115,8 @@ place of Batteries and the signer. Three settings select that, set together or n
 
 ### Each port and its route
 
-`{t}` is the tenant and `{a}` the actor. Every path begins `/v1/clearinghouse/tenants/{t}`.
+`{t}` is the tenant and `{a}` the actor. Every path but the two signer paths begins
+`/v1/clearinghouse/tenants/{t}`.
 
 | Port and member | Route | The answer becomes |
 | --- | --- | --- |
@@ -1131,7 +1132,7 @@ place of Batteries and the signer. Three settings select that, set together or n
 | `AllowanceReader.allocation_for` | None: the engine's own actor record | The allocation whose payment key the engine holds |
 | `UsageSource.page` | `GET /usage?cursor=&limit=` | The route's page, which is the port's own. A refused cursor is `CursorMismatch` |
 | `CredentialResolver.credential` | None: the engine's own actor record and secret store | The actor's payment key (`lpp_`), and never any other secret |
-| Signing, inside `RunnerTransport` | Not built | See [what signs](#what-signs-for-an-engine-that-uses-a-clearinghouse) |
+| Signing, inside `RunnerTransport` | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, at the root of the address, with the actor's payment key | The signer's own answer ([what signs](#what-signs-for-an-engine-that-uses-a-clearinghouse)) |
 
 - **The port names an allocation and the routes name an actor.** `AllocationManager` was written for
   Batteries, which takes an allocation's id. A manager that needs the actor has the optional protocol
@@ -1219,15 +1220,33 @@ errors. The words `retry` and `check` are ISS-28's, which will read them from th
 
 ### What signs for an engine that uses a clearinghouse
 
-Signing is the fifth port, and it is inside the runner transport. It is **not built**: the payments
-route's path is not decided (#166). Until it is, an engine that uses a clearinghouse signs nothing.
+Signing is the fifth port, and it is inside the runner transport. An engine that uses a clearinghouse
+signs with the transport every engine signs with, the gateway SDK's, unmodified (#168). A clearinghouse
+serves the signer's two paths at the root of its listener
+([Signing through a clearinghouse](#signing-through-a-clearinghouse)), so the engine gives the transport
+`LPB_CLEARINGHOUSE_URL` where a signer's address goes, and each job's credential is its actor's payment
+key, where a Batteries key goes. That is why the address names a scheme, a host and a port and nothing
+more: the SDK keeps that much of it.
 
-- A runner that asks for no payment is called, and its answer returned.
-- A runner that asks for payment fails the job as `payment`, with `payment_sent: false` and a message
-  that says signing through a clearinghouse is not built. No other runner is tried, since each would
-  ask the same.
-- The actor's payment key is sent nowhere. There is no fallback to a local signer: `LPB_SIGNER_URL` is
-  refused beside a clearinghouse.
+| Credential | Sent on | Never sent on |
+| --- | --- | --- |
+| The actor's payment key (`lpp_`) | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, for that actor's job | Any other route; any runner |
+| The tenant admin key | The tenant's routes under `/v1/clearinghouse`, and the runner list | The two signer paths; any runner |
+| A Batteries key | Nothing: the engine holds none | |
+
+- **A fixed job pays once and a live job pays every payment cycle**, as with self-hosted payments. The
+  clearinghouse swaps the payment key for the actor's Batteries key and hands the call to its signer.
+  The job, its attempts, its failure and its cost are recorded in the enterprise's engine as always.
+- **A rotated payment key is picked up by the next job.** The key is resolved when a job starts, and the
+  SDK asks the clearinghouse who the signer is again under a key it has not used.
+- **A refusal reads as it does with self-hosted payments:** an empty allocation is the signer's 402
+  (`allowance_exhausted`) and a paused one its 403 (`not_authorized`). A payment key that was rotated or
+  revoked is the clearinghouse's 401 (`not_authorized`).
+- **There is no local signer:** `LPB_SIGNER_URL` is refused beside a clearinghouse.
+- **The engine is nobody's clearinghouse.** Its transport could forward a signer call and answer a
+  signer probe, as a clearinghouse's does. It offers neither: `payments.signing` and `payments.wallet`
+  are `None`, so it serves neither the two signer paths nor the wallet report, whatever parts it was
+  supplied.
 
 ### `lpb payments check`
 

@@ -245,11 +245,11 @@ listener. Until then two listeners are a deployment's choice.
 
 ## Upgrading to an engine that uses a payment clearinghouse
 
-On 19 November 2026 the engine gained the remote adapters of four payment ports and
+On 19 November 2026 the engine gained the remote adapters of the payment ports and
 `lpb payments check` (D84, D87, #168). A deployment that sets nothing new runs self-hosted payments as
-before: no route, body, status code or stored record changed, and there is no migration. Signing through
-a clearinghouse is not built yet, so an engine that uses one cannot pay for a job
-([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghouse)).
+before, and there is no migration. One route's answer gained a field (the allocation read, below). An
+engine that uses a clearinghouse signs there with the gateway SDK's transport and its actors' payment
+keys ([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghouse)).
 
 | What | Before | Now |
 | --- | --- | --- |

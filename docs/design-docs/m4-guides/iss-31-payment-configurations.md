@@ -364,7 +364,8 @@ One builder-core issue each, all sub-issues of ISS-31.
 
 1. **P1 (#162).** Make `per_actor` the only allocation mode. Built: the three settings and the code
    that read them are removed, with `SettingsSecretStore` and `allocation_mode` in `GET /readyz`.
-2. **P2 (#163).** Rename routes, classes and settings to the domain language. Built: tenant for
+2. **P2 (#163).** Rename routes, classes and settings to the domain language. Built
+   ([#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177)): tenant for
    application, `clearinghouse_admin` for the kind `admin`, allot for provision, top up for fund, the
    payment key, the grants token and the `/v1/clearinghouse` prefix, with migration 0014 for the records.
    A route whose final shape needs more than a rename kept its shape under the new prefix, for P3 and

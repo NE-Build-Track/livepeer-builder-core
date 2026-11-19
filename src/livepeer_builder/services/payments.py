@@ -96,9 +96,7 @@ class PaymentsService:
 
     # -- AllowanceReader --------------------------------------------------------------------------
 
-    async def allocation_for(self, application_id: str, actor_id: str | None) -> str | None:
-        if actor_id is None:  # an allocation is an actor's: the application has none of its own
-            return None
+    async def allocation_for(self, application_id: str, actor_id: str) -> str | None:
         provisioned = await self._store.get_actor(application_id, actor_id)
         return provisioned.allocation_id if provisioned else None
 

@@ -27,8 +27,8 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.routing import APIRoute
 
-from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext
+from livepeer_builder import BuilderEngine, EngineSupply
+from livepeer_builder.contracts import ActorContext, AuthRequest
 from livepeer_builder.http import actor_dependency, create_app, listeners
 from livepeer_builder.http.app import shared_app
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
@@ -356,3 +356,36 @@ async def test_the_published_schema_says_which_routes_are_private(clearinghouse:
     assert not operations(house.public) & private_only
     async with client_of(house.public) as client:  # as served: /openapi.json and the docs page read it
         assert "/v1/clearinghouse/tenants" not in (await client.get("/openapi.json")).json()["paths"]
+
+
+class KindFromHeader:
+    """A deployment's own authenticator, as an identity provider's token would be read: the kind of
+    the credential is whatever it verified. No engine key is involved."""
+
+    async def authenticate(self, request: AuthRequest) -> ActorContext | None:
+        kind = request.header("x-kind")
+        if kind is None:
+            return None
+        return ActorContext.model_validate({"actor_id": "someone", "credential_kind": kind})
+
+    def challenge(self) -> str | None:
+        return None
+
+
+async def test_the_rule_is_by_the_kind_of_credential_whatever_verified_it(make_engine: EngineFactory) -> None:
+    """A token an identity provider issued with the admin scope is a clearinghouse admin credential too
+    (``LPB_JWT_ADMIN_SCOPE``), and so is one a deployment's own authenticator makes. The listener asks
+    the kind, not where the credential came from."""
+    engine = await make_engine(supply=EngineSupply(api_keys=None, authenticators=(KindFromHeader(),)))
+    actors = f"{TENANTS}/default/actors"
+    expected = {
+        "public": {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
+        "private": {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
+        "only": {"clearinghouse_admin": 200, "tenant_admin": 200, "auditor": 200},
+    }
+    for listener, answers in expected.items():
+        app = create_app(engine, manage_lifecycle=False, listener=listener)  # type: ignore[arg-type]
+        async with client_of(app) as client:
+            got = {kind: (await client.get(actors, headers={"x-kind": kind})).status_code for kind in answers}
+            assert got == answers, listener
+            assert (await client.get(actors)).status_code == 401

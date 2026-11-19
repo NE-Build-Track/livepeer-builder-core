@@ -6,7 +6,15 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from livepeer_builder.contracts import Contract, Currency, Operation
 from livepeer_builder.contracts.common import GrantId
@@ -51,7 +59,8 @@ def _runner_list_by_default(values: dict[str, Any]) -> dict[str, Any]:
 
 
 class EngineSettings(Contract):
-    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url).
+    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url). This
+    # hides it from str(error); _a_refusal_holds_no_value, below every rule, from every other form.
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
@@ -342,6 +351,24 @@ class EngineSettings(Contract):
             )
         return self
 
+    # The last model validator: pydantic runs each one defined after it outside it, where its refusal would
+    # carry every setting given (tests/unit/test_settings_refusals.py fails if one is).
+    @model_validator(mode="wrap")
+    @classmethod
+    def _a_refusal_holds_no_value(
+        cls, values: Any, handler: ModelWrapValidatorHandler["EngineSettings"]
+    ) -> "EngineSettings":
+        """A refusal names each setting, with its type and its words, and holds no value given (#162
+        review). ``hide_input_in_errors`` hides values from ``str(error)`` only: ``errors()`` and
+        ``json()`` keep them, and a whole-settings rule's or a missing setting's is every setting given,
+        credentials too. A rule's exception is kept as its words: its traceback holds the settings."""
+        try:
+            return handler(values)
+        except ValidationError as refused:
+            title, details = refused.title, refused.errors(include_url=False)
+        # Raised here, outside the except block, so the refusal does not chain the error that holds them.
+        raise ValidationError.from_exception_data(title, [_without_input(detail) for detail in details])
+
     @classmethod
     def from_env(
         cls, env: Mapping[str, str] | None = None, *, defaults: Mapping[str, Any] | None = None
@@ -366,6 +393,21 @@ class EngineSettings(Contract):
         (#112, C23)."""
         source = os.environ if env is None else env
         return source.get(ENV_PREFIX + "DATABASE_URL") or DEFAULT_DATABASE_URL
+
+
+_HIDDEN_INPUT = "[hidden]"  # what a refusal's errors() and json() say was given
+
+
+def _without_input(detail: Mapping[str, Any]) -> Any:  # one of pydantic's InitErrorDetails
+    """A refused setting as pydantic reported it, with ``_HIDDEN_INPUT`` for what was given. A rule's
+    exception in the context becomes its message, so the refusal's words stay the rule's own."""
+    line = {"type": detail["type"], "loc": detail["loc"], "input": _HIDDEN_INPUT}
+    if "ctx" in detail:
+        line["ctx"] = {
+            name: str(value) if isinstance(value, BaseException) else value
+            for name, value in detail["ctx"].items()
+        }
+    return line
 
 
 def generate_secret_key() -> str:

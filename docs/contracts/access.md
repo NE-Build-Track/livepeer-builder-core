@@ -26,6 +26,12 @@ tenant: the key list and key inspection, the actor list and one actor's allocati
 reconciliation. The other `admin.*` operations are the writes. The grant list is `admin.allocations`:
 grants fund every tenant and carry none, so only an admin reads them, never an auditor.
 
+**Where the admin routes are.** The routes are two sets (D84, #164). The clearinghouse set, under
+`/v1/clearinghouse`, has the actor list, the allocation routes and the grant routes. The work set has
+three groups of admin routes beside the routes every actor calls: an engine's own access keys
+(`/v1/keys`), reconciliation (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`). The
+set a route is in decides nothing about access: each route needs the operation it needed before.
+
 ## Protocols
 
 ```python

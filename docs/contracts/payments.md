@@ -677,6 +677,14 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)). The tenant rules and the
 clearinghouse routes are added to this contract as they are built.
 
+The engine's routes are two sets (D84, #164). The **clearinghouse routes**, all under
+`/v1/clearinghouse`, are the allocation routes, the actor list, the grant desk and the grant top-up. The
+**work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
+(`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
+engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The
+old paths of the routes that moved are under
+[Upgrading to the work routes and the clearinghouse routes](index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
+
 ### Mode B
 
 "Mode B" was the M2 name for the second configuration: a hosted payment operator, one Batteries

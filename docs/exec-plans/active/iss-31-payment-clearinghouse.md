@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 and P2 are built and in review. P3 to P8 follow in order.
+- **Progress:** P1, P2 and P3 are built and in review. P4 to P8 follow in order.
 
 ## Goal
 

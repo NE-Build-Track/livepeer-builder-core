@@ -59,3 +59,34 @@ receives the same idempotency key ([repeat-safe commands](payments.md#repeat-saf
 permission strings `admin.*`, `LPB_JWT_ADMIN_SCOPE` and `LPB_JWT_ADMIN_READ_SCOPE`, `lpb bootstrap-admin`,
 the `lpk_` prefix, an app ID (`app`), and the words Batteries uses on its own API (`/fund`,
 `grants.fund`).
+
+## Upgrading to the work routes and the clearinghouse routes
+
+On 18 November 2026 the routes became two sets, the work routes and the clearinghouse routes (D84, D87,
+#164). Three groups of work routes left the `/v1/clearinghouse` prefix, where the rename above had put
+them, and the facade for operator work was split the same way. Only paths and names changed: who may
+call each route, its body, its status codes and its repeat-safety are as they were. No old path or name
+is kept as an alias: an old path is 404.
+
+| What | Before | Now |
+| --- | --- | --- |
+| Reconciliation | `GET /v1/clearinghouse/reconciliation` | `GET /v1/costs/reconciliation` |
+| Cost sync | `POST /v1/clearinghouse/costs/sync` | `POST /v1/costs/sync` |
+| An engine's own access keys: issue and list | `POST`, `GET /v1/clearinghouse/keys` | `POST`, `GET /v1/keys` |
+| One key, and its commands | `GET /v1/clearinghouse/keys/{key_id}`, `POST .../rotate`, `POST .../revoke` | `GET /v1/keys/{key_id}`, `POST /v1/keys/{key_id}/rotate`, `POST /v1/keys/{key_id}/revoke` |
+| The operation ids of those seven routes in the OpenAPI document | `issue_key_v1_clearinghouse_keys_post`, `reconcile_v1_clearinghouse_reconciliation_get`, and so on | `issue_key_v1_keys_post`, `reconcile_v1_costs_reconciliation_get`, and so on: each follows its path |
+| The facade for operator work, in embedded mode | `AdminApi` | `WorkApi` for the access keys, reconciliation and cost sync; `ClearinghouseApi` for allotment, top-ups and the grant desk. `EngineApi` is both |
+
+**Move the clients.** A client that calls an old path gets 404, and a client generated from the
+OpenAPI document is generated again, because the operation ids changed. Code typed against `AdminApi`
+names the half it uses. The engine's members are unchanged: `engine.keys`, `engine.costs.reconcile`,
+`engine.costs.sync_now` and `engine.payments` are called as before. The builder console and the sample
+apps move with their next pin.
+
+**What a repeat gets.** A key command recorded before the upgrade is still answered from its record
+when it is repeated at the new path. The ledger compares the command and its request, and neither
+names a path ([repeat-safe commands](payments.md#repeat-safe-commands)).
+
+**What stays under `/v1/clearinghouse`.** The allocation routes, the actor list, the grant list and
+creation, and the grant top-up. They are the clearinghouse set. The last four take their final shape,
+nested under a tenant, with #165.

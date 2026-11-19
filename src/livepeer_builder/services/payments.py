@@ -48,6 +48,8 @@ from livepeer_builder.protocols import (
     AccessPolicy,
     ActorRepo,
     AllocationManager,
+    AllocationsByActor,
+    AllowanceReader,
     Clock,
     SecretStore,
 )
@@ -82,12 +84,16 @@ class PaymentsService:
         usage: TenantUsage | None = None,
         wallet: Wallet | None = None,
         currency: Currency = "USD",
+        allowances: AllowanceReader | None = None,
+        issues_payment_keys: bool = True,
     ) -> None:
         self._store = store
         self._writes = ActorWrites(store, clock)
         self._secrets = secrets
         self._keys = PaymentKeys(secrets, self._writes)
-        self._issued = IssuedPaymentKeys(store, clock)  # the keys an enterprise's engine pays with (#166)
+        # The keys an enterprise's engine pays with (#166). An engine that uses a clearinghouse is handed
+        # them and issues none of its own (#168).
+        self._issued = IssuedPaymentKeys(store if issues_payment_keys else None, clock)
         self._policy = policy
         self._clock = clock
         self._engine_id = engine_id
@@ -97,6 +103,7 @@ class PaymentsService:
         self.usage = usage  # None: no source reads one tenant's usage (#166)
         self.wallet = wallet  # None: a part cannot report the escrow or probe the signer (#167)
         self._currency = currency
+        self._allowances = allowances  # None: the engine's own records and its provider
 
     # -- CredentialResolver ---------------------------------------------------------------------
 
@@ -112,10 +119,14 @@ class PaymentsService:
     # -- AllowanceReader --------------------------------------------------------------------------
 
     async def allocation_for(self, tenant_id: str, actor_id: str) -> str | None:
+        if self._allowances is not None:
+            return await self._allowances.allocation_for(tenant_id, actor_id)
         allotted = await self._store.get_actor(tenant_id, actor_id)
         return allotted.allocation_id if allotted else None
 
     async def read_allowance(self, allocation_id: str) -> Allowance:
+        if self._allowances is not None:
+            return await self._allowances.read_allowance(allocation_id)
         return await self._require_manager().read_allocation(allocation_id)
 
     # -- admin commands (Operation.ADMIN_ALLOCATIONS) ---------------------------------------------
@@ -136,7 +147,8 @@ class PaymentsService:
         )
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
-        manager = self._require_manager()  # refused before the ledger: nothing was sent
+        # refused before the ledger: nothing was sent
+        manager = self._manager_for(request.tenant_id, request.actor_id)
 
         minted: list[str] = []  # the payment key's token, which the record never holds
 
@@ -282,7 +294,7 @@ class PaymentsService:
         actor = await self._require_actor(tenant_id, actor_id)
         if request.amount.currency != actor.currency or request.amount.amount <= 0:
             raise InvalidRequest(f"a top-up must be a positive amount in {actor.currency}")
-        manager = self._require_manager()
+        manager = self._manager_for(tenant_id, actor_id)
 
         async def steps(_: RunningOperation) -> ActorAllocation:
             await manager.top_up_allocation(
@@ -322,7 +334,7 @@ class PaymentsService:
         if status not in ("active", "paused"):
             raise InvalidRequest("status must be active or paused; use revoke to revoke")
         actor = await self._require_actor(tenant_id, actor_id)
-        await self._require_manager().set_allocation_status(actor.allocation_id, status)
+        await self._manager_for(tenant_id, actor_id).set_allocation_status(actor.allocation_id, status)
         written = await self._writes.status(actor, status)
         if written is None:  # revoked while this command was at the provider: it stays revoked (#115, C4)
             raise NotFound(f"actor {actor_id!r} has no allocation")
@@ -338,7 +350,7 @@ class PaymentsService:
         if (done := await self._store.get_actor(tenant_id, actor_id)) and done.status == "revoked":
             return done
         actor = await self._require_actor(tenant_id, actor_id)
-        await self._require_manager().revoke_allocation(actor.allocation_id)
+        await self._manager_for(tenant_id, actor_id).revoke_allocation(actor.allocation_id)
         await self._secrets.delete(actor.secret_ref)
         revoked = await self._writes.status(actor, "revoked")
         if revoked is None:  # another revoke wrote it first: answer as a repeat does
@@ -371,7 +383,7 @@ class PaymentsService:
         actor = await self._require_actor(tenant_id, actor_id)
         previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
         previous[BEGAN_ON] = actor.allocation_id
-        manager = self._require_manager()
+        manager = self._manager_for(tenant_id, actor_id)
 
         minted: list[str] = []  # the payment key's token, which the record never holds
 
@@ -443,6 +455,12 @@ class PaymentsService:
         if self._manager is None:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
+
+    def _manager_for(self, tenant_id: str, actor_id: str) -> AllocationManager:
+        """The manager for a command about one actor's allocation. A provider that names an actor and not
+        an allocation id, as a payment clearinghouse does, is told which (``AllocationsByActor``, #168)."""
+        manager = self._require_manager()
+        return manager.for_actor(tenant_id, actor_id) if isinstance(manager, AllocationsByActor) else manager
 
 
 def _allocation(tenant_id: str, actor_id: str) -> ResourceRef:

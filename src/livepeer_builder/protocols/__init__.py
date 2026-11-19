@@ -229,6 +229,20 @@ class AllocationManager(Protocol):
     async def set_grant_status(self, grant_id: str, status: str) -> None: ...  # active or paused
 
 
+@runtime_checkable
+class AllocationsByActor(Protocol):
+    """Optional for an allocation manager: the manager for one actor's allocation (#168).
+
+    ``AllocationManager`` names an allocation by its id, as Batteries does. A payment clearinghouse's
+    routes name the tenant and the actor instead, and take no allocation id. A manager that needs the
+    actor has this: the engine, which knows the actor of every allocation command, calls ``for_actor``
+    and sends that command to the manager it returns. The members that name a grant are called on the
+    manager itself. ``ClearinghouseAllocations`` has it; ``BatteriesClient`` does not, and is called as
+    before. Without it nothing changes for a supplied manager."""
+
+    def for_actor(self, tenant_id: str, actor_id: str) -> AllocationManager: ...
+
+
 class UsageSource(Protocol):
     """Pages the provider's usage rows (Batteries ``GET /v1/usage``). Raises CursorMismatch."""
 

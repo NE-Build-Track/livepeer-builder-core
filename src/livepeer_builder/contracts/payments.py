@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from livepeer_builder.contracts.discovery import PriceInfo
 
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
+# How a clearinghouse's payment key begins (D87, #166). A public prefix, not a secret: an access key is
+# lpk_ and a Batteries key lpg_.
+PAYMENT_KEY_PREFIX = "lpp_"
 
 
 class PaymentKey(Contract):

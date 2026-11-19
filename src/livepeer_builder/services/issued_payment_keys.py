@@ -20,11 +20,11 @@ import logging
 import secrets
 
 from livepeer_builder.contracts import ActorAllocation, IssuedPaymentKey, KeyedAllocation
+from livepeer_builder.contracts.payments import PAYMENT_KEY_PREFIX as PAYMENT_KEY_PREFIX
 from livepeer_builder.protocols import Clock, PaymentKeyRepo
 from livepeer_builder.utils import token_hash
 
 _LOG = logging.getLogger(__name__)
-PAYMENT_KEY_PREFIX = "lpp_"  # a public prefix, not a secret: an access key is lpk_, a Batteries key lpg_
 
 
 class IssuedPaymentKeys:

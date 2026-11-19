@@ -31,6 +31,11 @@ SIGNER_URL_REFUSED = "Value error, signer_url must not carry userinfo, a query o
 STALE_WINDOW_REFUSED = (
     "Value error, LPB_OPERATION_STALE_S (1) must be at least four times LPB_BATTERIES_TIMEOUT_S (30)"
 )
+CLEARINGHOUSE = {  # #168: the three settings of an engine that uses a payment clearinghouse
+    "clearinghouse_url": "https://clearinghouse.invalid",
+    "clearinghouse_token": f"lpk-{CREDENTIAL}",
+    "clearinghouse_tenant_id": "grant_7",
+}
 # The model validator that hides what was given (config.py). Every other must run inside it.
 REDACTION = "_a_refusal_holds_no_value"
 
@@ -85,6 +90,48 @@ REFUSED_IN_CODE = [
             "the private listener needs an address of its own",
         ),
         id="the rule on the two listeners",
+    ),
+    pytest.param(  # #168, with the tenant admin key given
+        CLEARINGHOUSE | {"clearinghouse_tenant_id": ABSENT},
+        (
+            "value_error",
+            (),
+            "Value error, LPB_CLEARINGHOUSE_URL, LPB_CLEARINGHOUSE_TOKEN, LPB_CLEARINGHOUSE_TENANT_ID are "
+            "set together or not at all; missing: LPB_CLEARINGHOUSE_TENANT_ID",
+        ),
+        id="the rule on a half clearinghouse",
+    ),
+    pytest.param(  # #168: the Batteries token is one of the credentials every case gives
+        CLEARINGHOUSE,
+        (
+            "value_error",
+            (),
+            "Value error, LPB_BATTERIES_TOKEN cannot be set with LPB_CLEARINGHOUSE_URL: an engine that uses "
+            "a payment clearinghouse reaches Batteries and the signer through it, and holds no address or "
+            "credential of theirs",
+        ),
+        id="the rule on a clearinghouse beside self-hosted payments",
+    ),
+    pytest.param(  # #168
+        CLEARINGHOUSE | {"batteries_token": ABSENT, "batteries_timeout_s": 1, "operation_stale_s": 100},
+        (
+            "value_error",
+            (),
+            "Value error, LPB_OPERATION_STALE_S (100) must be at least four times "
+            "LPB_CLEARINGHOUSE_TIMEOUT_S (30)",
+        ),
+        id="the rule on the stale window with a clearinghouse",
+    ),
+    pytest.param(  # #168
+        CLEARINGHOUSE | {"clearinghouse_url": f"https://tenant:{CREDENTIAL}@clearinghouse.invalid"},
+        (
+            "value_error",
+            ("clearinghouse_url",),
+            "Value error, LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, "
+            "with no path, query, fragment or userinfo, such as https://clearinghouse.example: the "
+            "signer's two paths are called at its root",
+        ),
+        id="the clearinghouse address's field validator",
     ),
     pytest.param(
         {"discovery_url": ABSENT},

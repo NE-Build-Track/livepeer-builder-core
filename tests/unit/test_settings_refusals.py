@@ -51,6 +51,11 @@ REFUSED_IN_CODE = [
         ("extra_forbidden", ("batteries_tokn",), EXTRA),
         id="a credential setting's name mistyped",
     ),
+    pytest.param(  # the grants token's name before #163; no setting keeps an old name
+        {"batteries_operator_token": f"tok-{CREDENTIAL}"},
+        ("extra_forbidden", ("batteries_operator_token",), EXTRA),
+        id="a renamed credential setting",
+    ),
     pytest.param(
         {"batteries_token": {"token": f"tok-{CREDENTIAL}"}},
         ("string_type", ("batteries_token",), "Input should be a valid string"),

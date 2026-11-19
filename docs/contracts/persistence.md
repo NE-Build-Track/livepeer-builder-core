@@ -20,6 +20,9 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   enforced after the provider key was funded), so a supplied secret store may return a long path. The
   encrypted-database `SecretStore` keeps Fernet ciphertext in `lpb_secrets`, with the key outside the
   database.
+- **A clearinghouse's payment keys** (`lpp_`, #166) are not stored either. `lpb_payment_keys` holds the
+  SHA-256 of each token, one row for each actor, with the allocation the key was issued for (migration
+  0015), as `lpb_access_keys` holds an access key's hash ([payments.md](payments.md#payment-keys)).
 - **Default URL:** `sqlite+aiosqlite:///./livepeer-builder.db`. There is no silent in-memory store.
 - **Optional store protocols.** A store may also implement these; the engine asks with `isinstance`
   and falls back for a supplied store that does not. `SqlStore` implements all of them.
@@ -30,6 +33,8 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   | `AllocationCostSnapshot` (#115, C9), on the cost snapshot | `attempt_allocations`: which allocation paid each attempt, so reconciliation counts one allocation at a time | reconciliation counts every attempt of the actor against the current allocation, as before, and knows no earlier allocation ([payments.md](payments.md#cost-classification)) |
   | `UsageOnceRepo` (#115, C20) | `set_usage_once`: a job's usage is written only where it has none and is `succeeded`, in one statement | the engine checks the job it read and calls `set_usage` (unconditional); two usage reports at the same moment can still both succeed ([engine.md](engine.md#measured-usage)) |
   | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`: each admin command writes only its own actor columns, with its condition in the statement | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#allotment)) |
+
+  | `PaymentKeyRepo` (#166) | `put_payment_key`, `delete_payment_key`, `actor_by_payment_key`: the hash of each payment key a clearinghouse issues, and the actor it finds | no payment key is issued or recognized: allotment and rotation answer `payment_key: null` ([payments.md](payments.md#payment-keys)) |
 
   `ActorCommandRepo` has a third write, `allot_actor`, and its key write takes the key the rotation
   began from (`only_from`). A rotation writes only over that key, and allotment writes its row only
@@ -72,6 +77,11 @@ like a source checkout. Version table: `lpb_alembic_version`.
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at
   revision 0001 and upgrades.
+
+- **0015, payment keys (#166):** it adds `lpb_payment_keys` and changes no other table, so every
+  existing row stays as it is. An allocation allotted before it has no payment key until its payment
+  key is rotated. A downgrade drops the table, and the payment keys with it; the allocations and the
+  Batteries keys they pay with are untouched (`tests/store/test_payment_keys.py`).
 
 ## Retention
 

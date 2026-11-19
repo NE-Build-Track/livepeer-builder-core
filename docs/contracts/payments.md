@@ -1,8 +1,8 @@
 # Payments and cost contract
 
-**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82 and D83 (18 November 2026) · **Code:**
-`contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
-`services/costs.py`, `adapters/batteries.py`
+**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82, D83 and D87 (18 November 2026) ·
+**Code:** `contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
+`services/issued_payment_keys.py`, `services/tenant_usage.py`, `services/costs.py`, `adapters/batteries.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.
@@ -55,7 +55,9 @@ being down reaches the engine as a signer 502, like any other signer fault.
 **What builders never see.** No builder-facing body carries a payment key, the signer URL or the
 signer's or Batteries' own text:
 
-- allotment and key rotation return the actor, never the `lpg_` key; keys are encrypted at rest;
+- allotment and key rotation return the allocation, never the `lpg_` key, which is encrypted at rest.
+  They also return, once, the clearinghouse's own key for that actor (`lpp_`), of which only a hash is
+  kept ([payment keys](#payment-keys));
 - a job's `failure.message` for a payment failure is the engine's own words, and `failure.body` is
   only ever the runner's; the SDK's text, with the signer URL and its body, goes to the
   `runner.signer_error` log line as `detail`;
@@ -115,13 +117,15 @@ clearinghouse has one for each enterprise app.
 | Route | Who may call | What it does |
 | --- | --- | --- |
 | `POST /v1/clearinghouse/tenants` | A clearinghouse admin | Onboards a tenant: creates its grant and answers `201` `OnboardedTenant`, the `tenant_id`, the `name` and the first tenant admin key (`admin_key`, an `IssuedKey`), whose token is shown once. Body: `name`, `amount` (the grant's first total; zero onboards a tenant to top up later), `operation_ref`, and optionally `admin_actor_id` (`tenant-admin`), the actor the key is issued to |
-| `GET /v1/clearinghouse/tenants` | A clearinghouse admin | Every tenant with its grant: `TenantGrant[]` |
+| `GET /v1/clearinghouse/tenants` | A clearinghouse admin | Every tenant with its grant and what it spent: `TenantGrant[]` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total` and `unallocated` |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
 | `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment) |
 | `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
+| `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
 
 A clearinghouse admin may call every route, for any tenant. The first four are what only a clearinghouse
 admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`), which
@@ -140,6 +144,12 @@ answers the total less what those allocations hold (verified at Batteries v0.0.3
 returns what was not spent). The two reads are moments apart, so a command that lands between them can
 put the figure off by its amount; it is never below zero.
 
+**What a tenant spent (#166).** `spent` is the tenant's payment usage as one figure: the sum of what its
+allocations have spent, the revoked ones included. Batteries serves `spent_<currency>` on each allocation,
+and keeps it on a revoked one, late charges too. The tenant list and the grant read already read the
+allocations for the unallocated balance, so `spent` adds no request. The records behind the figure are
+[a tenant's usage](#a-tenants-usage). A `spent` the engine cannot read is a `ProviderError`, never a zero.
+
 **Batteries refuses what the grant cannot cover.** An allocation, or an allocation's top-up, larger than
 the grant's unallocated balance is refused by Batteries: 409, with its reason, "insufficient unallocated
 grant balance". The engine passes that on as a definite refusal, so the reference is free again and
@@ -155,6 +165,48 @@ own. Resuming sets the status back to `active`.
 
 **A tenant that was never onboarded** has no grant. Allotting to it is 404 ("tenant ... has no grant at
 the payment provider"), from Batteries' own 404, and so are its grant read, top-up and status.
+
+### A tenant's usage
+
+`GET /v1/clearinghouse/tenants/{tenant_id}/usage` returns the tenant's payment records, and none of
+another tenant's (#166). It is what an enterprise's engine reads in place of Batteries' usage feed (the
+`UsageSource` port, #168), so it answers with that port's own page, `UsagePage`, and not a summary of it.
+
+| Field | What it holds |
+| --- | --- |
+| `items` | Usage rows, oldest first, each as cost sync stores one (`UsageRow`): `id`, `event_id`, `status` (`applied`, `quarantined`, `ignored`, `duplicate`), `allocation_id`, `manifest_id` (the payment's id at the orchestrator), `payment_session_id` (its id at Batteries), `request_id`, `pipeline` (the capability, in Batteries' word), `computed_fee_eth` and `computed_fee_usd` (exact decimals as strings; `null` where Batteries states none), `currency` and `created_at` |
+| `set_aside` | The rows of the page the source could not read as a usage row, each with its `reason` and the fees it stated ([cost classification](#cost-classification)), so a reader records them as cost sync does |
+| `next_cursor` | The cursor of the next page; `""` on the last |
+
+`?cursor=` is the last page's `next_cursor`, and `?limit=` is 1 to 1000 rows (1000 when absent), as at
+Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then by `payment_session_id`
+([correlation](#correlation)); every field it reads is here.
+
+- **How one tenant's rows are chosen.** The engine sends Batteries' own `grant_id` filter with the
+  tenant's id, which is the grant's id (D83). Batteries keeps a row when the payment session it was
+  charged to belongs to an allocation of that grant (`internal/store/manage.go` at v0.0.3). The engine
+  keeps no second copy and decides no row itself. A row with no payment session, which Batteries could
+  tie to no allocation, is in no tenant's usage: only the unfiltered feed has it, and only the
+  clearinghouse's own cost sync reads that.
+- **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
+  refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
+  Batteries' is about 135 for a grant id it issues.
+- **Who may call.** That tenant's admin or auditor, and a clearinghouse admin for any tenant. The tenant
+  is named to the access policy first, so another tenant's id is 403 before Batteries is asked. An actor
+  key is 403.
+- **When Batteries fails.** Unreachable is 503. An error status, or an answer the engine cannot read, is
+  502 (Batteries' own 400, 404, 409 or 422 keeps its status). Never an empty page.
+- **No orchestrator.** A Batteries usage row names no orchestrator at v0.0.3. Batteries keeps it on the
+  payment session (`GET /v1/sessions`: `orchestrator`, `app`), and the route adds no call for each row to
+  fetch it. An enterprise's engine has the orchestrator on its own attempt record, which cost sync joins
+  the row to.
+- **Records from before a tenant's id was its grant's id** are the grant's: the route reads the grant
+  whose id the path names. A free-named tenant (`default`) is no grant, so its page is empty, and its
+  allocations' records are read under the id of the grant they were allotted from
+  ([below](#records-from-before-a-tenants-id-was-its-grants-id)).
+- **Optional.** The route is present with a usage source that reads one tenant's records
+  (`TenantUsageSource` in `protocols`, which `BatteriesUsageSource` has), and absent without one:
+  `engine.payments.usage` is then `None`.
 
 ### Records from before a tenant's id was its grant's id
 
@@ -236,7 +288,7 @@ checks stop that:
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `allot(AllotRequest(tenant, actor, amount, operation_ref))` | `POST /v1/api-keys` with `grant_id`, the tenant's id (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; top it up instead |
+| `allot(AllotRequest(tenant, actor, amount, operation_ref))` | `POST /v1/api-keys` with `grant_id`, the tenant's id (atomic: allocation + key + funding); then the actor's [payment key](#payment-keys), an engine record | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; top it up instead |
 | `top_up(…, TopUpRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))` |
 | `top_up_grant(tenant, TopUpRequest(amount, operation_ref))` | `POST /v1/grants/{tenant}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{tenant}:{operation_ref}:fund))` |
 | `tenants.onboard(name, amount, operation_ref=…)` (the tenant desk, `payments.tenants`) | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation`; then the tenant admin key, an engine record | the ledger; Batteries has no key on grants, so a resume finds the tagged grant (Q5) |
@@ -244,7 +296,7 @@ checks stop that:
 | `tenants.set_status(tenant, active / paused, operation_ref=…)` | `PATCH /v1/grants/{tenant}/status` with `LPB_BATTERIES_GRANTS_TOKEN` | the ledger; the call itself sets a state |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
-| `rotate_payment_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
+| `rotate_payment_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key; then the actor's [payment key](#payment-keys) is replaced, an engine record | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit top-up.
@@ -367,6 +419,57 @@ checks stop that:
   allot are stored and are not part of any actor's reconciliation. A cursor saved under the old
   `grant_id` filter does not match, so the first sync after this change restarts from the beginning
   and skips rows it already stored.
+
+## Payment keys
+
+A payment key is what an enterprise's engine presents when it asks a clearinghouse to sign a payment for
+one actor (D87, #166). It may ask for that actor's payments and nothing else. The clearinghouse swaps it
+for the actor's Batteries key (`lpg_`), which never leaves the clearinghouse. The route that takes a
+payment key, `POST /v1/clearinghouse/payments`, is not built yet: the key comes first.
+
+- **Its form.** `lpp_` and 32 random bytes as URL-safe text, 47 characters in all. An access key is
+  `lpk_` and a Batteries key `lpg_`, so the three are told apart at sight.
+- **Issued at allotment, once.** `POST .../actors/{actor_id}/allocation` answers `201` with the
+  allocation, every field where it was, and `payment_key`: `{"token": "lpp_...", "replayed": false}`
+  (`KeyedAllocation`). The enterprise's engine stores the token where it stores a Batteries key today.
+- **Only its hash is kept.** `lpb_payment_keys` holds the SHA-256 of the token, never the token, as
+  `lpb_access_keys` does for an access key: one row for each actor, with the allocation the key was
+  issued for. The token is in the answer of the run that issued the key and nowhere else: not in the
+  actor's record, the operation ledger, any read, or a log line.
+- **A repeat shows none.** A repeat of a finished allotment or rotation is answered from the ledger with
+  `"token": null` and `"replayed": true`, as a repeated key issue is
+  ([repeat-safe commands](#repeat-safe-commands)). A resumed allotment, whose first run stopped before
+  it finished, issues the key only where the allocation has none yet, and shows it: nobody was shown
+  one. Where the first run did issue it, the answer is `"token": null`. An admin who lost the token
+  rotates the payment key.
+- **Rotation replaces both keys.** `POST .../allocation/rotate-payment-key` first rotates the Batteries
+  key as before (a new key on the same allocation, then the old one revoked), and then replaces the
+  payment key. The old payment key stops in the statement that stores the new one, and the answer
+  carries the new token, once. The Batteries key is still rotated because it is the one that spends:
+  with self-hosted payments it is the only key in use, and a clearinghouse that suspects a leak must be
+  able to retire it. The payment key is replaced last, so a rotation that stops part-way leaves the old
+  payment key working, on whichever Batteries key the actor holds, until the same request finishes it.
+- **Revoking the allocation stops it.** The key is removed. A key also finds its actor only while that
+  actor still holds the allocation the key was issued for and it is not revoked, so the key of a revoked
+  allocation finds nobody whether or not it was removed, and never finds an allocation allotted later.
+  A paused or exhausted allocation keeps its key: Batteries refuses the payment (403, 402), not the
+  clearinghouse the key.
+- **Not an access key.** As a bearer on any route the engine serves today, a payment key gets what no
+  credential gets: 401. Only the payments route will read one.
+- **Finding the actor.** `payments.resolve_payment_key(token)` returns the actor's `ActorAllocation`
+  for a live key, and raises `NotAuthenticated` for anything else: a key never issued, one a rotation
+  replaced, one of a revoked allocation, an access key, a Batteries key.
+- **Self-hosted payments is unchanged.** One engine has both halves: the work half's
+  `CredentialResolver` returns the stored Batteries key, and the runner call presents that to the
+  signer, as before. The payment key the allotment returned is not used there.
+- **An allocation allotted before #166** has no payment key. Rotating its payment key issues its first.
+  The repeat of its allotment still answers from the ledger, with `"token": null`.
+- **A supplied store** keeps payment keys when it implements `PaymentKeyRepo`
+  ([persistence.md](persistence.md#store)). Without it nothing is issued and none is recognized:
+  `payment_key` is `null`.
+- **Every change is logged**, never with the token or its hash: `payments.payment_key_issued`,
+  `payments.payment_key_replaced` and `payments.payment_key_stopped`, each with the tenant, the actor
+  and the allocation.
 
 ## Repeat-safe commands
 
@@ -492,6 +595,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   pause is answered from its record, so it never pauses again a tenant that was resumed since.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
+- **A payment key's token** is never in a record either. An allotment's and a rotation's recorded
+  result is the allocation alone, so a replay answers `payment_key` with `token: null` and
+  `replayed: true` ([payment keys](#payment-keys)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.
 
 Which commands take a reference:
@@ -780,12 +886,15 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Not built yet. M4 builds it as #162 to #169 |
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
-([Tenants](#tenants)). The routes an enterprise's engine calls at a clearinghouse (payments, usage,
-discovery) are added to this contract as they are built.
+([Tenants](#tenants)). Of the routes an enterprise's engine calls at a clearinghouse, two are built
+(#166): [a tenant's usage](#a-tenants-usage) and the
+[runner list](discovery.md#the-clearinghouses-runner-list). The key the third one takes is built too
+([payment keys](#payment-keys)); the payments route itself is not yet.
 
-The engine's routes are two sets (D84, #164). The **clearinghouse routes**, all under
-`/v1/clearinghouse/tenants` since #165, are tenants and their grants, a tenant's actors and their
-allocations, and a tenant's access keys ([Tenants](#tenants)). The
+The engine's routes are two sets (D84, #164). The **clearinghouse routes** are tenants and their grants,
+a tenant's actors and their allocations, and a tenant's access keys and usage, all under
+`/v1/clearinghouse/tenants` since #165 ([Tenants](#tenants)), and the runner list at
+`/v1/clearinghouse/discovery`. The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
 engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The

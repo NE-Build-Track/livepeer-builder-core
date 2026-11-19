@@ -3,7 +3,9 @@
 The routes are two sets (D84): the work half's (``http/work.py``) and the clearinghouse half's, under
 ``/v1/clearinghouse`` (``http/clearinghouse.py``). Each is one function that adds its routes to an app,
 by itself or with the other. ``shared_app`` builds the app both need: the engine's lifecycle, the error
-answers, the request limit and the health routes. ``create_app`` mounts both sets on it.
+answers, the request limit and the health routes. ``create_app`` adds the routes one listener serves:
+every route for a deployment with one listener, and the public or the private listener's for a
+deployment with two (``http/listeners.py``, #167).
 
 The sets register their routes on the app itself, as ``create_app`` always did, and not through
 ``include_router``: every route stays an ``APIRoute`` in ``app.routes``, which the structure tests read
@@ -39,11 +41,10 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
 )
-from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
+from livepeer_builder.http.listeners import ListenerName, mount_listener_routes
 from livepeer_builder.http.replies import JOB_ID_HEADER
 from livepeer_builder.http.unprocessable import install_unprocessable_handler
-from livepeer_builder.http.work import mount_work_routes
 
 _FAILURE_STATUS = {
     "no_offering": 404,
@@ -65,12 +66,20 @@ _HELD = {"command", "operation_ref", "state"}  # what a 409 shows of an admin co
 
 
 def create_app(
-    engine: EngineApi, *, manage_lifecycle: bool = True, max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
+    engine: EngineApi,
+    *,
+    manage_lifecycle: bool = True,
+    max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
+    listener: ListenerName = "only",
 ) -> FastAPI:
-    """The whole REST service: the work routes and the clearinghouse routes on one app."""
+    """The REST service one listener serves: the work routes and the clearinghouse routes on one app.
+
+    ``listener`` is ``"only"`` for a deployment with one listener, which serves every route to every
+    kind of credential. A deployment with a private listener has two apps over one engine, ``"public"``
+    and ``"private"`` (``http/listeners.py``, #167): start the engine once, with ``manage_lifecycle``
+    on one of them at most, since an engine starts once."""
     app = shared_app(engine, manage_lifecycle=manage_lifecycle, max_request_bytes=max_request_bytes)
-    mount_work_routes(app, engine)
-    mount_clearinghouse_routes(app, engine)
+    mount_listener_routes(app, engine, listener)
     return app
 
 

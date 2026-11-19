@@ -60,4 +60,10 @@ async def _authenticated(engine: WorkApi | ClearinghouseApi, request: Request) -
     actor = await engine.authenticator.authenticate(auth)
     if actor is None:
         raise NotAuthenticated("a credential is required")
+    # The listener this app serves says which credentials it takes (http/listeners.py, #167). It is asked
+    # here, where every route authenticates, so no route needs a check of its own. An app that is no
+    # listener's (one a caller built from ``shared_app``) takes every credential.
+    listener = getattr(request.app.state, "listener", None)
+    if listener is not None:
+        listener.check(actor)
     return actor

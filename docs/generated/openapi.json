@@ -2726,7 +2726,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Tenants"
+        "summary": "List Tenants",
+        "tags": [
+          "private listener"
+        ]
       },
       "post": {
         "description": "Create the tenant's grant and its first tenant admin key, whose token is shown once.",
@@ -2768,7 +2771,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Onboard Tenant"
+        "summary": "Onboard Tenant",
+        "tags": [
+          "private listener"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors": {
@@ -3332,7 +3338,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Top Up Grant"
+        "summary": "Top Up Grant",
+        "tags": [
+          "private listener"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/keys": {
@@ -3659,7 +3668,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Set Tenant Status"
+        "summary": "Set Tenant Status",
+        "tags": [
+          "private listener"
+        ]
       }
     },
     "/v1/costs/projections": {
@@ -4648,5 +4660,11 @@
         "summary": "Open Session"
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "description": "Served on the private listener only, when the deployment has one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one listener serves them there.",
+      "name": "private listener"
+    }
+  ]
 }

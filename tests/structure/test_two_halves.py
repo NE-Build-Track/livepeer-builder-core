@@ -89,6 +89,7 @@ SHARED = {
     "http/auth.py",
     "http/bodies.py",
     "http/limits.py",
+    "http/listeners.py",  # which listener serves which group of routes (#167)
     "http/params.py",
     "http/replies.py",
     "http/server.py",

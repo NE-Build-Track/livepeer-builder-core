@@ -46,13 +46,14 @@ async def on_a_file(tmp_path: Path) -> AsyncIterator[EngineSupply]:
 
 async def calls(transport: ScriptedTransport, count: int) -> None:
     """Wait until the transport holds ``count`` calls: a condition, never a length of time. It gives up
-    after far more turns of the loop than any step here takes, so a job that never starts fails the test
-    instead of hanging it."""
-    for _ in range(20_000):
-        if len(transport.calls) >= count:
-            return
-        await asyncio.sleep(0)
-    raise AssertionError(f"the transport was called {len(transport.calls)} times, not {count}")
+    after ten seconds, so a job that never starts fails the test instead of hanging it. The bound is a
+    time, not a number of turns of the loop: each of the job's writes waits for the store's thread, and
+    under load (coverage, a busy CI host) 20 000 turns ran out before two jobs had reached the runner."""
+    deadline = asyncio.get_running_loop().time() + 10
+    while len(transport.calls) < count:
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"the transport was called {len(transport.calls)} times, not {count}")
+        await asyncio.sleep(0.001)
 
 
 async def test_submit_returns_a_queued_job_and_calls_no_runner(

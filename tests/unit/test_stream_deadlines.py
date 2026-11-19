@@ -96,7 +96,7 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
     engine = await make_engine(runners=runners, supply=EngineSupply(transport=SdkRunnerTransport(net.url)))
     request = ProvisionRequest(
         operation_ref="provision:default:alice",
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",
@@ -136,7 +136,7 @@ async def test_a_first_byte_deadline_while_the_signer_identifies_is_signer_unava
     )
     request = ProvisionRequest(
         operation_ref="provision:default:alice",
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
         grant_id="g",

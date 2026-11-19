@@ -41,12 +41,12 @@ def provision_request(
     amount: str = "5",
     grant_id: str = "grant_1",
     *,
-    application_id: str = "default",
+    tenant_id: str = "default",
     label: str = "",
 ) -> ProvisionRequest:
     return ProvisionRequest(
-        operation_ref=f"provision:{application_id}:{actor_id}",
-        application_id=application_id,
+        operation_ref=f"provision:{tenant_id}:{actor_id}",
+        tenant_id=tenant_id,
         actor_id=actor_id,
         amount=usd(amount),
         grant_id=grant_id,
@@ -54,7 +54,7 @@ def provision_request(
     )
 
 
-@pytest.mark.parametrize("field", ["application_id", "actor_id", "grant_id"])
+@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "grant_id"])
 def test_an_id_longer_than_the_store_keeps_is_refused_before_any_call(field: str) -> None:
     """Every record keeps these ids in 200 characters (``store.schema.ID``), and provisioning funds a
     provider key before it saves the actor. So a longer id is refused when the request is built, not by
@@ -199,12 +199,12 @@ async def test_operator_lists_and_creates_grants(
 async def test_an_auditor_never_sees_the_operators_grants(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """Grants are the operator's money for every application and carry none, so an auditor bound to
-    one application cannot read them (John, #53 review). Admins still list them."""
+    """Grants are the operator's money for every tenant and carry none, so an auditor bound to
+    one tenant cannot read them (John, #53 review). Admins still list them."""
     engine = await make_engine()
     desk = engine.payments.grants
     assert desk is not None
-    await desk.create_grant(admin, "another application's pool", usd("5"), operation_ref="grant-5")
+    await desk.create_grant(admin, "another tenant's pool", usd("5"), operation_ref="grant-5")
     auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")
     with pytest.raises(AccessDenied):
         await desk.list_grants(auditor)
@@ -217,14 +217,14 @@ def test_a_provisioning_label_is_capped_where_it_is_stored() -> None:
     with pytest.raises(ValidationError):
         ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=usd("1"),
             label="x" * 201,
         )
     assert ProvisionRequest(
         operation_ref="provision:default:alice",
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=usd("1"),
         label="x" * 200,
@@ -683,12 +683,12 @@ async def test_provisioning_stores_the_label_and_admins_list_the_actors(
     engine = await make_engine()
     opaque = "4f6c2a1e-9b3d-4c8e-a1f0-7d2e5b9c3a10"  # an identity provider's sub
     await engine.payments.provision(admin, provision_request(actor_id=opaque, label="Alice Smith"))
-    await engine.payments.provision(admin, provision_request(actor_id="bob", application_id="app-2"))
+    await engine.payments.provision(admin, provision_request(actor_id="bob", tenant_id="app-2"))
     listed = await engine.payments.list_actors(admin)
-    assert [(a.application_id, a.actor_id, a.label) for a in listed] == [
+    assert [(a.tenant_id, a.actor_id, a.label) for a in listed] == [
         ("app-2", "bob", ""), ("default", opaque, "Alice Smith"),
     ]  # fmt: skip
-    assert [a.actor_id for a in await engine.payments.list_actors(admin, application_id="app-2")] == ["bob"]
+    assert [a.actor_id for a in await engine.payments.list_actors(admin, tenant_id="app-2")] == ["bob"]
     assert (await engine.payments.get_actor(admin, "default", opaque)).label == "Alice Smith"
     with pytest.raises(NotFound):
         await engine.payments.get_actor(admin, "default", "nobody")
@@ -715,7 +715,7 @@ async def test_people_who_signed_in_are_listed_before_provisioning_and_by_name_a
     alice_sub, bob_sub = "3c446b40-7123-45f1", "14a5c7ce-7de4-44a0"
     for sub, name in ((alice_sub, "alice"), (bob_sub, "bob")):
         await store.save_sighting(
-            SeenActor(application_id="default", actor_id=sub, name=name, first_seen_at=clock.now(), last_seen_at=clock.now())
+            SeenActor(tenant_id="default", actor_id=sub, name=name, first_seen_at=clock.now(), last_seen_at=clock.now())
         )  # fmt: skip
     await engine.payments.provision(admin, provision_request(actor_id=bob_sub, label="Bob B."))
     await engine.payments.provision(
@@ -738,7 +738,7 @@ async def test_provisioning_a_person_takes_their_name_as_the_label(
 ) -> None:
     engine = await make_engine()
     seen = SeenActor(
-        application_id="default",
+        tenant_id="default",
         actor_id="3c446b40",
         name="alice",
         first_seen_at=clock.now(),
@@ -749,17 +749,17 @@ async def test_provisioning_a_person_takes_their_name_as_the_label(
     assert provisioned.label == "alice"  # unless the operator gives one
 
 
-async def test_an_auditor_lists_only_its_applications_actors(
+async def test_an_auditor_lists_only_its_tenants_actors(
     make_engine: EngineFactory, admin: ActorContext
 ) -> None:
     engine = await make_engine()
     await engine.payments.provision(admin, provision_request(actor_id="alice"))
-    await engine.payments.provision(admin, provision_request(actor_id="bob", application_id="app-2"))
-    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # application "default"
+    await engine.payments.provision(admin, provision_request(actor_id="bob", tenant_id="app-2"))
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # tenant "default"
     assert [a.actor_id for a in await engine.payments.list_actors(auditor)] == ["alice"]
-    with pytest.raises(AccessDenied, match="another application"):
-        await engine.payments.list_actors(auditor, application_id="app-2")
-    with pytest.raises(AccessDenied, match="another application"):
+    with pytest.raises(AccessDenied, match="another tenant"):
+        await engine.payments.list_actors(auditor, tenant_id="app-2")
+    with pytest.raises(AccessDenied, match="another tenant"):
         await engine.payments.get_actor(auditor, "app-2", "bob")
     with pytest.raises(AccessDenied):
         await engine.payments.provision(auditor, provision_request(actor_id="carol"))

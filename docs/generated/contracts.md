@@ -14,7 +14,7 @@ classDiagram
     }
     class ActorContext {
         +str actor_id
-        +str application_id
+        +str tenant_id
         +str[] permissions
         +enum credential_kind
         +map attributes
@@ -28,7 +28,7 @@ classDiagram
     }
     class ResourceRef {
         +enum kind
-        +str application_id
+        +str tenant_id
         +str? owner_actor_id
         +str? id
     }
@@ -53,7 +53,7 @@ classDiagram
     class Job {
         +UUID id
         +str actor_id
-        +str application_id
+        +str tenant_id
         +str? operation_ref
         +enum mode
         +str app
@@ -180,7 +180,7 @@ classDiagram
         +int row_count
     }
     class ProvisionedActor {
-        +str application_id
+        +str tenant_id
         +str actor_id
         +str grant_id
         +str allocation_id

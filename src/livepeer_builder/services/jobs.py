@@ -4,7 +4,7 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 1. Fail over when another runner can do what this one did not, and only to another orchestrator after
    a payment (services/failover.py, D52). A paid failure that may have run the work, or whose payment is
    unknown, is ``uncertain``; one that ran, or is about the request, is ``failed``.
-2. One (application, actor, operation_ref) dispatches at most once; a changed body is a conflict. A
+2. One (tenant, actor, operation_ref) dispatches at most once; a changed body is a conflict. A
    repeat while the job runs is ``OperationInProgress``; a repeat after a failure that never reached a
    runner dispatches a new job under the same reference (D57, services/operations.py).
 3. An attempt row is written *before* the call and updated after it. Paid-but-unknown is
@@ -205,14 +205,14 @@ class JobService:
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
-        """The caller's own jobs; an admin's are every actor's in its application, as the cost reads (D44)."""
+        """The caller's own jobs; an admin's are every actor's in its tenant, as the cost reads (D44)."""
         target = None if sees_every_actor(actor) else actor.actor_id
         self._policy.check(
             actor,
             Operation.JOBS_READ,
-            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+            ResourceRef(kind="job", tenant_id=actor.tenant_id, owner_actor_id=target),
         )
-        return await self._store.list_jobs(actor.application_id, target, limit=limit, before=before)
+        return await self._store.list_jobs(actor.tenant_id, target, limit=limit, before=before)
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
         """The application measured the work and reports it once (service-mode default): it is stored once,
@@ -467,7 +467,7 @@ class JobService:
         return Job(
             id=uuid4(),
             actor_id=actor.actor_id,
-            application_id=actor.application_id,
+            tenant_id=actor.tenant_id,
             operation_ref=request.operation_ref,
             mode=request.mode,
             app=request.app,

@@ -469,8 +469,8 @@ async def test_provisioning_over_a_key_answer_it_cannot_read_is_an_unknown_outco
     key = await engine.keys.bootstrap_admin()
     body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "g1", "operation_ref": "p-1"}
     async with rest(engine, key.token) as http:
-        created = await http.post("/v1/admin/applications/default/actors/alice/allocation", json=body)
-        again = await http.post("/v1/admin/applications/default/actors/alice/allocation", json=body)
+        created = await http.post("/v1/admin/tenants/default/actors/alice/allocation", json=body)
+        again = await http.post("/v1/admin/tenants/default/actors/alice/allocation", json=body)
     assert (created.status_code, again.status_code) == (502, 409)  # the key may exist: unknown, and held
     assert await ledger(store) == [("p-1", "started")]
 

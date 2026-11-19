@@ -46,8 +46,8 @@ class JwtSettings:
     audience: str
     algorithms: tuple[str, ...] = ("RS256", "ES256")
     actor_claim: str = "sub"
-    application_claim: str | None = None  # None: every token is in application_id
-    application_id: str = "default"  # at most 200 characters, like a claim (``_identity``)
+    tenant_claim: str | None = None  # None: every token is in tenant_id
+    tenant_id: str = "default"  # at most 200 characters, like a claim (``_identity``)
     scope_claim: str = "scope"
     scope_prefix: str = ""
     admin_scope: str | None = None  # None: no token is an admin credential
@@ -59,8 +59,8 @@ class JwtSettings:
     name_claim: str | None = "preferred_username"  # the display name for the operator's actor list (D48)
 
     def __post_init__(self) -> None:
-        if len(self.application_id) > 200:  # every record stores it in 200 characters (store.schema.ID)
-            raise ValueError("the JWT application id is longer than 200 characters")
+        if len(self.tenant_id) > 200:  # every record stores it in 200 characters (store.schema.ID)
+            raise ValueError("the JWT tenant id is longer than 200 characters")
 
     @property
     def strict(self) -> bool:
@@ -393,11 +393,7 @@ class JwtBearerAuthenticator:
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
         settings = self._settings
         actor_id = _identity(claims, settings.actor_claim)
-        application_id = (
-            _identity(claims, settings.application_claim)
-            if settings.application_claim
-            else settings.application_id
-        )
+        tenant_id = _identity(claims, settings.tenant_claim) if settings.tenant_claim else settings.tenant_id
         scopes = _scopes(claims.get(settings.scope_claim))
         named = {
             scope.removeprefix(settings.scope_prefix)
@@ -410,7 +406,7 @@ class JwtBearerAuthenticator:
         name = claims.get(settings.name_claim) if settings.name_claim else None
         return ActorContext(
             actor_id=actor_id,
-            application_id=application_id,
+            tenant_id=tenant_id,
             permissions=frozenset(operation.value for operation in GRANTABLE if operation.value in named),
             credential_kind="admin" if admin else "auditor" if auditor else "actor",
             auth=AuthProvenance(
@@ -431,8 +427,8 @@ def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 3.0) -> Jw
         audience=settings.jwt_audience,
         algorithms=settings.jwt_algorithms,
         actor_claim=settings.jwt_actor_claim,
-        application_claim=settings.jwt_application_claim,
-        application_id=settings.jwt_application_id,
+        tenant_claim=settings.jwt_tenant_claim,
+        tenant_id=settings.jwt_tenant_id,
         scope_claim=settings.jwt_scope_claim,
         scope_prefix=settings.jwt_scope_prefix,
         admin_scope=settings.jwt_admin_scope,
@@ -477,7 +473,7 @@ def _text(claims: dict[str, Any], name: str) -> str:
 
 
 def _identity(claims: dict[str, Any], name: str) -> str:
-    """An actor or application id, which every record stores in 200 characters (``store.schema.ID``).
+    """An actor or tenant id, which every record stores in 200 characters (``store.schema.ID``).
     A longer one is refused here, not cut: cutting could merge two people (John, #53 review)."""
     value = _text(claims, name)
     if len(value) > 200:

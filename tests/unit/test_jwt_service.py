@@ -125,9 +125,9 @@ def test_jwt_settings_come_from_the_environment() -> None:
                 "auth": "jwt",
                 "jwt_issuer": "https://idp/",
                 "jwt_audience": "a",
-                "jwt_application_id": "a" * 201,
+                "jwt_tenant_id": "a" * 201,
             },
-            "jwt_application_id",
+            "jwt_tenant_id",
         ),
     ],
     ids=["no issuer", "no audience", "unknown mode", "repeated mode", "empty", "hmac", "none", "long app id"],
@@ -137,11 +137,11 @@ def test_bad_auth_settings_fail_at_startup(values: dict[str, Any], complaint: st
         EngineSettings.model_validate({"discovery_url": "http://127.0.0.1:9/discovery", **values})
 
 
-def test_an_embedder_s_application_id_longer_than_the_store_keeps_is_refused() -> None:
+def test_an_embedder_s_tenant_id_longer_than_the_store_keeps_is_refused() -> None:
     """Every token takes this id when no claim names one, and every record stores it in 200 characters."""
-    assert JwtSettings(issuer="https://idp/", audience="a", application_id="a" * 200)
+    assert JwtSettings(issuer="https://idp/", audience="a", tenant_id="a" * 200)
     with pytest.raises(ValueError, match="200 characters"):
-        JwtSettings(issuer="https://idp/", audience="a", application_id="a" * 201)
+        JwtSettings(issuer="https://idp/", audience="a", tenant_id="a" * 201)
 
 
 # -- the engine -------------------------------------------------------------------------------------

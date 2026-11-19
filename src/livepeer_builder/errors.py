@@ -31,7 +31,7 @@ class InvalidRequest(EngineError):
 
 
 class OperationExists(EngineError):
-    """This (application, actor, operation_ref) already dispatched a job with the same request (409).
+    """This (tenant, actor, operation_ref) already dispatched a job with the same request (409).
 
     ``job`` is that job. ``operation`` is set instead when the reference names an admin command (D57,
     ISS-11); such a repeat is answered with the command's result, so only ``OperationInProgress`` carries one.

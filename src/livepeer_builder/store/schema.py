@@ -57,7 +57,7 @@ access_keys = Table(
     Column("token_hash", String(64), nullable=False, unique=True),
     Column("kind", String(16), nullable=False),
     Column("actor_id", String(ID), nullable=False),
-    Column("application_id", String(ID), nullable=False),
+    Column("tenant_id", String(ID), nullable=False),
     Column("permissions", JSON, nullable=False),
     Column("label", String(ID), nullable=False, server_default=""),
     Column("created_at", UTCDateTime, nullable=False),
@@ -68,7 +68,7 @@ jobs = Table(
     "lpb_jobs",
     metadata,
     Column("id", String(36), primary_key=True),
-    Column("application_id", String(ID), nullable=False),
+    Column("tenant_id", String(ID), nullable=False),
     Column("actor_id", String(ID), nullable=False),
     Column("operation_ref", String(ID), nullable=True),
     Column("request_fingerprint", String(64), nullable=True),
@@ -89,14 +89,14 @@ jobs = Table(
 )
 Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
-    jobs.c.application_id,
+    jobs.c.tenant_id,
     jobs.c.actor_id,
     jobs.c.operation_ref,
     unique=True,
     sqlite_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
     postgresql_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
 )
-Index("lpb_jobs_owner_created", jobs.c.application_id, jobs.c.actor_id, jobs.c.created_at)
+Index("lpb_jobs_owner_created", jobs.c.tenant_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
 
 attempts = Table(
@@ -139,7 +139,7 @@ Index("lpb_payment_sessions_session", payment_sessions.c.payment_session_id)
 actors = Table(
     "lpb_actors",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("grant_id", String(ID), nullable=False),
     Column("allocation_id", String(ID), nullable=False, unique=True),
@@ -157,7 +157,7 @@ actors = Table(
 actor_sightings = Table(
     "lpb_actor_sightings",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("name", String(ID), nullable=False, server_default=""),
     Column("first_seen_at", UTCDateTime, nullable=False),
@@ -221,7 +221,7 @@ cost_projections = Table(
 operations = Table(
     "lpb_operations",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("operation_ref", String(ID), primary_key=True),
     Column("command", String(32), nullable=False),

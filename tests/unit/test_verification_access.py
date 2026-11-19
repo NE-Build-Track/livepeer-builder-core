@@ -29,7 +29,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: 
         await engine.payments.provision(
             admin,
             ProvisionRequest(
-                operation_ref=f"provision:default:{actor_id}", application_id="default", actor_id=actor_id,
+                operation_ref=f"provision:default:{actor_id}", tenant_id="default", actor_id=actor_id,
                 amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
             ),
         )  # fmt: skip
@@ -147,11 +147,11 @@ async def test_a_revoked_admin_or_auditor_key_is_401_on_admin_routes(
     client, engine = rest
     issued = await engine.keys.issue(admin, kind=kind, actor_id=f"{kind}-1", operation_ref=f"key-{kind}")  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {issued.token}"}
-    reads = ("/v1/admin/keys", "/v1/admin/actors", "/v1/admin/applications/default/actors/alice/allocation")
+    reads = ("/v1/admin/keys", "/v1/admin/actors", "/v1/admin/tenants/default/actors/alice/allocation")
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [200, 200, 200]
     await engine.keys.revoke(admin, issued.key.key_id)
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [401, 401, 401]
-    status = "/v1/admin/applications/default/actors/alice/allocation/status"
+    status = "/v1/admin/tenants/default/actors/alice/allocation/status"
     assert (await client.post(status, json={"status": "paused"}, headers=headers)).status_code == 401
 
 
@@ -195,7 +195,7 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest(
     client, engine = rest
     as_admin = await bearer(engine, admin, "admin", "ops")
     key = (await engine.keys.issue(admin, kind="actor", actor_id="bob", operation_ref="k")).key
-    allocation = "/v1/admin/applications/default/actors/alice/allocation"
+    allocation = "/v1/admin/tenants/default/actors/alice/allocation"
 
     async def twice(path: str, body: dict[str, str] | None = None) -> list[int]:
         return [(await client.post(path, json=body, headers=as_admin)).status_code for _ in range(2)]

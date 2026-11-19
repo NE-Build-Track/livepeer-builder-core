@@ -26,7 +26,7 @@ async def sql(database_url: str) -> AsyncIterator[SqlStore]:
 @pytest.fixture
 async def actor(sql: SqlStore, clock: FixedClock) -> ProvisionedActor:
     saved = ProvisionedActor(
-        application_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
+        tenant_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:1"), currency="USD", status="active", created_at=clock.now(),
         updated_at=clock.now(), label="Alice",
     )  # fmt: skip

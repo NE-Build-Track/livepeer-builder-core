@@ -225,7 +225,7 @@ class CostSummary(Contract):
 class Reconciliation(Contract):
     """Batteries spent = delivered + failed_after_payment + uncertain + unattributed (per allocation)."""
 
-    application_id: str
+    tenant_id: str
     actor_id: str | None
     allocation_id: str  # the one reconciled: only the attempts it paid are counted (#115, C9)
     # The actor's other allocations, each reconciled by naming it: the current one, and every earlier one

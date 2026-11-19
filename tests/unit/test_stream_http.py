@@ -25,7 +25,7 @@ Message = dict[str, Any]
 
 async def bearer(engine: BuilderEngine, admin: ActorContext) -> str:
     issued = await engine.keys.issue(
-        admin, kind="actor", actor_id="alice", application_id="default", operation_ref="issue-stream_http-27"
+        admin, kind="actor", actor_id="alice", tenant_id="default", operation_ref="issue-stream_http-27"
     )
     return issued.token
 

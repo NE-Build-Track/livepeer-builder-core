@@ -77,7 +77,7 @@ async def test_before_pages_the_history_newest_first_and_only_the_callers_own(hi
     assert await history.page(history.alice, limit=2) == [third, second]
     cursor = (await history.client.get(f"/v1/jobs/{second}", headers=history.alice)).json()["created_at"]
     assert await history.page(history.alice, limit=2, before=cursor) == [first]  # bob's is not alice's
-    assert await history.page(history.admin, before=cursor) == [bobs, first]  # the application's
+    assert await history.page(history.admin, before=cursor) == [bobs, first]  # the tenant's
 
 
 async def test_before_in_another_zone_is_the_same_instant_in_utc(history: History) -> None:

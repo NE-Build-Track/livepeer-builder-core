@@ -9,10 +9,6 @@
             "title": "Actor Id",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -54,13 +50,17 @@
               }
             ],
             "title": "Revoked At"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
           "key_id",
           "kind",
           "actor_id",
-          "application_id",
+          "tenant_id",
           "permissions",
           "label",
           "created_at",
@@ -393,10 +393,6 @@
             "title": "Actor Id",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -435,6 +431,10 @@
             "title": "Sequence",
             "type": "integer"
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "type": {
             "enum": [
               "job.created",
@@ -453,7 +453,7 @@
           "type",
           "schema_version",
           "occurred_at",
-          "application_id",
+          "tenant_id",
           "actor_id",
           "job_id",
           "operation_ref",
@@ -802,13 +802,6 @@
             "title": "Actor Id",
             "type": "string"
           },
-          "application_id": {
-            "default": "default",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Application Id",
-            "type": "string"
-          },
           "kind": {
             "default": "actor",
             "enum": [
@@ -845,6 +838,13 @@
               }
             ],
             "title": "Permissions"
+          },
+          "tenant_id": {
+            "default": "default",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
@@ -893,10 +893,6 @@
           },
           "app": {
             "title": "App",
-            "type": "string"
-          },
-          "application_id": {
-            "title": "Application Id",
             "type": "string"
           },
           "attempts": {
@@ -1000,6 +996,10 @@
             "title": "State",
             "type": "string"
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "usage": {
             "anyOf": [
               {
@@ -1014,7 +1014,7 @@
         "required": [
           "id",
           "actor_id",
-          "application_id",
+          "tenant_id",
           "operation_ref",
           "mode",
           "app",
@@ -1293,10 +1293,6 @@
               }
             ]
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "first_seen_at": {
             "anyOf": [
               {
@@ -1340,10 +1336,14 @@
             "readOnly": true,
             "title": "Provisioned",
             "type": "boolean"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
-          "application_id",
+          "tenant_id",
           "actor_id",
           "label",
           "name",
@@ -1673,10 +1673,6 @@
             "title": "Api Key Id",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1713,6 +1709,10 @@
             "title": "Status",
             "type": "string"
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -1720,7 +1720,7 @@
           }
         },
         "required": [
-          "application_id",
+          "tenant_id",
           "actor_id",
           "grant_id",
           "allocation_id",
@@ -1751,10 +1751,6 @@
           },
           "allocation_id": {
             "title": "Allocation Id",
-            "type": "string"
-          },
-          "application_id": {
-            "title": "Application Id",
             "type": "string"
           },
           "balanced": {
@@ -1801,12 +1797,16 @@
               }
             ]
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "unattributed": {
             "$ref": "#/components/schemas/Fees"
           }
         },
         "required": [
-          "application_id",
+          "tenant_id",
           "actor_id",
           "allocation_id",
           "provider_spent",
@@ -2102,10 +2102,6 @@
             "title": "App",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "closed_at": {
             "anyOf": [
               {
@@ -2153,12 +2149,16 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "job_id",
-          "application_id",
+          "tenant_id",
           "actor_id",
           "app",
           "state",
@@ -2404,7 +2404,7 @@
         "parameters": [
           {
             "in": "query",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": false,
             "schema": {
               "anyOf": [
@@ -2416,7 +2416,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Application Id"
+              "title": "Tenant Id"
             }
           },
           {
@@ -2502,374 +2502,6 @@
           }
         ],
         "summary": "List Actors"
-      }
-    },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation": {
-      "get": {
-        "operationId": "get_actor_v1_admin_applications__application_id__actors__actor_id__allocation_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Actor"
-      },
-      "post": {
-        "operationId": "provision_v1_admin_applications__application_id__actors__actor_id__allocation_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProvisionBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Provision"
-      }
-    },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/fund": {
-      "post": {
-        "operationId": "fund_v1_admin_applications__application_id__actors__actor_id__allocation_fund_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FundRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Fund"
-      }
-    },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/revoke": {
-      "post": {
-        "operationId": "revoke_v1_admin_applications__application_id__actors__actor_id__allocation_revoke_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Revoke"
-      }
-    },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/rotate-key": {
-      "post": {
-        "operationId": "rotate_v1_admin_applications__application_id__actors__actor_id__allocation_rotate_key_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RotateBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Rotate"
-      }
-    },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/status": {
-      "post": {
-        "operationId": "set_status_v1_admin_applications__application_id__actors__actor_id__allocation_status_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StatusBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Set Status"
       }
     },
     "/v1/admin/costs/sync": {
@@ -3005,7 +2637,7 @@
         "parameters": [
           {
             "in": "query",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": false,
             "schema": {
               "anyOf": [
@@ -3017,7 +2649,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Application Id"
+              "title": "Tenant Id"
             }
           }
         ],
@@ -3240,12 +2872,12 @@
         "parameters": [
           {
             "in": "query",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": false,
             "schema": {
               "default": "default",
               "maxLength": 200,
-              "title": "Application Id",
+              "title": "Tenant Id",
               "type": "string"
             }
           },
@@ -3313,6 +2945,374 @@
           }
         ],
         "summary": "Reconcile"
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation": {
+      "get": {
+        "operationId": "get_actor_v1_admin_tenants__tenant_id__actors__actor_id__allocation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Actor"
+      },
+      "post": {
+        "operationId": "provision_v1_admin_tenants__tenant_id__actors__actor_id__allocation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Provision"
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/fund": {
+      "post": {
+        "operationId": "fund_v1_admin_tenants__tenant_id__actors__actor_id__allocation_fund_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Fund"
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/revoke": {
+      "post": {
+        "operationId": "revoke_v1_admin_tenants__tenant_id__actors__actor_id__allocation_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke"
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-key": {
+      "post": {
+        "operationId": "rotate_v1_admin_tenants__tenant_id__actors__actor_id__allocation_rotate_key_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate"
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation/status": {
+      "post": {
+        "operationId": "set_status_v1_admin_tenants__tenant_id__actors__actor_id__allocation_status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionedActor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Status"
       }
     },
     "/v1/allowance": {

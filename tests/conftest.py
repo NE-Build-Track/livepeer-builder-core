@@ -103,8 +103,8 @@ async def provision(engine: BuilderEngine, *actors: ActorContext) -> None:
     operator = ActorContext(actor_id="operator", credential_kind="admin")
     for actor in actors:
         request = ProvisionRequest(
-            operation_ref=f"provision:{actor.application_id}:{actor.actor_id}",
-            application_id=actor.application_id,
+            operation_ref=f"provision:{actor.tenant_id}:{actor.actor_id}",
+            tenant_id=actor.tenant_id,
             actor_id=actor.actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",

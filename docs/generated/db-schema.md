@@ -12,21 +12,21 @@ erDiagram
         string token_hash
         string kind
         string actor_id
-        string application_id
+        string tenant_id
         json permissions
         string label
         datetime created_at
         datetime revoked_at
     }
     lpb_actor_sightings {
-        string application_id PK
+        string tenant_id PK
         string actor_id PK
         string name
         datetime first_seen_at
         datetime last_seen_at
     }
     lpb_actors {
-        string application_id PK
+        string tenant_id PK
         string actor_id PK
         string grant_id
         string allocation_id
@@ -71,7 +71,7 @@ erDiagram
     }
     lpb_jobs {
         string id PK
-        string application_id
+        string tenant_id
         string actor_id
         string operation_ref
         string request_fingerprint
@@ -90,7 +90,7 @@ erDiagram
         string superseded_by
     }
     lpb_operations {
-        string application_id PK
+        string tenant_id PK
         string actor_id PK
         string operation_ref PK
         string command
@@ -141,7 +141,7 @@ erDiagram
     lpb_attempts ||--o{ lpb_payment_sessions : "attempt_number, job_id"
     lpb_jobs ||--o{ lpb_attempts : "job_id"
     lpb_jobs ||--o| lpb_cost_projections : "job_id"
-    lpb_actors ||--o{ lpb_jobs : "owns (application_id, actor_id)"
+    lpb_actors ||--o{ lpb_jobs : "owns (tenant_id, actor_id)"
     lpb_actors ||--o| lpb_secrets : "secret_ref"
     lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"
     lpb_actors ||--o{ lpb_usage_rows : "allocation_id"
@@ -158,7 +158,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `token_hash` | VARCHAR(64) | no | unique |
 | `kind` | VARCHAR(16) | no |  |
 | `actor_id` | VARCHAR(200) | no |  |
-| `application_id` | VARCHAR(200) | no |  |
+| `tenant_id` | VARCHAR(200) | no |  |
 | `permissions` | JSON | no |  |
 | `label` | VARCHAR(200) | no |  |
 | `created_at` | DATETIME | no |  |
@@ -168,7 +168,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
-| `application_id` | VARCHAR(200) | no | PK |
+| `tenant_id` | VARCHAR(200) | no | PK |
 | `actor_id` | VARCHAR(200) | no | PK |
 | `name` | VARCHAR(200) | no |  |
 | `first_seen_at` | DATETIME | no |  |
@@ -178,7 +178,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
-| `application_id` | VARCHAR(200) | no | PK |
+| `tenant_id` | VARCHAR(200) | no | PK |
 | `actor_id` | VARCHAR(200) | no | PK |
 | `grant_id` | VARCHAR(200) | no |  |
 | `allocation_id` | VARCHAR(200) | no | unique |
@@ -235,7 +235,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
 | `id` | VARCHAR(36) | no | PK |
-| `application_id` | VARCHAR(200) | no |  |
+| `tenant_id` | VARCHAR(200) | no |  |
 | `actor_id` | VARCHAR(200) | no |  |
 | `operation_ref` | VARCHAR(200) | yes |  |
 | `request_fingerprint` | VARCHAR(64) | yes |  |
@@ -255,15 +255,15 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 
 Indexes:
 
-- `lpb_jobs_operation_ref` (application_id, actor_id, operation_ref) unique
-- `lpb_jobs_owner_created` (application_id, actor_id, created_at)
+- `lpb_jobs_operation_ref` (tenant_id, actor_id, operation_ref) unique
+- `lpb_jobs_owner_created` (tenant_id, actor_id, created_at)
 - `lpb_jobs_state` (state)
 
 ## `lpb_operations`
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
-| `application_id` | VARCHAR(200) | no | PK |
+| `tenant_id` | VARCHAR(200) | no | PK |
 | `actor_id` | VARCHAR(200) | no | PK |
 | `operation_ref` | VARCHAR(200) | no | PK |
 | `command` | VARCHAR(32) | no |  |

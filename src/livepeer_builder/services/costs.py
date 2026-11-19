@@ -252,7 +252,7 @@ class CostService:
             if found is None:
                 raise NotFound(f"job {job_id} not found")
             job, projection = found
-            owner = _resource(job.application_id, job.actor_id)
+            owner = _resource(job.tenant_id, job.actor_id)
             check_owner(self._policy, actor, Operation.COSTS_READ, owner, f"job {job_id} not found")
             if projection is not None and _covered(projection, job):
                 return projection
@@ -260,9 +260,9 @@ class CostService:
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
         target = None if sees_every_actor(actor) else actor.actor_id
-        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
+        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.tenant_id, target))
         async with self._store.cost_snapshot() as reads:
-            recent = await reads.recent_with_projections(actor.application_id, target, limit)
+            recent = await reads.recent_with_projections(actor.tenant_id, target, limit)
             due = [job for job, cost in recent if not _covered(cost, job)]
             computed = {cost.job_id: cost for cost in await _compute_all(due, reads)}
         return [
@@ -277,14 +277,14 @@ class CostService:
         actor_id: str | None = None,
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
-        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
+        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.tenant_id, target))
         start, end = summary_window(self._clock.now(), start, end)
         async with self._store.cost_snapshot() as reads:
-            costs = await _rollup(reads, actor.application_id, target, start, end)
+            costs = await _rollup(reads, actor.tenant_id, target, start, end)
         return summarize(start, end, costs)
 
     async def reconcile(
-        self, admin: ActorContext, application_id: str, actor_id: str | None, allocation_id: str | None = None
+        self, admin: ActorContext, tenant_id: str, actor_id: str | None, allocation_id: str | None = None
     ) -> Reconciliation:
         """provider spent == delivered + failed_after_payment + uncertain + pending + unattributed, for one
         allocation: the actor's current one, or an earlier one named by ``allocation_id`` (#115, C9). Only
@@ -294,15 +294,15 @@ class CostService:
         alongside can never count a row twice or nowhere. ``spent`` is read from the provider afterwards
         and can be ahead of usage the engine has not synced yet; ``balanced`` is then ``False`` until it is.
         """
-        self._policy.check(admin, Operation.ADMIN_READ, _resource(application_id, actor_id))
+        self._policy.check(admin, Operation.ADMIN_READ, _resource(tenant_id, actor_id))
         if self._allowances is None:
             raise ProviderUnavailable("no payment provider is configured")
-        current = await current_allocation(self._allowances, application_id, actor_id)
+        current = await current_allocation(self._allowances, tenant_id, actor_id)
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         async with self._store.cost_snapshot() as reads:
-            paid = await PaidAttempts.read(reads, application_id, actor_id)
+            paid = await PaidAttempts.read(reads, tenant_id, actor_id)
             allocation_id = paid.reconciled(current, allocation_id)
-            costs = await _rollup(reads, application_id, actor_id, _EPOCH, _FAR_FUTURE)
+            costs = await _rollup(reads, tenant_id, actor_id, _EPOCH, _FAR_FUTURE)
             unattributed = fees_of(await reads.unattributed_usage(allocation_id))
         for _, cost in costs:
             for attempt in paid.by(allocation_id, cost):
@@ -314,7 +314,7 @@ class CostService:
         except ProviderUnavailable:
             spent = None
         return Reconciliation(
-            application_id=application_id,
+            tenant_id=tenant_id,
             actor_id=actor_id,
             allocation_id=allocation_id,
             other_allocations=paid.others(current, allocation_id),
@@ -333,11 +333,11 @@ class _UsageReads(Protocol):
 
 
 async def _rollup(
-    reads: CostSnapshot, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    reads: CostSnapshot, tenant_id: str, actor_id: str | None, start: datetime, end: datetime
 ) -> list[tuple[str, JobCost]]:
     """One cost per job in the window, with the job's runner app: the stored projections, plus a live
     compute of the jobs none covers."""
-    stored, not_projected = await reads.projections_and_unprojected(application_id, actor_id, start, end)
+    stored, not_projected = await reads.projections_and_unprojected(tenant_id, actor_id, start, end)
     costs = {cost.job_id: cost for _, cost in stored}
     apps = {cost.job_id: app for app, cost in stored} | {job.id: job.app for job in not_projected}
     due = [job for job in not_projected if not _covered(costs.get(job.id), job)]
@@ -494,5 +494,5 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
     return None if total.fee_usd is None else total.fee_usd == spent.amount
 
 
-def _resource(application_id: str, owner: str | None) -> ResourceRef:
-    return ResourceRef(kind="costs", application_id=application_id, owner_actor_id=owner)
+def _resource(tenant_id: str, owner: str | None) -> ResourceRef:
+    return ResourceRef(kind="costs", tenant_id=tenant_id, owner_actor_id=owner)

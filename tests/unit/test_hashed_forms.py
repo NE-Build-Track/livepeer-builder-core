@@ -54,7 +54,7 @@ async def run_every_command(engine: BuilderEngine, admin: ActorContext) -> None:
     payments, keys, desk = engine.payments, engine.keys, engine.payments.grants
     assert keys is not None and desk is not None
     request = ProvisionRequest(
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=USD_5,
         label="Alice",

@@ -82,7 +82,7 @@ Everything else is reached through the engine object.
 ```python
 actor = ActorContext(
     actor_id="customer-42",
-    application_id="default",
+    tenant_id="default",
     permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
 )
 ```
@@ -92,7 +92,7 @@ That is the only identity the engine understands.
 | Your app | `ActorContext` |
 | --- | --- |
 | Logged-in customer id | `actor_id` |
-| Tenant / org | `application_id` |
+| Tenant / org | `tenant_id` |
 | What this user may do | `permissions` (`discover`, `jobs.run`, `jobs.read`, `costs.read`) |
 | Operator / admin desk | `credential_kind="admin"` |
 
@@ -118,7 +118,7 @@ admin = ActorContext(actor_id="operator", credential_kind="admin")
 await engine.payments.provision(
     admin,
     ProvisionRequest(
-        application_id="default",
+        tenant_id="default",
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
         grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
@@ -224,7 +224,7 @@ Health is `engine.health()`, not `GET /readyz`.
 - **D12.** Two small protocols: `Authenticator` and `AccessPolicy`. Imported mode builds
   `ActorContext` itself. The policy still applies.
 - **Identity stops at your app.** No request field establishes identity in the engine. You map your
-  session or token onto `actor_id` / `application_id` / `permissions`.
+  session or token onto `actor_id` / `tenant_id` / `permissions`.
 - **Payment keys never ride on records.** `lpg_` lives in a `SecretStore`; the database holds a
   `SecretRef`. Your handlers must not log or return it.
 - **Replace adapters, not services.** Supply or decorate discovery, policy, secrets, or transport

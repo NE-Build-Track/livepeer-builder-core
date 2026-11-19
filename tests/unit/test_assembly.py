@@ -47,7 +47,7 @@ class HeaderAuthenticator:
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
         user = request.header("x-user")
         return (
-            ActorContext(actor_id=user, application_id="corp", permissions=frozenset({"jobs.read"}))
+            ActorContext(actor_id=user, tenant_id="corp", permissions=frozenset({"jobs.read"}))
             if user
             else None
         )

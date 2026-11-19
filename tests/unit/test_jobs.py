@@ -43,7 +43,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: 
     for actor_id in actors:
         request = ProvisionRequest(
             operation_ref=f"provision:default:{actor_id}",
-            application_id="default",
+            tenant_id="default",
             actor_id=actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",
@@ -438,7 +438,7 @@ async def test_attempt_is_written_before_the_call(
 
 def running_job(clock: FixedClock) -> Job:
     return Job(
-        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        id=uuid4(), actor_id="alice", tenant_id="default", operation_ref=None, mode="immediate", app=APP,
         capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
         created_at=clock.now(), completed_at=None,
     )  # fmt: skip
@@ -653,7 +653,7 @@ async def test_a_repeat_after_a_failure_before_dispatch_runs_once_the_cause_is_f
     await engine.payments.provision(
         admin,
         ProvisionRequest(operation_ref="provision:default:bob",
-            application_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
+            tenant_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",
         ),
     )  # fmt: skip

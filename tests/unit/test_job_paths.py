@@ -100,7 +100,7 @@ async def api(
     engine = await make_engine()
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-paths-1")
     amount = Money(amount=Decimal(5), currency="USD")
-    alice_allocation = {"application_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
+    alice_allocation = {"tenant_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
     await engine.payments.provision(
         admin, ProvisionRequest(**alice_allocation, amount=amount, operation_ref="p1")
     )

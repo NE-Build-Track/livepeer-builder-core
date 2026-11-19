@@ -25,7 +25,7 @@ from livepeer_builder.store import (
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.migrate import downgrade
 from livepeer_builder.testing import FixedClock
-from tests.store.conftest import make_attempt, make_job
+from tests.store.conftest import as_before_0014, make_attempt, make_job
 
 
 async def test_upgrade_preserves_records_written_at_each_revision(
@@ -35,7 +35,7 @@ async def test_upgrade_preserves_records_written_at_each_revision(
     await upgrade(engine, "0001")
     job = make_job(clock)
     async with engine.begin() as conn:  # a record written by revision 0001's schema
-        await conn.execute(insert(t.jobs).values(
+        await conn.execute(insert(as_before_0014(t.jobs)).values(
             id=str(job.id), application_id="default", actor_id="alice", operation_ref="r", mode="immediate",
             app="a/b", state="succeeded", created_at=clock.now(), completed_at=clock.now(),
         ))  # fmt: skip
@@ -231,7 +231,11 @@ async def test_the_payment_intent_migration_keeps_every_old_session_paid(
     await upgrade(engine, "0005")
     job = make_job(clock)
     store = SqlStore(engine)
-    await store.create_job(job, None)
+    async with engine.begin() as conn:  # a job written by revision 0005's schema
+        await conn.execute(insert(as_before_0014(t.jobs)).values(
+            id=str(job.id), application_id="default", actor_id="alice", mode="immediate", app="a/b",
+            capability="cap", state="succeeded", created_at=clock.now(), completed_at=clock.now(),
+        ))  # fmt: skip
     await store.start_attempt(make_attempt(job.id, clock, manifest_ids=("old",)))
     async with engine.begin() as conn:
         await conn.execute(
@@ -294,9 +298,9 @@ async def test_the_retry_migration_keeps_references_and_downgrades(
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO lpb_jobs (id, application_id, actor_id, operation_ref, request_fingerprint, mode, "
-                "app, state, created_at) VALUES (:id, 'default', 'alice', 'order-1', 'fp', 'immediate', 'a/b', "
-                "'failed', :at)"
+                "INSERT INTO lpb_jobs (id, application_id, actor_id, operation_ref, request_fingerprint, "
+                "mode, app, state, created_at) VALUES (:id, 'default', 'alice', 'order-1', 'fp', 'immediate', "
+                "'a/b', 'failed', :at)"
             ),
             {"id": str(old.id), "at": clock.now()},
         )
@@ -341,7 +345,7 @@ async def test_the_operation_ledger_outlives_retention_and_downgrades(
     await upgrade(engine)
     store = SqlStore(engine)
     record = OperationRecord(
-        application_id="default", actor_id="operator", operation_ref="op-1", command="fund",
+        tenant_id="default", actor_id="operator", operation_ref="op-1", command="fund",
         fingerprint="f", state="started", started_at=clock.now(),
     )  # fmt: skip
     await store.begin_operation(record)

@@ -263,7 +263,7 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      signed. A signer 5xx, timeout or lost reply **while signing** is not a refusal: it is
      `payment_unknown` (`signer_unknown`), the manifest stays `unknown`, and the job ends
      `uncertain`. The cost stays `pending` until usage matches it.
-2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
+2. **At most one dispatch per operation.** One `(tenant_id, actor_id, operation_ref)` dispatches at
    most one job that reaches a runner. A job that failed before any runner accepted the work may be
    dispatched again under the same reference (see [idempotency](#idempotency)).
 3. **The attempt row is written before the call** (`in_flight`) and updated after it. **The manifest is stored before
@@ -299,7 +299,7 @@ before this, or from a transport that doesn't measure. Each call also logs them 
 ### Idempotency
 
 Final rules (D57; they replace D11's interim 409). A repeat is identified by
-`(application_id, actor_id, operation_ref)`. The request's fingerprint covers `app`, `path`, `method`,
+`(tenant_id, actor_id, operation_ref)`. The request's fingerprint covers `app`, `path`, `method`,
 `payload` (or the raw body), `capability`, `model`, `content_type`, `headers` and `return_http_errors`.
 Limits such as `timeout_s` and `max_attempts` may differ between repeats.
 
@@ -557,7 +557,7 @@ should handle a failed load ("the provider no longer serves this file") instead 
 ### Job history
 
 `GET /v1/jobs` (`jobs.list_jobs` in-process) lists jobs **newest first**: an actor's own; for an admin
-or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
+or an auditor, every actor's in its tenant ([access.md](access.md#answers)). `limit` is 1 to 500
 (default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
 ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
 is 422, and so is one that UTC cannot hold ([access.md](access.md#answers)). Jobs created in the same microsecond share a `created_at`, so a page that ends between two of

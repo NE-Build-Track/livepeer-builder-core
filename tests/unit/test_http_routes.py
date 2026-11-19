@@ -49,7 +49,7 @@ async def api(
         )
 
 
-ALLOCATION = "/v1/admin/applications/default/actors/alice/allocation"
+ALLOCATION = "/v1/admin/tenants/default/actors/alice/allocation"
 
 
 async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource) -> None:  # type: ignore[no-untyped-def]
@@ -431,9 +431,7 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
     )
     as_auditor = {"Authorization": f"Bearer {auditor.token}"}
     assert (await client.get("/v1/admin/actors", headers=as_auditor)).status_code == 200
-    assert (
-        await client.get("/v1/admin/grants", headers=as_auditor)
-    ).status_code == 403  # every application's
+    assert (await client.get("/v1/admin/grants", headers=as_auditor)).status_code == 403  # every tenant's
     funded = await client.post(
         ALLOCATION + "/fund",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
@@ -532,13 +530,13 @@ async def test_an_operation_ref_with_a_nul_is_422_on_fund_and_rotate(  # type: i
 @pytest.mark.parametrize(
     ("path", "grant_id"),
     [
-        (f"/v1/admin/applications/default/actors/{'a' * 201}/allocation", "grant_1"),
-        (f"/v1/admin/applications/{'a' * 201}/actors/alice/allocation", "grant_1"),
+        (f"/v1/admin/tenants/default/actors/{'a' * 201}/allocation", "grant_1"),
+        (f"/v1/admin/tenants/{'a' * 201}/actors/alice/allocation", "grant_1"),
         (ALLOCATION, "g" * 201),
-        ("/v1/admin/applications/default/actors/a%00b/allocation", "grant_1"),
-        ("/v1/admin/applications/a%00b/actors/alice/allocation", "grant_1"),
+        ("/v1/admin/tenants/default/actors/a%00b/allocation", "grant_1"),
+        ("/v1/admin/tenants/a%00b/actors/alice/allocation", "grant_1"),
     ],
-    ids=["actor", "application", "grant", "actor NUL", "application NUL"],
+    ids=["actor", "tenant", "grant", "actor NUL", "tenant NUL"],
 )
 async def test_provisioning_an_id_longer_than_the_store_keeps_is_422_before_money_moves(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str, grant_id: str

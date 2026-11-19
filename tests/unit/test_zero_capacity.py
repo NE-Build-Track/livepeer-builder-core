@@ -84,7 +84,7 @@ async def engine_offering(
     async with wire_engine(*answers, supply=EngineSupply(transport=transport, **supply)) as engine:
         request = ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",

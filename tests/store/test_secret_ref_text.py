@@ -19,6 +19,7 @@ from livepeer_builder.store import SqlStore, create_engine, current_revision, he
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.migrate import alembic_config, downgrade
 from livepeer_builder.testing import FixedClock
+from tests.store.conftest import as_before_0014
 
 LONG = "vault:kv/data/livepeer/" + "p" * 5000
 
@@ -34,10 +35,33 @@ def actor(
     clock: FixedClock, actor_id: str = "alice", allocation_id: str = "a1", ref: str = "db:1"
 ) -> ProvisionedActor:
     return ProvisionedActor(
-        application_id="default", actor_id=actor_id, grant_id="g", allocation_id=allocation_id,
+        tenant_id="default", actor_id=actor_id, grant_id="g", allocation_id=allocation_id,
         api_key_id="k1", secret_ref=SecretRef(ref=ref), currency="USD", status="active",
         created_at=clock.now(), updated_at=clock.now(), label="Alice",
     )  # fmt: skip
+
+
+# Revision 0012 names an actor's tenant ``application_id`` (0014 renamed it, #163), so a row is written
+# and read there under that name, not through the store.
+ACTORS_AT_0012 = as_before_0014(t.actors)
+
+
+def row_at_0012(actor: ProvisionedActor) -> dict[str, object]:
+    values = actor.model_dump(exclude={"secret_ref", "tenant_id"})
+    return values | {"application_id": actor.tenant_id, "secret_ref": actor.secret_ref.ref}
+
+
+async def save_at_0012(engine: AsyncEngine, actor: ProvisionedActor) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(insert(ACTORS_AT_0012).values(row_at_0012(actor)))
+
+
+async def alice_at_0012(engine: AsyncEngine) -> ProvisionedActor:
+    async with engine.connect() as conn:
+        found = await conn.execute(select(ACTORS_AT_0012).where(ACTORS_AT_0012.c.actor_id == "alice"))
+        row = dict(found.mappings().one())
+    row["tenant_id"] = row.pop("application_id")
+    return ProvisionedActor.model_validate(row | {"secret_ref": SecretRef(ref=row["secret_ref"])})
 
 
 async def secret_ref_length(engine: AsyncEngine) -> int | None:
@@ -78,18 +102,17 @@ async def test_existing_actors_survive_the_change_and_a_downgrade(
         await upgrade(engine, "0012")
         assert await secret_ref_length(engine) == 200
         before = actor(clock)
-        values = before.model_dump(exclude={"secret_ref"}) | {"secret_ref": before.secret_ref.ref}
-        async with engine.begin() as conn:  # a row written by revision 0012's schema
-            await conn.execute(insert(t.actors).values(values))
+        await save_at_0012(engine, before)  # a row written by revision 0012's schema
 
         await upgrade(engine)
-        assert await current_revision(engine) == head_revision() == "0013"
+        assert await current_revision(engine) == head_revision() == "0014"
         assert await secret_ref_length(engine) is None
         store = SqlStore(engine)
         assert await store.get_actor("default", "alice") == before
         # the rest of the table is as it was: an allocation still belongs to one actor, a label defaults
         with pytest.raises(IntegrityError):
             await store.save_actor(actor(clock, actor_id="bob", allocation_id="a1"))
+        values = before.model_dump(exclude={"secret_ref"}) | {"secret_ref": before.secret_ref.ref}
         unlabelled = {key: value for key, value in values.items() if key != "label"}
         async with engine.begin() as conn:
             await conn.execute(
@@ -100,7 +123,7 @@ async def test_existing_actors_survive_the_change_and_a_downgrade(
 
         await downgrade(engine, "0012")  # no reference here is over 200 characters, so it goes back
         assert await secret_ref_length(engine) == 200
-        assert await store.get_actor("default", "alice") == before
+        assert await alice_at_0012(engine) == before
         await upgrade(engine)
         assert await store.get_actor("default", "alice") == before
     finally:
@@ -141,7 +164,7 @@ async def test_an_interrupted_run_on_sqlite_does_not_block_the_next_migrate(
     try:
         await upgrade(engine, "0012")
         store, saved = SqlStore(engine), actor(clock)
-        await store.save_actor(saved)
+        await save_at_0012(engine, saved)
 
         await interrupted(engine, "up", "head")
         assert await current_revision(engine) == "0012" and COPY in await tables(engine)
@@ -149,11 +172,12 @@ async def test_an_interrupted_run_on_sqlite_does_not_block_the_next_migrate(
         assert await current_revision(engine) == head_revision() and COPY not in await tables(engine)
         assert await secret_ref_length(engine) is None and await store.get_actor("default", "alice") == saved
 
+        await downgrade(engine, "0013")  # the revision whose downgrade makes the copy
         await interrupted(engine, "down", "0012")
-        assert await current_revision(engine) == head_revision() and COPY in await tables(engine)
+        assert await current_revision(engine) == "0013" and COPY in await tables(engine)
         await downgrade(engine, "0012")
         assert await current_revision(engine) == "0012" and COPY not in await tables(engine)
-        assert await secret_ref_length(engine) == 200 and await store.get_actor("default", "alice") == saved
+        assert await secret_ref_length(engine) == 200 and await alice_at_0012(engine) == saved
     finally:
         await engine.dispose()
 
@@ -166,7 +190,7 @@ async def test_a_copy_that_holds_the_only_actor_rows_is_never_dropped(
     engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}")
     try:
         await upgrade(engine, "0012")
-        await SqlStore(engine).save_actor(actor(clock))
+        await save_at_0012(engine, actor(clock))
         async with engine.begin() as conn:
             await conn.execute(text(f"ALTER TABLE lpb_actors RENAME TO {COPY}"))
         with pytest.raises(NoSuchTableError):

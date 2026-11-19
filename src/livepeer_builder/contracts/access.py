@@ -20,7 +20,7 @@ class Operation(StrEnum):
     ADMIN_KEYS = "admin.keys"
     ADMIN_ALLOCATIONS = "admin.allocations"
     ADMIN_COSTS = "admin.costs"
-    ADMIN_READ = "admin.read"  # admin reads of one application: keys, actors, reconciliation (D46)
+    ADMIN_READ = "admin.read"  # admin reads of one tenant: keys, actors, reconciliation (D46)
     ACTORS_ASSERT = "actors.assert"
 
 
@@ -43,7 +43,7 @@ class ActorContext(Contract):
     """The only identity the core sees. Built by an Authenticator, or in-process by an importing app."""
 
     actor_id: str = Field(min_length=1)
-    application_id: str = Field(default="default", min_length=1)
+    tenant_id: str = Field(default="default", min_length=1)
     permissions: frozenset[str] = frozenset()
     credential_kind: CredentialKind = "actor"
     attributes: dict[str, str] = Field(default_factory=dict)  # copied onto records; never secrets
@@ -69,7 +69,7 @@ class ResourceRef(Contract):
     """What an operation touches, so a policy can check ownership."""
 
     kind: Literal["job", "actor", "allocation", "key", "costs"]
-    application_id: str
+    tenant_id: str
     owner_actor_id: str | None = None
     id: str | None = None
 
@@ -80,7 +80,7 @@ class AccessKey(Contract):
     key_id: str
     kind: CredentialKind
     actor_id: str
-    application_id: str
+    tenant_id: str
     permissions: tuple[str, ...]
     label: str
     created_at: datetime

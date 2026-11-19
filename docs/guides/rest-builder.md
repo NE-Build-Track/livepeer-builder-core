@@ -59,7 +59,7 @@ curl -sS -G "$ENGINE/v1/jobs" -H "Authorization: Bearer $KEY" \
   --data-urlencode "limit=50" --data-urlencode "before=2026-10-30T12:00:00.123456Z"
 ```
 
-Newest first, your own jobs only; an admin or auditor key lists the application's
+Newest first, your own jobs only; an admin or auditor key lists the tenant's
 ([job history](../contracts/engine.md#job-history)). An empty page is the end.
 
 ## 4. When a job fails

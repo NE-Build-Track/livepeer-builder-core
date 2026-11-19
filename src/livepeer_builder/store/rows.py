@@ -117,7 +117,7 @@ async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
             Job(
                 id=UUID(row["id"]),
                 actor_id=row["actor_id"],
-                application_id=row["application_id"],
+                tenant_id=row["tenant_id"],
                 operation_ref=row["operation_ref"],
                 mode=row["mode"],
                 app=row["app"],

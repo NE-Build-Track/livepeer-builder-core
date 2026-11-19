@@ -34,7 +34,7 @@ class ApiKeyAuthenticator:
             raise NotAuthenticated("unknown or revoked key")
         return ActorContext(
             actor_id=key.actor_id,
-            application_id=key.application_id,
+            tenant_id=key.tenant_id,
             permissions=frozenset(key.permissions),
             credential_kind=key.kind,
             auth=AuthProvenance(method="api_key", credential_id=key.key_id),

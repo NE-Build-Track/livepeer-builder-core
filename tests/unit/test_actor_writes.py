@@ -39,7 +39,7 @@ def usd(amount: str) -> Money:
 
 def provision_request(amount: str = "5") -> ProvisionRequest:
     return ProvisionRequest(
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=usd(amount),
         grant_id="grant_1",

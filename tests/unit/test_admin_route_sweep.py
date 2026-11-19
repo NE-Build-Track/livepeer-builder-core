@@ -62,12 +62,12 @@ async def surface(
     await engine.payments.provision(
         admin,
         ProvisionRequest(
-            operation_ref="provision:default:alice", application_id="default", actor_id="alice",
+            operation_ref="provision:default:alice", tenant_id="default", actor_id="alice",
             amount=Money.model_validate(USD), grant_id="grant_1",
         ),
     )  # fmt: skip
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="sweep-alice")
-    params = {"key_id": alice.key.key_id, "application_id": "default", "actor_id": "alice"}
+    params = {"key_id": alice.key.key_id, "tenant_id": "default", "actor_id": "alice"}
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield app, client, engine, params

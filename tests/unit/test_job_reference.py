@@ -46,7 +46,7 @@ async def api(
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine, dict[str, str]]]:
     engine = await make_engine()
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-ref-1")
-    allocation = {"application_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
+    allocation = {"tenant_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
     amount = Money(amount=Decimal(5), currency="USD")
     await engine.payments.provision(admin, ProvisionRequest(**allocation, amount=amount, operation_ref="p1"))
     app = create_app(engine, manage_lifecycle=False)

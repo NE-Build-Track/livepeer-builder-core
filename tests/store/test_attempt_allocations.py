@@ -24,7 +24,7 @@ async def test_the_snapshot_reads_the_allocation_of_each_attempt_of_the_actors_j
     first, second, unpaid, bobs = (
         make_job(clock, actor=actor) for actor in ("alice", "alice", "alice", "bob")
     )
-    other_app = make_job(clock).model_copy(update={"application_id": "other"})
+    other_app = make_job(clock).model_copy(update={"tenant_id": "other"})
     for job in (first, second, unpaid, bobs, other_app):
         await sql.create_job(job, None)
     await sql.start_attempt(make_attempt(first.id, clock, 1, ("m-1",), allocation_id="a1"))
@@ -37,8 +37,8 @@ async def test_the_snapshot_reads_the_allocation_of_each_attempt_of_the_actors_j
     async with sql.cost_snapshot() as reads:
         assert isinstance(reads, AllocationCostSnapshot)
         alices = await reads.attempt_allocations("default", "alice")
-        application = await reads.attempt_allocations("default", None)
+        tenant = await reads.attempt_allocations("default", None)
         nobody = await reads.attempt_allocations("default", "nobody")
     assert alices == {(first.id, 1): "a1", (first.id, 2): "a1", (second.id, 1): "a2"}
-    assert application == alices | {(bobs.id, 1): "b1"}
+    assert tenant == alices | {(bobs.id, 1): "b1"}
     assert nobody == {}

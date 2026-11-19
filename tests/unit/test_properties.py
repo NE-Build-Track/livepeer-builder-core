@@ -52,7 +52,7 @@ def job_with(outcomes: list[str], state: str) -> Job:
         for n, outcome in enumerate(outcomes, start=1)
     )  # fmt: skip
     return Job(
-        id=job_id, actor_id="a", application_id="default", operation_ref=None, mode="immediate", app="x",
+        id=job_id, actor_id="a", tenant_id="default", operation_ref=None, mode="immediate", app="x",
         capability=None, model=None, state=state, attempts=attempts, failure=None, result=None, usage=None,  # type: ignore[arg-type]
         created_at=NOW, completed_at=NOW,
     )  # fmt: skip

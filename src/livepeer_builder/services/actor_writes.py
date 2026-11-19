@@ -39,7 +39,7 @@ class ActorWrites:
         """Write ``status``; with ``only_from``, only where that is the stored status."""
         if isinstance(self._store, ActorCommandRepo):
             return await self._store.set_actor_status(
-                actor.application_id,
+                actor.tenant_id,
                 actor.actor_id,
                 actor.allocation_id,
                 status,
@@ -60,7 +60,7 @@ class ActorWrites:
         holding that key."""
         if isinstance(self._store, ActorCommandRepo):
             written = await self._store.set_actor_key(
-                actor.application_id,
+                actor.tenant_id,
                 actor.actor_id,
                 actor.allocation_id,
                 api_key_id,
@@ -81,7 +81,7 @@ class ActorWrites:
         if isinstance(self._store, ActorCommandRepo):
             allocation_id = replacing.allocation_id if replacing is not None else None
             return await self._store.provision_actor(actor, replacing=allocation_id)
-        if await self._store.get_actor(actor.application_id, actor.actor_id) != replacing:
+        if await self._store.get_actor(actor.tenant_id, actor.actor_id) != replacing:
             return False
         await self._store.save_actor(actor)
         return True
@@ -90,12 +90,12 @@ class ActorWrites:
         """After a fund: ``exhausted`` becomes ``active``. Any other status stays as it is stored, one
         another command wrote meanwhile included, and the answer is the actor as stored."""
         activated = await self.status(actor, "active", only_from="exhausted")
-        return activated or await self._store.get_actor(actor.application_id, actor.actor_id) or actor
+        return activated or await self._store.get_actor(actor.tenant_id, actor.actor_id) or actor
 
     async def _held(self, actor: ProvisionedActor) -> ProvisionedActor | None:
         """Without the store's conditional write: the actor as stored now, when it still holds the
         allocation the command acted on and is not revoked."""
-        current = await self._store.get_actor(actor.application_id, actor.actor_id)
+        current = await self._store.get_actor(actor.tenant_id, actor.actor_id)
         if current is None or current.allocation_id != actor.allocation_id or current.status == "revoked":
             return None
         return current

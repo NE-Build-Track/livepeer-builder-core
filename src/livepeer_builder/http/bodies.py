@@ -25,7 +25,7 @@ class JobRequest(contracts.JobRequest):
 class IssueKeyBody(BaseModel):
     kind: CredentialKind = "actor"
     actor_id: Annotated[StoredText, Field(min_length=1)]  # a key for nobody could never authenticate
-    application_id: Annotated[StoredText, Field(min_length=1)] = "default"
+    tenant_id: Annotated[StoredText, Field(min_length=1)] = "default"
     permissions: list[str] | None = None
     label: StoredText = ""
     operation_ref: OperationRef  # required (D57, Q4)

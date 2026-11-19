@@ -39,7 +39,7 @@ APP = "example/echo"
 async def provision(engine: BuilderEngine, admin: ActorContext, actor_id: str = "alice") -> str:
     request = ProvisionRequest(
         operation_ref=f"provision:default:{actor_id}",
-        application_id="default",
+        tenant_id="default",
         actor_id=actor_id,
         amount=Money(amount=Decimal(1), currency="ETH"),
         grant_id="grant_1",
@@ -170,7 +170,7 @@ async def test_the_summary_totals_every_class_with_a_failover_job(
     assert (summary.jobs_with_cost, summary.jobs_pending) == (2, 1)
 
 
-async def test_the_summary_scope_is_the_actor_or_for_an_admin_the_application_or_one_actor(
+async def test_the_summary_scope_is_the_actor_or_for_an_admin_the_tenant_or_one_actor(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport, usage: FakeUsageSource,
 ) -> None:  # fmt: skip

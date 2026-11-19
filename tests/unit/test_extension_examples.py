@@ -55,7 +55,7 @@ class SignedSsoHeaderAuthenticator:
             raise NotAuthenticated("bad SSO signature")  # ours, but invalid: stop the chain (401)
         return ActorContext(
             actor_id=user,
-            application_id=tenant,
+            tenant_id=tenant,
             permissions=frozenset(
                 {Operation.DISCOVER, Operation.JOBS_RUN, Operation.JOBS_READ, Operation.COSTS_READ}
             ),
@@ -87,11 +87,7 @@ class TeamReadPolicy:
         owner = resource.owner_actor_id if resource else None
         same_team = owner is not None and self._team_of.get(owner) == self._team_of.get(actor.actor_id)
         teammate_read = operation in self.READS and resource is not None and same_team
-        if (
-            teammate_read
-            and operation in actor.permissions
-            and resource.application_id == actor.application_id
-        ):
+        if teammate_read and operation in actor.permissions and resource.tenant_id == actor.tenant_id:
             return
         self._fallback.check(actor, operation, resource)
 
@@ -241,7 +237,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
     admin = ActorContext(actor_id="ops", credential_kind="admin")
 
     alice = await engine.authenticator.authenticate(sso("alice"))
-    assert alice is not None and (alice.actor_id, alice.application_id) == ("alice", "acme")
+    assert alice is not None and (alice.actor_id, alice.tenant_id) == ("alice", "acme")
     with pytest.raises(NotAuthenticated):
         await engine.authenticator.authenticate(sso("alice", signature="forged"))
 
@@ -249,7 +245,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
         admin,
         ProvisionRequest(
             operation_ref="provision:acme:alice",
-            application_id="acme",
+            tenant_id="acme",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",
@@ -275,7 +271,7 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
             bob,
             ProvisionRequest(
                 operation_ref="provision:acme:bob",
-                application_id="acme",
+                tenant_id="acme",
                 actor_id="bob",
                 amount=Money(amount=Decimal(1), currency="USD"),
             ),

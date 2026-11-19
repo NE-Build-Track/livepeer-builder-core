@@ -39,7 +39,7 @@ async def succeeded_job(
         admin,
         ProvisionRequest(
             operation_ref="provision:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="USD"),
             grant_id="grant_1",

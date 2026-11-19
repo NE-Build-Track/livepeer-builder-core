@@ -33,7 +33,7 @@ async def stack(
     await engine.payments.provision(
         admin,
         ProvisionRequest(
-            operation_ref="provision:default:carol", application_id="default", actor_id="carol",
+            operation_ref="provision:default:carol", tenant_id="default", actor_id="carol",
             amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
         ),
     )  # fmt: skip

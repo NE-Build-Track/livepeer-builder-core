@@ -50,7 +50,7 @@ def usd(amount: str) -> Money:
 def provision(actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1") -> ProvisionRequest:
     return ProvisionRequest(
         operation_ref=f"provision:default:{actor_id}",
-        application_id="default",
+        tenant_id="default",
         actor_id=actor_id,
         amount=usd(amount),
         grant_id=grant_id,
@@ -69,7 +69,7 @@ async def test_payments_guard_clauses(
             admin,
             ProvisionRequest(
                 operation_ref="provision:default:a",
-                application_id="default",
+                tenant_id="default",
                 actor_id="a",
                 amount=Money(amount=Decimal(1), currency="ETH"),
             ),

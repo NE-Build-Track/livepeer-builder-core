@@ -43,7 +43,7 @@ class SightingRecorder:
         self._store = store
         self._clock = clock
         self._refresh_after_s = refresh_after_s
-        self._recorded: dict[tuple[str, str], tuple[str, float]] = {}  # (application, actor) -> (name, when)
+        self._recorded: dict[tuple[str, str], tuple[str, float]] = {}  # (tenant, actor) -> (name, when)
 
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
         actor = await self._inner.authenticate(request)
@@ -55,7 +55,7 @@ class SightingRecorder:
         return self._inner.challenge()
 
     async def _record(self, actor: ActorContext) -> None:
-        key = (actor.application_id, actor.actor_id)
+        key = (actor.tenant_id, actor.actor_id)
         name = actor.display_name or ""
         now = self._clock.now()
         recorded = self._recorded.get(key)
@@ -66,7 +66,7 @@ class SightingRecorder:
         ):
             return
         seen = SeenActor(
-            application_id=actor.application_id,
+            tenant_id=actor.tenant_id,
             actor_id=actor.actor_id,
             name=name,
             first_seen_at=now,  # the store keeps the first one

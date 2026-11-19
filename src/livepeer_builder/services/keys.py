@@ -46,7 +46,7 @@ class KeyService:
         *,
         kind: CredentialKind,
         actor_id: str,
-        application_id: str = "default",
+        tenant_id: str = "default",
         permissions: Iterable[str] | None = None,
         label: str = "",
         operation_ref: str,
@@ -56,12 +56,12 @@ class KeyService:
         self._policy.check(admin, Operation.ADMIN_KEYS)
         OPERATION_REPLAYED.set(False)
         granted = _validated_permissions(kind, permissions)
-        request: dict[str, Any] = {"kind": kind, "actor_id": actor_id, "application_id": application_id}
+        request: dict[str, Any] = {"kind": kind, "actor_id": actor_id, "tenant_id": tenant_id}
         request |= {"permissions": sorted(granted), "label": label}
         replay = await self._replayed(admin, operation_ref, ledger.fingerprint("issue_key", request))
         if replay is not None:
             return replay
-        token, key = self._new_key(kind, actor_id, application_id, granted, label)
+        token, key = self._new_key(kind, actor_id, tenant_id, granted, label)
         record = ledger.done(admin, "issue_key", operation_ref, request, _public(key), key.created_at)
         if await self._store.insert_access_key(key, token_hash(token), record):
             _audit("keys.issued", key, by=admin.actor_id)
@@ -86,7 +86,7 @@ class KeyService:
         key = await self._store.get_access_key(key_id)
         if key is None:
             raise NotFound(f"key {key_id!r} not found")
-        resource = ResourceRef(kind="key", application_id=key.application_id, id=key.key_id)
+        resource = ResourceRef(kind="key", tenant_id=key.tenant_id, id=key.key_id)
         check_owner(self._policy, admin, Operation.ADMIN_READ, resource, f"key {key_id!r} not found")
         return key
 
@@ -94,7 +94,7 @@ class KeyService:
         self, admin: ActorContext, key_id: str, *, label: str | None = None, operation_ref: str
     ) -> IssuedKey:
         """Replace an active key at once (D44): the old token stops working in the same transaction that
-        stores the new one and its ledger record (D57). Same kind, actor, application and permissions;
+        stores the new one and its ledger record (D57). Same kind, actor, tenant and permissions;
         ``label`` renames it. A repeat of ``operation_ref`` gets the new key back, without its token."""
         self._policy.check(admin, Operation.ADMIN_KEYS)
         OPERATION_REPLAYED.set(False)
@@ -106,7 +106,7 @@ class KeyService:
         if old is None or old.revoked_at is not None:
             raise InvalidRequest(f"no active key {key_id!r}")
         token, key = self._new_key(
-            old.kind, old.actor_id, old.application_id, old.permissions, old.label if label is None else label
+            old.kind, old.actor_id, old.tenant_id, old.permissions, old.label if label is None else label
         )
         record = ledger.done(admin, "rotate_access_key", operation_ref, request, _public(key), key.created_at)
         if not await self._store.rotate_access_key(key_id, key, token_hash(token), key.created_at, record):
@@ -126,17 +126,17 @@ class KeyService:
             return  # already revoked: a retry after a lost answer succeeds, and logs nothing again (D61)
         _audit("keys.revoked", key, by=admin.actor_id)
 
-    async def list_keys(self, admin: ActorContext, application_id: str | None = None) -> list[AccessKey]:
-        """Every application's keys for an admin unless it names one; an auditor's own application's (D46)."""
-        scope = application_id or (None if admin.credential_kind == "admin" else admin.application_id)
-        resource = None if scope is None else ResourceRef(kind="key", application_id=scope)
+    async def list_keys(self, admin: ActorContext, tenant_id: str | None = None) -> list[AccessKey]:
+        """Every tenant's keys for an admin unless it names one; an auditor's own tenant's (D46)."""
+        scope = tenant_id or (None if admin.credential_kind == "admin" else admin.tenant_id)
+        resource = None if scope is None else ResourceRef(kind="key", tenant_id=scope)
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         return await self._store.list_access_keys(scope)
 
     async def _replayed(self, admin: ActorContext, operation_ref: str, fingerprint: str) -> IssuedKey | None:
         """The answer to a held reference: the recorded key without its token (never stored, so never
         replayed), a conflict, or in progress. ``None`` when the reference is free."""
-        held = await self._store.get_operation(admin.application_id, admin.actor_id, operation_ref)
+        held = await self._store.get_operation(admin.tenant_id, admin.actor_id, operation_ref)
         if held is None:
             return None
         return IssuedKey(key=ledger.repeat(held, fingerprint, _KEY), token=None, replayed=True)
@@ -151,24 +151,24 @@ class KeyService:
         self,
         kind: CredentialKind,
         actor_id: str,
-        application_id: str,
+        tenant_id: str,
         permissions: Iterable[str] | None,
         label: str,
     ) -> IssuedKey:
         granted = _validated_permissions(kind, permissions)
-        token, key = self._new_key(kind, actor_id, application_id, granted, label)
+        token, key = self._new_key(kind, actor_id, tenant_id, granted, label)
         await self._store.insert_access_key(key, token_hash(token))
         return IssuedKey(key=key, token=token)
 
     def _new_key(
-        self, kind: CredentialKind, actor_id: str, application_id: str, permissions: Iterable[str], label: str
+        self, kind: CredentialKind, actor_id: str, tenant_id: str, permissions: Iterable[str], label: str
     ) -> tuple[str, AccessKey]:
         token = TOKEN_PREFIX + secrets.token_urlsafe(32)
         key = AccessKey(
             key_id="key_" + secrets.token_urlsafe(12),
             kind=kind,
             actor_id=actor_id,
-            application_id=application_id,
+            tenant_id=tenant_id,
             permissions=tuple(sorted(permissions)),
             label=label,
             created_at=self._clock.now(),
@@ -187,7 +187,7 @@ def _audit(event: str, key: AccessKey, *, by: str, replaced_key_id: str | None =
             "key_id": key.key_id,
             "kind": key.kind,
             "actor_id": key.actor_id,
-            "application_id": key.application_id,
+            "tenant_id": key.tenant_id,
             "by": by,
             **replaced,
         },

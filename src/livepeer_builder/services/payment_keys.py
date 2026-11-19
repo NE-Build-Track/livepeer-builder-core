@@ -22,7 +22,7 @@ class PaymentKeys:
         self._writes = writes
 
     async def stored(
-        self, run: RunningOperation, application_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
+        self, run: RunningOperation, tenant_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
     ) -> SecretRef:
         """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
         key it belongs to and the provider operation that returned it (``sent_as``, its idempotency key),
@@ -30,7 +30,7 @@ class PaymentKeys:
         that got another key (a re-provision after a revoke) stores that key's secret."""
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             return SecretRef(ref=run.context["new_secret_ref"])
-        ref = await self._secrets.put(_secret_name(application_id, actor_id), key.secret.get_secret_value())
+        ref = await self._secrets.put(_secret_name(tenant_id, actor_id), key.secret.get_secret_value())
         try:
             await run.remember(
                 new_secret_ref=ref.ref, new_secret_key_id=key.api_key_id, new_secret_sent_as=sent_as
@@ -105,7 +105,7 @@ class PaymentKeys:
         nothing, revokes its own key and is refused, ``InvalidRequest``."""
         previous_key = run.context["previous_api_key_id"]
         if actor.api_key_id != key.api_key_id:  # not stored yet
-            ref = await self.stored(run, actor.application_id, actor.actor_id, key, sent_as)
+            ref = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
             actor = await self._pointed_at(actor, key.api_key_id, ref, previous_key)
             if actor.api_key_id != key.api_key_id:
                 # Another rotation's key: this one wrote nothing, so its own key must not stay live. The
@@ -149,5 +149,5 @@ def _lost_rotation(actor_id: str, held: str) -> InvalidRequest:
     )
 
 
-def _secret_name(application_id: str, actor_id: str) -> str:
-    return f"lpg/{application_id}/{actor_id}"
+def _secret_name(tenant_id: str, actor_id: str) -> str:
+    return f"lpg/{tenant_id}/{actor_id}"

@@ -198,7 +198,7 @@ async def repeated_fund(probe: Probe, *, spend: bool, actor: str | None, amount:
         cap = FUND_CAP.get(before[1], 0)
         probe.record("FAIL", name, f"refused to spend: not a number above 0 and at most {cap} {before[1]}")
         return
-    path = f"/v1/admin/applications/{APPLICATION}/actors/{actor}/allocation/fund"
+    path = f"/v1/admin/tenants/{APPLICATION}/actors/{actor}/allocation/fund"
     body = {"amount": {"amount": str(chosen), "currency": before[1]}, "operation_ref": f"{probe.run}-fund"}
     first = await probe.call("POST", path, probe.admin_key, json=body)
     again = await probe.call("POST", path, probe.admin_key, json=body)

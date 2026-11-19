@@ -123,7 +123,7 @@ async def real(
         amount = Money(amount=Decimal("5"), currency="USD")
         request = ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=amount,
             grant_id="grant_1",

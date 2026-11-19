@@ -82,11 +82,11 @@ def jobs_needing_projection(job_ids: Sequence[str]) -> ColumnElement[bool]:
 
 
 def in_window(
-    application_id: str, actor_id: str | None, start: datetime, end: datetime
+    tenant_id: str, actor_id: str | None, start: datetime, end: datetime
 ) -> list[ColumnElement[bool]]:
-    """Jobs of one application (and actor, when given) created in [start, end)."""
+    """Jobs of one tenant (and actor, when given) created in [start, end)."""
     clauses = [
-        t.jobs.c.application_id == application_id,
+        t.jobs.c.tenant_id == tenant_id,
         t.jobs.c.created_at >= start,
         t.jobs.c.created_at < end,
     ]

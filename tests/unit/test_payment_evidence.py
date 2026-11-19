@@ -70,7 +70,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, transport
     amount = Money(amount=Decimal(1), currency="USD")
     request = ProvisionRequest(
         operation_ref="provision:default:alice",
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=amount,
         grant_id="grant_1",

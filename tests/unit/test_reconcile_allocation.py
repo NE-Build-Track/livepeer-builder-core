@@ -44,7 +44,7 @@ def row(row_id: str, eth: str, allocation: str, manifest: str) -> UsageRow:
 def provision(ref: str) -> ProvisionRequest:
     return ProvisionRequest(
         operation_ref=ref,
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
         grant_id="grant_1",
@@ -113,7 +113,7 @@ async def test_an_allocation_that_never_paid_for_the_actor_is_not_found(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport,
     usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
-    """Otherwise an auditor of one application could read what any allocation spent."""
+    """Otherwise an auditor of one tenant could read what any allocation spent."""
     engine = await make_engine(default_currency="ETH")
     await two_allocations(engine, admin, alice, transport, usage, manager)
     other = await engine.payments.provision(
@@ -148,7 +148,7 @@ async def test_a_shared_allocation_of_the_removed_mode_still_reconciles_when_it_
 ) -> None:  # fmt: skip
     """An engine in the removed ``per_application`` mode stored every actor's attempts under its one shared
     allocation. That allocation is no actor's, so it is never the current one, and it still reconciles
-    when it is named, over every actor of the application: what was paid before the upgrade can still be
+    when it is named, over every actor of the tenant: what was paid before the upgrade can still be
     accounted for (#162)."""
     engine = await make_engine(default_currency="ETH")
     for actor_id in ("alice", "bob"):
@@ -167,7 +167,7 @@ async def test_a_shared_allocation_of_the_removed_mode_still_reconciles_when_it_
     manager.allocations[shared].spent = Decimal("0.5")
 
     with pytest.raises(NotFound, match="no allocation pays"):
-        await engine.costs.reconcile(admin, "default", None)  # nothing is the application's allocation
+        await engine.costs.reconcile(admin, "default", None)  # nothing is the tenant's allocation
     report = await engine.costs.reconcile(admin, "default", None, shared)
     assert (report.actor_id, report.allocation_id) == (None, shared)
     assert counted(report) == (Decimal("0.5"), Decimal("0")) and report.balanced is True
@@ -225,12 +225,12 @@ async def test_an_empty_allocation_id_is_refused_not_read_as_the_current_allocat
     assert empty.json()["detail"][0]["loc"] == ["query", "allocation_id"]
 
 
-async def test_without_an_actor_a_named_allocation_reconciles_over_the_application(
+async def test_without_an_actor_a_named_allocation_reconciles_over_the_tenant(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport, usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
     """``per_actor`` with no ``actor_id``: no allocation is the current one, so one must be named. Any
-    allocation that paid an attempt in the application reconciles, with no actor in the answer and every
+    allocation that paid an attempt in the tenant reconciles, with no actor in the answer and every
     other such allocation listed."""
     engine = await make_engine(default_currency="ETH")
     first, second = await two_allocations(engine, admin, alice, transport, usage, manager)

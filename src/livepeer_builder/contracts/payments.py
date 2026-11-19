@@ -42,7 +42,7 @@ class ProvisionRequest(Contract):
 
     # ``StoredText``: provisioning funds a provider key before it saves the actor, so an id or a label
     # the store could not keep is refused here, before any provider call.
-    application_id: StoredText
+    tenant_id: StoredText
     actor_id: StoredText
     # may be zero: identity without money; fund later with an explicit command. Never negative, and within
     # the provider's format and the engine's bound (#112, C11)
@@ -73,7 +73,7 @@ class GrantPage(Contract):
 
 
 class ProvisionedActor(Contract):
-    application_id: str
+    tenant_id: str
     actor_id: str
     grant_id: str
     allocation_id: str
@@ -93,7 +93,7 @@ class SeenActor(Contract):
     immutable ``sub``, so a renamed person keeps their actor and a reused name never inherits one.
     """
 
-    application_id: str
+    tenant_id: str
     actor_id: str
     name: str = Field(default="", max_length=200)
     first_seen_at: datetime
@@ -103,7 +103,7 @@ class SeenActor(Contract):
 class KnownActor(Contract):
     """One row of the operator's actor list (D46, D48): provisioned, signed in, or both."""
 
-    application_id: str
+    tenant_id: str
     actor_id: str
     label: str  # the operator's label, else the name the provider gave, else ""
     name: str | None  # the provider's latest name; None until the person signs in with a token

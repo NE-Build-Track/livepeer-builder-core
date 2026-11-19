@@ -152,7 +152,7 @@ async def test_an_allowance_the_provider_cannot_read_has_a_fixed_message_and_its
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     amount = Money(amount=Decimal(5), currency="USD")
     request = ProvisionRequest(
-        operation_ref="p", application_id="default", actor_id="alice", amount=amount, grant_id="g"
+        operation_ref="p", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
     )
     await engine.payments.provision(admin, request)
     key = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-alice")
@@ -186,7 +186,7 @@ async def test_an_allowance_read_with_batteries_unreachable_says_so_in_the_engin
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     amount = Money(amount=Decimal(5), currency="USD")
     request = ProvisionRequest(
-        operation_ref="p", application_id="default", actor_id="alice", amount=amount, grant_id="g"
+        operation_ref="p", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
     )
     await engine.payments.provision(admin, request)
     key = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-alice")

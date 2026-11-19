@@ -279,7 +279,7 @@ def create_app(
                 actor,
                 kind=body.kind,
                 actor_id=body.actor_id,
-                application_id=body.application_id,
+                tenant_id=body.tenant_id,
                 permissions=body.permissions,
                 label=body.label,
                 operation_ref=body.operation_ref,
@@ -287,8 +287,8 @@ def create_app(
             return _replay(response, issued)
 
         @app.get("/v1/admin/keys", response_model=list[AccessKey])
-        async def list_keys(actor: Actor, application_id: QueryId = None) -> list[AccessKey]:
-            return await keys.list_keys(actor, application_id)
+        async def list_keys(actor: Actor, tenant_id: QueryId = None) -> list[AccessKey]:
+            return await keys.list_keys(actor, tenant_id)
 
         @app.get("/v1/admin/keys/{key_id}", response_model=AccessKey)
         async def get_key(actor: Actor, key_id: PathId) -> AccessKey:
@@ -309,32 +309,32 @@ def create_app(
     @app.get("/v1/admin/actors", response_model=list[KnownActor])
     async def list_actors(
         actor: Actor,
-        application_id: QueryId = None,
+        tenant_id: QueryId = None,
         status: AllocationStatus | None = None,
         provisioned: bool | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 500,
     ) -> list[KnownActor]:
         """Provisioned actors and people an identity provider signed in (D46, D48)."""
         return await engine.payments.list_actors(
-            actor, application_id=application_id, status=status, provisioned=provisioned, limit=limit
+            actor, tenant_id=tenant_id, status=status, provisioned=provisioned, limit=limit
         )
 
-    base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"
+    base = "/v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation"
 
     @app.get(base, response_model=ProvisionedActor)
-    async def get_actor(actor: Actor, application_id: PathId, actor_id: PathId) -> ProvisionedActor:
-        return await engine.payments.get_actor(actor, application_id, actor_id)
+    async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ProvisionedActor:
+        return await engine.payments.get_actor(actor, tenant_id, actor_id)
 
     @app.post(base, response_model=ProvisionedActor, status_code=201)
     async def provision(
         actor: Actor,
-        application_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
+        tenant_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
         actor_id: Annotated[StoredText, Path()],
         body: ProvisionBody,
         response: Response,
     ) -> ProvisionedActor:
         request = ProvisionRequest(
-            application_id=application_id,
+            tenant_id=tenant_id,
             actor_id=actor_id,
             amount=body.amount,
             label=body.label,
@@ -345,9 +345,9 @@ def create_app(
 
     @app.post(base + "/fund", response_model=ProvisionedActor)
     async def fund(
-        actor: Actor, application_id: PathId, actor_id: PathId, body: FundRequest, response: Response
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: FundRequest, response: Response
     ) -> ProvisionedActor:
-        return _replay(response, await engine.payments.fund(actor, application_id, actor_id, body))
+        return _replay(response, await engine.payments.fund(actor, tenant_id, actor_id, body))
 
     if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
         desk = engine.payments.grants
@@ -369,30 +369,30 @@ def create_app(
 
     @app.post(base + "/status", response_model=ProvisionedActor)
     async def set_status(
-        actor: Actor, application_id: PathId, actor_id: PathId, body: StatusBody
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: StatusBody
     ) -> ProvisionedActor:
-        return await engine.payments.set_status(actor, application_id, actor_id, body.status)
+        return await engine.payments.set_status(actor, tenant_id, actor_id, body.status)
 
     @app.post(base + "/revoke", response_model=ProvisionedActor)
-    async def revoke(actor: Actor, application_id: PathId, actor_id: PathId) -> ProvisionedActor:
-        return await engine.payments.revoke(actor, application_id, actor_id)
+    async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ProvisionedActor:
+        return await engine.payments.revoke(actor, tenant_id, actor_id)
 
     @app.post(base + "/rotate-key", response_model=ProvisionedActor)
     async def rotate(
-        actor: Actor, application_id: PathId, actor_id: PathId, body: RotateBody, response: Response
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
     ) -> ProvisionedActor:
-        rotated = await engine.payments.rotate_key(actor, application_id, actor_id, body.operation_ref)
+        rotated = await engine.payments.rotate_key(actor, tenant_id, actor_id, body.operation_ref)
         return _replay(response, rotated)
 
     @app.get("/v1/admin/reconciliation", response_model=Reconciliation)
     async def reconcile(
         actor: Actor,
-        application_id: Annotated[StoredText, Query()] = "default",
+        tenant_id: Annotated[StoredText, Query()] = "default",
         actor_id: QueryId = None,
         # an earlier allocation of the actor; absent: the current one, and empty is a 422, not "absent"
         allocation_id: Annotated[StoredText | None, Query(min_length=1)] = None,
     ) -> Reconciliation:
-        return await engine.costs.reconcile(actor, application_id, actor_id, allocation_id)
+        return await engine.costs.reconcile(actor, tenant_id, actor_id, allocation_id)
 
     @app.post("/v1/admin/costs/sync", response_model=SyncReport)
     async def sync_costs(actor: Actor) -> SyncReport:

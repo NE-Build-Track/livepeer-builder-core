@@ -228,7 +228,7 @@ class UsageSource(Protocol):
 class AllowanceReader(Protocol):
     """Finds the allocation that pays for an actor and reads its allowance."""
 
-    async def allocation_for(self, application_id: str, actor_id: str) -> str | None: ...
+    async def allocation_for(self, tenant_id: str, actor_id: str) -> str | None: ...
 
     async def read_allowance(self, allocation_id: str) -> Allowance: ...
 
@@ -237,17 +237,17 @@ class AllowanceReader(Protocol):
 
 
 class ActorRepo(Protocol):
-    async def get_actor(self, application_id: str, actor_id: str) -> ProvisionedActor | None: ...
+    async def get_actor(self, tenant_id: str, actor_id: str) -> ProvisionedActor | None: ...
 
     async def save_actor(self, actor: ProvisionedActor) -> None: ...
 
-    async def list_actors(self, application_id: str | None = None) -> list[ProvisionedActor]: ...
+    async def list_actors(self, tenant_id: str | None = None) -> list[ProvisionedActor]: ...
 
     async def save_sighting(self, seen: SeenActor) -> None: ...  # keeps the first first_seen_at
 
-    async def get_sighting(self, application_id: str, actor_id: str) -> SeenActor | None: ...
+    async def get_sighting(self, tenant_id: str, actor_id: str) -> SeenActor | None: ...
 
-    async def list_sightings(self, application_id: str | None = None) -> list[SeenActor]: ...
+    async def list_sightings(self, tenant_id: str | None = None) -> list[SeenActor]: ...
 
 
 class KeyRepo(Protocol):
@@ -259,7 +259,7 @@ class KeyRepo(Protocol):
         ...
 
     async def get_operation(
-        self, application_id: str, actor_id: str, operation_ref: str
+        self, tenant_id: str, actor_id: str, operation_ref: str
     ) -> OperationRecord | None: ...  # the ledger record the key writes share (OperationRepo)
 
     async def access_key_by_hash(self, token_hash: str) -> AccessKey | None: ...
@@ -281,7 +281,7 @@ class KeyRepo(Protocol):
         revoked, or the operation's reference is held."""
         ...
 
-    async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]: ...
+    async def list_access_keys(self, tenant_id: str | None = None) -> list[AccessKey]: ...
 
     async def count_active_admin_keys(self) -> int: ...
 
@@ -298,13 +298,13 @@ class JobRepo(Protocol):
         ...
 
     async def job_by_operation_ref(
-        self, application_id: str, actor_id: str, operation_ref: str
+        self, tenant_id: str, actor_id: str, operation_ref: str
     ) -> tuple[Job, str | None] | None: ...
 
     async def get_job(self, job_id: UUID) -> Job | None: ...
 
     async def list_jobs(
-        self, application_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
+        self, tenant_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
     ) -> list[Job]: ...
 
     async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
@@ -363,7 +363,7 @@ class OperationRepo(Protocol):
     async def abandon_operation(self, record: OperationRecord) -> bool: ...  # delete it: a definite refusal
 
     async def get_operation(
-        self, application_id: str, actor_id: str, operation_ref: str
+        self, tenant_id: str, actor_id: str, operation_ref: str
     ) -> OperationRecord | None: ...
 
 
@@ -415,14 +415,14 @@ class CostSnapshot(Protocol):
     async def job_with_projection(self, job_id: UUID) -> tuple[Job, JobCost | None] | None: ...
 
     async def projections_and_unprojected(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+        self, tenant_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> tuple[list[tuple[str, JobCost]], list[Job]]:
         """The stored projections of jobs created in the window, each with its job's runner app, and the
         jobs no projection covers: running, or ended since their projection was stored."""
         ...
 
     async def recent_with_projections(
-        self, application_id: str, actor_id: str | None, limit: int
+        self, tenant_id: str, actor_id: str | None, limit: int
     ) -> list[tuple[Job, JobCost | None]]: ...
 
     async def usage_for_payment_sessions(self, payment_session_ids: Sequence[str]) -> list[UsageRow]: ...
@@ -436,11 +436,9 @@ class AllocationCostSnapshot(CostSnapshot, Protocol):
     has it. Without it reconciliation counts every attempt of the actor against the current allocation,
     as before, lists no other allocation and knows no earlier one to reconcile."""
 
-    async def attempt_allocations(
-        self, application_id: str, actor_id: str | None
-    ) -> dict[tuple[UUID, int], str]:
+    async def attempt_allocations(self, tenant_id: str, actor_id: str | None) -> dict[tuple[UUID, int], str]:
         """(job id, attempt number) -> allocation, for each attempt of the actor's jobs (or, with no actor,
-        the application's) that records one."""
+        the tenant's) that records one."""
         ...
 
 

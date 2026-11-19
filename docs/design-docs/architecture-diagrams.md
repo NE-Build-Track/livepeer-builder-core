@@ -138,7 +138,7 @@ sequenceDiagram
     else not an lpk_ token
         K-->>Chain: None (try the next authenticator)
     else valid
-        K-->>Chain: ActorContext(actor, application, permissions, kind)
+        K-->>Chain: ActorContext(actor, tenant, permissions, kind)
     end
     H->>Svc: get(actor, job_id)
     Svc->>P: check(actor, JOBS_READ, ResourceRef(owner))

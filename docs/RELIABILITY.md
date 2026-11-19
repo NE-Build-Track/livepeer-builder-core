@@ -37,7 +37,7 @@ chooses an allocation mode or holds a payment key (D82).
 | `LPB_JWT_TOKEN_TYPES` | `at+jwt,application/at+jwt` | Accepted `typ` headers (RFC 9068). Adding `jwt` accepts plain JWTs and drops the `client_id` and `jti` requirements: weaker |
 | `LPB_JWT_MAX_LIFETIME_S` | `3600` | A token whose `exp - iat` is longer is refused |
 | `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms, asymmetric only |
-| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_APPLICATION_CLAIM`, `LPB_JWT_APPLICATION_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `application_id` |
+| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_TENANT_CLAIM`, `LPB_JWT_TENANT_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `tenant_id` |
 | `LPB_JWT_SCOPE_CLAIM`, `LPB_JWT_SCOPE_PREFIX`, `LPB_JWT_ADMIN_SCOPE` | `scope`, empty, unset | Scopes named after operations become permissions; the admin scope makes an engine-wide admin credential, so it may not be an operation or a standard OpenID scope |
 | `LPB_JWT_NAME_CLAIM` | `preferred_username` | The person's display name, recorded on first sign-in for the operator's actor list (D48); empty turns it off |
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |

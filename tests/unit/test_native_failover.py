@@ -18,7 +18,7 @@ from livepeer_builder.testing import (
 )
 from tests.conftest import provision
 
-ACTOR = ActorContext(actor_id="a", application_id="app", permissions=frozenset({"jobs.run", "jobs.read"}))
+ACTOR = ActorContext(actor_id="a", tenant_id="app", permissions=frozenset({"jobs.run", "jobs.read"}))
 RUNNERS = [
     runner("chat", "https://runner-a.example", orchestrator_url="https://orch-a.example"),
     runner("chat", "https://runner-b.example", orchestrator_url="https://orch-b.example"),

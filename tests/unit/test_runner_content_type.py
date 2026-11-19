@@ -147,7 +147,7 @@ async def serving(
     engine = await make_engine(runners=(runner,), supply=EngineSupply(transport=SdkRunnerTransport(None)))
     amount = Money(amount=Decimal(5), currency="USD")
     request = ProvisionRequest(
-        operation_ref="p1", application_id="default", actor_id="alice", amount=amount, grant_id="g"
+        operation_ref="p1", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
     )
     await engine.payments.provision(admin, request)
     issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-live")

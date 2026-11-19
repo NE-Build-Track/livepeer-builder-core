@@ -34,7 +34,7 @@ async def paid_job(
     actor = await engine.payments.provision(
         admin,
         ProvisionRequest(
-            operation_ref="provision:default:alice", application_id="default", actor_id="alice",
+            operation_ref="provision:default:alice", tenant_id="default", actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"), grant_id="grant_1",
         ),
     )  # fmt: skip

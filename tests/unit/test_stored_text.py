@@ -29,7 +29,7 @@ SURROGATE = "a\ud800b"  # half of a UTF-16 pair, which JSON can write ("\ud800")
 UNSTORABLE = [LONG, NUL, SURROGATE]
 PROVISION: dict[str, Any] = {
     "operation_ref": "p1",
-    "application_id": "default",
+    "tenant_id": "default",
     "actor_id": "alice",
     "amount": Money(amount=Decimal("5"), currency="USD"),
     "grant_id": "grant_1",
@@ -37,7 +37,7 @@ PROVISION: dict[str, Any] = {
 }
 
 
-@pytest.mark.parametrize("field", ["application_id", "actor_id", "grant_id", "label", "operation_ref"])
+@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "grant_id", "label", "operation_ref"])
 @pytest.mark.parametrize("value", UNSTORABLE, ids=["too long", "NUL", "lone surrogate"])
 def test_provisioning_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
     with pytest.raises(ValidationError, match=field):
@@ -90,15 +90,15 @@ def test_a_job_keeps_text_of_exactly_the_stored_length() -> None:
     assert len(request.app) == len(request.model or "") == 200
 
 
-@pytest.mark.parametrize("field", ["actor_id", "application_id", "label"])
+@pytest.mark.parametrize("field", ["actor_id", "tenant_id", "label"])
 @pytest.mark.parametrize("value", UNSTORABLE, ids=["too long", "NUL", "lone surrogate"])
 def test_issuing_a_key_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
     with pytest.raises(ValidationError, match=field):
         IssueKeyBody(**({"actor_id": "bob", "operation_ref": "k1"} | {field: value}))
 
 
-@pytest.mark.parametrize("field", ["actor_id", "application_id"])
-def test_a_key_needs_an_actor_and_an_application(field: str) -> None:
+@pytest.mark.parametrize("field", ["actor_id", "tenant_id"])
+def test_a_key_needs_an_actor_and_an_tenant(field: str) -> None:
     """An empty one was issued, and then every request with that key failed: ``ActorContext`` needs both."""
     with pytest.raises(ValidationError, match=field):
         IssueKeyBody(**({"actor_id": "bob", "operation_ref": "k1"} | {field: ""}))

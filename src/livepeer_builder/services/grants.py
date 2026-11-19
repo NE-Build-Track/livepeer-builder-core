@@ -1,6 +1,6 @@
 """Grants: the idempotency keys the engine sends Batteries, and the grant desk (D57).
 
-Split from ``payments.py`` by responsibility: grants fund every application and are an optional
+Split from ``payments.py`` by responsibility: grants fund every tenant and are an optional
 capability, while ``PaymentsService`` provisions and funds one actor's allocation.
 """
 
@@ -49,8 +49,8 @@ class GrantDesk:
         self._ledger = ledger
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        # The provisioning catalog: grants fund every application and carry none, so an auditor bound to
-        # one application never reads them (John, #53 review).
+        # The provisioning catalog: grants fund every tenant and carry none, so an auditor bound to
+        # one tenant never reads them (John, #53 review).
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         return await self._manager.list_grants()
 
@@ -67,7 +67,7 @@ class GrantDesk:
 
         # Batteries has no idempotency key on grant creation (Q5): the tag finds an earlier run's grant
         tag = idempotency_key(
-            self._engine_id, f"create-grant:{admin.application_id}:{admin.actor_id}:{operation_ref}", "grant"
+            self._engine_id, f"create-grant:{admin.tenant_id}:{admin.actor_id}:{operation_ref}", "grant"
         )
 
         async def steps(run: RunningOperation) -> GrantRecord:

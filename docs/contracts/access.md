@@ -14,7 +14,7 @@ in adapters.
 | Field | Meaning |
 | --- | --- |
 | `actor_id` | Opaque to the engine; the owner of jobs, costs and allocations |
-| `application_id` | Tenant isolation; defaults to `default` |
+| `tenant_id` | Tenant isolation; defaults to `default` |
 | `permissions` | `Operation` values (see below) |
 | `credential_kind` | `actor`, `admin`, `auditor` (a read-only admin, D46) or `service` |
 | `attributes` | Non-secret labels copied onto records. **Never secrets** |
@@ -22,9 +22,9 @@ in adapters.
 
 **Operations:** `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`, `admin.keys`,
 `admin.allocations`, `admin.costs`, `admin.read`, `actors.assert`. `admin.read` is every admin read of one
-application: the key list and key inspection, the actor list and one actor's allocation, and
+tenant: the key list and key inspection, the actor list and one actor's allocation, and
 reconciliation. The other `admin.*` operations are the writes. The grant list is `admin.allocations`:
-grants fund every application and carry none, so only an admin reads them, never an auditor.
+grants fund every tenant and carry none, so only an admin reads them, never an auditor.
 
 ## Protocols
 
@@ -63,13 +63,13 @@ class AccessPolicy(Protocol):
 
 - **Admin operations** (`admin.*`) need an **admin credential kind**. A permission string on an actor
   key is not enough.
-- **An admin credential** may act on any application's records.
+- **An admin credential** may act on any tenant's records.
 - **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
-  `events.read`, across every actor of its own application. Every write is `AccessDenied`, and so is any
-  record of another application. It is for a dashboard or an audit reader that must not move money. An
+  `events.read`, across every actor of its own tenant. Every write is `AccessDenied`, and so is any
+  record of another tenant. It is for a dashboard or an audit reader that must not move money. An
   engine key can be issued as `auditor`, and a JWT is one with `LPB_JWT_ADMIN_READ_SCOPE`.
 - **Everyone else** needs the operation's permission, and may touch only resources owned by their own
-  `(application_id, actor_id)`.
+  `(tenant_id, actor_id)`.
 - **Another actor's record** reads as missing (404), never 403, so its existence isn't revealed. A
   missing permission is 403. The order of the two checks is in [Answers](#answers).
 
@@ -86,11 +86,11 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 
 1. **The permission first, before any lookup.** A caller without the operation's permission gets
    `AccessDenied` (403), whether or not the job exists, so the answer says nothing about any job.
-2. **Then ownership.** Another actor's or application's job, and a job that does not exist, are both
+2. **Then ownership.** Another actor's or tenant's job, and a job that does not exist, are both
    `NotFound` (404).
 
 **An id no record can hold is a 422 (#113, C26).** Every id a route reads from its path or query string
-(an application, actor or key id, `app`, a filter such as `actor_id`) is stored text: at most 200
+(a tenant, actor or key id, `app`, a filter such as `actor_id`) is stored text: at most 200
 characters and no NUL, as every record keeps it. A longer one, or one holding a NUL, is a 422 when the
 request is parsed, after authentication (401) and before the permission check and any query, as a job id
 that is not a UUID already was. Such a lookup used to answer 404 (an empty 200 for a list filter or the
@@ -105,12 +105,12 @@ same test fails when a route declares a plain `datetime` query parameter.
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
-| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application. Newest first, paged with `before` ([job history](engine.md#job-history)) |
+| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its tenant. Newest first, paged with `before` ([job history](engine.md#job-history)) |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
-| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its application; summary and allowance take `?actor_id=` to name one |
-| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the provisioned ones and the people an identity provider signed in (D48), each with `provisioned`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `application_id`, `status` (allocations only), `provisioned` and `limit`. An admin lists every application unless it names one; an auditor lists its own. The single read returns the allocation (`ProvisionedActor`) |
+| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
+| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the provisioned ones and the people an identity provider signed in (D48), each with `provisioned`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `tenant_id`, `status` (allocations only), `provisioned` and `limit`. An admin lists every tenant unless it names one; an auditor lists its own. The single read returns the allocation (`ProvisionedActor`) |
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -157,14 +157,14 @@ mode, with no code:
 - an `LPB_JWT_ADMIN_SCOPE` that ordinary tokens carry: an operation name (`jobs.run`, ...) or a standard
   OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`), whether written bare or
   with `LPB_JWT_SCOPE_PREFIX` (`api:jobs.run` with the prefix `api:`, D49). The admin scope makes an
-  engine-wide admin that skips permission and ownership checks in every application, so it must be a scope
+  engine-wide admin that skips permission and ownership checks in every tenant, so it must be a scope
   the provider issues to operators alone;
   - **This check is a denylist.** It catches the scopes every provider puts on ordinary tokens, not ones
     a provider invents. Choosing a scope that only operators are ever issued stays the operator's
     responsibility. A dedicated namespace or a separate admin claim would remove that reliance (a
     follow-up, not built: [#58](https://github.com/NE-Build-Track/livepeer-builder-core/issues/58), T19);
 - an `LPB_JWT_ADMIN_READ_SCOPE` that ordinary tokens carry (bare or prefixed, D49), or that equals the admin scope (D46): the read
-  scope marks a read-only admin across the application, so it too must be issued to operators and dashboards
+  scope marks a read-only admin across the tenant, so it too must be issued to operators and dashboards
   alone;
 - an empty `LPB_JWT_TOKEN_TYPES`.
 
@@ -236,7 +236,7 @@ mode, with no code:
 | Field | From |
 | --- | --- |
 | `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at provisioning (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
-| `application_id` | `LPB_JWT_APPLICATION_CLAIM` when set, otherwise `LPB_JWT_APPLICATION_ID` (`default`, at most 200 characters: a longer one fails at startup); a claim over 200 characters is a 401 |
+| `tenant_id` | `LPB_JWT_TENANT_CLAIM` when set, otherwise `LPB_JWT_TENANT_ID` (`default`, at most 200 characters: a longer one fails at startup); a claim over 200 characters is a 401 |
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
 | `credential_kind` | `admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
@@ -273,9 +273,9 @@ An enterprise backend calls the deployed engine on behalf of many users in one o
 
 - **(A) JWT bearer.** Use this for direct clients (browser, MCP). The enterprise identity provider
   issues tokens whose audience is the engine. The engine is configured with issuer(s), audience and a
-  claim mapping (`sub` → `actor_id`, a claim → `application_id`, the scope claim → permissions).
+  claim mapping (`sub` → `actor_id`, a claim → `tenant_id`, the scope claim → permissions).
 - **(B) Trusted backend.** Use this for backend-to-engine calls. The backend holds a **service
-  credential** with `actors.assert`, **bound to one `application_id`**, and names the actor in a
+  credential** with `actors.assert`, **bound to one `tenant_id`**, and names the actor in a
   `Livepeer-Actor` header. The header is honored **only** for that credential, so it is never an
   unchecked request field. Service credentials are never issued to browsers.
 
@@ -318,9 +318,9 @@ same steps run on the dev stack.
 | --- | --- | --- |
 | 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
 | 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
-| 3. Fund the user | `POST /v1/admin/applications/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "provision-alice"}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 3. Fund the user | `POST /v1/admin/tenants/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "provision-alice"}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
-| 5. Inspect the key, and who is provisioned | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the provisioned actors | `AccessKey`: kind, actor, application, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 5. Inspect the key, and who is provisioned | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the provisioned actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
 | 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
 | 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
 
@@ -339,7 +339,7 @@ the first did (`204`), so a retry after a lost answer is not an error (D61); a k
 `400`. `lpb bootstrap-admin` takes none either.
 
 **Audit log.** Each change is one INFO line: `keys.bootstrapped`, `keys.issued`, `keys.rotated` (with
-`replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `application_id` and
+`replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `tenant_id` and
 `by` (the acting admin's `actor_id`, or `cli`). No log line carries a token, a token hash or a payment
 key (`tests/unit/test_access.py`). A database driver's own DEBUG output echoes the parameters it
 stores, token hashes among them; the engine's logging never turns that on, and a hash is not a

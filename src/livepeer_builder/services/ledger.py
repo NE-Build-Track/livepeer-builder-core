@@ -33,10 +33,18 @@ from livepeer_builder.protocols import Clock, OperationRepo
 _REQUEST = TypeAdapter(dict[str, Any])
 
 
+# What a fingerprint hashes is a stored format, not a name: ``lpb_operations.fingerprint`` holds digests
+# written before #163 renamed the words below, and no migration can recompute a digest. The hashed text
+# keeps the word it was first written with, so the repeat of a command recorded before the upgrade still
+# matches its record (tests/unit/test_hashed_forms.py). Nothing reads these words back.
+_HASHED_FIELDS = {"tenant_id": "application_id"}
+
+
 def fingerprint(command: OperationCommand, request: Mapping[str, Any]) -> str:
     """sha256 of the command and its target and validated request, the reference excluded."""
     values = _REQUEST.dump_python(dict(request), mode="json")  # models and decimals as JSON
-    canonical = json.dumps({"command": command, "request": values}, sort_keys=True)
+    hashed = {_HASHED_FIELDS.get(name, name): value for name, value in values.items()}
+    canonical = json.dumps({"command": command, "request": hashed}, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -89,7 +97,7 @@ def done(
     """The record of a command whose effect and record commit in one transaction (an access key): it is
     never ``started``, so its outcome is never unknown."""
     return OperationRecord(
-        application_id=caller.application_id,
+        tenant_id=caller.tenant_id,
         actor_id=caller.actor_id,
         operation_ref=operation_ref,
         command=command,
@@ -130,7 +138,7 @@ class OperationLedger:
         """Run ``steps`` once per ``operation_ref``; a repeat gets the first run's result back."""
         OPERATION_REPLAYED.set(False)
         record = OperationRecord(
-            application_id=caller.application_id,
+            tenant_id=caller.tenant_id,
             actor_id=caller.actor_id,
             operation_ref=operation_ref,
             command=command,
@@ -183,7 +191,7 @@ class OperationLedger:
 
     async def _recorded[T](self, record: OperationRecord, answer: TypeAdapter[T]) -> T:
         """A resume took this slow run over (its token is fenced off): answer as the record does now."""
-        held = await self._repo.get_operation(record.application_id, record.actor_id, record.operation_ref)
+        held = await self._repo.get_operation(record.tenant_id, record.actor_id, record.operation_ref)
         if held is None or held.state != "done":
             raise OperationInProgress(held or record, self._until_stale(held or record))
         return _replayed(held, answer)

@@ -28,7 +28,7 @@ class ActorCommandRepo(Protocol):
 
     async def set_actor_status(
         self,
-        application_id: str,
+        tenant_id: str,
         actor_id: str,
         allocation_id: str,
         status: AllocationStatus,
@@ -41,7 +41,7 @@ class ActorCommandRepo(Protocol):
 
     async def set_actor_key(
         self,
-        application_id: str,
+        tenant_id: str,
         actor_id: str,
         allocation_id: str,
         api_key_id: str,

@@ -2,7 +2,7 @@
 
 | Term | Meaning |
 | --- | --- |
-| **Actor** | Whoever a job runs for. An opaque `actor_id` within an `application_id`; the engine never sees customer identity |
+| **Actor** | Whoever a job runs for. An opaque `actor_id` within an `tenant_id`; the engine never sees customer identity |
 | **ActorContext** | The validated actor the core receives: IDs, permissions, credential kind, non-secret attributes |
 | **Admin credential** | A credential kind (not a permission) required for `admin.*` operations. The first one comes from `lpb bootstrap-admin` |
 | **Allocation** | A Batteries budget carved from a grant, with its own balance, status and API keys |
@@ -20,7 +20,7 @@
 | **`manifest_id`** | The orchestrator's session label from the 402 challenge. The session log uses it, with `allocation_id`, to find the Batteries `payment_session_id`. It is not itself the billing key (D20, T13) |
 | **Mode A / Mode B** | The M2 names for the two payment configurations: self-hosted payments, and a hosted payment operator, which D82 replaced with the payment clearinghouse ([payments.md](../contracts/payments.md#payment-configurations)) |
 | **Node key vs recipient** | An orchestrator's operational signing account vs its registered account that tickets pay. Since `f970be6` the node signer pays the recipient and ignores the node address (T10) |
-| **`operation_ref`** | The caller's retry key; at most one job per (application, actor, ref) reaches a runner (D57) |
+| **`operation_ref`** | The caller's retry key; at most one job per (tenant, actor, ref) reaches a runner (D57) |
 | **`per_actor`** | The only allocation mode (D82): one allocation and key per actor. `per_application`, one shared key from the engine's settings, was removed in M4 (#162) |
 | **Remote signer** | The livepeer/node service that signs payment tickets for gateways, after Batteries authorizes |
 | **Reserved** | Defined in the contract, implemented in a later milestone; answers 501 |

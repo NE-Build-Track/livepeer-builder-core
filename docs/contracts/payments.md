@@ -94,7 +94,7 @@ only one tenant. It is gone with its settings, `LPB_ALLOCATION_MODE`, `LPB_SHARE
   actors only.
 - **What was paid before.** Attempts stored in that mode name the shared allocation, where
   `LPB_SHARED_ALLOCATION_ID` was set. It is no actor's allocation, so it is never the current one. It
-  still reconciles when it is named, without an `actor_id`, over every actor of the application
+  still reconciles when it is named, without an `actor_id`, over every actor of the tenant
   ([one allocation at a time](#cost-classification)).
 
 ## Provisioning
@@ -103,11 +103,11 @@ only one tenant. It is gone with its settings, `LPB_ALLOCATION_MODE`, `LPB_SHARE
 `admin.allocations` operation (an admin credential). Allocation and key writes carry an idempotency
 key of `base64url(sha256(engine_id:operation:step))`.
 
-Provisioning refuses an `application_id`, `actor_id`, `grant_id` or `label` that is longer than 200
+Provisioning refuses an `tenant_id`, `actor_id`, `grant_id` or `label` that is longer than 200
 characters or holds a NUL character (422 over REST), before any provider call: every record stores them
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
-`app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `application_id` and
+`app`, `capability`, `model` and `operation_ref`, and an access key's `actor_id`, `tenant_id` and
 `label`. Stored text also refuses a lone surrogate, half of a UTF-16 pair, which JSON can write
 (`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
 because the 422 could not be sent.
@@ -157,7 +157,7 @@ checks stop that:
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `provision(ProvisionRequest(application, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |
+| `provision(ProvisionRequest(tenant, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already provisioned is 409 `already_provisioned`; fund it instead |
 | `fund(…, FundRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
 | `fund_grant(FundRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
 | `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
@@ -197,7 +197,7 @@ checks stop that:
   answers with the revoked actor as stored, as a repeat does. If the actor was provisioned again
   before it wrote, it writes nothing and answers with the allocation it revoked, `revoked`: the
   answer to a revoke is never an active actor, and the new allocation is read with
-  `GET /v1/admin/applications/{application_id}/actors/{actor_id}/allocation`. Before, each of these commands saved the
+  `GET /v1/admin/tenants/{tenant_id}/actors/{actor_id}/allocation`. Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
   revoked, and any of them could put a revoked actor back to `active`.
 
@@ -292,7 +292,7 @@ checks stop that:
 ## Repeat-safe commands
 
 Each admin command that moves money or creates a credential takes a caller-chosen `operation_ref`,
-scoped to the caller `(application_id, actor_id)` (D57, ISS-11). The engine records it in the operation
+scoped to the caller `(tenant_id, actor_id)` (D57, ISS-11). The engine records it in the operation
 ledger (`lpb_operations`, unique per scope and reference) **before the first provider call**, with a
 fingerprint of the command, its target and the validated request (the reference excluded), and stores the
 public result when the command ends. A repeat is answered from that record and never applies twice.
@@ -567,7 +567,7 @@ rows on that allocation. Before, it counted every job the actor ever ran against
 allocation, so after a re-provision reconciliation never balanced again.
 
 - **The default** is the actor's current allocation (`allocation_id` in the answer).
-- **An earlier allocation** is reconciled by naming it: `costs.reconcile(admin, application_id,
+- **An earlier allocation** is reconciled by naming it: `costs.reconcile(admin, tenant_id,
   actor_id, allocation_id)`, or `?allocation_id=` on the route (stored text: over 200 characters or a
   NUL is 422, and so is an empty value, which names no allocation and is not read as the current
   one). Batteries still reports `spent_*` for a revoked allocation, late charges after the
@@ -575,14 +575,14 @@ allocation, so after a re-provision reconciliation never balanced again.
 - **`other_allocations`** in the answer lists the actor's other allocations, sorted: the current one,
   and every earlier one that paid an attempt. It is empty for an actor that had one allocation.
 - **An allocation that is not the actor's** (it is not the current one and paid none of the actor's
-  attempts) is 404, so a caller who may read one application never reads what another's allocation
+  attempts) is 404, so a caller who may read one tenant never reads what another's allocation
   spent. An earlier allocation that paid no attempt is not known to the engine: the actor's record
   keeps only the current one.
 - **Without `actor_id`** no allocation is the current one, since an allocation is an actor's, so the
-  call is 404 unless it names one. Any allocation that paid an attempt in the application can be
+  call is 404 unless it names one. Any allocation that paid an attempt in the tenant can be
   named: the answer is 200 with `actor_id: null`, it counts the attempts that allocation paid, and
-  `other_allocations` lists every other allocation that paid an attempt in the application. There is
-  still no single figure for a whole application: each allocation reconciles on its own.
+  `other_allocations` lists every other allocation that paid an attempt in the tenant. There is
+  still no single figure for a whole tenant: each allocation reconciles on its own.
 
 Which allocation paid each attempt is an optional read of a store's cost snapshot
 (`AllocationCostSnapshot` in `protocols`: `attempt_allocations`). The packaged SQL store has it. With a
@@ -624,7 +624,7 @@ A cost reaches a job, and from the job its attempts, through engine records only
 - **`JobCost`** (`GET /v1/jobs/{id}/cost`, `GET /v1/costs/projections`) names the job by `job_id` and
   carries `fees`, `billable` and one `AttemptCost` per attempt that opened a payment session:
   `attempt_number`, `cost_class` and that attempt's `fees`.
-- **The job** (`GET /v1/jobs/{id}`) says who and what: `application_id`, `actor_id`, `app`,
+- **The job** (`GET /v1/jobs/{id}`) says who and what: `tenant_id`, `actor_id`, `app`,
   `capability`, `model`, and the app-reported `usage`.
 - **Its attempts** (`job_id`, `number`; `number` is the `attempt_number` above) say who was paid and
   from what: `allocation_id` (the allocation whose key paid), `orchestrator_url` (the orchestrator the
@@ -643,7 +643,7 @@ Units, on every field:
 | `jobs_with_cost`, `jobs_pending` | Jobs: `observed` or `corrected`, and `pending` |
 
 **The summary** (`GET /v1/costs/summary`) totals the jobs in its window and scope (an actor's own; an
-admin's or auditor's whole application, or one actor with `?actor_id=`) by class (`by_class`), and the
+admin's or auditor's whole tenant, or one actor with `?actor_id=`) by class (`by_class`), and the
 same attempt fees by runner app and class (`by_app`, D60): "what did each app cost, and how much of
 it is settled". `by_app[app][class]` keeps classes apart as `by_class` does, so a final fee and a
 `pending` one that can still grow are never added into one figure; for every class, the apps add up to

@@ -53,7 +53,7 @@ def job_with(*attempts: tuple[str, tuple[str, ...], bool], state: str = "succeed
     job_id = uuid4()
     now = FixedClock().now()
     return Job(
-        id=job_id, actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        id=job_id, actor_id="alice", tenant_id="default", operation_ref=None, mode="immediate", app=APP,
         capability=None, model=None, state=state, failure=None, result=None, usage=None,  # type: ignore[arg-type]
         created_at=now, completed_at=now,
         attempts=tuple(
@@ -177,7 +177,7 @@ async def test_a_stored_projection_keeps_billable_apart_from_fees(
     )
     request = ProvisionRequest(
         operation_ref="provision:default:alice",
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
         grant_id="g",
@@ -212,7 +212,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext):  # type:
     engine = await make_engine()
     request = ProvisionRequest(
         operation_ref="provision:default:alice",
-        application_id="default",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
         grant_id="grant_1",
@@ -230,7 +230,7 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
         admin,
         ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
             grant_id="grant_1",
@@ -282,7 +282,7 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
         admin,
         ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
             grant_id="grant_1",
@@ -326,7 +326,7 @@ async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
         admin,
         ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
             grant_id="grant_1",
@@ -353,7 +353,7 @@ async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
         admin,
         ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
             grant_id="grant_1",
@@ -391,7 +391,7 @@ async def test_a_forged_manifest_on_another_allocation_stays_unattributed(
         admin,
         ProvisionRequest(
             operation_ref="provision:default:alice",
-            application_id="default",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
             grant_id="grant_1",
@@ -426,7 +426,7 @@ async def running_job(
     """A job with one attempt still in flight, as the engine stores it before the runner answers."""
     now = clock.now()
     job = Job(
-        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        id=uuid4(), actor_id="alice", tenant_id="default", operation_ref=None, mode="immediate", app=APP,
         capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
         created_at=now, completed_at=None,
     )  # fmt: skip
@@ -474,7 +474,7 @@ async def test_a_job_that_ended_since_the_last_sync_counts_in_summary_and_recent
     engine = await make_engine()
     await engine.payments.provision(
         admin,
-        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+        ProvisionRequest(operation_ref="provision:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                          grant_id="grant_1"),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-new",))]
@@ -560,7 +560,7 @@ async def test_a_reconciliation_during_a_sync_counts_every_row_once(
         engine = await make_engine(supply=EngineSupply(store=file_store))
         actor = await engine.payments.provision(
             admin,
-            ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+            ProvisionRequest(operation_ref="provision:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                              grant_id="grant_1"),
         )  # fmt: skip
         job, attempt = await running_job(file_store, clock, allocation=actor.allocation_id)
@@ -600,7 +600,7 @@ async def test_a_running_jobs_matched_fee_is_pending_and_reconciliation_balances
     engine = await make_engine()
     actor = await engine.payments.provision(
         admin,
-        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+        ProvisionRequest(operation_ref="provision:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                          grant_id="grant_1"),
     )  # fmt: skip
     transport.opens = [StreamScript(events=[b"a", 30.0], manifest_ids=("m-s",))]  # paid at open, then runs on
@@ -633,7 +633,7 @@ async def ended_paid_job(
     engine = await make_engine()
     actor = await engine.payments.provision(
         admin,
-        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
+        ProvisionRequest(operation_ref="provision:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
                          grant_id="grant_1"),
     )  # fmt: skip
     job, attempt = await running_job(store, clock, allocation=actor.allocation_id)

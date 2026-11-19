@@ -134,7 +134,7 @@ classDiagram
     class CostsAdminApi {
         <<interface>>
         +async recent(actor, limit) JobCost[]
-        +async reconcile(admin, application_id, actor_id, allocation_id) Reconciliation
+        +async reconcile(admin, tenant_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
     }
     class AllowanceApi {
@@ -144,10 +144,10 @@ classDiagram
     class PaymentsAdminApi {
         <<interface>>
         +async provision(admin, request) ProvisionedActor
-        +async fund(admin, application_id, actor_id, request) ProvisionedActor
-        +async set_status(admin, application_id, actor_id, status) ProvisionedActor
-        +async rotate_key(admin, application_id, actor_id, operation_ref) ProvisionedActor
-        +async revoke(admin, application_id, actor_id) ProvisionedActor
+        +async fund(admin, tenant_id, actor_id, request) ProvisionedActor
+        +async set_status(admin, tenant_id, actor_id, status) ProvisionedActor
+        +async rotate_key(admin, tenant_id, actor_id, operation_ref) ProvisionedActor
+        +async revoke(admin, tenant_id, actor_id) ProvisionedActor
         +async fund_grant(admin, request) None
         +grants GrantsApi?
     }
@@ -158,8 +158,8 @@ classDiagram
     }
     class KeysApi {
         <<interface>>
-        +async issue(admin, kind, actor_id, application_id, permissions, label, operation_ref) IssuedKey
-        +async list_keys(admin, application_id) AccessKey[]
+        +async issue(admin, kind, actor_id, tenant_id, permissions, label, operation_ref) IssuedKey
+        +async list_keys(admin, tenant_id) AccessKey[]
         +async revoke(admin, key_id) None
         +async bootstrap_admin(label) IssuedKey
     }
@@ -210,7 +210,7 @@ classDiagram
         +async insert_access_key(key, token_hash, operation) bool
         +async access_key_by_hash(token_hash) AccessKey?
         +async revoke_access_key(key_id, revoked_at) bool
-        +async list_access_keys(application_id) AccessKey[]
+        +async list_access_keys(tenant_id) AccessKey[]
         +async count_active_admin_keys() int
     }
     class AuthenticatorChain {
@@ -229,7 +229,7 @@ classDiagram
     }
     class KeyService {
         +async issue(admin, ...) IssuedKey
-        +async list_keys(admin, application_id) AccessKey[]
+        +async list_keys(admin, tenant_id) AccessKey[]
         +async revoke(admin, key_id) None
         +async bootstrap_admin(label) IssuedKey
     }
@@ -344,7 +344,7 @@ classDiagram
     }
     class AllowanceReader {
         <<interface>>
-        +async allocation_for(application_id, actor_id) str?
+        +async allocation_for(tenant_id, actor_id) str?
         +async read_allowance(allocation_id) Allowance
     }
     class AllocationManager {
@@ -385,7 +385,7 @@ classDiagram
         -worker CostSyncWorker?
         -allowances AllowanceReader
         +async for_job(actor, job_id) JobCost
-        +async reconcile(admin, application_id, actor_id, allocation_id) Reconciliation
+        +async reconcile(admin, tenant_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
         +async run(stop) None
     }
@@ -765,8 +765,8 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
-| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (provisioned, signed in, or both: D46, D48), `ProvisionedActor` |
-| `POST /v1/admin/applications/{app}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
+| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (provisioned, signed in, or both: D46, D48), `ProvisionedActor` |
+| `POST /v1/admin/tenants/{tenant}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
 | `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
 | `POST /v1/admin/grant/fund` | `payments.fund_grant` | `204` |
 | `GET /v1/admin/reconciliation` | `costs.reconcile` | `Reconciliation` |

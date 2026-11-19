@@ -141,7 +141,7 @@ def bearer(token: str) -> AuthRequest:
 async def test_a_valid_token_becomes_an_actor(make: Make, provider: Provider) -> None:
     actor = await make().authenticate(bearer(provider.token()))
     assert actor is not None
-    assert (actor.actor_id, actor.application_id, actor.credential_kind) == ("alice", "default", "actor")
+    assert (actor.actor_id, actor.tenant_id, actor.credential_kind) == ("alice", "default", "actor")
     assert actor.permissions == frozenset({"jobs.run", "jobs.read"})
     assert actor.auth == AuthProvenance(method="jwt", issuer=ISSUER, credential_id="t-1")
     assert provider.requests == [DISCOVERY, JWKS_URL]  # found through the issuer's discovery document
@@ -149,7 +149,7 @@ async def test_a_valid_token_becomes_an_actor(make: Make, provider: Provider) ->
 
 async def test_claims_are_mapped_as_configured(make: Make, provider: Provider) -> None:
     authenticator = make(
-        actor_claim="email", application_claim="tenant", scope_claim="scp", scope_prefix="api://engine/"
+        actor_claim="email", tenant_claim="tenant", scope_claim="scp", scope_prefix="api://engine/"
     )
     token = provider.token(
         email="alice@example.com",
@@ -158,7 +158,7 @@ async def test_claims_are_mapped_as_configured(make: Make, provider: Provider) -
     )
     actor = await authenticator.authenticate(bearer(token))
     assert actor is not None
-    assert (actor.actor_id, actor.application_id) == ("alice@example.com", "acme")
+    assert (actor.actor_id, actor.tenant_id) == ("alice@example.com", "acme")
     assert actor.permissions == frozenset({"costs.read", "discover"})
 
 
@@ -752,10 +752,10 @@ async def test_the_name_claim_becomes_the_display_name(make: Make, provider: Pro
 async def test_an_identity_longer_than_the_engine_stores_is_a_401(
     make: Make, provider: Provider, claim: str
 ) -> None:
-    """Actor and application ids are stored in 200 characters on every record. A longer subject or
-    application claim is refused when the token is checked, not on each write: cutting it would merge
+    """Actor and tenant ids are stored in 200 characters on every record. A longer subject or
+    tenant claim is refused when the token is checked, not on each write: cutting it would merge
     two people (John, #53 review)."""
-    authenticator = make(application_claim="tenant")
+    authenticator = make(tenant_claim="tenant")
     with pytest.raises(NotAuthenticated, match=f"{claim} claim is longer than 200"):
         await authenticator.authenticate(bearer(provider.token(**{"tenant": "acme", claim: "x" * 201})))
     fits = await authenticator.authenticate(bearer(provider.token(**{"tenant": "acme", claim: "x" * 200})))

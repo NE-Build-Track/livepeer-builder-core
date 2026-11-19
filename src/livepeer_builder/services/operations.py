@@ -63,7 +63,7 @@ async def check_operation(
 ) -> UUID | None:
     """Before admission: the failed job a new one supersedes, or None for a reference nobody holds.
     Raises as ``retry_of`` does. A fingerprint stored before fingerprints existed matches any request."""
-    found = await store.job_by_operation_ref(actor.application_id, actor.actor_id, operation_ref)
+    found = await store.job_by_operation_ref(actor.tenant_id, actor.actor_id, operation_ref)
     if found is None:
         return None
     existing, existing_fingerprint = found

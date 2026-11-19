@@ -47,7 +47,7 @@ def usd(amount: str) -> Money:
 
 def provision_request(actor_id: str = "alice", amount: str = "5", *, ref: str = "") -> ProvisionRequest:
     return ProvisionRequest(
-        application_id="default",
+        tenant_id="default",
         actor_id=actor_id,
         amount=usd(amount),
         grant_id="grant_1",
@@ -545,9 +545,9 @@ async def test_one_ref_used_for_another_command_is_a_conflict(
 def test_a_provisioning_request_needs_an_operation_ref() -> None:
     """Q4: required now, so a repeat after a lost response can never create a second allocation."""
     with pytest.raises(ValidationError, match="operation_ref"):
-        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"))  # type: ignore[call-arg]
+        ProvisionRequest(tenant_id="default", actor_id="alice", amount=usd("1"))  # type: ignore[call-arg]
     with pytest.raises(ValidationError, match="operation_ref"):
-        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), operation_ref="")
+        ProvisionRequest(tenant_id="default", actor_id="alice", amount=usd("1"), operation_ref="")
 
 
 async def test_provisioning_with_one_ref_and_another_body_is_a_conflict_before_any_provider_call(

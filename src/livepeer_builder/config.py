@@ -85,8 +85,8 @@ class EngineSettings(Contract):
     jwt_audience: str | None = None  # must be in aud: this engine
     jwt_algorithms: tuple[str, ...] = ("RS256", "ES256")
     jwt_actor_claim: str = Field(default="sub", min_length=1)
-    jwt_application_claim: str | None = None  # None: every token is in jwt_application_id
-    jwt_application_id: str = Field(default="default", min_length=1, max_length=200)  # as records store it
+    jwt_tenant_claim: str | None = None  # None: every token is in jwt_tenant_id
+    jwt_tenant_id: str = Field(default="default", min_length=1, max_length=200)  # as records store it
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential

@@ -63,7 +63,7 @@ def test_a_grant_id_a_provider_path_cannot_hold_is_refused(grant_id: str) -> Non
         FundRequest(amount=USD, operation_ref="f1", grant_id=grant_id)
     with pytest.raises(ValidationError, match="grant_id"):
         ProvisionRequest(
-            application_id="default", actor_id="alice", amount=USD, grant_id=grant_id, operation_ref="p1"
+            tenant_id="default", actor_id="alice", amount=USD, grant_id=grant_id, operation_ref="p1"
         )
     with pytest.raises(ValidationError, match="grant_id"):
         ProvisionBody(amount=USD, grant_id=grant_id, operation_ref="p1")
@@ -73,9 +73,7 @@ def test_a_grant_id_a_provider_path_cannot_hold_is_refused(grant_id: str) -> Non
 def test_any_other_grant_id_is_kept_as_written(grant_id: str) -> None:
     """No pattern such as a UUID: the provider chooses its ids."""
     assert FundRequest(amount=USD, operation_ref="f1", grant_id=grant_id).grant_id == grant_id
-    request = ProvisionRequest(
-        application_id="d", actor_id="a", amount=USD, grant_id=grant_id, operation_ref="p1"
-    )
+    request = ProvisionRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=grant_id, operation_ref="p1")
     assert request.grant_id == grant_id
 
 
@@ -83,9 +81,7 @@ def test_any_other_grant_id_is_kept_as_written(grant_id: str) -> None:
 def test_whitespace_around_a_grant_id_is_removed_where_the_request_is_read(written: str, used: str) -> None:
     """The value checked is the value the engine uses: it stripped the id only after the check."""
     assert FundRequest(amount=USD, operation_ref="f1", grant_id=written).grant_id == used
-    request = ProvisionRequest(
-        application_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1"
-    )
+    request = ProvisionRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1")
     assert request.grant_id == used
     assert ProvisionBody(amount=USD, grant_id=written, operation_ref="p1").grant_id == used
 
@@ -99,7 +95,7 @@ async def admin_client(make_engine: EngineFactory) -> AsyncIterator[tuple[httpx.
         yield client, {"Authorization": f"Bearer {admin.token}"}
 
 
-ALLOCATION = "/v1/admin/applications/default/actors/alice/allocation"
+ALLOCATION = "/v1/admin/tenants/default/actors/alice/allocation"
 AMOUNT = {"amount": "5", "currency": "USD"}
 
 

@@ -91,6 +91,14 @@ classDiagram
         <<interface>>
         +async tenant_page(tenant_id, cursor, limit) UsagePage
     }
+    class EscrowSource {
+        <<interface>>
+        +async escrow_accounts() EscrowAccount[]
+    }
+    class SignerProbe {
+        <<interface>>
+        +async signer_readiness() SignerReadiness
+    }
     class AllowanceReader {
         <<interface>>
         +async allocation_for(tenant_id, actor_id) str?
@@ -194,6 +202,8 @@ classDiagram
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
     TenantUsageSource <|.. BatteriesUsageSource
+    EscrowSource <|.. BatteriesClient
+    SignerProbe <|.. SdkRunnerTransport
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
@@ -229,6 +239,8 @@ classDiagram
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
+| `EscrowSource` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
+| `SignerProbe` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |

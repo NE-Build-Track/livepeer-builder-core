@@ -13,7 +13,9 @@ The set is two groups, each one function, so a deployment can serve them on diff
 - ``mount_tenant_routes``: what a tenant's own admin or auditor calls, for its own tenant, and the
   runner list, which any of them reads;
 - ``mount_clearinghouse_admin_routes``: what only a clearinghouse admin does (onboarding, the tenant
-  list, a grant's top-up and a tenant's status).
+  list, a grant's top-up, a tenant's status and the wallet report).
+
+``http/listeners.py`` says which listener serves which group.
 
 A tenant's id is its grant's id (D83): no route or body takes a separate grant id.
 """
@@ -38,6 +40,7 @@ from livepeer_builder.contracts import (
     TenantState,
     TopUpRequest,
     UsagePage,
+    WalletReport,
 )
 from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.http.auth import actor_dependency
@@ -58,6 +61,7 @@ TENANT = TENANTS + "/{tenant_id}"
 ALLOCATION = TENANT + "/actors/{actor_id}/allocation"
 KEYS = TENANT + "/keys"
 DISCOVERY = "/v1/clearinghouse/discovery"
+WALLET = "/v1/clearinghouse/wallet"
 
 
 def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
@@ -67,14 +71,24 @@ def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
 
 
 def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
-    """Add what only a clearinghouse admin does: onboarding, the tenant list, a grant's top-up and a
-    tenant's status. Onboarding, the list and the status need the tenant desk."""
+    """Add what only a clearinghouse admin does: onboarding, the tenant list, a grant's top-up, a
+    tenant's status and the wallet report. Onboarding, the list and the status need the tenant desk."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     @app.post(TENANT + "/grant/top-up", status_code=204)
     async def top_up_grant(actor: Actor, tenant_id: GrantTenantId, body: TopUpRequest) -> Response:
         await engine.payments.top_up_grant(actor, tenant_id, body)
         return Response(status_code=204, headers=replayed())
+
+    if engine.payments.wallet is not None:  # needs a provider that reports the escrow, and a signer to ask
+        wallet = engine.payments.wallet
+
+        @app.get(WALLET)
+        async def wallet_report(actor: Actor) -> WalletReport:
+            """The wallet's deposit and reserve as the payment provider has confirmed them, the total of
+            unspent grants for each currency, and whether the signer answers. Nothing is converted
+            between currencies and no margin is computed."""
+            return await wallet.report(actor)
 
     if engine.payments.tenants is None:  # the tenant desk is off: none of its routes (decision 7)
         return

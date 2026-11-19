@@ -87,8 +87,11 @@ RUNNER_LIST = {("GET", "/v1/clearinghouse/discovery")}
 # What only a clearinghouse admin does: a private listener's routes (#167).
 ADMIN_ROUTES = {("POST", TENANT + "/grant/top-up")}
 TENANT_DESK = {("POST", TENANTS), ("GET", TENANTS), ("POST", TENANT + "/status")}  # only when it is on
+# the wallet report (#167): only when the grants manager reports the escrow and the transport can ask the
+# signer, as the packaged ones do. A clearinghouse admin's, so in the private listener's group.
+WALLET = {("GET", "/v1/clearinghouse/wallet")}
 CLEARINGHOUSE = TENANT_ROUTES | ADMIN_ROUTES
-OPTIONAL = TENANT_KEYS | GRANT_READ | TENANT_DESK | USAGE_READ | RUNNER_LIST
+OPTIONAL = TENANT_KEYS | GRANT_READ | TENANT_DESK | USAGE_READ | RUNNER_LIST | WALLET
 # Gone since #165, with no alias: the tenant is in the path, and a tenant's id is its grant's id.
 REMOVED = [
     ("GET", "/v1/clearinghouse/actors"),
@@ -154,7 +157,8 @@ async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory
     mount_clearinghouse_routes(app, engine)
     assert served(app) == HEALTH | CLEARINGHOUSE | OPTIONAL
     assert all(path.startswith("/v1/clearinghouse/") for _, path in served(app) - HEALTH)
-    in_a_tenant = served(app) - HEALTH - RUNNER_LIST  # the list is every tenant's: it names none
+    # the runner list is every tenant's and the wallet is the clearinghouse's: neither names a tenant
+    in_a_tenant = served(app) - HEALTH - RUNNER_LIST - WALLET
     assert all(path.startswith("/v1/clearinghouse/tenants") for _, path in in_a_tenant)
     admin, alice = await keys_of(engine)
     actors = ACTORS.format(tenant_id="default")
@@ -208,7 +212,7 @@ async def test_the_two_groups_of_the_clearinghouse_set_mount_by_themselves(
     assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ | RUNNER_LIST
     private = shared_app(engine, manage_lifecycle=False)
     mount_clearinghouse_admin_routes(private, engine)
-    assert served(private) == HEALTH | ADMIN_ROUTES | TENANT_DESK
+    assert served(private) == HEALTH | ADMIN_ROUTES | TENANT_DESK | WALLET
     both = shared_app(engine, manage_lifecycle=False)
     mount_clearinghouse_routes(both, engine)
     assert len([route for route in both.routes if isinstance(route, APIRoute)]) == len(

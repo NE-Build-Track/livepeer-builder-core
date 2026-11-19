@@ -73,6 +73,7 @@ CLEARINGHOUSE = {
     "services/runner_list.py",  # the list a clearinghouse publishes: it reaches no work module
     "services/tenant_usage.py",
     "services/tenants.py",
+    "services/wallet.py",  # the wallet report, which only a clearinghouse admin reads (#167)
     "http/clearinghouse.py",
 }
 # What both halves use: access (policy, access keys, who signed in), the operation ledger, and the app
@@ -105,6 +106,9 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # PaymentKeyRepo is where a clearinghouse keeps the payment keys it issues (#166): the work half is
 # handed one through CredentialResolver and never looks one up. TenantUsageSource is how a clearinghouse
 # reads one tenant's usage at the provider: the work half reads usage through UsageSource.
+# EscrowSource and SignerProbe are what the wallet report reads (#167): the wallet's deposit and reserve at
+# the provider, and whether the signer answers. They are the clearinghouse half's, for its admin: the work
+# half pays through the signer inside RunnerTransport and has no use for either.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
@@ -113,6 +117,8 @@ BEHIND_THE_PORTS = {
     "ActorCommandRepo",
     "PaymentKeyRepo",
     "TenantUsageSource",
+    "EscrowSource",
+    "SignerProbe",
     "EngineStore",
 }
 NOT_PAYMENTS = {

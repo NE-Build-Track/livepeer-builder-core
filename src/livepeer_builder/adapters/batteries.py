@@ -18,10 +18,12 @@ from urllib.parse import quote
 import httpx
 from pydantic import SecretStr
 
+from livepeer_builder.adapters.batteries_escrow import read_escrow_report
 from livepeer_builder.adapters.batteries_usage_rows import decimal_or_none, read_usage_item
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
+    EscrowAccount,
     GrantPage,
     GrantRecord,
     Money,
@@ -145,6 +147,19 @@ class BatteriesClient:
     async def set_grant_status(self, grant_id: str, status: str) -> None:
         await self._request("PATCH", f"/v1/grants/{segment(grant_id)}/status", json={"status": status})
 
+    async def escrow_accounts(self) -> tuple[EscrowAccount, ...]:
+        """The wallet's deposit and reserve (``EscrowSource``, #167): Batteries' escrow report, which
+        needs ``escrow.read``. A credential without it is told so: the grants credential had no use for
+        that permission before."""
+        try:
+            response = await self._send("GET", "/v1/escrow/report")
+        except ProviderError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            needed = f"{exc.message}: the grants credential needs the permission escrow.read"
+            raise ProviderError(exc.status_code, needed) from exc
+        return read_escrow_report(json_value(response))
+
     async def _allotted(self, grant_id: str | None) -> dict[str, tuple[Decimal, Decimal]]:
         """What the allocations of each grant hold and what they have spent, by grant; of one grant when
         it is named. One read of the allocations gives both (#166)."""
@@ -178,6 +193,17 @@ class BatteriesClient:
         idempotency_key: str | None = None,
         params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        return json_object(await self._send(method, path, json, idempotency_key, params))
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        json: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """The call's answer once it is no error status; what it holds is the caller's to read."""
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         try:
             # One deadline for the whole call: httpx times each phase separately, and the operation ledger's
@@ -190,7 +216,7 @@ class BatteriesClient:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(response.status_code, error_message(response))
-        return json_object(response)
+        return response
 
 
 class BatteriesUsageSource:
@@ -257,15 +283,21 @@ def json_object(response: httpx.Response) -> dict[str, Any]:
     Only a 2xx is an answer. A redirect is none, whatever its body: the engine follows no redirect, and a
     3xx that held a JSON object read as the call's result (Go's ``ServeMux`` answers a 301 for a path it
     would clean)."""
-    if not response.is_success:
-        raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
-    try:
-        body = response.json()
-    except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
-        body = None
+    body = json_value(response)
     if not isinstance(body, dict):
         raise ProviderError(response.status_code, "Batteries answered with a body that is not a JSON object")
     return body
+
+
+def json_value(response: httpx.Response) -> object:
+    """A 2xx answer's JSON, whatever it is, or ``None`` when the body is none: for the one report that
+    is an array (``adapters/batteries_escrow.py``). A redirect is refused here, as ``json_object`` says."""
+    if not response.is_success:
+        raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
+    try:
+        return response.json()
+    except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
+        return None
 
 
 def list_page(body: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:

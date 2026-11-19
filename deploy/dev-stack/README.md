@@ -133,7 +133,7 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
     `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`, `api_keys.read`,
     `api_keys.revoke` and `usage.read`;
   - `grant-desk` (`LPB_BATTERIES_GRANTS_TOKEN`, optional): `grants.read`, `grants.create`,
-    `grants.fund`, `grants.status` and `allocations.read`.
+    `grants.fund`, `grants.status`, `allocations.read` and, for the wallet report, `escrow.read`.
 - **No pinned certificates.** The signer no longer discovers, so it needs no orchestrator certificates
   (T12 closed by D43). `config/pinned-certs/` is gone. The engine still verifies runner TLS against
   the system trust store.

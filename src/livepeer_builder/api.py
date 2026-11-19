@@ -16,8 +16,9 @@ The engine has two halves (D84), and the facade follows them:
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
 (the transport can stream), ``keys`` (engine API keys are on), ``payments.tenants`` (the tenant desk
-is on), ``payments.usage`` (the usage source reads one tenant's records), ``runner_list`` (the discovery
-source holds the document it read). Check for ``None`` before use; never probe with ``hasattr``. Members
+is on), ``payments.usage`` (the usage source reads one tenant's records), ``payments.wallet`` (the grants
+manager reports the escrow and the transport can ask the signer), ``runner_list`` (the discovery source
+holds the document it read). Check for ``None`` before use; never probe with ``hasattr``. Members
 are read-only properties so a wider protocol can narrow a member it combines.
 """
 
@@ -55,6 +56,7 @@ from livepeer_builder.contracts import (
     TenantStatus,
     TopUpRequest,
     UsagePage,
+    WalletReport,
 )
 from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
@@ -242,6 +244,13 @@ class TenantUsageApi(Protocol):
     ) -> UsagePage: ...
 
 
+class WalletApi(Protocol):
+    """The wallet report: present only when the grants manager reports the escrow (``EscrowSource``) and
+    the runner transport can ask the signer (``SignerProbe``), as the packaged ones do."""
+
+    async def report(self, admin: ActorContext) -> WalletReport: ...
+
+
 class PaymentsAdminApi(Protocol):
     async def allot(self, admin: ActorContext, request: AllotRequest) -> KeyedAllocation: ...
     async def top_up(
@@ -269,6 +278,8 @@ class PaymentsAdminApi(Protocol):
     def tenants(self) -> TenantsApi | None: ...
     @property
     def usage(self) -> TenantUsageApi | None: ...
+    @property
+    def wallet(self) -> WalletApi | None: ...
 
 
 class RunnerListApi(Protocol):
@@ -328,5 +339,6 @@ __all__ = [
     "StreamingApi",
     "TenantUsageApi",
     "TenantsApi",
+    "WalletApi",
     "WorkApi",
 ]

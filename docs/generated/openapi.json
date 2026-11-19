@@ -664,6 +664,44 @@
         "title": "EngineHealth",
         "type": "object"
       },
+      "EscrowAccount": {
+        "additionalProperties": false,
+        "description": "One on-chain escrow account of the clearinghouse's wallet, as the payment provider reports it\n(#167): the TicketBroker deposit and reserve of one sender on one chain. Both are in ETH, exact to\nthe wei. They are what the provider's on-chain listener has confirmed through\n``confirmed_through_block``, not the chain's head: the engine reads no chain itself.\n\n``sender`` is the wallet's public address, which the provider already reports. No key material, no\nkeystore path and no RPC address is here.",
+        "properties": {
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "string"
+          },
+          "confirmed_through_block": {
+            "title": "Confirmed Through Block",
+            "type": "integer"
+          },
+          "contract_address": {
+            "title": "Contract Address",
+            "type": "string"
+          },
+          "deposit": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "reserve": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "contract_address",
+          "sender",
+          "deposit",
+          "reserve",
+          "confirmed_through_block"
+        ],
+        "title": "EscrowAccount",
+        "type": "object"
+      },
       "EventPage": {
         "additionalProperties": false,
         "properties": {
@@ -2338,6 +2376,37 @@
         "title": "SignedSession",
         "type": "object"
       },
+      "SignerReadiness": {
+        "additionalProperties": false,
+        "description": "Whether the signer answered its identity call just now (#167): the unauthenticated call every\npayment begins with. ``ready`` says the signer is reachable where the engine calls it and signed\nwith the wallet's key. It does not say the wallet is funded, that the signer's price feed or event\nstream is up, or that it can reach the payment provider: those are the signer's own ``/readyz``, on\na listener the engine is not given.",
+        "properties": {
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_configured",
+                  "unavailable",
+                  "no_identity"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "ready"
+        ],
+        "title": "SignerReadiness",
+        "type": "object"
+      },
       "StatusBody": {
         "properties": {
           "status": {
@@ -2535,6 +2604,25 @@
         "title": "TopUpRequest",
         "type": "object"
       },
+      "UnspentGrants": {
+        "additionalProperties": false,
+        "description": "What the tenants whose grants are in one currency may still spend (#167): for every grant the\nprovider holds in that currency, whatever its status, the grant's total less what its allocations\nhave spent, and never less than zero for one grant. ``grants`` is how many grants were summed.\nNothing is converted: a deployment with grants in two currencies has two of these.",
+        "properties": {
+          "grants": {
+            "title": "Grants",
+            "type": "integer"
+          },
+          "unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          }
+        },
+        "required": [
+          "unspent",
+          "grants"
+        ],
+        "title": "UnspentGrants",
+        "type": "object"
+      },
       "UsageBody": {
         "properties": {
           "quantities": {
@@ -2589,6 +2677,36 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WalletReport": {
+        "additionalProperties": false,
+        "description": "What a clearinghouse admin watches the wallet by (D82, #167): the deposit and reserve, the total\nof unspent grants, and the signer's readiness. Each amount is in its own currency. Nothing is\nconverted between ETH and a grant's currency, and no margin is computed: the report states, and a\nperson judges.",
+        "properties": {
+          "escrow": {
+            "items": {
+              "$ref": "#/components/schemas/EscrowAccount"
+            },
+            "title": "Escrow",
+            "type": "array"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/SignerReadiness"
+          },
+          "unspent_grants": {
+            "items": {
+              "$ref": "#/components/schemas/UnspentGrants"
+            },
+            "title": "Unspent Grants",
+            "type": "array"
+          }
+        },
+        "required": [
+          "escrow",
+          "unspent_grants",
+          "signer"
+        ],
+        "title": "WalletReport",
         "type": "object"
       }
     },
@@ -3669,6 +3787,33 @@
           }
         ],
         "summary": "Set Tenant Status",
+        "tags": [
+          "private listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/wallet": {
+      "get": {
+        "description": "The wallet's deposit and reserve as the payment provider has confirmed them, the total of\nunspent grants for each currency, and whether the signer answers. Nothing is converted\nbetween currencies and no margin is computed.",
+        "operationId": "wallet_report_v1_clearinghouse_wallet_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Wallet Report",
         "tags": [
           "private listener"
         ]

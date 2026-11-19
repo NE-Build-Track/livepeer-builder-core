@@ -45,6 +45,7 @@ PRIVATE = {
     ("GET", TENANTS),
     ("POST", TENANT + "/grant/top-up"),
     ("POST", TENANT + "/status"),
+    ("GET", "/v1/clearinghouse/wallet"),
 }
 # A valid body for each body model, so an answer is the listener's and never a 422: the admin routes'
 # samples, and the work routes'.

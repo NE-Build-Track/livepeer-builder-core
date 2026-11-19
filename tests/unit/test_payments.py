@@ -272,8 +272,12 @@ async def test_a_grant_amount_the_provider_would_not_take_is_refused_before_the_
     desk = engine.payments.grants
     assert desk is not None
     for amount in [*TOO_PRECISE, *TOO_LARGE]:
-        with pytest.raises(ValidationError):
+        # #106 review: an in-process call is refused as the checks above it are, naming the field, not
+        # the value, and chaining nothing that holds it
+        with pytest.raises(InvalidRequest, match=r"^amount: ") as refused:
             await desk.create_grant(admin, "ops", usd(amount), operation_ref="grant-1")
+        assert amount not in str(refused.value)
+        assert refused.value.__cause__ is None and refused.value.__context__ is None
     assert manager.calls == []
     created = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")  # the ref is free
     assert created.total == "5"

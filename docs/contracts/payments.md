@@ -130,7 +130,8 @@ checks stop that:
 
 - **At startup.** An engine with a payment provider and the built-in secret store refuses to start
   when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the error names the
-  setting. The check runs on the parts the engine will run with, after `decorate`: a
+  setting; `lpb purge` and `lpb bootstrap-admin`, which never allot, give the store a key for their run
+  only (#106 review). The check runs on the parts the engine will run with, after `decorate`: a
   decorator that turns the provider off, or installs a store of its own, is not refused, and one that
   adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
   at boot, such as a sealed vault, still starts and is asked per request.
@@ -266,8 +267,9 @@ checks stop that:
   effectively none. Provisioning takes zero or more (`ProvisionAmount`); funding an allocation, funding a
   grant and creating a grant take an amount within the format and bound (`FundingAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
-  `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
-  ledger records anything and before any provider call. A zero or negative funding or grant amount is
+  `ValidationError` when an in-process request is built, and `InvalidRequest` (400) from
+  `grants.create_grant`, which takes the amount itself and names the field, not the value (#106
+  review). Each comes before the operation ledger records anything and before any provider call. A zero or negative funding or grant amount is
   still the command's own refusal, 400, unless it also breaks the format: one with more than 18
   decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than

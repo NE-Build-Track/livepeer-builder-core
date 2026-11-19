@@ -13,6 +13,7 @@ An engine that uses a clearinghouse is not one: it forwards no signer call for a
 wallet, although its transport could do both.
 """
 
+import socket
 from collections.abc import AsyncIterator
 
 import pytest
@@ -20,7 +21,9 @@ from fastapi.routing import APIRoute
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
+from livepeer_builder.adapters.signer_forward import HttpSignerForwarder
 from livepeer_builder.contracts import AllotRequest, JobRequest
+from livepeer_builder.errors import JobFailed
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import SignerForwarder, SignerProbe
 from livepeer_builder.testing import FakeAllocationManager, FakeSigningTransport, MemorySecretStore
@@ -137,6 +140,82 @@ async def test_a_rotated_payment_key_is_picked_up_for_the_next_job(ports: Ports,
     # the next job signs with the new key, from its first signer call on: the old one is not sent again
     assert bearers(ports, signer=True) == {f"Bearer {new}"}
     assert await ports.pays_for(old) is None
+
+
+# -- when the clearinghouse's signer fails (D87 point 7) ----------------------------------------------------
+
+
+def unused_address() -> str:
+    """A loopback address nothing listens on: a signer that is down."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{probe.getsockname()[1]}"
+
+
+def signer_of(ports: Ports) -> SdkRunnerTransport:
+    """The clearinghouse's own transport: the part that forwards to its signer."""
+    assert ports.clearinghouse is not None
+    transport = ports.clearinghouse.jobs._transport
+    assert isinstance(transport, SdkRunnerTransport)
+    return transport
+
+
+async def test_a_clearinghouse_that_cannot_reach_its_signer_fails_the_job_with_nothing_paid_and_the_next_pays(
+    ports: Ports, net: Net, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine remembers who the signer is, so a later job goes straight to signing. The
+    clearinghouse answers that it sent its signer nothing, and the job fails ``payment`` /
+    ``signer_unavailable``: failed, not uncertain, with the manifest recorded as unpaid. Retrying is
+    safe, and the next job pays once the signer is back."""
+    await allotted(ports)
+    alice = ports.actor("alice")
+    await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={}))
+    working = signer_of(ports)._forwarder
+
+    monkeypatch.setattr(signer_of(ports), "_forwarder", HttpSignerForwarder(unused_address()))
+    with pytest.raises(JobFailed) as failed:
+        await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={}))
+
+    job = failed.value.job
+    assert job.state == "failed" and job.failure is not None
+    assert (job.failure.kind, job.failure.reason, job.failure.status_code) == (
+        "payment",
+        "signer_unavailable",
+        503,
+    )
+    assert not job.failure.payment_sent and "nothing was signed" in job.failure.message
+    [attempt] = job.attempts
+    assert not attempt.payment_sent and [session.payment_state for session in attempt.sessions] == ["unpaid"]
+    assert net.log.count("sign m-2") == 0  # the signer never heard of it
+
+    monkeypatch.setattr(signer_of(ports), "_forwarder", working)
+    again = await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={}))
+    assert again.job.state == "succeeded" and again.job.attempts[0].payment_sent
+
+
+async def test_a_signer_call_that_left_the_clearinghouse_and_got_no_answer_leaves_the_job_uncertain(
+    ports: Ports, net: Net, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The clearinghouse handed the call to its signer and no answer came inside its deadline: it may
+    have signed. The job is ``uncertain`` and nobody else is paid."""
+    await allotted(ports)
+    alice = ports.actor("alice")
+    await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={}))
+
+    monkeypatch.setattr(signer_of(ports), "_forwarder", HttpSignerForwarder(net.url, deadline_s=0.2))
+    net.sign = [5.0]
+    with pytest.raises(JobFailed) as failed:
+        await ports.engine.jobs.run(alice, JobRequest(app=FIXED_APP, payload={}))
+
+    job = failed.value.job
+    assert job.state == "uncertain" and job.failure is not None
+    assert (job.failure.kind, job.failure.reason, job.failure.status_code) == (
+        "payment_unknown",
+        "signer_unknown",
+        502,
+    )
+    assert [session.payment_state for session in job.attempts[0].sessions] == ["unknown"]
+    assert net.log.count("sign m-2") == 1  # handed over once
 
 
 # -- an engine that uses a clearinghouse is not one ---------------------------------------------------------

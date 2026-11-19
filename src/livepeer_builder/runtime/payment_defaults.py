@@ -137,7 +137,9 @@ class ThroughClearinghouse:
         from livepeer_builder.adapters.sdk import SdkRunnerTransport
 
         return SdkRunnerTransport(
-            self._settings.clearinghouse_url, self._settings.max_payment_challenge_retries
+            self._settings.clearinghouse_url,
+            self._settings.max_payment_challenge_retries,
+            signer_is_clearinghouse=True,  # so its "nothing was sent" is read as that (signer_failures.py)
         )
 
     def _ports(self) -> "ClearinghousePorts":

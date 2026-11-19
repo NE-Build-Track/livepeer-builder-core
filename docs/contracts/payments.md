@@ -620,7 +620,7 @@ no retry, no redirect followed and no proxy read from the environment. What it a
 | No live payment key | No | 401 | `payment` / `not_authorized` | `payment` / `not_authorized`, unpaid |
 | A body over 1 MiB | No | 400 | `payment_refused` | `payment_refused`, unpaid |
 | The signer answered | Yes | The signer's own | As with self-hosted payments | As with self-hosted payments |
-| The signer was not reached: the connection was never made (refused, no such host, no connection in 2 seconds), or the actor's key could not be read from the secret store | No | 503, `code: signer_not_reached`, `Retry-After: 10` | `payment` / `signer_unavailable`: retry | Today `payment_unknown` / `signer_unknown`, as any 5xx while signing. An engine that uses a clearinghouse reads the `code` and reports `signer_unavailable` (#168) |
+| The signer was not reached: the connection was never made (refused, no such host, no connection in 2 seconds), or the actor's key could not be read from the secret store | No | 503, `code: signer_not_reached`, `Retry-After: 10` | `payment` / `signer_unavailable`: retry | `payment` / `signer_unavailable`, with nothing paid, at an engine that uses a clearinghouse: it reads the `code` (#168). A transport that was not told the address is a clearinghouse's reads no code: `payment_unknown` / `signer_unknown`, as any 5xx while signing |
 | The call left and no usable answer came back: a timeout, a dropped connection, a redirect, an answer that held the key | Yes, or perhaps | 502, `code: signer_outcome_unknown` | `payment` / `signer_unavailable` (nothing is signed at this path) | `payment_unknown` / `signer_unknown`: it may have charged |
 
 The `code` is in the body, which the SDK keeps on the error it raises (`LivepeerHTTPError.body`), so an
@@ -1243,6 +1243,32 @@ more: the SDK keeps that much of it.
   (`allowance_exhausted`) and a paused one its 403 (`not_authorized`). A payment key that was rotated or
   revoked is the clearinghouse's 401 (`not_authorized`).
 - **There is no local signer:** `LPB_SIGNER_URL` is refused beside a clearinghouse.
+
+**What a failed signer call means** (D87 point 7), on an engine that uses a clearinghouse. The first
+column is what the engine met at the clearinghouse's two signer paths.
+
+| The engine met | At the identity call | While signing |
+| --- | --- | --- |
+| No connection to the clearinghouse | `payment` / `signer_unavailable` | `payment` / `signer_unavailable`: the request was never written |
+| 503 with `code: signer_not_reached` (the clearinghouse sent its signer nothing) | `payment` / `signer_unavailable` | `payment` / `signer_unavailable`, `payment_sent: false`. The job is `failed`, its manifest `unpaid`, and a retry is safe |
+| 502 with `code: signer_outcome_unknown` | `payment` / `signer_unavailable`: nothing is signed at this call | `payment_unknown` / `signer_unknown`: the job is `uncertain` and nobody else is paid |
+| Any other 5xx: the signer's own, passed on, or one a proxy in front of the clearinghouse made, with or without a `code` | `payment` / `signer_unavailable` | `payment_unknown` / `signer_unknown` |
+| A timeout or a dropped connection | `payment` / `signer_unavailable` | `payment_unknown` / `signer_unknown` |
+| 401: the payment key was rotated or revoked, or the signer refused the key | `payment` / `not_authorized` | `payment` / `not_authorized` |
+| 402: the allocation is empty | | `payment` / `allowance_exhausted` |
+| 403: the allocation is paused | | `payment` / `not_authorized` |
+| 400, 481: this orchestrator's payment parameters | | `payment_refused`: another orchestrator is tried |
+
+- **Only the clearinghouse's own 503 with its own code says nothing was sent.** A 502 or a 500 that
+  carries the code, a 503 with another code, with the code somewhere else in the body, or with no JSON
+  body, is an unknown outcome while signing. When in doubt the answer is "unknown", never "nothing was
+  sent".
+- **A self-hosted engine does not read the code.** Its signer is livepeer/node's, which never sends
+  one. Whatever answers with it at a signer's address is not the signer, and its word is no reason to
+  pay somebody twice. The transport reads the code only when the engine's settings name a clearinghouse
+  (`SdkRunnerTransport(..., signer_is_clearinghouse=True)`, which the engine passes itself).
+- Every row is tested against the clearinghouse's real routes with its signer scripted
+  (`tests/unit/test_clearinghouse_signing_failures.py`).
 - **The engine is nobody's clearinghouse.** Its transport could forward a signer call and answer a
   signer probe, as a clearinghouse's does. It offers neither: `payments.signing` and `payments.wallet`
   are `None`, so it serves neither the two signer paths nor the wallet report, whatever parts it was

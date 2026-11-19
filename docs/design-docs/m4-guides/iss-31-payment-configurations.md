@@ -377,9 +377,10 @@ One builder-core issue each, all sub-issues of ISS-31.
    A route whose final shape needs more than a rename kept its shape under the new prefix, for P3 and
    P4: the key routes, the actor list, the grant list and creation, the grant top-up, reconciliation
    and cost sync.
-3. **P3 (#164).** Separate the work routes from the clearinghouse routes. Built: the routes are two
-   sets, each mounted by itself (`http/work.py`, `http/clearinghouse.py`), and one app still mounts
-   both. Reconciliation, cost sync and an engine's own access keys moved to the work set, at
+3. **P3 (#164).** Separate the work routes from the clearinghouse routes. Built
+   ([#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178)): the routes are two sets,
+   each mounted by itself (`http/work.py`, `http/clearinghouse.py`), and one app still mounts both.
+   Reconciliation, cost sync and an engine's own access keys moved to the work set, at
    `GET /v1/costs/reconciliation`, `POST /v1/costs/sync` and `/v1/keys`, with no alias at the old
    paths. The facade follows the halves: `WorkApi` and `ClearinghouseApi` replace `AdminApi`. A
    structure test (`tests/structure/test_two_halves.py`) holds the work half to the five payment

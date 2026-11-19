@@ -44,7 +44,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#174](https://github.com/NE-Build-Track/livepeer-builder-core/pull/174).
 - [ ] **P2 (#163).** Rename routes, classes and settings to the domain language. Built and in review:
   [#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177).
-- [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes.
+- [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes. Built and in review:
+  [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
 - [ ] **P4 (#165).** Tenants at the clearinghouse.
 - [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
 - [ ] **P6 (#167).** A public and a private listener.

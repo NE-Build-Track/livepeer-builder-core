@@ -56,7 +56,7 @@ edge and prints how to fix a violation.
 | Adapters | `adapters/` | contracts, errors, protocols, config, utils |
 | App wiring | `runtime/` (`assembly.py` builds the parts, `engine.py` runs them) | everything above |
 | Test doubles | `testing/` (`make_engine` builds a real engine) | everything `runtime/` may, plus runtime |
-| UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn) | runtime, api, contracts, errors, config |
+| UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn; the routes are [two sets](#the-two-halves)) | runtime, api, contracts, errors, config |
 | Entry points | `cli.py`, `docs_gen.py`, `docs_diagrams.py`, `__init__.py` | anything |
 
 Services never touch a database, SDK or HTTP client directly: they receive protocol implementations
@@ -68,6 +68,29 @@ discovery or transport **without patching core**.
 server import only the public API
 (`tests/structure/test_public_api.py`). Importing the root or `api` loads no heavy dependency
 (`test_import_weight.py`), and no module may import a DI container (`test_layers.py`).
+
+## The two halves
+
+The engine is one program with two halves, which meet at five payment ports (D84,
+[guide](docs/design-docs/m4-guides/iss-31-payment-configurations.md#the-engines-two-halves)). The halves
+live in `http/` and `services/`. Every module of the two is one half's or shared.
+
+| | Work half | Clearinghouse half | Shared |
+| --- | --- | --- | --- |
+| Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys | Access, the operation ledger, health |
+| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse` | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py` |
+| Facade | `WorkApi` | `ClearinghouseApi` | `EngineApi` is both |
+| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
+
+`create_app` mounts both sets of routes on one app. Each set is one function that adds its routes to an
+app, so a deployment can serve one half: the role setting that chooses is #169.
+
+The work half reaches payments through five ports and nothing else: signing inside `RunnerTransport`,
+`CredentialResolver`, `AllocationManager`, `AllowanceReader` and `UsageSource`. An enterprise that uses a
+payment clearinghouse runs the work half alone, with each port pointed at the clearinghouse (#168).
+`tests/structure/test_two_halves.py` enforces the seam and prints how to fix a violation: no module of
+one half imports the other, a work module names no payment protocol but the five ports, every protocol
+is classified, and each set of routes is typed against its own half of the facade.
 
 ## Providers
 
@@ -125,7 +148,8 @@ Each third-party package is confined to one module so a dependency change has on
   `ActorContext`. The `AccessPolicy` still applies. Walkthrough:
   [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
 - **Service:** `lpb serve` runs the same engine behind REST. Requests are authenticated by the
-  authenticator chain. Admin routes need an admin credential. A customized service calls
+  authenticator chain. Admin routes need an admin credential: every clearinghouse route, and in the
+  work set the key routes, reconciliation and cost sync. A customized service calls
   `livepeer_builder.http.server.serve` (or `build_app`, to mount it elsewhere) with its own parts
   and routes: [extending-the-engine.md](docs/design-docs/extending-the-engine.md#service-mode).
 

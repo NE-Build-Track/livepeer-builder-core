@@ -246,6 +246,13 @@ async def test_a_grants_credential_with_no_batteries_address_is_not_configured()
     assert by_name["batteries_grants"].setting == "LPB_BATTERIES_URL" and not report.ok
 
 
+async def test_a_batteries_address_that_cannot_be_read_is_unavailable_and_no_error() -> None:
+    """``LPB_BATTERIES_URL`` is not checked when the settings load, so the check meets it as it is."""
+    report = await probe_payments(settings(batteries_url="http://[::1", batteries_token=BATTERIES_TOKEN))
+    by_name = {probe.name: probe for probe in report.probes}
+    assert by_name["batteries"].outcome == "unavailable" and not report.ok
+
+
 async def test_an_answer_that_is_no_json_is_unexpected() -> None:
     def page(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="<html>a proxy's page</html>")

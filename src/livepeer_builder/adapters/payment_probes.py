@@ -69,12 +69,13 @@ async def _get(
     params: Mapping[str, str] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> Answer:
-    """The one request this module makes. A redirect is an answer, never followed."""
+    """The one request this module makes. A redirect is an answer, never followed. An address that
+    cannot be called at all is no answer either: ``LPB_BATTERIES_URL`` is not checked when settings load."""
     try:
         return await client.get(
             url, params=params, headers=dict(headers or {}), follow_redirects=False, timeout=TIMEOUT_S
         )
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
         return None
 
 

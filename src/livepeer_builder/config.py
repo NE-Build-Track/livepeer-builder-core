@@ -170,18 +170,22 @@ class EngineSettings(Contract):
 
     @field_validator("clearinghouse_url")
     @classmethod
-    def _clearinghouse_url_holds_no_secret(cls, value: str | None) -> str | None:
-        """Error text and logs quote the address, so it carries no userinfo, query or fragment, as the
-        signer's and the discovery address do not. The tenant admin key is a header. The value is not
-        echoed. A path is kept: a clearinghouse may sit behind one on its proxy."""
+    def _clearinghouse_url_is_an_origin(cls, value: str | None) -> str | None:
+        """A scheme, a host and an optional port, and nothing after them. The engine signs at the
+        clearinghouse through the gateway SDK, which keeps that much of a signer's address and drops the
+        rest: with a path, the tenant's routes would be called under it and the signer's two paths at
+        the root. Error text and logs quote the address, so it carries no userinfo either: the tenant
+        admin key is a header. A trailing slash alone names no path and is taken off. The value is not
+        echoed."""
         if value is None:
             return None
-        value = value.strip().rstrip("/")
+        value = value.strip()
         try:
             parts = urlsplit(value)
             valid = (
                 parts.scheme in ("http", "https")
                 and bool(parts.hostname)
+                and parts.path in ("", "/")
                 and not any(mark in value for mark in "@?#")
                 and not any(char.isspace() for char in value)
             )
@@ -189,10 +193,11 @@ class EngineSettings(Contract):
             valid = False
         if not valid:
             raise ValueError(
-                "LPB_CLEARINGHOUSE_URL must be an http:// or https:// address with a host and no "
-                "userinfo, query or fragment, such as https://clearinghouse.example"
+                "LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, with no "
+                "path, query, fragment or userinfo, such as https://clearinghouse.example: the signer's "
+                "two paths are called at its root"
             )
-        return value
+        return f"{parts.scheme}://{parts.netloc}"
 
     @field_validator("discovery_url")
     @classmethod

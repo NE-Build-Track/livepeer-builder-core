@@ -121,11 +121,33 @@ def test_the_clearinghouse_runner_list_is_the_default_discovery_address() -> Non
     assert settings.clearinghouse_runner_list_token == TOKEN
 
 
-def test_a_trailing_slash_or_a_path_before_the_routes_is_kept_out_or_in() -> None:
+@pytest.mark.parametrize(
+    "more",
+    [
+        "/pay",  # a path: the gateway SDK drops it, so signing would go to the root while the rest did not
+        "/v1/clearinghouse",
+        "//",
+        "/?",
+    ],
+)
+def test_an_address_with_anything_after_the_host_and_port_is_refused(more: str) -> None:
+    """The gateway SDK keeps the scheme, the host and the port of a signer's address and drops the rest
+    (``livepeer_gateway.http._http_origin``). An engine signs at the clearinghouse through that SDK, so
+    the address names an origin and nothing more: with a path, the allocation routes would be called
+    under it and the two signer paths at the root."""
+    given = "https://ch.internal.test:8443"
+    message = refused(THREE | DISCOVERY | {"LPB_CLEARINGHOUSE_URL": given + more})
+    assert "LPB_CLEARINGHOUSE_URL" in message and "no path" in message
+    assert "ch.internal.test" not in message  # the value is not echoed
+
+
+def test_a_trailing_slash_alone_names_no_path_and_is_taken_off() -> None:
     slashed = EngineSettings.from_env(THREE | {"LPB_CLEARINGHOUSE_URL": URL + "/"})
+    assert slashed.clearinghouse_url == URL
     assert slashed.discovery_url == URL + "/v1/clearinghouse/discovery"
-    behind = EngineSettings.from_env(THREE | {"LPB_CLEARINGHOUSE_URL": URL + "/pay"})
-    assert behind.discovery_url == URL + "/pay/v1/clearinghouse/discovery"
+    assert slashed.clearinghouse_runner_list_token == TOKEN
+    with_port = EngineSettings.from_env(THREE | {"LPB_CLEARINGHOUSE_URL": "http://10.0.0.5:8080/"})
+    assert with_port.clearinghouse_url == "http://10.0.0.5:8080"
 
 
 def test_an_enterprise_may_use_its_own_discovery_and_the_key_is_not_sent_there() -> None:

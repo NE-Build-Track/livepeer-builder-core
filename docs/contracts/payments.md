@@ -1081,7 +1081,7 @@ place of Batteries and the signer. Three settings select that, set together or n
 
 | Setting | Meaning |
 | --- | --- |
-| `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port][/path]`, with no userinfo, query or fragment |
+| `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port]` and nothing after it: a path, a query, a fragment or userinfo is refused at startup, and the refusal does not echo the value. The gateway SDK, which the engine signs through, keeps that much of an address and drops the rest, so the signer's two paths are called at the root. A trailing slash alone is taken off |
 | `LPB_CLEARINGHOUSE_TOKEN` | The tenant admin key the clearinghouse admin handed over at onboarding. A secret: it is sent as a bearer to the clearinghouse and is in no log line, error text or `repr` |
 | `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83) |
 

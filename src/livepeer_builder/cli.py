@@ -12,6 +12,8 @@ lpb bootstrap-admin    issue the first admin key (one time; printed once)
 lpb gen-secret-key     print a new LPB_SECRET_KEY
 lpb smoke              import, migrate, start, health-check, stop, on a throwaway database (CI)
 lpb serve              run the REST service (needs the [server] extra)
+lpb payments check     probe what payments need, with GET requests only: the signer and Batteries, or
+                       the payment clearinghouse (exit 0 ready, 1 a probe failed, 2 settings refused)
 lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
 """
 
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from livepeer_builder import EngineError, EngineSettings, generate_secret_key
-from livepeer_builder.runtime import BuilderEngine, package_version
+from livepeer_builder.runtime import BuilderEngine, check_payments, package_version
 from livepeer_builder.store import SqlStore, backup, current_revision, head_revision, restore, upgrade, verify
 
 
@@ -63,6 +65,12 @@ def _parser() -> argparse.ArgumentParser:
     command("gen-secret-key", _gen_secret_key, "print a new LPB_SECRET_KEY")
     command("smoke", _smoke, "import/start/health/stop check")
     command("serve", _serve, "run the REST service")
+    payments = command("payments", _payments_check, "check what payments need").add_subparsers(
+        required=True, metavar="CHECK"
+    )
+    payments.add_parser(
+        "check", help="probe the signer and Batteries, or the payment clearinghouse; never writes"
+    ).set_defaults(handler=_payments_check)
     docs = command("gen-docs", _gen_docs, "regenerate docs/generated")
     docs.add_argument("--out", type=Path, default=Path("docs/generated"))
     docs.add_argument("--check", action="store_true", help="fail if the committed files are stale")
@@ -175,6 +183,20 @@ async def _serve(_: argparse.Namespace) -> None:
         print("the REST service needs: pip install 'livepeer-builder[server]'", file=sys.stderr)
         raise SystemExit(2) from None
     await serve(EngineSettings.from_env())
+
+
+async def _payments_check(_: argparse.Namespace) -> int:
+    """Read-only (D87): every request is a GET. No engine is built and no database is opened. Exit 0 when
+    every probe passed, 1 when one was refused or failed, 2 when the settings themselves are refused. The
+    report names settings and never holds a credential, an address or the other side's own words."""
+    try:
+        settings = _engine_settings()
+    except ValueError as refused:  # pydantic's, which names the settings and echoes no value
+        print(json.dumps({"error": str(refused), "type": "InvalidSettings"}), file=sys.stderr)
+        return 2
+    report = await check_payments(settings)
+    _emit(report.model_dump(mode="json"))
+    return 0 if report.ok else 1
 
 
 async def _gen_docs(args: argparse.Namespace) -> int:

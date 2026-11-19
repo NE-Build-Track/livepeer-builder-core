@@ -64,6 +64,7 @@ CONFINED: dict[str, tuple[str, ...]] = {
         "adapters/jwt.py",
         "adapters/sdk.py",
         "adapters/clearinghouse_wire.py",
+        "adapters/payment_probes.py",  # `lpb payments check`: GET requests only
     ),
     "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),

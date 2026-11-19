@@ -226,13 +226,14 @@ def _own_authenticators(
     settings: EngineSettings, stack: contextlib.AsyncExitStack
 ) -> tuple[Authenticator, ...]:
     """The deployment's own authenticators when it supplies none: the JWT bearer, with LPB_AUTH=jwt."""
-    if "jwt" not in settings.auth:
-        return ()
-    from livepeer_builder.adapters.jwt import jwt_authenticator
+    built: list[Authenticator] = []
+    if "jwt" in settings.auth:
+        from livepeer_builder.adapters.jwt import jwt_authenticator
 
-    bearer = jwt_authenticator(settings)
-    own(stack, bearer, bearer.aclose)
-    return (bearer,)
+        bearer = jwt_authenticator(settings)
+        own(stack, bearer, bearer.aclose)
+        built.append(bearer)
+    return tuple(built)
 
 
 def _built_in_secret_store(settings: EngineSettings, store: EngineStore, clock: Clock) -> SecretStore:

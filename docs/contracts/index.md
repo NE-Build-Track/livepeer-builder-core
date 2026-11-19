@@ -307,6 +307,8 @@ own.
 | What a `clearinghouse` engine needs | | `LPB_HTTP_PRIVATE_PORT`, a signer (`LPB_SIGNER_URL`), Batteries (`LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`) and the grants credential (`LPB_BATTERIES_GRANTS_TOKEN`), or the parts supplied in their place. Without one it does not start |
 | What a `clearinghouse` engine starts | | Discovery alone. No interrupted job is resolved, and no cost sync or retention purge runs. `jobs.run` and `jobs.streaming.stream` raise `InvalidRequest` |
 | `GET /readyz`, `EngineHealth` | | and `role` |
+| `lpb payments check`, `PaymentCheck` | `configuration`, `ok`, `probes`, `tenant` | and `role`. In the `clearinghouse` role the `batteries_grants` probe is always made, and is `not_configured` without the credential |
+| `lpb smoke` | An engine with the environment's settings | The same, in the role the environment names, and its output has `role` |
 | `create_app(engine, ...)` | Mounted every group of routes | Mounts the groups of `engine.role`. For an engine in its `clearinghouse` role, `listener="only"` raises `ValueError` |
 | The facade | `EngineApi` | `EngineApi.role`, which a caller's own implementation of the whole-engine facade must state |
 | `http/listeners.py` | `EVERY_LISTENER` and `PRIVATE_ONLY`, written by hand | `ROUTE_GROUPS` (each group of routes, its half, and whether it is private) and `ROLE_HALVES`. The two tuples are read from the table |

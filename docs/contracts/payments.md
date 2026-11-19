@@ -1296,22 +1296,24 @@ column is what the engine met at the clearinghouse's two signer paths.
 
 ### `lpb payments check`
 
-A read-only command (D87): it prints what this engine's payments need and whether each answered.
-**Every request it makes is a GET**, it builds no engine and it opens no database.
+A read-only command (D87): it prints the engine's role, what that role needs for payments and whether
+each answered (#169). **Every request it makes is a GET**, it builds no engine and it opens no database.
+An engine in its `both` or its `clearinghouse` role pays through Batteries and a signer of its own, so
+its configuration is `self_hosted`; an engine in its `work` role has the configuration `clearinghouse`.
 
 | Configuration | Probe | Request | Passes when |
 | --- | --- | --- | --- |
 | Self-hosted | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
-| Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered |
+| Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
 | Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
 | Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
 | Clearinghouse | `clearinghouse_signer` | `GET /sign-orchestrator-info` at the clearinghouse's address, with no credential | The answer is 405, as at a signer: the clearinghouse serves the signer's two paths, where the engine signs. A clearinghouse with no signer answers 404 |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings
-  themselves are refused. Nothing is sent in the last case.
-- **Output:** one JSON object on standard output: `configuration`, `ok`, `probes` (each with `name`,
+  themselves are refused, a role without what it needs included. Nothing is sent in the last case.
+- **Output:** one JSON object on standard output: `role`, `configuration`, `ok`, `probes` (each with `name`,
   `setting`, `request`, `outcome`, `status_code` and `detail`) and `tenant`. `outcome` is `ok`,
   `refused`, `unavailable`, `unexpected` or `not_configured`.
 - **Never printed:** a credential, an address, or anything the other side said. A probe names the

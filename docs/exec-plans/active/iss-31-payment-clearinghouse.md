@@ -49,7 +49,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
 - [ ] **P4 (#165).** Tenants at the clearinghouse. Built and in review:
   [#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179).
 - [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
-- [ ] **P6 (#167).** A public and a private listener. Built and in review.
+- [ ] **P6 (#167).** A public and a private listener. Built and in review:
+  [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
 - [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`.
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
 

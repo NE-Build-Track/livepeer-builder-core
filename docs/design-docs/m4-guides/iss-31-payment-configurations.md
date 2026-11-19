@@ -45,7 +45,7 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | Item | State | Where |
 | --- | --- | --- |
 | Self-hosted payments | Done in M3: the console's stack runs the engine, Batteries and the signer on one host | console `docs/references/m3-environment.md` (ISS-13) |
-| Allocation modes | `per_actor` (default) and `per_application` are both built. `per_application` takes one allocation and one key from settings for the whole engine | `config.py` (`allocation_mode`, `shared_payment_key`, `shared_allocation_id`) |
+| Allocation modes | `per_actor` is the only mode since P1 (#162). At `719378f` `per_application` was built too: it took one allocation and one key from settings for the whole engine | `services/payments.py`. The settings `allocation_mode`, `shared_payment_key` and `shared_allocation_id` are gone from `config.py` |
 | Admin authority | `DefaultPolicy.check` returns at once for kind `admin`, before any application check | `services/policy.py:32` |
 | Writes and the policy | Provision, fund, status, revoke and key rotation call the policy with no resource, so the path or body chooses the application | `services/payments.py`, `services/keys.py` |
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
@@ -217,6 +217,10 @@ Mode B row); `milestones.md` (the ISS-31 row); `RELIABILITY.md` (the configurati
 setting); the tech debt tracker (T5 closes, because `LPB_SHARED_ALLOCATION_ID` goes); console
 `m3-environment.md` and `m3-journey.md` (the "second configuration" wording).
 
+P1 (#162) changed `payments.md` (the allocation modes, and "Mode B" as a short "Payment configurations"
+section; the tenant rules and the routes follow with their tickets) and the configuration table of
+`RELIABILITY.md`, and closed T5.
+
 ## Code areas
 
 | File | Change |
@@ -243,7 +247,7 @@ and a second engine instance in the `clearinghouse` role for the end-to-end test
 no Batteries call recorded.
 
 ```text
-[ ] per_actor is the only mode; the allocation mode and shared-key settings are gone
+[x] per_actor is the only mode; the allocation mode and shared-key settings are gone (P1, #162)
 [ ] onboarding creates one grant and returns the tenant id and one tenant admin key, once
 [ ] the tenant's id is the grant's id; no route takes a separate grant id
 [ ] a tenant admin allots, tops up, pauses and revokes allocations in its own tenant
@@ -334,7 +338,8 @@ the clearinghouse admin.
 
 One builder-core issue each, all sub-issues of ISS-31.
 
-1. **P1 (#162).** Make `per_actor` the only allocation mode.
+1. **P1 (#162).** Make `per_actor` the only allocation mode. Built: the three settings and the code
+   that read them are removed, with `SettingsSecretStore` and `allocation_mode` in `GET /readyz`.
 2. **P2 (#163).** Rename routes, classes and settings to the domain language.
 3. **P3 (#164).** Separate the work routes from the clearinghouse routes.
 4. **P4 (#165).** Tenants at the clearinghouse.

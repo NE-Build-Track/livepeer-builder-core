@@ -23,6 +23,17 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
 - **A clearinghouse's payment keys** (`lpp_`, #166) are not stored either. `lpb_payment_keys` holds the
   SHA-256 of each token, one row for each actor, with the allocation the key was issued for (migration
   0015), as `lpb_access_keys` holds an access key's hash ([payments.md](payments.md#payment-keys)).
+- **An async job's request and result** (ISS-26, migration 0016). `lpb_jobs` is the queue: an async
+  job waits there `queued`, and `started_at` and `claims` record a worker's claim. `lpb_job_requests`
+  holds what a queued job will run with: its request (a raw body as its bytes) and the actor it was
+  authorized for (id, tenant, permissions, credential kind and attributes; never the credential's
+  provenance or a display name). The transaction that ends the job deletes the row. `lpb_job_results`
+  holds the answer of a succeeded async job, its content type, size and SHA-256, and when it expires,
+  written in the transaction that ends the job. **Neither table is encrypted by the engine** (D69
+  (5)): a request or an answer may hold anything the caller or the runner put in it, a URL that grants
+  access included, so protect the database, its backups and its replicas as you would those requests
+  and answers themselves. How long each is kept is under [Retention](#retention); the worst case for
+  stored requests is `LPB_ASYNC_MAX_QUEUED` requests at the request limit, about 16 GiB at the defaults.
 - **Default URL:** `sqlite+aiosqlite:///./livepeer-builder.db`. There is no silent in-memory store.
 - **Optional store protocols.** A store may also implement these; the engine asks with `isinstance`
   and falls back for a supplied store that does not. `SqlStore` implements all of them.
@@ -82,20 +93,35 @@ like a source checkout. Version table: `lpb_alembic_version`.
   existing row stays as it is. An allocation allotted before it has no payment key until its payment
   key is rotated. A downgrade drops the table, and the payment keys with it; the allocations and the
   Batteries keys they pay with are untouched (`tests/store/test_payment_keys.py`).
+- **0016, async jobs (ISS-26):** it adds `lpb_jobs.started_at` and `lpb_jobs.claims` (0 for every
+  job already stored) and the tables `lpb_job_requests` and `lpb_job_results`, and changes no
+  existing row. A downgrade drops both tables and both columns. A job still `queued` then could never
+  run, since its request goes with its table and the earlier release has no worker: the downgrade
+  ends it `failed`, `interrupted`, so its `operation_ref` may run again. Stored results are deleted;
+  the jobs keep their record. The run is one transaction on SQLite and on PostgreSQL, in both
+  directions (`tests/store/test_async_migration.py`). On SQLite it also makes a downgrade from the
+  head one transaction where 0015's first step, a `DROP TABLE`, was committed on its own.
 
 ## Retention
 
 | Setting | Effect | Default |
 | --- | --- | --- |
-| `LPB_RETENTION_JOBS_DAYS` | Deletes `succeeded`/`failed` jobs (attempts, payment sessions, projections) completed before the cutoff. **`uncertain` jobs are kept** until resolved | keep forever |
+| `LPB_RETENTION_JOBS_DAYS` | Deletes `succeeded`/`failed` jobs (attempts, payment sessions, projections, and an async job's stored result and any request left beside it) completed before the cutoff. **`uncertain` jobs are kept** until resolved, and `queued` and `running` ones are never taken | keep forever |
 | `LPB_RETENTION_USAGE_DAYS` | Deletes cached Batteries usage rows older than the cutoff | keep forever |
+| `LPB_RETENTION_RESULTS_DAYS` | Gives an async job's stored result an `expires_at` that many days after the job ended (ISS-26). The purge deletes the bytes once it has passed, and the result route answers 410 from that moment, purged or not. The job and its `ResultRef` stay until `LPB_RETENTION_JOBS_DAYS` takes the job. In code, `retention_results_days=None` keeps a result as long as its job | 7 days (D69 (6)) |
 
 Neither setting deletes from `lpb_operations` (the operation ledger) or from `lpb_usage_set_aside`,
 the record of usage rows cost sync left out (#114, C13; migration 0012;
 [payments.md](payments.md#cost-classification)): each row there is an id, a reason and two fees.
 
 The purge runs every `LPB_RETENTION_INTERVAL_S` (default 21600 s, 6 h) when a retention setting is on,
-or on demand with `lpb purge` (it prints a `PurgeReport`). It runs through the store's `maintenance`
+or on demand with `lpb purge` (it prints a `PurgeReport`: `jobs_deleted`, `usage_rows_deleted` and,
+since ISS-26, `results_deleted`). With job or usage retention on, the first purge runs at start. With
+results retention alone, the default, it runs one interval after start, so an engine with the
+default settings writes nothing at start beside its caller's own first writes; an expired result is
+never served meanwhile. Every purge deletes the results whose time has passed: a result keeps the
+`expires_at` it was given when its job ended, whatever the setting is now, and `lpb purge` deletes
+them whatever the settings. It runs through the store's `maintenance`
 capability, which `SqlStore` provides; a store without one purges nothing. Batteries stays the
 authority for network accounting. Purging the engine cache never changes provider balances.
 

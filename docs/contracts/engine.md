@@ -643,7 +643,7 @@ The job is stored with what it will run with, in one transaction: its request (a
 and a snapshot of the actor it was authorized for: `actor_id`, `tenant_id`, `permissions`,
 `credential_kind` and `attributes`, never `auth` or `display_name`. **Authorization is decided at
 submit** (D69 (8)): an access key revoked while the job waits does not stop it, because the job belongs to
-the actor, not to the key. The allocation is read again at dispatch, so spending still stops: an
+the actor, not to the access key. The allocation is read again at dispatch, so spending still stops: an
 allocation revoked while the job waited fails it `not_provisioned`, and one that is spent fails it
 `payment` with the signer's reason, each with nothing paid. With a payment clearinghouse
 (`LPB_ROLE=work`), `not_provisioned` means the actor has no allocation there.
@@ -655,7 +655,8 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   one conditional write (`queued` to `running`). A claim that finds the job gone (a cancel, the queue's
   time limit) gives the slot back. No async job runs outside the admission limits, and at most
   `LPB_ASYNC_WORKERS` of them run at once.
-- **Oldest first**, leaving out an app at its per-app limit, so one busy app does not hold up the others.
+- **Oldest first**, leaving out a runner app at its per-app limit, so one busy runner app does not hold
+  up the others.
 - **When.** A submit wakes the worker at once. While jobs wait it also looks every `LPB_ASYNC_POLL_S`,
   and whenever a job of its own ends. An engine with nothing queued makes no query for the queue.
 - **`timeout_s` counts from the claim**, which `Job.started_at` records. `started_at` is `null` while
@@ -701,7 +702,7 @@ bytes.
 **What is stored, and for how long.** A queued job's request is kept until the job ends, in the same
 transaction that ends it. A stored result is kept until `expires_at`, and the job's record until
 `LPB_RETENTION_JOBS_DAYS` purges it ([persistence.md](persistence.md#retention)). Neither is encrypted
-by the engine (D69 (5)): the operator protects the database. The worst case for queued inputs is
+by the engine (D69 (5)): the deployment protects the database. The worst case for queued inputs is
 `LPB_ASYNC_MAX_QUEUED` requests at the request limit: about 16 GiB at the defaults (1000 jobs, 16 MiB). A
 stored result is at most `LPB_ASYNC_RESULT_MAX_BYTES` (16 MiB), for as long as it is kept. A result's
 bytes, and any URL inside them, go only to the job's owner and never into a log.
@@ -709,7 +710,7 @@ bytes, and any URL inside them, go only to the job's owner and never into a log.
 ### Cancel
 
 `jobs.cancel(actor, job_id)` (REST: `POST /v1/jobs/{id}/cancel`) cancels a job that is still `queued`
-(D69 (3)). It needs `jobs.run` and the job's owner, as a usage report does. One conditional write ends the
+(D69 (3)). It needs `jobs.run` and the job's owner, as `POST /v1/jobs/{id}/usage` does. One conditional write ends the
 job `failed`, with kind `abandoned` and reason `cancelled`: nothing was dispatched or paid, and its cost
 is `none`. Cancelling a cancelled job again answers with it, 200, and writes nothing. A job a worker has
 claimed, or one that ended another way, is not cancelled: `JobNotQueued`, 409, `code: job_not_queued`,

@@ -1,0 +1,62 @@
+# ISS-26: asynchronous jobs and durable recovery handles
+
+## Status
+
+- **Owners:** Mike decides and reviews; John owns the engine design.
+- **Ticket:** ISS-26
+  ([Network-Engineering-SPE#40](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/40)), amended
+  on 13 November 2026. The first M4 engine ticket after the payment clearinghouse (ISS-31).
+- **Guide:** [iss-26-async-jobs.md](../../design-docs/m4-guides/iss-26-async-jobs.md), with its current
+  state brought up to date and its test plan marked.
+- **Decisions:** D69 in [m4-decisions.md](../../design-docs/m4-decisions.md), and the guide's amendment of
+  18 November 2026 (async jobs are the work half's; `tenant_id`).
+- **Branch:** `tasks/m4/iss-26-async-jobs`, from P8's branch (#169) at `699d759`. One pull request.
+- **Progress:** built and in review.
+
+## Goal
+
+A job outlives the request that created it. An async job is queued in the engine's own database, a
+worker in the engine's process runs it through the same paid call as an immediate job, and its owner
+reads its state and its stored result back by id. A disconnect or a restart keeps the job's identity and
+recovery references and never starts a replacement execution.
+
+## Acceptance
+
+From ISS-26, as amended on 13 November 2026.
+
+- [ ] A job outlives its original request and exposes durable status and an eventual result or
+  failure, through the supported handle: the engine's own job id, `GET /v1/jobs/{id}` and
+  `GET /v1/jobs/{id}/result` ([engine.md](../../contracts/engine.md#async-jobs)).
+- [ ] A disconnect and a restart preserve the job's identity and recovery references without submitting
+  a replacement execution ([restart and stop](../../contracts/engine.md#restart-and-stop)).
+
+## Progress
+
+- [x] **13 November 2026.** Q1 to Q8 are locked (D69).
+- [x] **19 November 2026.** The tidy slice: the paid call, the job writes, the FakeEngine's modules and
+  the cost class each move to a module of their own, with no behavior change.
+- [x] **19 November 2026.** The queue and the results: `jobs.submit`, the worker, restart and stop, the
+  queue's limits, stored results, the result route, the cancel of a queued job, health, migration 0016,
+  and the FakeEngine's parity.
+- [x] **19 November 2026.** Retention of stored results; the clearinghouse role refuses async jobs; a
+  queued job on both sets of payment adapters; the client going away; the documents.
+- [ ] **ISS-26.** Built and in review; the pull request is linked here when it is opened.
+
+## Decision log
+
+- **13 November 2026, D69.** Q1 to Q8: a repeated submit returns the existing job; only a `running` job
+  with no attempt is requeued, three times at most; a cancel for queued jobs only; a paid answer that
+  could not be stored is `failed_after_payment`; stored inputs and results are not encrypted; the
+  defaults; polling only; a job whose access key is revoked while it waits still runs. Source: Mike.
+- **18 November 2026.** Async jobs are the work half's, and the actor's snapshot says `tenant_id`.
+  Source: the guide's amendment (D82 to D86).
+- **19 November 2026, where the guide is silent.** A cancelled job is `failed` with kind `abandoned`
+  and reason `cancelled`, needs `jobs.run`, and answers 200 with itself when cancelled again; a repeat
+  after a cancel or a queue expiry queues a new job (D57's closed list); an actor with no allocation is
+  failed `not_provisioned` at submit, as `run` fails it; a job stopped before its first attempt goes
+  back to the queue; the queue's limit is counted before the insert (T45); results retention alone
+  purges first one interval after start, so the default settings add no write at start; `start()`
+  counts the queue before the worker's loop runs. Source: the guide's rules, applied; for Mike's review.
+- **19 November 2026, not built.** No worker lease (T44): #112 left the detection of a second engine to
+  ISS-26's leases, and the locked guide builds none. No events feed (ISS-46) and no provider request id
+  (ISS-48); their seams are kept. Source: the guide and D64.

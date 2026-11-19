@@ -5,7 +5,7 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 
 | Contract | Ticket | Status |
 | --- | --- | --- |
-| [engine.md](engine.md): discovery, jobs, attempts, results, usage, failures, idempotency | ISS-02 | Immediate and streamed jobs implemented (streaming is optional: `jobs.streaming`); async and persistent defined (M4) |
+| [engine.md](engine.md): discovery, jobs, attempts, results, usage, failures, idempotency | ISS-02, ISS-26 | Immediate, streamed and async jobs implemented (streaming is optional: `jobs.streaming`); persistent defined (M4) |
 | [access.md](access.md): actor context, authenticators, policy, credentials | ISS-03 | API key, JWT bearer (D45) and policy implemented; trusted backend defined (M4) |
 | [payments.md](payments.md): allocations, allotment, units, cost classification | ISS-04 | Implemented for self-hosted payments; the payment clearinghouse (D82) is M4 work (ISS-31) |
 | [events.md](events.md): versioned event feed | ISS-02 | Defined; held in M3 (D60) |
@@ -332,3 +332,42 @@ own.
 - **A caller's own implementation of `EngineApi`** states `role`.
 - **An entrypoint that calls `create_app` for a clearinghouse** builds two apps, `listener="public"` and
   `listener="private"`, or calls `serve`.
+
+## Upgrading to async jobs
+
+ISS-26 built async jobs (D69): a job queued in the engine's own database, run by a worker in the
+engine's process, and read back by id with its stored result ([engine.md](engine.md#async-jobs)). The
+database migrates to revision 0016 ([persistence.md](persistence.md#migrations)). An engine that is sent
+no async job runs as before, with two exceptions: results retention is on by default, and the result
+route of an immediate job answers 410, not 501.
+
+| What | Before | Now |
+| --- | --- | --- |
+| `POST /v1/jobs` with `mode="async"` | 501 | 202 with the queued job, `Location` and `Livepeer-Job-Id`; 200 with `Idempotent-Replayed: true` for a repeated `operation_ref`; 400 with `?stream=true`, `Accept: text/event-stream` or `return_http_errors` |
+| `GET /v1/jobs/{id}/result` | 501, to the job's owner | An async job's stored bytes, with the runner's `Content-Type`; 409 `job_not_finished` with `Retry-After` before it ends; the failure's status for a failed or uncertain job; 410 `result_expired` for an immediate job and for an expired result |
+| `POST /v1/jobs/{id}/cancel` | | New: cancels a queued job (`jobs.run`, the owner); 409 `job_not_queued` for any other |
+| `GET /v1/jobs/{id}` | | `Retry-After: 1` while the job is `queued` or `running` |
+| `jobs.run`, `jobs.streaming.stream` with `mode="async"` | `NotImplementedInMilestone` (501) | `InvalidRequest` (400): queue it with `jobs.submit` |
+| `jobs.submit`, `jobs.result` | `NotImplementedInMilestone`; `submit` was not on `JobsApi` | `submit` returns the queued `Job`; `result` returns the `JobResult`, or raises `JobNotFinished`, `JobFailed` or `ResultExpired` |
+| `JobsApi` (the facade) | | `submit` and `cancel`: a caller's own implementation of the facade adds them |
+| `JobRepo` (a supplied store) | `finish_job` returned `None` and wrote whatever the job's state | `finish_job` returns whether it ended the job, and ends only a `running` one. Nine methods for the queue: `enqueue_job`, `queued_jobs`, `claim_job`, `requeue_unstarted`, `cancel_queued`, `expire_queued`, `finish_job_with_result`, `read_result`, `queued_stats` |
+| Contracts | | `Job.started_at`; `ResultRef.expires_at`; the failure kind `result_not_stored`; `FailureReason`, the type of `Failure.reason`, which adds `cancelled` to the four payment reasons; `EngineHealth.queued_jobs`, `oldest_queued_s`; `PurgeReport.results_deleted` |
+| Errors | | `JobNotFinished` (409), `ResultExpired` (410), `JobNotQueued` (409), exported from `livepeer_builder` |
+| Settings | | `LPB_ASYNC_WORKERS`, `LPB_ASYNC_MAX_QUEUED`, `LPB_ASYNC_QUEUE_TTL_S`, `LPB_ASYNC_RESULT_MAX_BYTES`, `LPB_ASYNC_POLL_S`, `LPB_ASYNC_DRAIN_TIMEOUT_S`, and `LPB_RETENTION_RESULTS_DAYS` (7), which turns the retention purge on by default ([RELIABILITY.md](../RELIABILITY.md#configuration)) |
+| Schema | Revision 0015 | 0016: `lpb_jobs.started_at` and `claims`; the tables `lpb_job_requests` and `lpb_job_results` |
+| `FakeEngine` | Ran `mode="async"` as an immediate job and recorded it `immediate`; `jobs.result` returned an immediate job's result | `jobs.submit` queues, `await fake.jobs.advance()` runs what is queued, `jobs.result` and `jobs.cancel` answer by the engine's rules, and `jobs.run(mode="async")` is `InvalidRequest` |
+| `make_engine` (testing) | | `async_workers=1`; step the worker with `await engine.jobs.worker.run_once()` |
+| `lpb purge`, `BuilderEngine.purge()` | `jobs_deleted`, `usage_rows_deleted` | and `results_deleted` |
+| Background loops | | `lpb-async-jobs`, in the `both` and `work` roles |
+| The log | | `jobs.async_step_failed`, `jobs.async_failed`, `jobs.async_drained`, `jobs.queue_expired`, `jobs.finish_missed`; `jobs.recovered` gains `requeued` |
+
+**Before you start the new release:**
+
+- **Migrate** (`lpb migrate`, or start with `LPB_AUTO_MIGRATE=true`).
+- **Decide how long results are kept.** `LPB_RETENTION_RESULTS_DAYS` is 7 unless set. The stored
+  requests and results are not encrypted by the engine: protect the database and its backups.
+- **A supplied store** implements the queue's methods of `JobRepo`, and `finish_job` returns `bool`.
+- **A caller's own implementation of `JobsApi`** adds `submit` and `cancel`.
+- **A test that relied on `FakeEngine` running `mode="async"` at once** calls `jobs.submit` and then
+  `jobs.advance()`; one that read an immediate job's result from the fake expects `ResultExpired`.
+- **A client that matched the 501 of `/result` or of `mode="async"`** reads the new answers above.

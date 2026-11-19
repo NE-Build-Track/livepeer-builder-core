@@ -140,7 +140,7 @@ async def test_a_job_after_the_allocation_is_revoked_fails_not_provisioned_witho
     assert transport.calls == []  # no payment, and no fallback to another key
 
 
-@pytest.mark.parametrize("kind", ["admin", "auditor"])
+@pytest.mark.parametrize("kind", ["clearinghouse_admin", "auditor"])
 async def test_a_revoked_admin_or_auditor_key_is_401_on_admin_routes(
     rest: tuple[httpx.AsyncClient, BuilderEngine], admin: ActorContext, kind: str
 ) -> None:
@@ -193,7 +193,7 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest(
     rest: tuple[httpx.AsyncClient, BuilderEngine], admin: ActorContext
 ) -> None:
     client, engine = rest
-    as_admin = await bearer(engine, admin, "admin", "ops")
+    as_admin = await bearer(engine, admin, "clearinghouse_admin", "ops")
     key = (await engine.keys.issue(admin, kind="actor", actor_id="bob", operation_ref="k")).key
     allocation = "/v1/admin/tenants/default/actors/alice/allocation"
 

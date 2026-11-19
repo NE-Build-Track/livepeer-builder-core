@@ -94,7 +94,7 @@ That is the only identity the engine understands.
 | Logged-in customer id | `actor_id` |
 | Tenant / org | `tenant_id` |
 | What this user may do | `permissions` (`discover`, `jobs.run`, `jobs.read`, `costs.read`) |
-| Operator / admin desk | `credential_kind="admin"` |
+| Operator / admin desk | `credential_kind="clearinghouse_admin"` |
 
 You do **not** call `engine.authenticator`. Imported mode needs no authenticator
 ([access.md](../contracts/access.md#protocols)). `DefaultPolicy` still runs on every service call,
@@ -113,7 +113,7 @@ Jobs that hit the network spend from an allocation. A job for an unprovisioned a
 ```python
 from livepeer_builder import ActorContext, Money, ProvisionRequest
 
-admin = ActorContext(actor_id="operator", credential_kind="admin")
+admin = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
 await engine.payments.provision(
     admin,

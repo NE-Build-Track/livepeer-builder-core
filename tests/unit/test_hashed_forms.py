@@ -17,7 +17,14 @@ failure here, put the hashed text back as it was; never update a digest to make 
 from decimal import Decimal
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, FundRequest, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import (
+    ActorContext,
+    CredentialKind,
+    FundRequest,
+    JobRequest,
+    Money,
+    ProvisionRequest,
+)
 from livepeer_builder.services.grants import GRANT_TAG
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.store import SqlStore
@@ -68,14 +75,13 @@ async def run_every_command(engine: BuilderEngine, admin: ActorContext) -> None:
     )
     await desk.create_grant(admin, "Team", USD_5, operation_ref="create-grant")
     await payments.rotate_key(admin, "default", "alice", "rotate-payment-key")
-    for kind in ("admin", "auditor", "actor"):
-        await keys.issue(
-            admin,
-            kind=kind,
-            actor_id="alice",
-            label="L",
-            operation_ref=f"issue-{kind}-key",  # type: ignore[arg-type]
-        )
+    kinds: dict[str, CredentialKind] = {
+        "admin": "clearinghouse_admin",
+        "auditor": "auditor",
+        "actor": "actor",
+    }
+    for was, kind in kinds.items():  # the reference names the kind as the digest was written
+        await keys.issue(admin, kind=kind, actor_id="alice", label="L", operation_ref=f"issue-{was}-key")
 
 
 async def test_every_admin_command_keeps_its_fingerprint(

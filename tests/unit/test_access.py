@@ -110,7 +110,7 @@ async def test_permission_validation(store: SqlStore, clock: FixedClock, admin: 
 async def test_bootstrap_admin_is_one_time(store: SqlStore, clock: FixedClock) -> None:
     keys = KeyService(store, DefaultPolicy(), clock)
     first = await keys.bootstrap_admin()
-    assert first.key.kind == "admin"
+    assert first.key.kind == "clearinghouse_admin"
     with pytest.raises(AccessDenied, match="already exists"):
         await keys.bootstrap_admin()
 

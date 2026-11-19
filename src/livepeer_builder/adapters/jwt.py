@@ -408,7 +408,7 @@ class JwtBearerAuthenticator:
             actor_id=actor_id,
             tenant_id=tenant_id,
             permissions=frozenset(operation.value for operation in GRANTABLE if operation.value in named),
-            credential_kind="admin" if admin else "auditor" if auditor else "actor",
+            credential_kind="clearinghouse_admin" if admin else "auditor" if auditor else "actor",
             auth=AuthProvenance(
                 method="jwt", issuer=settings.issuer, credential_id=jti if isinstance(jti, str) else None
             ),

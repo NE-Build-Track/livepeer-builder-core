@@ -54,7 +54,7 @@ async def history(
 ) -> AsyncIterator[History]:
     engine = await make_engine()
     await provision(engine, ActorContext(actor_id="alice"), ActorContext(actor_id="bob"))
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     admin = await engine.keys.bootstrap_admin()
     alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-alice")
     bob = await engine.keys.issue(operator, kind="actor", actor_id="bob", operation_ref="issue-bob")

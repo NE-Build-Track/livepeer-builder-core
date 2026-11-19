@@ -23,7 +23,7 @@ async def tokens(engine: BuilderEngine) -> tuple[str, str]:
     admin = await engine.keys.bootstrap_admin()
     from livepeer_builder.contracts import ActorContext
 
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-http-27")
     return admin.token, alice.token
 

@@ -37,7 +37,7 @@ from livepeer_builder.testing import FakeAllocationManager, FixedClock, make_eng
 from tests.store.conftest import as_before_0014, make_job
 
 TABLES = (t.access_keys, t.jobs, t.actors, t.actor_sightings, t.operations)
-ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
+ADMIN = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 # What ``lpb_operations.fingerprint`` held for this provisioning before the rename
 # (tests/unit/test_hashed_forms.py): a digest, which no migration can recompute.
 PROVISION = ProvisionRequest(
@@ -65,6 +65,8 @@ def rows_at_0013(now: datetime, job_id: str) -> dict[str, list[dict[str, Any]]]:
         "lpb_access_keys": [
             key | {"key_id": "key_admin", "token_hash": "h1", "kind": "admin", "actor_id": "operator",
                    "application_id": "default", "label": "bootstrap"},
+            key | {"key_id": "key_admin_revoked", "token_hash": "h0", "kind": "admin", "actor_id": "operator",
+                   "application_id": "default", "revoked_at": now},
             key | {"key_id": "key_auditor", "token_hash": "h2", "kind": "auditor", "actor_id": "dashboard",
                    "application_id": "acme"},
             key | {"key_id": "key_actor", "token_hash": "h3", "kind": "actor", "actor_id": "bob",
@@ -97,6 +99,13 @@ def rows_at_0013(now: datetime, job_id: str) -> dict[str, list[dict[str, Any]]]:
                 "command": "issue_key", "fingerprint": "f-issue", "state": "done",
                 "result": {"key_id": "key_auditor", "kind": "auditor", "actor_id": "dashboard",
                            "application_id": "acme", "permissions": [], "label": "",
+                           "created_at": now.isoformat(), "revoked_at": None},
+            },
+            operation | {
+                "application_id": "default", "actor_id": "operator", "operation_ref": "rotate",
+                "command": "rotate_access_key", "fingerprint": "f-rotate", "state": "done",
+                "result": {"key_id": "key_admin", "kind": "admin", "actor_id": "operator",
+                           "application_id": "default", "permissions": [], "label": "bootstrap",
                            "created_at": now.isoformat(), "revoked_at": None},
             },
             operation | {
@@ -133,7 +142,16 @@ async def stored(engine: AsyncEngine, old_names: bool) -> dict[str, list[dict[st
 
 def renamed(row: dict[str, Any]) -> dict[str, Any]:
     """A row of revision 0013 as the head names it."""
-    return {("tenant_id" if name == "application_id" else name): value for name, value in row.items()}
+    named = {("tenant_id" if name == "application_id" else name): value for name, value in row.items()}
+    return named | ({"kind": "clearinghouse_admin"} if named.get("kind") == "admin" else {})
+
+
+async def kind_length(engine: AsyncEngine) -> int | None:
+    """The declared length of ``lpb_access_keys.kind`` in the database itself."""
+    async with engine.connect() as conn:
+        columns = await conn.run_sync(lambda sync: inspect(sync).get_columns("lpb_access_keys"))
+    [column] = [column for column in columns if column["name"] == "kind"]
+    return getattr(column["type"], "length", None)
 
 
 @pytest.fixture
@@ -170,7 +188,16 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     assert await store.access_key_by_hash("h3") == auditor.model_copy(
         update={"key_id": "key_actor", "kind": "actor", "actor_id": "bob", "permissions": ("jobs.run",)}
     )
-    assert [key.key_id for key in await store.list_access_keys("default")] == ["key_admin"]
+    admin = auditor.model_copy(
+        update={"key_id": "key_admin", "kind": "clearinghouse_admin", "actor_id": "operator"}
+        | {"tenant_id": "default", "label": "bootstrap"}
+    )
+    assert await store.list_access_keys("default") == [
+        admin,
+        admin.model_copy(update={"key_id": "key_admin_revoked", "label": "", "revoked_at": now}),
+    ]
+    assert await store.count_active_admin_keys() == 1  # so `lpb bootstrap-admin` still refuses a second
+    assert await kind_length(engine) == 32  # clearinghouse_admin is 19 characters
 
     job = await store.get_job(UUID(job_id))
     assert job is not None and (job.tenant_id, job.actor_id, job.operation_ref) == (
@@ -187,6 +214,8 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     assert ProvisionedActor.model_validate(done.result) == alice  # the answer a repeat gets back
     issued = await store.get_operation("default", "operator", "issue")
     assert issued is not None and AccessKey.model_validate(issued.result) == auditor
+    rotated = await store.get_operation("default", "operator", "rotate")
+    assert rotated is not None and AccessKey.model_validate(rotated.result) == admin
     started = await store.get_operation("acme", "operator", "fund-1")
     assert started is not None and (started.state, started.fencing_token, started.result) == (
         "started",
@@ -232,16 +261,16 @@ async def test_a_downgrade_puts_every_row_back_as_it_was(database_url: str, cloc
     try:
         before = await stored(engine, old_names=True)
         assert {name: len(rows) for name, rows in before.items()} == {
-            "lpb_access_keys": 3,
+            "lpb_access_keys": 4,
             "lpb_jobs": 1,
             "lpb_actors": 2,
             "lpb_actor_sightings": 1,
-            "lpb_operations": 3,
+            "lpb_operations": 4,
         }
         await upgrade(engine)
         head = await stored(engine, old_names=False)
         await downgrade(engine, "0013")
-        assert await current_revision(engine) == "0013"
+        assert await current_revision(engine) == "0013" and await kind_length(engine) == 16
         assert await stored(engine, old_names=True) == before
         await upgrade(engine)
         assert await stored(engine, old_names=False) == head
@@ -305,6 +334,6 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
         assert await current_revision(engine) == head_revision()
         assert await stored(engine, old_names=False) == head
         async with engine.connect() as conn:
-            assert (await conn.execute(select(func.count()).select_from(t.operations))).scalar_one() == 3
+            assert (await conn.execute(select(func.count()).select_from(t.operations))).scalar_one() == 4
     finally:
         await engine.dispose()

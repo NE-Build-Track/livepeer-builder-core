@@ -29,7 +29,7 @@ class DefaultPolicy:
     """
 
     def check(self, actor: ActorContext, operation: Operation, resource: ResourceRef | None = None) -> None:
-        if actor.credential_kind == "admin":
+        if actor.credential_kind == "clearinghouse_admin":
             return
         if actor.credential_kind == "auditor":
             if operation not in AUDITOR_OPERATIONS:

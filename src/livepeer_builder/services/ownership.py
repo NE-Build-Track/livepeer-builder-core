@@ -22,7 +22,7 @@ def check_owner(
 
 def sees_every_actor(actor: ActorContext) -> bool:
     """An admin or an auditor reads every actor's records (in an auditor's case, of its tenant)."""
-    return actor.credential_kind in ("admin", "auditor")
+    return actor.credential_kind in ("clearinghouse_admin", "auditor")
 
 
 def job_resource(job: Job) -> ResourceRef:

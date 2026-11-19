@@ -34,7 +34,7 @@ async def api(
     make_engine: EngineFactory,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine, dict[str, str], dict[str, str]]]:
     engine = await make_engine(runners=(runner(url="https://r1"), runner(url="https://r2")))
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     admin = await engine.keys.bootstrap_admin()
     alice = await engine.keys.issue(
         operator, kind="actor", actor_id="alice", operation_ref="issue-http_routes-34"
@@ -123,7 +123,7 @@ async def test_keys_jobs_usage_and_costs_over_rest(
         headers=admin,
     )
     keys = (await client.get("/v1/admin/keys", headers=admin)).json()
-    assert {k["kind"] for k in keys} == {"admin", "actor"}
+    assert {k["kind"] for k in keys} == {"clearinghouse_admin", "actor"}
     transport.steps = [ScriptedTransport.ok()]
     ran = await client.post("/v1/jobs", json={"app": APP}, headers=alice)
     job_id = ran.headers["livepeer-job-id"]
@@ -340,7 +340,7 @@ async def test_a_missing_permission_is_403_and_another_actors_job_404_over_rest(
     )
     transport.steps = [ScriptedTransport.ok()]
     job_id = (await client.post("/v1/jobs", json={"app": APP}, headers=alice)).headers["livepeer-job-id"]
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     bob = await engine.keys.issue(
         operator, kind="actor", actor_id="bob", operation_ref="issue-http_routes-320"
     )
@@ -425,7 +425,7 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
     assert one.status_code == 200 and one.json()["actor_id"] == "alice"
     assert (await client.get(ALLOCATION.replace("alice", "nobody"), headers=admin)).status_code == 404
     assert (await client.get("/v1/admin/actors", headers=alice)).status_code == 403
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     auditor = await engine.keys.issue(
         operator, kind="auditor", actor_id="dashboard", operation_ref="issue-http_routes-397"
     )
@@ -585,9 +585,9 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
     twice take none."""
     client, engine, admin, _alice = api
     usd = {"amount": "5", "currency": "USD"}
-    key_id = (await engine.keys.list_keys(ActorContext(actor_id="operator", credential_kind="admin")))[
-        0
-    ].key_id
+    key_id = (
+        await engine.keys.list_keys(ActorContext(actor_id="operator", credential_kind="clearinghouse_admin"))
+    )[0].key_id
     commands = [
         (ALLOCATION, {"amount": usd, "grant_id": "grant_1"}),
         (ALLOCATION + "/fund", {"amount": usd}),

@@ -71,7 +71,7 @@ def paid_refusal(manifest_id: str) -> RunnerCallError:
     )
 
 
-OPERATOR = ActorContext(actor_id="operator", credential_kind="admin")
+OPERATOR = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
 
 @asynccontextmanager

@@ -234,7 +234,7 @@ def sso(user: str, tenant: str = "acme", signature: str | None = None) -> AuthRe
 
 async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> None:  # type: ignore[no-untyped-def]
     engine, vault, transport = enterprise_engine
-    admin = ActorContext(actor_id="ops", credential_kind="admin")
+    admin = ActorContext(actor_id="ops", credential_kind="clearinghouse_admin")
 
     alice = await engine.authenticator.authenticate(sso("alice"))
     assert alice is not None and (alice.actor_id, alice.tenant_id) == ("alice", "acme")

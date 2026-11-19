@@ -193,7 +193,7 @@ class PaymentsService:
         """Every actor an operator can act on: the provisioned ones (gap G2) and the people an identity
         provider signed in, provisioned or not (D48). Every tenant's for an admin unless it names one;
         an auditor's own. ``status`` filters allocations, so it leaves out the unprovisioned."""
-        scope = tenant_id or (None if admin.credential_kind == "admin" else admin.tenant_id)
+        scope = tenant_id or (None if admin.credential_kind == "clearinghouse_admin" else admin.tenant_id)
         resource = None if scope is None else ResourceRef(kind="actor", tenant_id=scope)
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         allocations = {(a.tenant_id, a.actor_id): a for a in await self._store.list_actors(scope)}

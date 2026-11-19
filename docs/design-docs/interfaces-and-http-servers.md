@@ -224,7 +224,7 @@ classDiagram
         -realm str
     }
     class DefaultPolicy {
-        admin kind passes
+        clearinghouse_admin kind passes
         else permission and ownership
     }
     class KeyService {

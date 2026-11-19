@@ -77,7 +77,7 @@ async def test_a_new_name_is_recorded_at_once(clock: FixedClock) -> None:
 @pytest.mark.parametrize(
     "actor",
     [
-        person(kind="admin"),
+        person(kind="clearinghouse_admin"),
         person(kind="auditor"),
         person(method="api_key"),
         None,

@@ -38,11 +38,14 @@ _REQUEST = TypeAdapter(dict[str, Any])
 # keeps the word it was first written with, so the repeat of a command recorded before the upgrade still
 # matches its record (tests/unit/test_hashed_forms.py). Nothing reads these words back.
 _HASHED_FIELDS = {"tenant_id": "application_id"}
+_HASHED_KINDS = {"clearinghouse_admin": "admin"}  # the kind of key an ``issue_key`` asked for
 
 
 def fingerprint(command: OperationCommand, request: Mapping[str, Any]) -> str:
     """sha256 of the command and its target and validated request, the reference excluded."""
     values = _REQUEST.dump_python(dict(request), mode="json")  # models and decimals as JSON
+    if "kind" in values:
+        values["kind"] = _HASHED_KINDS.get(values["kind"], values["kind"])
     hashed = {_HASHED_FIELDS.get(name, name): value for name, value in values.items()}
     canonical = json.dumps({"command": command, "request": hashed}, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()

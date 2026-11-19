@@ -99,7 +99,7 @@ class SqlKeys:
 
     async def count_active_admin_keys(self) -> int:
         query = select(func.count()).where(
-            t.access_keys.c.kind == "admin", t.access_keys.c.revoked_at.is_(None)
+            t.access_keys.c.kind == "clearinghouse_admin", t.access_keys.c.revoked_at.is_(None)
         )
         async with self.engine.connect() as conn:
             return int((await conn.execute(query)).scalar_one())

@@ -165,7 +165,7 @@ async def test_claims_are_mapped_as_configured(make: Make, provider: Provider) -
 async def test_only_the_admin_scope_makes_an_admin(make: Make, provider: Provider) -> None:
     authenticator = make(admin_scope="livepeer:admin")
     admin = await authenticator.authenticate(bearer(provider.token(scope="livepeer:admin")))
-    assert admin is not None and admin.credential_kind == "admin"
+    assert admin is not None and admin.credential_kind == "clearinghouse_admin"
     actor = await authenticator.authenticate(bearer(provider.token(scope="admin.keys admin.allocations")))
     assert actor is not None and actor.credential_kind == "actor"  # admin is a kind, never a scope string
 
@@ -495,7 +495,7 @@ async def test_the_admin_read_scope_makes_an_auditor_and_admin_wins(make: Make, 
     reader = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read")))
     assert reader is not None and reader.credential_kind == "auditor"
     both = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read livepeer:admin")))
-    assert both is not None and both.credential_kind == "admin"
+    assert both is not None and both.credential_kind == "clearinghouse_admin"
 
 
 # -- PR #50, John's review (D47) ---------------------------------------------------------------------------

@@ -76,7 +76,7 @@ class KeyService:
         """
         if await self._store.count_active_admin_keys() > 0:
             raise AccessDenied("an admin key already exists; issue further keys with it")
-        issued = await self._issue("admin", "operator", "default", (), label)
+        issued = await self._issue("clearinghouse_admin", "operator", "default", (), label)
         _audit("keys.bootstrapped", issued.key, by="cli")
         return issued
 
@@ -128,7 +128,7 @@ class KeyService:
 
     async def list_keys(self, admin: ActorContext, tenant_id: str | None = None) -> list[AccessKey]:
         """Every tenant's keys for an admin unless it names one; an auditor's own tenant's (D46)."""
-        scope = tenant_id or (None if admin.credential_kind == "admin" else admin.tenant_id)
+        scope = tenant_id or (None if admin.credential_kind == "clearinghouse_admin" else admin.tenant_id)
         resource = None if scope is None else ResourceRef(kind="key", tenant_id=scope)
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         return await self._store.list_access_keys(scope)
@@ -199,7 +199,7 @@ def _public(key: AccessKey) -> Any:
 
 
 def _validated_permissions(kind: CredentialKind, permissions: Iterable[str] | None) -> set[str]:
-    if kind in ("admin", "auditor"):
+    if kind in ("clearinghouse_admin", "auditor"):
         return set()  # a credential kind, not permission strings, decides what these may do
     granted = set(DEFAULT_ACTOR_PERMISSIONS if permissions is None else permissions)
     known = {operation.value for operation in Operation}

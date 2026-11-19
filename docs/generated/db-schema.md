@@ -156,7 +156,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | --- | --- | --- | --- |
 | `key_id` | VARCHAR(64) | no | PK |
 | `token_hash` | VARCHAR(64) | no | unique |
-| `kind` | VARCHAR(16) | no |  |
+| `kind` | VARCHAR(32) | no |  |
 | `actor_id` | VARCHAR(200) | no |  |
 | `tenant_id` | VARCHAR(200) | no |  |
 | `permissions` | JSON | no |  |

@@ -47,7 +47,7 @@ APP, OTHER, NONE = "example/echo", "example/other", "example/nobody"  # no runne
 ALICE = ActorContext(
     actor_id="alice", permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 )
-ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
+ADMIN = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 BOB = ALICE.model_copy(update={"actor_id": "bob"})
 RUNNERS = (runner(APP, url="https://orch.example/r1"), runner(OTHER, url="https://orch.example/r2"))
 

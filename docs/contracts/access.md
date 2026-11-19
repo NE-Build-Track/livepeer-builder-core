@@ -16,7 +16,7 @@ in adapters.
 | `actor_id` | Opaque to the engine; the owner of jobs, costs and allocations |
 | `tenant_id` | Tenant isolation; defaults to `default` |
 | `permissions` | `Operation` values (see below) |
-| `credential_kind` | `actor`, `admin`, `auditor` (a read-only admin, D46) or `service` |
+| `credential_kind` | `actor`, `clearinghouse_admin`, `auditor` (a read-only admin, D46) or `service` |
 | `attributes` | Non-secret labels copied onto records. **Never secrets** |
 | `auth` | Provenance (method, issuer, credential id), for audit only |
 
@@ -61,8 +61,8 @@ class AccessPolicy(Protocol):
 
 ## DefaultPolicy
 
-- **Admin operations** (`admin.*`) need an **admin credential kind**. A permission string on an actor
-  key is not enough.
+- **Admin operations** (`admin.*`) need an **admin credential**: one of kind `clearinghouse_admin`. A
+  permission string on an actor key is not enough.
 - **An admin credential** may act on any tenant's records.
 - **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
   `events.read`, across every actor of its own tenant. Every write is `AccessDenied`, and so is any
@@ -238,7 +238,7 @@ mode, with no code:
 | `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at provisioning (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
 | `tenant_id` | `LPB_JWT_TENANT_CLAIM` when set, otherwise `LPB_JWT_TENANT_ID` (`default`, at most 200 characters: a longer one fails at startup); a claim over 200 characters is a 401 |
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
-| `credential_kind` | `admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
+| `credential_kind` | `clearinghouse_admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
 | `display_name` | `LPB_JWT_NAME_CLAIM` (`preferred_username`), when it is text. Only for the operator's actor list (D48): never an identity, never copied onto records |
 
@@ -289,7 +289,7 @@ Both are generic: no enterprise logic lives in the engine.
 - **Browser:** browsers never hold admin, management or payment credentials. A browser reaches the
   engine through the enterprise backend, or directly with a JWT whose audience is the engine. CORS is
   off by default.
-- **Admin:** admin is a distinct credential kind. The first admin key comes from
+- **Admin:** `clearinghouse_admin` is a distinct credential kind. The first admin key comes from
   `lpb bootstrap-admin`, which works only while no active admin key exists, and only when engine API
   keys are on. There is no network
   bootstrap route and no static admin token.

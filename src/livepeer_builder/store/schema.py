@@ -55,7 +55,7 @@ access_keys = Table(
     metadata,
     Column("key_id", String(64), primary_key=True),
     Column("token_hash", String(64), nullable=False, unique=True),
-    Column("kind", String(16), nullable=False),
+    Column("kind", String(32), nullable=False),  # a credential kind; 32 since 0014: clearinghouse_admin
     Column("actor_id", String(ID), nullable=False),
     Column("tenant_id", String(ID), nullable=False),
     Column("permissions", JSON, nullable=False),

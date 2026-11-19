@@ -21,7 +21,7 @@
           "kind": {
             "enum": [
               "actor",
-              "admin",
+              "clearinghouse_admin",
               "auditor",
               "service"
             ],
@@ -806,7 +806,7 @@
             "default": "actor",
             "enum": [
               "actor",
-              "admin",
+              "clearinghouse_admin",
               "auditor",
               "service"
             ],

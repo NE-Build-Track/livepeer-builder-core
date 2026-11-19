@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import EngineSettings
+from tests.unit.refusal_forms import carried
 
 URL = "https://clearinghouse.example"
 TOKEN = "lpk_tenant-admin-key-not-to-be-shown"
@@ -44,10 +45,8 @@ SECRETS = (TOKEN, "not-to-be-shown", "clearinghouse.example", "grant_7")
 def refused(env: dict[str, str], **defaults: Any) -> str:
     with pytest.raises(ValidationError) as error:
         EngineSettings.from_env(env, defaults=defaults or None)
-    message = str(error.value)
-    for secret in SECRETS:
-        assert secret not in message, "a refusal names settings and echoes no value"
-    return message
+    assert carried(error.value, *SECRETS) == [], "a refusal names settings and echoes no value, in any form"
+    return str(error.value)
 
 
 # -- the three roles ----------------------------------------------------------------------------------

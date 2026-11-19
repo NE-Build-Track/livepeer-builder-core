@@ -65,6 +65,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
     "RunnerStream": (SdkRunnerStream,),
+    "SignerForwarder": (SdkRunnerTransport,),
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient,),
     "UsageSource": (BatteriesUsageSource,),

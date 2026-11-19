@@ -12,12 +12,14 @@ async def render_openapi() -> str:
     from livepeer_builder.runtime.assembly import EngineSupply
     from livepeer_builder.testing import FakeAllocationManager
 
-    # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
-    # so the committed spec documents the whole API. A deployment without one lacks those routes.
+    # Every optional capability on (API keys by default; the tenant desk needs a grants manager, and the
+    # signer's two paths a signer address), so the committed spec documents the whole API. A deployment
+    # without one lacks those routes. Nothing is called: the app is built and never started.
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
+        signer_url="http://127.0.0.1:9",
     )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:

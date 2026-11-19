@@ -28,7 +28,9 @@ from livepeer_builder.http.clearinghouse import (
     mount_clearinghouse_routes,
     mount_tenant_routes,
 )
+from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
+from livepeer_builder.testing import FakeSigningTransport
 from tests.conftest import EngineFactory
 from tests.unit.test_assembly import HeaderAuthenticator
 
@@ -84,6 +86,9 @@ USAGE_READ = {("GET", TENANT + "/usage")}
 # the runner list a clearinghouse publishes (#166): only when the discovery source holds its document,
 # as the HTTP reader does
 RUNNER_LIST = {("GET", "/v1/clearinghouse/discovery")}
+# The signer's two paths, at the root, where the gateway SDK calls a signer (D87, #166): only on an engine
+# whose runner transport forwards a signer call. The shared test engine's scripted transport does not.
+SIGNING = {("POST", "/sign-orchestrator-info"), ("POST", "/generate-live-payment")}
 # What only a clearinghouse admin does: a private listener's routes (#167).
 ADMIN_ROUTES = {("POST", TENANT + "/grant/top-up")}
 TENANT_DESK = {("POST", TENANTS), ("GET", TENANTS), ("POST", TENANT + "/status")}  # only when it is on
@@ -171,6 +176,30 @@ async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory
         for method, path in (("GET", "/v1/jobs"), ("GET", "/v1/offerings"), ("GET", "/v1/keys")):
             assert (await client.request(method, path, headers=admin)).status_code == 404, path
         assert (await client.post("/v1/costs/sync", headers=admin)).status_code == 404
+
+
+async def test_the_signers_two_paths_are_a_group_of_the_clearinghouse_set_that_mounts_by_itself(
+    make_engine: EngineFactory,
+) -> None:
+    """An engine whose transport forwards a signer call serves the two paths: with the whole app, with
+    the clearinghouse set, and from their own mount function, which a listener's table names (#167).
+    The work set never has them."""
+    engine = await make_engine(supply=EngineSupply(transport=FakeSigningTransport()))
+    alone = shared_app(engine, manage_lifecycle=False)
+    mount_signing_routes(alone, engine)
+    assert served(alone) == HEALTH | SIGNING
+    clearinghouse = shared_app(engine, manage_lifecycle=False)
+    mount_clearinghouse_routes(clearinghouse, engine)
+    assert served(clearinghouse) == HEALTH | CLEARINGHOUSE | OPTIONAL | SIGNING
+    assert served(create_app(engine, manage_lifecycle=False)) == (
+        HEALTH | WORK | KEYS | CLEARINGHOUSE | OPTIONAL | SIGNING
+    )
+    work = shared_app(engine, manage_lifecycle=False)
+    mount_work_routes(work, engine)
+    assert not served(work) & SIGNING
+    tenants = shared_app(engine, manage_lifecycle=False)
+    mount_tenant_routes(tenants, engine)
+    assert not served(tenants) & SIGNING  # a group of its own: neither of the two #165 made
 
 
 async def test_health_is_shared_by_both_halves(make_engine: EngineFactory) -> None:

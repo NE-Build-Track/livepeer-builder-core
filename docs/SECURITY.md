@@ -37,9 +37,18 @@ See [contracts/access.md](contracts/access.md#boundaries).
 - **Payment keys (D87, #166):** a clearinghouse gives an enterprise's engine one payment key for each
   actor, never the Batteries key behind it. A payment key finds one actor, and only while that actor
   holds the allocation the key was issued for: rotating it stops the old one at once, and revoking the
-  allocation stops it. It is no access key: as a bearer on any route the engine serves today it gets
+  allocation stops it. It is no access key: as a bearer on any route but the signer's two paths it gets
   what no credential gets. `tests/unit/test_issued_payment_keys.py` checks both, and that the token is in
   no table and no log line ([payments.md](contracts/payments.md#payment-keys)).
+- **Signing through a clearinghouse (D87, #166):** `POST /sign-orchestrator-info` and
+  `POST /generate-live-payment` take a payment key and nothing else: no credential, an access key and a
+  Batteries key are 401 there, on both paths, and nothing is forwarded for them. The clearinghouse reads
+  the actor's Batteries key from its own secret store and calls its signer with it. That key is in no
+  answer, error body or log line, an answer that held it would be withheld, and the payment key is never
+  sent to the signer or to Batteries. Only the request body and its content type go to the signer, and
+  only the signer's status, body and content type come back. The private signer's address is in the log
+  only (`tests/unit/test_signing_routes.py`,
+  [payments.md](contracts/payments.md#signing-through-a-clearinghouse)).
 - **Runner addresses:** a runner URL names one app on an orchestrator, and a job's `path` is appended
   to it. The contract refuses a path that is not already normal (a dot or empty segment, an encoded
   separator, a backslash, a control character, a lone surrogate or a fragment) with a 422 before anything

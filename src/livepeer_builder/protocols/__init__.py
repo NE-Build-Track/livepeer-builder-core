@@ -35,6 +35,7 @@ from livepeer_builder.contracts import (
 from livepeer_builder.protocols.clearinghouse import DiscoveryDocumentSource as DiscoveryDocumentSource
 from livepeer_builder.protocols.clearinghouse import EscrowSource as EscrowSource
 from livepeer_builder.protocols.clearinghouse import PaymentKeyRepo as PaymentKeyRepo
+from livepeer_builder.protocols.clearinghouse import SignerForwarder as SignerForwarder
 from livepeer_builder.protocols.clearinghouse import SignerProbe as SignerProbe
 from livepeer_builder.protocols.clearinghouse import TenantUsageSource as TenantUsageSource
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo

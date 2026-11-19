@@ -61,6 +61,8 @@ from livepeer_builder.contracts import (
     SessionRequest,
     SetAsideUsage,
     SignedSession,
+    SignerAnswer,
+    SignerCall,
     SignerReadiness,
     SyncReport,
     TenantGrant,
@@ -89,6 +91,8 @@ from livepeer_builder.errors import (
     ProviderError,
     ProviderUnavailable,
     RunnerCallError,
+    SignerNotReached,
+    SignerOutcomeUnknown,
     UnsupportedForBackend,
 )
 from livepeer_builder.runtime import BuilderEngine, JobStream
@@ -169,6 +173,10 @@ __all__ = [
     "SessionRequest",
     "SetAsideUsage",
     "SignedSession",
+    "SignerAnswer",
+    "SignerCall",
+    "SignerNotReached",
+    "SignerOutcomeUnknown",
     "SignerReadiness",
     "StreamingApi",
     "SyncReport",

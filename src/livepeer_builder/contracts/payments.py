@@ -204,6 +204,20 @@ class KeyedAllocation(ActorAllocation):
         return ActorAllocation.model_validate(self.model_dump(exclude={"payment_key"}))
 
 
+SignerCall = Literal["sign-orchestrator-info", "generate-live-payment"]
+"""The two calls the gateway SDK makes to a signer, by the path of each: who the signer is, which signs
+no payment, and one payment."""
+
+
+class SignerAnswer(Contract):
+    """What a signer answered one call with, as it answered (#166): the status, the body as bytes and its
+    content type. Nothing of it is parsed: a clearinghouse hands it back to the engine that asked."""
+
+    status_code: int
+    content: bytes
+    content_type: str = ""
+
+
 class SeenActor(Contract):
     """A person the identity provider signed in as an actor (#52, D48), known before any allocation.
 

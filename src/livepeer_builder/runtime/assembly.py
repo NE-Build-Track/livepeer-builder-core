@@ -40,6 +40,7 @@ from livepeer_builder.protocols import (
     SecretStore,
     SelectionPolicy,
     SessionManager,
+    SignerForwarder,
     SignerProbe,
     TenantUsageSource,
     UsageSource,
@@ -307,6 +308,11 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     # and the transport asks the signer it pays through
     if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
         wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    forwarder: SignerForwarder | None = None
+    # Otherwise the signer's two paths are not served (#166): a transport that forwards no signer call,
+    # or one that does not pay, which has no signer to forward to.
+    if isinstance(parts.transport, SignerForwarder) and getattr(parts.transport, "pays", True):
+        forwarder = parts.transport
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -318,6 +324,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         tenants=tenants,
         usage=usage,
         wallet=wallet,
+        forwarder=forwarder,
         currency=settings.default_currency,
     )
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)

@@ -305,8 +305,8 @@ thing here beyond names.
 
 - **Where it runs.** Sessions belong to the work half of the engine, in the enterprise's own engine.
 - **Payment cycles go through the clearinghouse.** A session's renewals are payment cycles, about one
-  every 3 seconds. When the engine uses a payment clearinghouse, each cycle is signed by the
-  clearinghouse's payments route with the actor's payment key (#166). The SDK's `run_payments()` result is
+  every 3 seconds. When the engine uses a payment clearinghouse, each cycle is signed through the
+  clearinghouse, at the signer's path it serves, with the actor's payment key (#166). The SDK's `run_payments()` result is
   read as before.
 - **An empty allocation ends the session** at the next cycle, which the clearinghouse refuses.
 - **Names.** `application_id` becomes `tenant_id` (#163).

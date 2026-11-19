@@ -1,9 +1,9 @@
 """The payment keys a clearinghouse issues: one for each actor, shown once (D87, #166).
 
 A payment key (``lpp_``) is what an enterprise's engine presents when it asks the clearinghouse to sign a
-payment for one actor. It may ask for that actor's payments and nothing else: it is no access key, and no
-route but the payments route reads one. The clearinghouse swaps it for the actor's Batteries key, which
-never leaves it (``payment_keys.py`` keeps that one).
+payment for one actor. It may ask for that actor's payments and nothing else: it is no access key, and
+nothing but the signer's two paths reads one (``http/signing.py``). The clearinghouse swaps it for the
+actor's Batteries key, which never leaves it (``payment_keys.py`` keeps that one).
 
 Only the key's hash is kept (``PaymentKeyRepo``), as for an access key, so the token is in the answer of
 the command that issued the key and nowhere else. The key is bound to the allocation it was issued for:

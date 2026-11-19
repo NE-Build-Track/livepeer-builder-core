@@ -62,6 +62,10 @@ classDiagram
         +__aiter__() AsyncIterator
         +async aclose() None
     }
+    class SignerForwarder {
+        <<interface>>
+        +async forward_signer_call(call, credential, body, content_type) SignerAnswer
+    }
     class CredentialResolver {
         <<interface>>
         +async credential(actor) PaymentKey
@@ -198,6 +202,7 @@ classDiagram
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
     RunnerStream <|.. SdkRunnerStream
+    SignerForwarder <|.. SdkRunnerTransport
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
@@ -235,6 +240,7 @@ classDiagram
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
+| `SignerForwarder` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

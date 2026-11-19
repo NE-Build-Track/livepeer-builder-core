@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import EngineSettings
+from tests.unit.refusal_forms import carried
 
 URL = "https://clearinghouse.example"
 TOKEN = "lpk_tenant-admin-key-not-to-be-shown"
@@ -29,6 +30,7 @@ DISCOVERY = {"LPB_DISCOVERY_URL": "http://discovery:8939/discovery"}
 def refused(env: dict[str, str], **defaults: Any) -> str:
     with pytest.raises(ValidationError) as error:
         EngineSettings.from_env(env, defaults=defaults or None)
+    assert carried(error.value, TOKEN) == [], "the tenant admin key is in no form of a refusal"
     return str(error.value)
 
 

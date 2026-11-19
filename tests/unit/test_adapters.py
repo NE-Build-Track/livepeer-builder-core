@@ -29,6 +29,7 @@ from livepeer_builder.errors import (
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
+from tests.unit.refusal_forms import carried
 
 
 def mock_client(handler: httpx.MockTransport) -> httpx.AsyncClient:
@@ -325,12 +326,16 @@ def test_the_allocation_mode_and_shared_key_variables_name_no_setting() -> None:
 )
 def test_a_removed_payment_setting_given_in_code_is_refused_and_not_echoed(name: str) -> None:
     """Settings built in code refuse a field they do not have, so an embedder that still passes one
-    learns it when it builds them. The refusal names the field and never repeats its value."""
+    learns it when it builds them. The refusal names the field and never repeats its value, in any form
+    an embedder may log: its text, ``errors()``, ``json()`` or its traceback (#162 review; every kind of
+    refusal is in tests/unit/test_settings_refusals.py)."""
+    value = "lpg_shared"
+    given = {"discovery_url": "http://127.0.0.1:9/discovery", name: value}
     with pytest.raises(ValidationError) as refused:
-        EngineSettings.model_validate({"discovery_url": "http://127.0.0.1:9/discovery", name: "lpg_shared"})
+        EngineSettings.model_validate(given)  # not the value itself: the traceback quotes this line
     (error,) = refused.value.errors()
     assert (error["type"], error["loc"]) == ("extra_forbidden", (name,))
-    assert "lpg_shared" not in str(refused.value)
+    assert carried(refused.value, value) == []
 
 
 def test_tuning_values_are_settings_with_todays_defaults() -> None:

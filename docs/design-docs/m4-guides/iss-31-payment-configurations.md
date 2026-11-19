@@ -58,7 +58,7 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
 | Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one. Since P3 (#164) a structure test fails when the work half reaches payments another way | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`), `tests/structure/test_two_halves.py` |
 | Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. Since P4 the clearinghouse set is two groups that also mount by themselves: a tenant's own routes, and what only a clearinghouse admin does, for the private listener of P6. Since P6 (#167) one table says which listener serves which group (`http/listeners.py`); with one listener the app mounts every group. No role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
-| Listeners | Since P6 (#167) one by default, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route for every kind of credential: what self-hosted payments runs. `LPB_HTTP_PRIVATE_PORT` turns on a private listener (`LPB_HTTP_PRIVATE_HOST`, loopback unless set): two apps over one engine in one process. The public listener serves no route of the private group (404) and refuses a `clearinghouse_admin` credential (403) on every route; the private one serves every route, to a `clearinghouse_admin` only. The rule is applied where every route authenticates, so a route added later is covered. The `clearinghouse` role (P8) will require the private listener. Before P6 there was one listener | `http/listeners.py`, `http/auth.py`, `http/server.py`, `config.py`; [access.md](../../contracts/access.md#listeners) |
+| Listeners | Since P6 (#167) one by default, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route for every kind of credential: what self-hosted payments runs. `LPB_HTTP_PRIVATE_PORT` turns on a private listener (`LPB_HTTP_PRIVATE_HOST`, loopback unless set): two apps over one engine in one process. The public listener serves no route of the private group (404) and refuses a `clearinghouse_admin` credential (403) on every route that takes an access credential; the private one serves every route, to a `clearinghouse_admin` only. The signer's two paths are on every listener and take a payment key on each: the rule about kinds does not reach them, and an access key of any kind is 401 there. The rule is applied where every route authenticates, so a route added later is covered. The `clearinghouse` role (P8) will require the private listener. Before P6 there was one listener | `http/listeners.py`, `http/auth.py`, `http/server.py`, `config.py`; [access.md](../../contracts/access.md#listeners) |
 | The wallet | Since P6 (#167) `GET /v1/clearinghouse/wallet`, in the private group, for a `clearinghouse_admin`: the deposit and reserve as Batteries' on-chain listener has confirmed them (ETH, with the block it has read to), the total of unspent grants for each currency (each grant's total less what its allocations spent), and whether the signer answers its identity call. Nothing is converted and no margin is computed. The deposit and reserve need Batteries' on-chain listener, which is off by default; "ready" is the signer's identity call, not its `/readyz`. Before P6 nothing reported the wallet | `services/wallet.py`, `adapters/batteries_escrow.py`, `adapters/sdk.py`; [payments.md](../../contracts/payments.md#the-wallet-report) |
 | Consumer apps | ChatLPT and the inference gateway embed the engine in `per_application`. The inference gateway refuses any other mode | their `deploy/.env.example`; inference-gateway `runtime.py:121` |
 
@@ -158,7 +158,8 @@ Kinds: `clearinghouse_admin` (every tenant, private listener only), `tenant_admi
 `auditor` (one tenant, read-only), `actor` (itself), and a payment key (one actor's allocation).
 
 **Clearinghouse half, public listener.** Another tenant's id in the path is 403, and a
-`clearinghouse_admin` credential is 403 on this listener.
+`clearinghouse_admin` credential is 403 on this listener. The signer's two paths take a payment key
+and nothing else: an access key of any kind is 401 on them.
 
 | Route | Who may call | What it does |
 | --- | --- | --- |
@@ -175,7 +176,8 @@ Kinds: `clearinghouse_admin` (every tenant, private listener only), `tenant_admi
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant | The clearinghouse's runner list |
 
 **Clearinghouse half, private listener.** For a `clearinghouse_admin` only. Every public route is also
-served here, for any tenant.
+served here, for any tenant. That includes the signer's two paths, which take a payment key here as
+they do on the public listener.
 
 | Route | What it does |
 | --- | --- |
@@ -444,7 +446,8 @@ One builder-core issue each, all sub-issues of ISS-31.
    credentials it takes: the private group is 404 on the public listener, a `clearinghouse_admin`
    credential is 403 there on every route, and the private listener takes a `clearinghouse_admin`
    only. The wallet report (`GET /v1/clearinghouse/wallet`) is in the private group, through two new
-   optional protocols (`EscrowSource`, `SignerProbe`). The signer's two paths of P5 are a
-   group in that table, served on every listener. Requiring the private listener for the `clearinghouse` role is P8's.
+   optional protocols (`EscrowSource`, `SignerProbe`). The signer's two paths of P5 are a group in
+   that table, served on every listener to a payment key. Requiring the private listener for the
+   `clearinghouse` role is P8's.
 7. **P7 (#168).** Remote adapters for the five payment ports.
 8. **P8 (#169).** The engine's role setting.

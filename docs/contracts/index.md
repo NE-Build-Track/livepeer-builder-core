@@ -213,8 +213,9 @@ existing route changed, and no credential is refused that was accepted. There is
 | --- | --- | --- |
 | Listeners | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | The same, unless `LPB_HTTP_PRIVATE_PORT` is set. Then two: that address is the public listener, and `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1`) with `LPB_HTTP_PRIVATE_PORT` is the private one ([access.md](access.md#listeners)) |
 | Onboarding, the tenant list, a grant's top-up and a tenant's status, with two listeners | | 404 on the public listener; served on the private one |
-| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener; accepted on the private one |
+| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener that takes an access credential; accepted on the private one |
 | A tenant admin, auditor, actor or service credential, with two listeners | | Accepted on the public listener as before; 403 on every route of the private one |
+| The signer's two paths (#166), with two listeners | | Served on both, to a payment key. An access key of any kind is 401 on them, as with one listener |
 | The wallet | not served | `GET /v1/clearinghouse/wallet` (`WalletReport`), a clearinghouse admin's; `engine.payments.wallet` ([payments.md](payments.md#the-wallet-report)) |
 | `create_app` | `create_app(engine, *, manage_lifecycle, max_request_bytes)` | and `listener`: `"only"` (the default), `"public"` or `"private"` |
 | `serve`, `lpb serve` | One server | Two servers over one engine when `LPB_HTTP_PRIVATE_PORT` is set. `extend` runs once for each app |

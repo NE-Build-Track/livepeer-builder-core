@@ -130,10 +130,12 @@ clearinghouse has one for each enterprise app.
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
 | `POST /sign-orchestrator-info`, `POST /generate-live-payment` | A payment key | The signer's two paths, at the root: who the signer is, and one signed payment against that actor's allocation ([signing through a clearinghouse](#signing-through-a-clearinghouse)) |
 
-A clearinghouse admin may call every route, for any tenant. The first five are what only a clearinghouse
-admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A
-deployment with a private listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the
-public listener those five are 404, and a clearinghouse admin credential is 403 on every route
+A clearinghouse admin may call every route but the last, for any tenant: the signer's two paths take a
+payment key and nothing else. The first five are what only a clearinghouse admin does; they are one
+group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A deployment with a private
+listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the public listener those
+five are 404, and a clearinghouse admin credential is 403 on every route that takes an access
+credential. The signer's two paths are served on both listeners, to a payment key
 ([access.md](access.md#listeners)). With one listener, which is the default and what self-hosted
 payments runs, every route is served there and nothing is refused.
 
@@ -559,7 +561,9 @@ signer's two paths, which the clearinghouse serves
 ## Signing through a clearinghouse
 
 A payment clearinghouse serves the signer's two paths at the root of its listener, each called with a
-payment key (D87 point 3, as Mike amended it on 19 November 2026; #166):
+payment key (D87 point 3, as Mike amended it on 19 November 2026; #166). With a public and a private
+listener (#167) they are at the root of both, and take a payment key on both
+([access.md](access.md#listeners)):
 
 | Route | What it does |
 | --- | --- |

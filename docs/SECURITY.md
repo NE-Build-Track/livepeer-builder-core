@@ -67,8 +67,10 @@ See [contracts/access.md](contracts/access.md#boundaries).
   only a clearinghouse admin does (onboarding, the tenant list, a grant's top-up, a tenant's status and
   the wallet report) on a private listener, which binds loopback unless told otherwise. On the public
   listener those routes are 404, as any unknown path, and a clearinghouse admin credential is 403 on
-  every route, so a leaked clearinghouse admin key does nothing where the engine is published. The private listener takes a
-  clearinghouse admin credential only. Reaching it is not enough: it still asks for the credential. With
+  every route that takes an access credential, so a leaked clearinghouse admin key does nothing where
+  the engine is published. The private listener takes a clearinghouse admin credential only. Reaching
+  it is not enough: it still asks for the credential. The signer's two paths (#166) are on both
+  listeners and take a payment key on both; an access key of any kind is 401 there. With
   one listener, the default, there is no such boundary: keep the engine off the public network, or put
   the admin routes behind your own proxy ([access.md](contracts/access.md#listeners)).
 - **The wallet report (#167):** it states the wallet's deposit and reserve, the unspent grants and

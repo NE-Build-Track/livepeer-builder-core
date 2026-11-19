@@ -512,7 +512,7 @@ async def test_the_payment_key_of_an_answer_the_engine_cannot_read_is_not_quoted
     with pytest.raises(ProviderError) as unreadable:
         await manager.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "k")
     assert "lpp_secret" not in str(unreadable.value) and unreadable.value.__cause__ is None
-    assert unreadable.value.__suppress_context__
+    assert unreadable.value.__context__ is None  # hidden is not enough: pydantic's error holds the body
 
 
 # -- the adapters as one set --------------------------------------------------------------------------------

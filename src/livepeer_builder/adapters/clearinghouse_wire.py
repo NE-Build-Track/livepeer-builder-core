@@ -21,7 +21,8 @@ A clearinghouse failure is classified like a signer failure (D87):
   read) is a ``ProviderError`` with that status, which is no refusal: its body is not quoted.
 
 No request is ever sent twice here, and no redirect is followed: the tenant admin key goes to the
-clearinghouse's address only. The key is in no error text, log line or ``repr``.
+clearinghouse's address only. The key is in no error text, log line or ``repr``, and no error chains
+one that holds it, or an answer that may hold a payment key (#168 review).
 """
 
 import asyncio
@@ -112,14 +113,20 @@ class ClearinghouseWire:
             # One deadline for the whole call, as for Batteries: the ledger's stale window counts whole calls
             async with asyncio.timeout(self._timeout_s):
                 response = await self._client.send(request, follow_redirects=False)
-        except _NEVER_SENT as error:
-            raise ProviderUnavailable("the clearinghouse could not be reached; nothing was sent") from _named(
-                error
-            )
         except (TimeoutError, httpx.TransportError) as error:
-            raise _no_answer(method, f"the clearinghouse gave no answer within {self._timeout_s:g} s") from (
-                _named(error)
-            )
+            failure, cause = self._failed(method, error), _named(error)
+        else:
+            return self._answered(method, response)
+        # Raised here, outside the except block: httpx's own error, whose request holds the tenant admin key
+        # in its headers, would otherwise stay reachable as the context (#168 review).
+        raise failure from cause
+
+    def _failed(self, method: Method, error: Exception) -> ProviderUnavailable:
+        if isinstance(error, _NEVER_SENT):
+            return ProviderUnavailable("the clearinghouse could not be reached; nothing was sent")
+        return _no_answer(method, f"the clearinghouse gave no answer within {self._timeout_s:g} s")
+
+    def _answered(self, method: Method, response: httpx.Response) -> httpx.Response:
         if response.status_code >= 400:
             self._refuse(method, response)
         if not response.is_success:  # a redirect is not followed: the key goes to this address only
@@ -179,11 +186,13 @@ def _problem(response: httpx.Response) -> tuple[str, str | None]:
 
 def _parsed[T: BaseModel](model: type[T], response: httpx.Response) -> T:
     """A 2xx answer as ``model``, or a ``ProviderError`` with the answer's own status: an unknown outcome
-    to the ledger, never a refusal. The body is not quoted: it may hold a payment key."""
+    to the ledger, never a refusal. The body is not quoted: it may hold a payment key. Nor is pydantic's
+    error chained, which holds the whole body: the refusal is raised outside the except block, since
+    ``from None`` hides the context from a printed traceback but keeps it (#168 review)."""
     try:
         return model.model_validate_json(response.content)
     except ValidationError:
-        raise ProviderError(
-            response.status_code,
-            f"the clearinghouse answered with a body that is not {model.__name__}",
-        ) from None
+        refused = ProviderError(
+            response.status_code, f"the clearinghouse answered with a body that is not {model.__name__}"
+        )
+    raise refused

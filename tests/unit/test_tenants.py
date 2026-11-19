@@ -407,12 +407,11 @@ async def test_a_tenant_admin_key_never_acts_on_another_tenants_keys(house: Hous
     for path, body in (
         (two.named("/keys"), {"actor_id": "spy", "operation_ref": "k1"}),
         ("/v1/keys", {"kind": "auditor", "actor_id": "spy", "tenant_id": two.id, "operation_ref": "k2"}),
-        (
-            "/v1/keys",
-            {"kind": "actor", "actor_id": "spy", "operation_ref": "k3"},
-        ),  # the body's default tenant
     ):
         assert (await client.post(path, json=body, headers=one.admin)).status_code == 403, path
+    # a body that names no tenant was put in "default", another tenant's: now it is refused as it is read
+    unnamed = {"kind": "actor", "actor_id": "spy", "operation_ref": "k3"}
+    assert (await client.post("/v1/keys", json=unnamed, headers=one.admin)).status_code == 422
     # reading another tenant's keys: no path of its own names another tenant, and one that does is 403
     assert (await client.get(two.named("/keys"), headers=one.admin)).status_code == 403
     assert {key["tenant_id"] for key in (await client.get(one.path("/keys"), headers=one.admin)).json()} == {
@@ -499,7 +498,8 @@ async def test_on_the_work_set_a_tenant_admin_is_an_admin_of_its_own_tenant_only
     reconciliation = "/v1/costs/reconciliation?actor_id=alice&tenant_id="
     assert (await client.get(reconciliation + one.id, headers=one.admin)).status_code == 200
     assert (await client.get(reconciliation + two.id, headers=one.admin)).status_code == 403
-    assert (await client.get("/v1/costs/reconciliation?actor_id=alice", headers=one.admin)).status_code == 403
+    # no tenant named: once read as "default", another tenant's; now refused as it is read (#163 review)
+    assert (await client.get("/v1/costs/reconciliation?actor_id=alice", headers=one.admin)).status_code == 422
     assert (await client.get("/v1/allowance?actor_id=alice", headers=one.admin)).status_code == 200
     assert (await client.get("/v1/allowance?actor_id=bob", headers=one.admin)).status_code == 404
     assert (await client.post("/v1/costs/sync", headers=one.admin)).status_code == 403

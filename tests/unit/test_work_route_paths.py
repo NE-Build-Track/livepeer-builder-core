@@ -61,18 +61,27 @@ async def test_reconciliation_and_cost_sync_are_work_routes_under_costs(api: Ser
     client, _engine, admin, alice = api
     synced = await client.post("/v1/costs/sync", headers=admin)
     assert synced.status_code == 200 and synced.json()["pages"] == 1
-    reconciled = await client.get("/v1/costs/reconciliation", params={"actor_id": "alice"}, headers=admin)
+    mine = {"tenant_id": "default"}  # required (#163 review)
+    reconciled = await client.get(
+        "/v1/costs/reconciliation", params=mine | {"actor_id": "alice"}, headers=admin
+    )
     assert reconciled.status_code == 200 and reconciled.json()["tenant_id"] == "default"
     # who may call them is as it was: an actor key may not, and no credential is a 401
     assert (await client.post("/v1/costs/sync", headers=alice)).status_code == 403
-    assert (await client.get("/v1/costs/reconciliation", headers=alice)).status_code == 403
+    assert (await client.get("/v1/costs/reconciliation", params=mine, headers=alice)).status_code == 403
     assert (await client.post("/v1/costs/sync")).status_code == 401
     assert (await client.get("/v1/costs/reconciliation")).status_code == 401
 
 
 async def test_the_engines_own_access_keys_are_work_routes_under_keys(api: Served) -> None:
     client, _engine, admin, alice = api
-    body = {"kind": "actor", "actor_id": "bob", "label": "bob laptop", "operation_ref": "key-bob-1"}
+    body = {
+        "kind": "actor",
+        "actor_id": "bob",
+        "tenant_id": "default",
+        "label": "bob laptop",
+        "operation_ref": "key-bob-1",
+    }
     issued = await client.post("/v1/keys", json=body, headers=admin)
     assert issued.status_code == 201 and issued.json()["token"].startswith("lpk_")
     key_id = issued.json()["key"]["key_id"]

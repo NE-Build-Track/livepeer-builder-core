@@ -130,8 +130,10 @@ class EngineSettings(Contract):
     jwt_audience: str | None = None  # must be in aud: this engine
     jwt_algorithms: tuple[str, ...] = ("RS256", "ES256")
     jwt_actor_claim: str = Field(default="sub", min_length=1)
-    jwt_tenant_claim: str | None = None  # None: every token is in jwt_tenant_id
-    jwt_tenant_id: str = Field(default="default", min_length=1, max_length=200)  # as records store it
+    # With jwt, exactly one says a token's tenant, and neither has a default (#163 review): the claim that
+    # names it, or the one tenant every token is in, at most 200 characters as records store it
+    jwt_tenant_claim: str | None = Field(default=None, min_length=1)
+    jwt_tenant_id: str | None = Field(default=None, min_length=1, max_length=200)
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential
@@ -401,6 +403,21 @@ class EngineSettings(Contract):
             raise ValueError(
                 f"jwt_admin_read_scope {read!r} is a scope ordinary tokens carry, or the admin scope, "
                 "so it would not mark a read-only admin"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _jwt_names_one_tenant_source(self) -> "EngineSettings":
+        """An engine still set with a variable the rename retired reads none of the two, and with a default
+        it put every token in one tenant: users of different organisations shared it (#163 review)."""
+        if "jwt" not in self.auth:
+            return self
+        named = (self.jwt_tenant_claim is not None) + (self.jwt_tenant_id is not None)
+        if named != 1:
+            raise ValueError(
+                "LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID must be "
+                "set: the claim that names each token's tenant, or the one tenant every token is in; "
+                + ("both are set" if named else "neither is set")
             )
         return self
 

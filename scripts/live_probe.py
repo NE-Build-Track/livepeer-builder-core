@@ -96,7 +96,7 @@ class Probe:
 
     async def issue(self, kind: str, actor_id: str) -> tuple[str, str] | None:
         """A new key's (token, key id), or ``None`` when the engine did not issue one."""
-        body = {"kind": kind, "actor_id": actor_id, "operation_ref": f"{actor_id}-key"}
+        body = {"kind": kind, "actor_id": actor_id, "tenant_id": TENANT, "operation_ref": f"{actor_id}-key"}
         answer = await self.call("POST", "/v1/keys", self.admin_key, json=body)
         token = answer.json().get("token") if answer.status_code == 201 else None
         key_id = _issued_key_id(answer)  # never the previous key's id: a 201 without one is a failure
@@ -128,7 +128,7 @@ async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_
     reads = await probe.call("GET", "/v1/keys", auditor)
     probe.expect("auditor key reads: GET /v1/keys", reads, 200)
     probe.expect(f"auditor key: POST {SYNC}", await probe.call("POST", SYNC, auditor), 403)
-    issue = {"actor_id": f"{probe.run}-x", "operation_ref": f"{probe.run}-auditor-issue"}
+    issue = {"actor_id": f"{probe.run}-x", "tenant_id": TENANT, "operation_ref": f"{probe.run}-auditor-issue"}
     issued = await probe.call("POST", "/v1/keys", auditor, json=issue)
     probe.expect("auditor key: POST /v1/keys", issued, 403)
     await cross_actor(probe, a, b)

@@ -37,7 +37,7 @@ from fastapi import FastAPI
 from livepeer_builder import api, protocols
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.http.work import mount_work_routes
-from livepeer_builder.protocols import conditional_writes, persistence
+from livepeer_builder.protocols import clearinghouse, conditional_writes, persistence
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.jobs import JobService
 
@@ -67,6 +67,7 @@ WORK = {
 CLEARINGHOUSE = {
     "services/actor_writes.py",
     "services/grants.py",
+    "services/issued_payment_keys.py",
     "services/payment_keys.py",
     "services/payments.py",
     "services/tenants.py",
@@ -98,12 +99,15 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # Payment protocols that are not ports: where payment keys and allocation records are kept. The work
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
 # both: a work module asks for the narrow repo it needs (JobRepo, CostRepo).
+# PaymentKeyRepo is where a clearinghouse keeps the payment keys it issues (#166): the work half is
+# handed one through CredentialResolver and never looks one up.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
     "SecretRepo",
     "ActorRepo",
     "ActorCommandRepo",
+    "PaymentKeyRepo",
     "EngineStore",
 }
 NOT_PAYMENTS = {
@@ -204,7 +208,7 @@ def protocol_names(relative: str) -> set[str]:
 def declared_protocols() -> set[str]:
     return {
         name
-        for module in (protocols, conditional_writes, persistence)
+        for module in (protocols, clearinghouse, conditional_writes, persistence)
         for name, value in vars(module).items()
         if isinstance(value, type)
         and getattr(value, "_is_protocol", False)

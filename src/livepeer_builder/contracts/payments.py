@@ -122,6 +122,31 @@ class ActorAllocation(Contract):
     label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
 
 
+class IssuedPaymentKey(Contract):
+    """An actor's payment key, as the command that issued it answers (D87, #166). The clearinghouse keeps
+    the key's hash and never the key, so the token is in the answer of the run that issued the key and
+    nowhere else. A repeat of the command's reference, or a run that found the key already issued,
+    answers ``token: null`` and ``replayed: true``, as issuing an access key does."""
+
+    token: str | None  # ``lpp_...``, shown once
+    replayed: bool = False
+
+
+class KeyedAllocation(ActorAllocation):
+    """The answer to allotting an allocation and to rotating its payment key: the allocation, and the
+    payment key the command issued for its actor. An enterprise's engine presents that key when it asks
+    the clearinghouse to sign a payment for the actor, and stores it where it stores a Batteries key
+    today. ``payment_key`` is ``None`` when the store keeps no payment keys (a supplied store without
+    ``PaymentKeyRepo``)."""
+
+    payment_key: IssuedPaymentKey | None = None
+
+    @property
+    def allocation(self) -> ActorAllocation:
+        """The allocation as the store keeps it and every read returns it: without the payment key."""
+        return ActorAllocation.model_validate(self.model_dump(exclude={"payment_key"}))
+
+
 class SeenActor(Contract):
     """A person the identity provider signed in as an actor (#52, D48), known before any allocation.
 

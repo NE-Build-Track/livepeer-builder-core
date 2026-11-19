@@ -73,6 +73,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "ActorCommandRepo": (SqlStore,),
     "UsageOnceRepo": (SqlStore,),
     "UsageSetAsideRepo": (SqlStore,),
+    "PaymentKeyRepo": (SqlStore,),
     "CostSnapshot": (SqlCostSnapshot,),
     "AllocationCostSnapshot": (SqlCostSnapshot,),
     "Clock": (SystemClock,),

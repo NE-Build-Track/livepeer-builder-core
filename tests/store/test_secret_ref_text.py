@@ -105,7 +105,7 @@ async def test_existing_actors_survive_the_change_and_a_downgrade(
         await save_at_0012(engine, before)  # a row written by revision 0012's schema
 
         await upgrade(engine)
-        assert await current_revision(engine) == head_revision() == "0014"
+        assert await current_revision(engine) == head_revision() == "0015"
         assert await secret_ref_length(engine) is None
         store = SqlStore(engine)
         assert await store.get_actor("default", "alice") == before

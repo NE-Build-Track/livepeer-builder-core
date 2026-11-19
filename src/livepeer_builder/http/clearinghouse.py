@@ -28,6 +28,7 @@ from livepeer_builder.contracts import (
     AllocationStatus,
     AllotRequest,
     IssuedKey,
+    KeyedAllocation,
     KnownActor,
     OnboardedTenant,
     TenantGrant,
@@ -136,7 +137,9 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         actor_id: Annotated[StoredText, Path()],
         body: AllotBody,
         response: Response,
-    ) -> ActorAllocation:
+    ) -> KeyedAllocation:
+        """Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment
+        key, whose token is shown once."""
         request = AllotRequest(
             tenant_id=tenant_id,
             actor_id=actor_id,
@@ -165,7 +168,8 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     @app.post(ALLOCATION + "/rotate-payment-key")
     async def rotate_payment_key(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
-    ) -> ActorAllocation:
+    ) -> KeyedAllocation:
+        """Replace the actor's payment key, and the Batteries key behind it. The old one stops at once."""
         rotated = await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, body.operation_ref)
         return replay(response, rotated)
 

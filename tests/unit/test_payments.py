@@ -99,7 +99,7 @@ async def test_repeat_allotment_returns_the_original(
     engine = await make_engine()
     first = await engine.payments.allot(admin, allot_request())
     second = await engine.payments.allot(admin, allot_request())
-    assert first == second
+    assert first.allocation == second.allocation
     assert manager.calls == ["create_key_for_grant"]
     assert len(manager.allocations) == 1
 
@@ -439,7 +439,7 @@ async def test_a_repeat_of_a_finished_allotment_gets_its_result_while_the_store_
     first = await engine.payments.allot(admin, allot_request())
     vault.sealed = True
     again = await engine.payments.allot(admin, allot_request())  # a lost response, repeated
-    assert again == first
+    assert again.allocation == first.allocation
     assert manager.calls == ["create_key_for_grant"]  # no second provider call
 
 

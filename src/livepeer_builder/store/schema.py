@@ -249,4 +249,19 @@ usage_set_aside = Table(
     Column("set_aside_at", UTCDateTime, nullable=False),
 )
 
+# -- 0015: the payment keys a clearinghouse issues (D87, #166) -------------------------------------------
+
+# One payment key for each actor: what an enterprise's engine presents when it asks for a payment for that
+# actor. The hash of the token, never the token. The key is bound to the allocation it was issued for, so
+# it finds its actor only while the actor still holds that allocation.
+payment_keys = Table(
+    "lpb_payment_keys",
+    metadata,
+    Column("tenant_id", String(ID), primary_key=True),
+    Column("actor_id", String(ID), primary_key=True),
+    Column("allocation_id", String(ID), nullable=False),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("created_at", UTCDateTime, nullable=False),
+)
+
 VERSION_TABLE = "lpb_alembic_version"

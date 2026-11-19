@@ -114,6 +114,12 @@ classDiagram
         +async count_set_aside_usage() int
         +async set_aside_usage(rows) SetAsideUsage[]
     }
+    class PaymentKeyRepo {
+        <<interface>>
+        +async actor_by_payment_key(token_hash) ActorAllocation?
+        +async delete_payment_key(tenant_id, actor_id, allocation_id) None
+        +async put_payment_key(tenant_id, actor_id, allocation_id, token_hash, created_at, only_if_absent) bool
+    }
     class CostSnapshot {
         <<interface>>
         +async job_with_projection(job_id) tuple~Job JobCost?~?
@@ -184,6 +190,7 @@ classDiagram
     ActorCommandRepo <|.. SqlStore
     UsageOnceRepo <|.. SqlStore
     UsageSetAsideRepo <|.. SqlStore
+    PaymentKeyRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
     AllocationCostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
@@ -216,6 +223,7 @@ classDiagram
 | `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageOnceRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
+| `PaymentKeyRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `AllocationCostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |

@@ -1,7 +1,8 @@
 """Providers layer: the extension protocols. Integrators swap an implementation here, never core source.
 
 Imports only ``contracts`` and ``errors``. See ARCHITECTURE.md#providers. The store's protocols are in
-``persistence`` and ``conditional_writes``; every one is re-exported here, and this is where they are
+``persistence`` and ``conditional_writes``, and what only the clearinghouse half needs in
+``clearinghouse``; every one is re-exported here, and this is where they are
 imported from.
 """
 
@@ -31,6 +32,7 @@ from livepeer_builder.contracts import (
     TenantGrant,
     UsagePage,
 )
+from livepeer_builder.protocols.clearinghouse import PaymentKeyRepo as PaymentKeyRepo
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo
 from livepeer_builder.protocols.conditional_writes import UsageOnceRepo as UsageOnceRepo
 from livepeer_builder.protocols.persistence import ActorRepo as ActorRepo

@@ -77,10 +77,10 @@ live in `http/` and `services/`. Every module of the two is one half's or shared
 
 | | Work half | Clearinghouse half | Shared |
 | --- | --- | --- | --- |
-| Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys | Access, the operation ledger, health |
-| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse` | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py` |
+| Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys, a tenant's access keys | Access, the operation ledger, health |
+| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse/tenants`, in two groups that also mount by themselves: a tenant's own routes (`mount_tenant_routes`) and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py` |
 | Facade | `WorkApi` | `ClearinghouseApi` | `EngineApi` is both |
-| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
+| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `tenants`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
 
 `create_app` mounts both sets of routes on one app. Each set is one function that adds its routes to an
 app, so a deployment can serve one half: the role setting that chooses is #169.
@@ -136,7 +136,7 @@ Each third-party package is confined to one module so a dependency change has on
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
 | Discovery | `services/discovery.py` | [engine](docs/contracts/engine.md#discovery) |
 | Jobs | `services/jobs.py`, `services/admission.py` | [engine](docs/contracts/engine.md) |
-| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/grants.py` (the grant desk) | [payments](docs/contracts/payments.md) |
+| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |
 | Persistence | `store/` | [persistence](docs/contracts/persistence.md) |
@@ -149,7 +149,8 @@ Each third-party package is confined to one module so a dependency change has on
   [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
 - **Service:** `lpb serve` runs the same engine behind REST. Requests are authenticated by the
   authenticator chain. Admin routes need an admin credential: every clearinghouse route, and in the
-  work set the key routes, reconciliation and cost sync. A customized service calls
+  work set the key routes, reconciliation and cost sync. A clearinghouse admin is an admin of every
+  tenant and a tenant admin of its own ([access](docs/contracts/access.md#defaultpolicy)). A customized service calls
   `livepeer_builder.http.server.serve` (or `build_app`, to mount it elsewhere) with its own parts
   and routes: [extending-the-engine.md](docs/design-docs/extending-the-engine.md#service-mode).
 

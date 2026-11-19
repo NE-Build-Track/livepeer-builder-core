@@ -4,25 +4,34 @@ Baseline v0.0.3, `03bc9fb` (`internal/app/management.go` is unchanged since `ca0
 Authoritative source: the Batteries `README.md` and `internal/app/management.go`.
 
 - **Auth:** `Livepeer-Clearinghouse-Token: <management secret>`. A permission covers **every**
-  resource of its type. There is no per-grant scoping (that is the [Mode B](../contracts/payments.md#mode-b) gap).
+  resource of its type. There is no per-grant scoping (that is the [Mode B](../contracts/payments.md#mode-b) gap),
+  so the engine keeps one tenant from another itself ([tenants](../contracts/payments.md#tenants)).
+- **A tenant's id is a grant's id (D83, #165).** Every `grant_id` and grant `{id}` below is the
+  engine's `tenant_id`.
 - **Engine credential** (`LPB_BATTERIES_TOKEN`): `grants.fund`, `allocations.create`,
   `allocations.fund`, `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`,
   `api_keys.read`, `api_keys.revoke`, `usage.read`. **No `grants.*`.** `grants.fund` covers every
-  grant. The engine sends the grant id on the request, or the grant of the caller's own allocation.
+  grant. The engine sends the tenant's id as the grant id.
 - **Ids in paths:** every id the engine places in a route below (`{id}`) is percent-encoded as one path
   segment (`adapters/batteries.py`, `segment`; #113, C10), and the ids `.` and `..` are encoded too
   (`%2E`, `%2E%2E`).
-- **Grant desk** (`LPB_BATTERIES_GRANTS_TOKEN`): `grants.read` and `grants.create`. Optional: without
-  it the engine starts with the grant desk off (`list_grants`/`create_grant` and their routes absent).
+- **Tenant desk** (`LPB_BATTERIES_GRANTS_TOKEN`): `grants.read`, `grants.create`, `grants.status`,
+  `allocations.read`, and `grants.fund`, which Batteries also asks of a grant created with an amount
+  (`internal/app/management.go`: a create with a non-zero amount checks `<resource>.fund`). Optional:
+  without it the engine starts with the tenant desk off (onboarding, the tenant list, a grant's read
+  and a tenant's status are absent).
 
 | Engine call | Route | Notes |
 | --- | --- | --- |
-| `create_key_for_grant` | `POST /v1/api-keys` `{grant_id, name, amount_usd \| amount_eth}` | Atomic: a funded allocation plus a key. Returns `{allocation_id, id, api_key}`. Needs `allocations.create` and `.fund` |
+| `create_key_for_grant` | `POST /v1/api-keys` `{grant_id, name, amount_usd \| amount_eth}` | Atomic: a funded allocation plus a key. Returns `{allocation_id, id, api_key}`. Needs `allocations.create` and `.fund`. An amount larger than the grant's unallocated balance is 409 "insufficient unallocated grant balance"; an unknown grant is 404; a closed grant is 409. A paused grant still takes it |
 | `create_key` | `POST /v1/api-keys` `{allocation_id, name}` | Key rotation |
-| `top_up_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation |
+| `top_up_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation. Drawn from the allocation's own grant, which Batteries finds by the allocation: the same 409 when the grant's unallocated balance is smaller |
 | `top_up_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | `Idempotency-Key` is `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
-| `list_grants` | `GET /v1/grants` | Grants token. `{items: [...], next_cursor}` |
-| `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*}` | Grants token. `grants.create` |
+| `list_grants`, `grant_page` | `GET /v1/grants` | Grants token. `{items: [...], next_cursor}`. A resumed onboarding reads it page by page for its tag |
+| `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*, metadata}` | Grants token. `grants.create`, and `grants.fund` unless the amount is zero. No `Idempotency-Key`: Batteries takes none on a grant. Answers `{id}`, which is the tenant's id |
+| `read_grant` | `GET /v1/grants/{id}`, then `GET /v1/allocations?grant_id={id}` | Grants token. `grants.read` and `allocations.read`. A grant is served with `total_<cur>` and `status`, and with no unallocated balance. The engine answers the total less the sum of the allocations' `allocated_<cur>`: allotting and topping up move an amount from the grant's unallocated account to the allocation and add it to `allocated`, and a revoke moves back what was not spent and takes it off `allocated` (`internal/store/manage.go`). An unknown grant is 404 |
+| `grant_balances` | `GET /v1/grants`, then `GET /v1/allocations` (every page of both) | Grants token. The same figure for every grant, grouped by the allocations' `grant_id` |
+| `set_grant_status` | `PATCH /v1/grants/{id}/status` `{status: active \| paused}` | Grants token. `grants.status`. No `Idempotency-Key`: the call sets a state. Batteries also takes `draft` and `closed`; the engine sends neither, and a closed grant cannot be reopened (409) |
 | `set_allocation_status` | `PATCH /v1/allocations/{id}/status` `{status: active \| paused}` | |
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
 | `revoke_key` | `POST /v1/api-keys/{id}/revoke` | |
@@ -43,8 +52,13 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
   none. Every id Batteries answers with is a string, and so is a new key's `api_key`
   (`map[string]string` in `internal/store/idempotency.go`; `TEXT` columns): a key answer or an allocation read
   whose `id`, `allocation_id` or `api_key` is absent, empty or not a string is that `ProviderError` too.
+- **A paused grant** (`internal/store/auth.go`, read at `fb76150`): the authorization webhook refuses
+  every payment whose grant is not `active` (403, "grant or allocation is inactive"). The management API
+  refuses only a `closed` grant, so allotting, topping up, revoking and a grant's top-up still work on a
+  paused one.
 - **Idempotency:** `Idempotency-Key` on allocation create, API-key create, and grant and allocation
-  fund. It is shared by every caller of a grant, which is why the engine namespaces its keys.
+  fund. It is shared by every caller of a grant, which is why the engine namespaces its keys. A key is
+  kept per grant: the same key under another grant is another operation.
   - A matching retry replays the original success, including the secret.
   - A different body returns 409.
   - Errors are not saved.

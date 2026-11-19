@@ -66,10 +66,10 @@ classDiagram
 
 `api.py` splits the engine into its two halves (D84). An application that only runs jobs types against
 `ActorApi`. `WorkApi` is the work half: the actor API, and the engine's own access keys, reconciliation
-and cost sync. `ClearinghouseApi` is the clearinghouse half: allotment, top-ups and the grant desk. In
+and cost sync. `ClearinghouseApi` is the clearinghouse half: tenants and their grants, allotment and top-ups. In
 `http/` each set of routes is typed against its half, and `create_app` against `EngineApi`, which is both. Optional capabilities are `X?` members decided once at construction:
-`jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.grants`
-(the grant desk is on). Callers check for `None`; nothing probes with `hasattr`.
+`jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.tenants`
+(the tenant desk is on). Callers check for `None`; nothing probes with `hasattr`.
 
 ```mermaid
 classDiagram
@@ -157,19 +157,21 @@ classDiagram
         +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
         +async rotate_payment_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
         +async revoke(admin, tenant_id, actor_id) ActorAllocation
-        +async top_up_grant(admin, request) None
-        +grants GrantsApi?
+        +async top_up_grant(admin, tenant_id, request) None
+        +tenants TenantsApi?
     }
-    class GrantsApi {
+    class TenantsApi {
         <<interface>>
-        +async list_grants(admin) GrantRecord[]
-        +async create_grant(admin, name, amount, operation_ref) GrantRecord
+        +async onboard(admin, name, amount, operation_ref, admin_actor_id) OnboardedTenant
+        +async list_tenants(admin) TenantGrant[]
+        +async grant(admin, tenant_id) TenantGrant
+        +async set_status(admin, tenant_id, status, operation_ref) TenantState
     }
     class KeysApi {
         <<interface>>
         +async issue(admin, kind, actor_id, tenant_id, permissions, label, operation_ref) IssuedKey
         +async list_keys(admin, tenant_id) AccessKey[]
-        +async revoke(admin, key_id) None
+        +async revoke(admin, key_id, tenant_id) None
         +async bootstrap_admin(label) IssuedKey
     }
     class BuilderEngine
@@ -187,13 +189,13 @@ classDiagram
     WorkApi --> CostsAdminApi
     ClearinghouseApi --> PaymentsAdminApi
     ClearinghouseApi --> KeysApi
-    PaymentsAdminApi --> GrantsApi
+    PaymentsAdminApi --> TenantsApi
     BuilderEngine ..|> EngineApi
     FakeEngine ..|> ActorApi
 ```
 
 Behind the facade, each member is one concrete service: `jobs` is `JobService` (with `Streaming` and
-`JobStream`), `discovery` is `DiscoveryService`, `payments` is `PaymentsService` (with `GrantDesk`),
+`JobStream`), `discovery` is `DiscoveryService`, `payments` is `PaymentsService` (with `TenantDesk`),
 `costs` is `CostService`, `keys` is `KeyService`, and `authenticator` is `AuthenticatorChain`.
 
 ## What the engine needs: the ports
@@ -371,6 +373,9 @@ classDiagram
         +async list_grants() GrantRecord[]
         +async grant_page(cursor) GrantPage
         +async create_grant(name, amount, metadata) GrantRecord
+        +async read_grant(grant_id) TenantGrant
+        +async grant_balances() TenantGrant[]
+        +async set_grant_status(grant_id, status) None
     }
     class UsageSource {
         <<interface>>
@@ -386,10 +391,11 @@ classDiagram
         -manager AllocationManager?
         -secrets SecretStore
         -store ActorRepo
-        +grants GrantDesk?
+        +tenants TenantDesk?
     }
-    class GrantDesk {
+    class TenantDesk {
         -manager AllocationManager
+        -keys KeyService?
     }
     class CostService {
         -store CostStore
@@ -406,7 +412,7 @@ classDiagram
         +async sync_once() SyncReport
     }
     class BatteriesClient {
-        engine token, or grants token for the grant desk
+        engine token, or grants token for the tenant desk
     }
     class BatteriesUsageSource {
         GET /v1/usage
@@ -420,8 +426,8 @@ classDiagram
     PaymentsService ..|> AllowanceReader
     PaymentsService --> AllocationManager
     PaymentsService --> SecretStore
-    PaymentsService --> GrantDesk
-    GrantDesk --> AllocationManager
+    PaymentsService --> TenantDesk
+    TenantDesk --> AllocationManager
     CostService --> CostSyncWorker
     CostService --> AllowanceReader
     CostSyncWorker --> UsageSource
@@ -808,10 +814,11 @@ clearinghouse set.
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/keys`, `GET /v1/keys/{id}`, `POST /v1/keys/{id}/rotate`, `POST /v1/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
-| `GET /v1/clearinghouse/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
+| `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
 | `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation` |
-| `GET, POST /v1/clearinghouse/grants` | `payments.grants.*` | only when `payments.grants` is set |
-| `POST /v1/clearinghouse/grant/top-up` | `payments.top_up_grant` | `204` |
+| `POST, GET /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants/{tenant}/grant`, `POST /v1/clearinghouse/tenants/{tenant}/status` | `payments.tenants.onboard`, `list_tenants`, `grant`, `set_status` | `OnboardedTenant`, `TenantGrant[]`, `TenantGrant`, `TenantState`; only when `payments.tenants` is set |
+| `POST /v1/clearinghouse/tenants/{tenant}/grant/top-up` | `payments.top_up_grant` | `204` |
+| `POST, GET /v1/clearinghouse/tenants/{tenant}/keys`, `GET .../keys/{id}`, `POST .../keys/{id}/rotate`, `POST .../keys/{id}/revoke` | `keys.*`, with the tenant from the path | only when `engine.keys` is set |
 
 The generated schema is [generated/openapi.json](../generated/openapi.json); CI fails when it drifts.
 
@@ -1054,8 +1061,9 @@ Points worth deciding, noticed while drawing these:
    document that, or move readiness to a policy-checked call?
 2. **`ProviderError` passes some provider statuses through.** A Batteries `400`, `404`, `409` or `422`
    becomes the engine's own status, so a client cannot tell a provider rejection from an engine one.
-3. **Route naming.** Grants are `/v1/clearinghouse/grants` but topping one up is `/v1/clearinghouse/grant/top-up`, with no
-   grant id in the path.
+3. **Route naming.** Settled by #165: a grant is its tenant's, and both are named in the path
+   (`/v1/clearinghouse/tenants/{tenant_id}/grant/top-up`). Grants were `/v1/clearinghouse/grants`, and
+   topping one up `/v1/clearinghouse/grant/top-up`, with no grant id in the path.
 4. **Reserved members.** `EngineApi.events`, `sessions` and `jobs.result` are on the facade and answer
    `501` until M4. Keep them visible so the contract is fixed early, or add them when they work?
 5. **Ports that services implement.** `CredentialResolver` and `AllowanceReader` are implemented by

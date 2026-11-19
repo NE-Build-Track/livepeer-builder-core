@@ -311,6 +311,115 @@ no Batteries call recorded.
 (`uv run pytest`, coverage gates, `ruff`, `mypy` strict, `scripts/check_docs.py`, `lpb gen-docs`,
 `lpb smoke`); the arrangement run once with one paid job attributed; the docs above updated.
 
+## The remote adapters: each port and its route
+
+Investigated on 19 November 2026 for P7 (#168), before the adapters were built, against this repository
+at `a4aa9e0`. The ports and the clearinghouse's routes are not at the same level, so the mapping is
+written down here, member by member, with every place it is not clean.
+
+### The two levels
+
+- **`AllocationManager` is written in the payment provider's terms.** It names an allocation by its id
+  and a key by its id, and a rotation is two calls: `create_key`, then `revoke_key`.
+- **The clearinghouse's routes are written in a tenant's terms.** Each names a tenant and an actor in its
+  path, and none takes an allocation id. They are the commands of `PaymentsService`, one route each.
+
+So five members of the port cannot find their route by themselves: the actor is not in their arguments.
+The smallest change that closes the gap is one optional protocol, `AllocationsByActor`, with one member,
+`for_actor(tenant_id, actor_id)`, which returns the manager for that actor. `PaymentsService` knows the
+actor of every command and asks a manager that has the protocol. The Batteries adapter does not have it
+and is called as before. No member of `AllocationManager` changes, so a caller who supplies a manager of
+their own changes nothing. No hashed text changes: the idempotency keys and fingerprints pinned in
+`tests/unit/test_hashed_forms.py` are computed above the port.
+
+### `AllocationManager`
+
+`{t}` is the tenant, `{a}` the actor, and every path begins `/v1/clearinghouse/tenants/{t}`. Each
+request carries the tenant admin key as a bearer.
+
+| Member | Route | What the answer becomes |
+| --- | --- | --- |
+| `create_key_for_grant(grant_id, name, amount, idempotency_key)` | `POST /actors/{a}/allocation` with `amount`, `label` and `operation_ref` | `NewAllocationKey`: the allocation's id, the id of the Batteries key behind it, and the actor's payment key as the secret |
+| `create_key(allocation_id, name, idempotency_key)` | `POST /actors/{a}/allocation/rotate-payment-key` with `operation_ref` | `NewAllocationKey`, with the new payment key as the secret |
+| `revoke_key(api_key_id)` | None. The rotation above already ended the old key | Nothing is sent |
+| `top_up_allocation(allocation_id, amount, idempotency_key)` | `POST /actors/{a}/allocation/top-up` with `amount` and `operation_ref` | Nothing |
+| `set_allocation_status(allocation_id, status)` | `POST /actors/{a}/allocation/status` with `status` | Nothing |
+| `revoke_allocation(allocation_id)` | `POST /actors/{a}/allocation/revoke` | Nothing |
+| `read_allocation(allocation_id)` | `GET /v1/allowance?actor_id={a}` (see "Not clean" below) | `Allowance` |
+| `read_grant(grant_id)` | `GET /grant` | `TenantGrant` |
+| `top_up_grant`, `set_grant_status`, `create_grant`, `list_grants`, `grant_page`, `grant_balances` | None. Only a clearinghouse admin does these, on the private listener, where a tenant admin key is refused | Refused in the engine with `AccessDenied` (403), and nothing is sent |
+
+- **The idempotency key is the `operation_ref`.** The engine derives one idempotency key for each
+  provider write, from its `LPB_ENGINE_ID`, the command and the caller's reference. The adapter sends
+  that key, unchanged, as the route's `operation_ref`. A repeat at the enterprise's engine derives the
+  same key, so it is a repeat at the clearinghouse, which answers it from its own operation ledger and
+  sends Batteries the idempotency key it derived the first time.
+- **The grant is the tenant.** `grant_id` is the tenant's id (D83), and it is the `{t}` of the path.
+- **The label.** `name` is the actor's label, or `{t}/{a}` when it has none. The adapter sends an empty
+  label in the second case, so the clearinghouse makes the same default itself.
+- **The allocation is checked before a write.** `top_up_allocation`, `set_allocation_status`,
+  `revoke_allocation` and `create_key` name an allocation, and the route acts on whichever allocation the
+  actor holds at the clearinghouse. The adapter reads the actor's allocation first
+  (`GET /actors/{a}/allocation`) and refuses with the provider's 404 when it is another one, as Batteries
+  answers an allocation id it does not hold. A revoke of an allocation that is already revoked there
+  sends nothing more.
+
+### `AllowanceReader`, `UsageSource` and `CredentialResolver`
+
+| Port and member | Reaches | Note |
+| --- | --- | --- |
+| `AllowanceReader.allocation_for(tenant_id, actor_id)` | The engine's own actor record | As today: the allocation a job's attempt records is the one whose payment key the engine holds |
+| `AllowanceReader.read_allowance(allocation_id)` | `GET /v1/allowance?actor_id={a}`, with the actor found in the engine's own records | See "Not clean" |
+| `UsageSource.page(cursor, limit)` | `GET /usage?cursor=&limit=` | The route's answer is the port's own page. A refused cursor (400, `cursor_mismatch`) is `CursorMismatch`, so cost sync starts again from the first page, as it does today |
+| `CredentialResolver.credential(actor)` | The engine's own actor record and secret store | The payment key the clearinghouse issued, and never any other secret |
+
+### Where the payment key is kept
+
+The clearinghouse shows an actor's payment key once, in the answer to the allotment and to a rotation.
+The adapter returns it as the secret of `NewAllocationKey`, so the engine keeps it exactly where it keeps
+a Batteries key today: in the `SecretStore`, with the `SecretRef` on the actor's record. The remote
+`CredentialResolver` reads it back and returns it only when it is a payment key (`lpp_`).
+
+- **A lost answer.** When the answer to an allotment never arrives, the repeat is answered
+  `token: null, replayed: true`: the allocation exists and its key was shown to an answer nobody read.
+  The adapter then rotates the payment key at the clearinghouse under a new reference and returns the
+  key that rotation shows. A rotation moves no money, and the key it replaces was never held by anyone.
+  The same holds for a rotation whose answer was lost.
+- **An actor already allotted at the clearinghouse under another reference** (allotted there directly,
+  or by an engine whose records are gone) is a 409 from the clearinghouse, passed on. Nothing is
+  applied and the amount is not added, as for `AlreadyAllotted` in one engine. The tenant admin revokes
+  that allocation at the clearinghouse and allots again.
+- **Rows a deployment already has.** An actor allotted while the engine ran self-hosted payments holds a
+  Batteries key and an allocation the clearinghouse does not know. Its key is never sent to the
+  clearinghouse: the resolver answers `not_provisioned`, before any payment. Its commands are refused by
+  the clearinghouse, which holds no such allocation. Nothing is rewritten or deleted (T30). An actor is
+  allotted again under the tenant's id; when the clearinghouse's engine holds the same actor record (a
+  deployment that moved its own Batteries behind a clearinghouse), rotating the payment key is enough.
+- **The enterprise's engine issues no payment key of its own.** Its answers to an allotment and a
+  rotation carry `payment_key: null`, and the clearinghouse's key is in no answer, record or log line.
+
+### Who the enterprise's engine is at the clearinghouse
+
+A tenant's id is its grant's id (D83), and the engine already passes the tenant of an allotment to the
+provider as the grant. So the tenant of every actor the enterprise's engine allots must be the id the
+clearinghouse gave the tenant at onboarding: in `LPB_JWT_TENANT_ID` or the tenant claim, in the
+`tenant_id` of the access keys it issues, and in the `ActorContext` an embedding app builds. Nothing is
+mapped. An actor in any other tenant is refused by the clearinghouse (403, "another tenant").
+
+The usage read and `lpb payments check` name no actor, so they need the tenant's id from a setting,
+`LPB_CLEARINGHOUSE_TENANT_ID`, until `GET /v1/me` (ISS-29) can say it.
+
+### Not clean
+
+| Where | What | Smallest change proposed |
+| --- | --- | --- |
+| Five members of `AllocationManager` | No actor in their arguments | Built: the optional `AllocationsByActor` protocol |
+| `read_allocation`, `read_allowance` | The guide gives this read to `GET /actors/{a}/allocation` ("allotted, spent, available and status"), and that route answers the allocation's record, with no amounts (`http/clearinghouse.py`, `get_actor`). The only route that answers an allowance is the work half's `GET /v1/allowance`, which a clearinghouse serves today and a tenant admin may call for an actor of its tenant | The adapter calls `GET /v1/allowance`. The `clearinghouse` role (P8) mounts no work route, so before P8 one of the two changes: the allocation route answers the allowance, as the guide says, or the role keeps the allowance route. For the owner |
+| `read_allowance(allocation_id)` for an earlier allocation | The clearinghouse reads an actor's current allocation only. Reconciling an earlier allocation of an actor (#115, C9) reads the provider's `spent` by allocation id | Refused with the provider's 404. A route that reads an allocation by its id, if the read is wanted |
+| The tenant's id | `UsageSource.page` and the check command name no tenant, and the engine cannot ask who it is | Built: `LPB_CLEARINGHOUSE_TENANT_ID`. `GET /v1/me` (ISS-29) can replace it |
+| `revoke_key` | A rotation at the clearinghouse is one command, and the port's is two | Built: the second call sends nothing |
+| The grant members | Only a clearinghouse admin calls them | Built: refused in the engine, plainly |
+
 ## Upstream dependencies
 
 | Upstream | Needed? | Why / workaround |

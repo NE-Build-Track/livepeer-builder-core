@@ -128,7 +128,7 @@ field is kept as an alias: an old path is 404, and an old field is a 422.
 | Key commands, in embedded mode | `keys.get(admin, key_id)`, `keys.rotate(...)`, `keys.revoke(admin, key_id)` | Each also takes an optional `tenant_id`, the tenant a route named |
 | The `AllocationManager` port | | Three more methods, which the tenant desk calls on the grants manager: `read_grant`, `grant_balances`, `set_grant_status` |
 | The command a ledger record names | `create_grant` | `onboard_tenant`, and `set_tenant_status`. Records of `create_grant` are kept |
-| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id. `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
+| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id, and `create_grant` the next `grant_<n>` no grant holds (#165 review). `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
 | The `engine.started` log line | `grant_desk` | `tenant_desk` |
 
 **Before you start the new release:**

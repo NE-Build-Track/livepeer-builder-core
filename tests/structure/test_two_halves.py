@@ -60,6 +60,7 @@ GUIDE = "docs/design-docs/m4-guides/iss-31-payment-configurations.md"
 # Network capabilities, runner choice, the runner call, streaming, job records and the cost of each job.
 WORK = {
     "services/admission.py",
+    "services/cost_classes.py",  # the cost class of each attempt, a pure function
     "services/costs.py",
     "services/discovery.py",
     "services/dispatch.py",  # the paid call, which every way of running a job goes through (ISS-26)

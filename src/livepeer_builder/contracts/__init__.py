@@ -44,6 +44,7 @@ from livepeer_builder.contracts.health import (
     PaymentProbe,
     ProbeOutcome,
     PurgeReport,
+    Role,
 )
 from livepeer_builder.contracts.jobs import (
     Attempt,
@@ -170,6 +171,7 @@ __all__ = [
     "Reconciliation",
     "ResourceRef",
     "ResultRef",
+    "Role",
     "Runner",
     "RunnerGPU",
     "RunnerReply",

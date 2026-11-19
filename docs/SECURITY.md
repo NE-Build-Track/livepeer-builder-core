@@ -36,6 +36,15 @@ See [contracts/access.md](contracts/access.md#boundaries).
   admin token.
 - **Payment calls:** the caller's credential stops at the engine. Only the actor's allocation key
   goes to the signer.
+- **Roles (D84, #169):** `LPB_ROLE` decides what a deployment exposes. An engine in its `work` role
+  serves no clearinghouse route and no signer path, and holds no address or credential of Batteries or
+  a signer: its payment calls go to the clearinghouse, and a prompt or a result never does. An engine in
+  its `clearinghouse` role serves no job route and no other work route, runs no job, and does not start
+  without the private listener: onboarding, a grant's top-up, a tenant's status and the wallet report
+  are never on the address it publishes. Batteries and the signer are reached by that engine alone and
+  are published nowhere. A
+  setting that contradicts the role is refused at startup by name, with no value echoed
+  (`tests/unit/test_role_settings.py`, `tests/unit/test_roles.py`).
 - **Payment keys (D87, #166):** a clearinghouse gives an enterprise's engine one payment key for each
   actor, never the Batteries key behind it. A payment key finds one actor, and only while that actor
   holds the allocation the key was issued for: rotating it stops the old one at once, and revoking the

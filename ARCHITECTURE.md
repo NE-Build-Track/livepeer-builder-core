@@ -78,19 +78,32 @@ live in `http/` and `services/`. Every module of the two is one half's or shared
 | | Work half | Clearinghouse half | Shared |
 | --- | --- | --- | --- |
 | Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys, a tenant's access keys and usage, the runner list it publishes | Access, the operation ledger, health |
-| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse/tenants`, and the runner list at `/v1/clearinghouse/discovery` (#166), in two groups that also mount by themselves: a tenant's own routes (`mount_tenant_routes`) and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165), with the wallet report at `/v1/clearinghouse/wallet` (#167); and `http/signing.py` (`mount_signing_routes`): the signer's two paths at the root, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each called with a payment key (#166) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py`, and `http/listeners.py`: which listener serves which group of routes and which credentials it takes (#167) |
+| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse/tenants`, and the runner list at `/v1/clearinghouse/discovery` (#166), in two groups that also mount by themselves: a tenant's own routes (`mount_tenant_routes`) and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165), with the wallet report at `/v1/clearinghouse/wallet` (#167); and `http/signing.py` (`mount_signing_routes`): the signer's two paths at the root, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each called with a payment key (#166) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py`, and `http/listeners.py`: which role and which listener serve which group of routes, and which credentials a listener takes (#167, #169) |
 | Facade | `WorkApi` | `ClearinghouseApi` | `EngineApi` is both |
 | Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `issued_payment_keys`, `payment_signing`, `tenants`, `tenant_usage`, `runner_list`, `wallet`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
 
-`create_app` mounts both sets of routes on one app. Each set is one function that adds its routes to an
-app, so a deployment can serve one half: the role setting that chooses is #169.
+Each set is one function that adds its routes to an app, so a deployment can serve one half. The
+engine's role chooses (`LPB_ROLE`, #169), and `create_app` mounts the routes of that role:
+
+| `LPB_ROLE` | Serves | The payment ports reach | Starts |
+| --- | --- | --- | --- |
+| `both`, the default | Both halves' routes: self-hosted payments | Batteries and the signer | Everything |
+| `work` | The work half's routes | A payment clearinghouse (`runtime/payment_defaults.py`) | Everything; it is nobody's clearinghouse (`runtime/assembly.py`) |
+| `clearinghouse` | The clearinghouse half's routes, on a public and a private listener | Batteries and the signer | Discovery alone: it runs no jobs (`runtime/engine.py`, `services/admission.py`) |
+
+The role is read in four places and nowhere else: the settings check that the other settings agree with
+it (`config.py`), `payment_defaults` chooses the adapters, `assemble` leaves out what the role does not
+offer, and the listener table mounts its routes. What each role needs and refuses is in
+[RELIABILITY.md](docs/RELIABILITY.md#roles).
 
 The work half reaches payments through five ports and nothing else: signing inside `RunnerTransport`,
 `CredentialResolver`, `AllocationManager`, `AllowanceReader` and `UsageSource`. An enterprise that uses a
 payment clearinghouse runs the work half alone, with each port pointed at the clearinghouse (#168).
 `tests/structure/test_two_halves.py` enforces the seam and prints how to fix a violation: no module of
 one half imports the other, a work module names no payment protocol but the five ports, every protocol
-is classified, and each set of routes is typed against its own half of the facade.
+is classified, and each set of routes is typed against its own half of the facade. It states the rule
+for each role too (#169): every group of routes a role serves is of that role's half, the role alone
+chooses what is behind the five ports, and the adapters of the `work` role import nothing of Batteries.
 
 ## Providers
 
@@ -149,7 +162,7 @@ Each third-party package is confined to one module so a dependency change has on
   `ActorApi` where it only runs jobs; the application authenticates its own users and passes an
   `ActorContext`. The `AccessPolicy` still applies. Walkthrough:
   [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
-- **Service:** `lpb serve` runs the same engine behind REST. Requests are authenticated by the
+- **Service:** `lpb serve` runs the same engine behind REST, with the routes of its role. Requests are authenticated by the
   authenticator chain. Admin routes need an admin credential: every clearinghouse route, and in the
   work set the key routes, reconciliation and cost sync. A clearinghouse admin is an admin of every
   tenant and a tenant admin of its own ([access](docs/contracts/access.md#defaultpolicy)). A customized service calls

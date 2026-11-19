@@ -25,6 +25,16 @@ clearinghouse or shared. This file then holds five things:
 
 ``test_layers.py`` closes the other doors: nothing in ``services/`` or ``http/`` may import an adapter
 or an HTTP client, so no module of the work half can call Batteries or the signer itself.
+
+Since #169 a deployment runs one half by its role (``LPB_ROLE``), so the rule is also stated for each
+role, where it is stronger:
+
+6. Every group of routes a role serves is of that role's half: it is mounted from a module of that half
+   and typed against that half's facade. So an engine in its ``work`` role serves no route that can
+   reach a clearinghouse command, and one in its ``clearinghouse`` role none that can run a job.
+7. Behind the five ports of an engine in its ``work`` role is a payment clearinghouse and nothing else:
+   the role alone chooses the adapters, and the ones it chooses import nothing of Batteries. In its
+   other two roles the engine holds no clearinghouse adapter.
 """
 
 import ast
@@ -34,11 +44,13 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-from livepeer_builder import api, protocols
+from livepeer_builder import EngineSettings, api, protocols
+from livepeer_builder.http import listeners
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
 from livepeer_builder.protocols import clearinghouse, conditional_writes, persistence
+from livepeer_builder.runtime import payment_defaults
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.jobs import JobService
 
@@ -378,4 +390,88 @@ def test_the_allowance_read_goes_through_the_allowance_reader_port() -> None:
         "work route's: it finds the allocation with allocation_for and reads it with read_allowance, the "
         "two methods of AllowanceReader, so an engine that uses a payment clearinghouse can answer it "
         "from the clearinghouse. Put anything else it needs behind that port."
+    )
+
+
+# -- the rule, for each role (#169) -----------------------------------------------------------------------
+
+HALVES = {"work": (WORK, api.WorkApi), "clearinghouse": (CLEARINGHOUSE, api.ClearinghouseApi)}
+
+
+@pytest.mark.parametrize("group", listeners.ROUTE_GROUPS, ids=lambda group: group.mount.__name__)
+def test_every_group_of_routes_a_role_serves_is_of_that_roles_half(group: listeners.RouteGroup) -> None:
+    """The listener table says which half a group belongs to, and a role serves the groups of its half.
+    The group must be what the table says: defined in a module of that half, which the checks above
+    hold to that half, and typed against that half's facade, which mypy holds it to."""
+    modules, facade = HALVES[group.half]
+    module = module_file(group.mount.__module__)
+    assert module in modules, (
+        f"{group.mount.__name__} is in the {group.half} half in ROUTE_GROUPS (http/listeners.py) and is "
+        f"defined in {module}, which this file does not list in that half. An engine in its "
+        f"{group.half} role would serve it. Move the group to a module of its half, or change its half "
+        "in the table."
+    )
+    taken = typing.get_type_hints(group.mount)["engine"]
+    assert taken is facade, (
+        f"{group.mount.__name__} is in the {group.half} half in ROUTE_GROUPS and takes engine: "
+        f"{taken.__name__}. Type it against {facade.__name__} (src/livepeer_builder/api.py), so a route "
+        "an engine serves in one role cannot call the other half."
+    )
+
+
+def test_a_role_serves_its_own_half_and_both_serves_the_two() -> None:
+    assert listeners.ROLE_HALVES["work"] == {"work"}, FIVE
+    assert listeners.ROLE_HALVES["clearinghouse"] == {"clearinghouse"}, (
+        "A payment clearinghouse never runs jobs (D82): its role serves the clearinghouse half alone."
+    )
+    assert listeners.ROLE_HALVES["both"] == {"work", "clearinghouse"}
+
+
+def settings_in(role: str) -> EngineSettings:
+    """Settings in ``role``, past validation: only which adapters the role chooses is asked here."""
+    return EngineSettings.model_construct(role=role)  # type: ignore[arg-type]
+
+
+def test_the_role_alone_chooses_what_is_behind_the_five_ports() -> None:
+    """``work``: a payment clearinghouse. ``both`` and ``clearinghouse``: Batteries and the signer. No
+    other setting is asked, so no engine can be wired half one way and half the other."""
+
+    def keep(*_: object) -> None:
+        """Nothing is opened here: no adapter is built."""
+
+    def chosen(role: str) -> type:
+        return type(payment_defaults.payment_defaults(settings_in(role), keep, None, None))  # type: ignore[arg-type]
+
+    assert chosen("work") is payment_defaults.ThroughClearinghouse, FIVE
+    assert chosen("both") is payment_defaults.SelfHosted
+    assert chosen("clearinghouse") is payment_defaults.SelfHosted
+
+
+def adapters_named_in(class_name: str) -> set[str]:
+    """The adapter modules a class of ``runtime/payment_defaults.py`` imports, wherever in its body."""
+    tree = ast.parse((SRC / "runtime" / "payment_defaults.py").read_text())
+    chosen = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+    return {
+        node.module.removeprefix("livepeer_builder.adapters.")
+        for node in ast.walk(chosen)
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("livepeer_builder.adapters.")
+    }
+
+
+def test_an_engine_in_its_work_role_holds_no_adapter_that_reaches_batteries() -> None:
+    """Its allocation manager, allowance reader, usage source and credential resolver are the remote
+    adapters, and it signs through the gateway SDK's transport, pointed at the clearinghouse. The other
+    two roles hold no remote adapter: a clearinghouse is nobody's tenant."""
+    remote = adapters_named_in("ThroughClearinghouse")
+    assert remote == {"clearinghouse", "clearinghouse_wire", "sdk"}, (
+        f"ThroughClearinghouse (runtime/payment_defaults.py) builds adapters from {sorted(remote)}. "
+        f"{FIVE} For an engine in its work role each port reaches the payment clearinghouse: the remote "
+        "adapters (adapters/clearinghouse.py, over adapters/clearinghouse_wire.py) and the SDK's "
+        "transport (adapters/sdk.py), which signs there. It holds no address or credential of Batteries."
+    )
+    own = adapters_named_in("SelfHosted")
+    assert own == {"batteries", "sdk"}, (
+        f"SelfHosted (runtime/payment_defaults.py) builds adapters from {sorted(own)}. An engine in its "
+        "both or its clearinghouse role pays through Batteries and its own signer, and is no tenant of "
+        "another clearinghouse."
     )

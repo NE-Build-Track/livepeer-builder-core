@@ -1071,7 +1071,19 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Configuration | Who runs Batteries, the signer and the wallet | State |
 | --- | --- | --- |
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
-| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built but for the role setting and the two Compose projects that prove it (#169). M4 builds it as #162 to #169 |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built (M4, #162 to #169) |
+
+**The engine's role says which side a deployment is** (`LPB_ROLE`, D84, #169):
+
+| `LPB_ROLE` | Configuration | Routes | The payment ports reach |
+| --- | --- | --- | --- |
+| `both`, the default | Self-hosted payments | The work routes and the clearinghouse routes | Batteries and the signer |
+| `work` | The enterprise's side of a payment clearinghouse | The work routes | The payment clearinghouse |
+| `clearinghouse` | The clearinghouse | The clearinghouse routes, on a public and a private listener | Batteries and the signer |
+
+A deployment that sets nothing new is in its `both` role, and nothing it served or wired changed. What
+each role needs, refuses and starts is in [RELIABILITY.md](../RELIABILITY.md#roles), and the routes of
+each role are in [access.md](access.md#listeners).
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
 ([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166):
@@ -1087,14 +1099,17 @@ a tenant's actors and their allocations, and a tenant's access keys and usage, a
 `/v1/clearinghouse/discovery`, and the signer's two paths at the root. The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
-engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The
+engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets; an
+engine in its `work` role serves the work routes alone, and one in its `clearinghouse` role the
+clearinghouse routes alone (#169). The
 old paths of the routes that moved are under
 [Upgrading to the work routes and the clearinghouse routes](index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
 
 ## The remote adapters
 
 An engine that uses a payment clearinghouse (#168, D84) points its payment ports at the clearinghouse in
-place of Batteries and the signer. Three settings select that, set together or not at all:
+place of Batteries and the signer. It is an engine in its `work` role: `LPB_ROLE=work` selects the
+remote adapters (#169), and three settings, set together, say which clearinghouse:
 
 | Setting | Meaning |
 | --- | --- |
@@ -1106,6 +1121,9 @@ place of Batteries and the signer. Three settings select that, set together or n
   `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` or `LPB_SIGNER_URL`: an engine that uses a
   clearinghouse holds no address or credential of Batteries or a signer. The refusal names the
   settings and echoes no value.
+- **The role and the three settings go together** (#169). `LPB_ROLE=work` without them is refused, and
+  so are they with `LPB_ROLE` unset, `both` or `clearinghouse`: the role is the one switch, and the
+  three settings alone do not turn an engine into a clearinghouse's tenant.
 - **`LPB_SECRET_KEY` is required**, as with Batteries: the engine keeps each actor's payment key.
 - **`LPB_CLEARINGHOUSE_TIMEOUT_S`** (30) bounds each request. `LPB_OPERATION_STALE_S` must be at least
   four times it, as for `LPB_BATTERIES_TIMEOUT_S`.

@@ -1,9 +1,10 @@
-"""Admission limits: refuse work with NoCapacity *before* any payment (proposal gap 6)."""
+"""Admission limits: refuse work with NoCapacity *before* any payment (proposal gap 6). An engine that
+runs no jobs at all, a payment clearinghouse's (D82), admits none."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from livepeer_builder.errors import NoCapacity
+from livepeer_builder.errors import InvalidRequest, NoCapacity
 
 
 class AdmissionLimiter:
@@ -11,16 +12,28 @@ class AdmissionLimiter:
 
     Admitting and releasing never await, so no other task runs in between and no lock is needed. A
     release can therefore never be cancelled half way, even under anyio, which cancels every await of a
-    cancelled request task (#44 review)."""
+    cancelled request task (#44 review).
 
-    def __init__(self, max_concurrent: int | None, max_per_app: int | None) -> None:
+    ``runs_jobs=False`` is an engine in its ``clearinghouse`` role (#169): every job is refused here,
+    before it is recorded, a runner is chosen or a payment is asked for. It is not a lack of capacity,
+    so the answer is not ``NoCapacity``: a retry would be refused again."""
+
+    def __init__(
+        self, max_concurrent: int | None, max_per_app: int | None, *, runs_jobs: bool = True
+    ) -> None:
         self._max_concurrent = max_concurrent
         self._max_per_app = max_per_app
+        self._runs_jobs = runs_jobs
         self._running = 0
         self._per_app: dict[str, int] = {}
 
     @asynccontextmanager
     async def admit(self, app: str) -> AsyncIterator[None]:
+        if not self._runs_jobs:
+            raise InvalidRequest(
+                "this engine is in its clearinghouse role (LPB_ROLE) and runs no jobs: a job runs in "
+                "the enterprise's own engine, which pays through this one"
+            )
         if self._max_concurrent is not None and self._running >= self._max_concurrent:
             raise NoCapacity("engine is at its concurrent job limit")
         if self._max_per_app is not None and self._per_app.get(app, 0) >= self._max_per_app:

@@ -89,7 +89,7 @@ async def _self_hosted(settings: EngineSettings, client: httpx.AsyncClient) -> P
     probes = [await _signer(settings, client), await _batteries(settings, client)]
     if settings.batteries_grants_token is not None:
         probes.append(await _batteries_grants(settings, client))
-    return _checked("self_hosted", probes)
+    return _checked(settings, "self_hosted", probes)
 
 
 async def _signer(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentProbe:
@@ -193,7 +193,7 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     ]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
         probes.append(await _runner_list(client, settings.discovery_url, headers))
-    return _checked("clearinghouse", probes, grant)
+    return _checked(settings, "clearinghouse", probes, grant)
 
 
 async def _tenant_grant(
@@ -328,9 +328,13 @@ def _probe(
 
 
 def _checked(
-    configuration: PaymentConfiguration, probes: list[PaymentProbe], tenant: TenantGrant | None = None
+    settings: EngineSettings,
+    configuration: PaymentConfiguration,
+    probes: list[PaymentProbe],
+    tenant: TenantGrant | None = None,
 ) -> PaymentCheck:
     return PaymentCheck(
+        role=settings.role,
         configuration=configuration,
         ok=all(probe.outcome == "ok" for probe in probes),
         probes=tuple(probes),

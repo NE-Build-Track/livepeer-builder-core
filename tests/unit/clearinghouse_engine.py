@@ -1,5 +1,5 @@
-"""An engine's settings and default parts for the #168 assembly tests: self-hosted payments, or a payment
-clearinghouse named by its three settings."""
+"""An engine's settings and default parts for the #168 assembly tests: self-hosted payments, or an engine
+in its ``work`` role (#169) with the payment clearinghouse its three settings name."""
 
 import contextlib
 from collections.abc import AsyncIterator
@@ -23,7 +23,11 @@ def self_hosted(**values: object) -> EngineSettings:
 
 def with_clearinghouse(url: str = "http://127.0.0.1:9", **values: object) -> EngineSettings:
     return settings(
-        clearinghouse_url=url, clearinghouse_token=TOKEN, clearinghouse_tenant_id="grant_7", **values
+        role="work",
+        clearinghouse_url=url,
+        clearinghouse_token=TOKEN,
+        clearinghouse_tenant_id="grant_7",
+        **values,
     )
 
 

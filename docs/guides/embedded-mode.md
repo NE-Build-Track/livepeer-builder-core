@@ -135,6 +135,16 @@ await engine.payments.allot(
 The payment key (`lpg_`) stays in the `SecretStore`. Your app never holds it. On each job the engine
 resolves it and sends it to the signer. See [SECURITY.md](../SECURITY.md).
 
+**With a payment clearinghouse** the code above is the same, and the settings differ (D84, #169). The
+engine is in its `work` role: `LPB_ROLE=work`, with `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`
+and `LPB_CLEARINGHOUSE_TENANT_ID` from what the clearinghouse admin handed over at onboarding, and no
+Batteries or signer setting ([RELIABILITY.md](../RELIABILITY.md#roles)). The tenant is onboarded at the
+clearinghouse, not here, and its id is the `tenant_id` of every actor. `engine.payments.allot` then
+takes the amount from the tenant's grant at the clearinghouse and keeps the payment key the
+clearinghouse issues for the actor (`lpp_`) in your `SecretStore`; each job is signed there with it
+([payments.md](../contracts/payments.md#the-remote-adapters)). Allot through the engine: an allocation
+made at the clearinghouse directly gives your engine no payment key.
+
 ## 4. Call the services
 
 The same methods the REST routes wrap:

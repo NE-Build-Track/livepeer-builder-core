@@ -128,6 +128,7 @@ def clearinghouse(monkeypatch: pytest.MonkeyPatch, url: str, recorder: Recorder,
         "/v1/clearinghouse/discovery": (200, []),
     }
     values = {
+        "LPB_ROLE": "work",
         "LPB_CLEARINGHOUSE_URL": url,
         "LPB_CLEARINGHOUSE_TOKEN": TENANT_KEY,
         "LPB_CLEARINGHOUSE_TENANT_ID": "grant_7",
@@ -410,6 +411,7 @@ SELF_HOSTED = {
     "batteries_grants_token": GRANTS_TOKEN,
 }
 CLEARINGHOUSE = {
+    "role": "work",
     "clearinghouse_url": "https://clearinghouse.test",
     "clearinghouse_token": TENANT_KEY,
     "clearinghouse_tenant_id": "grant_7",

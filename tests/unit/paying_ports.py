@@ -10,9 +10,15 @@ loopback socket of its own, with the same signer behind it. The runner is the sa
 
 ``seen`` is every request that arrived at the clearinghouse's socket, in order: the tenant's routes and
 the signer's two paths alike.
+
+Since #169 each engine is in the role its side has: the self-hosted engine in ``both``, the enterprise's
+in ``work`` and the clearinghouse in ``clearinghouse``. The clearinghouse keeps its records in a file: its
+listener answers several requests at once (a payment cycle still on the wire while usage is read), and
+an in-memory database is one connection, which two requests at once could leave unusable.
 """
 
 import contextlib
+import tempfile
 from collections.abc import AsyncIterator
 
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
@@ -23,7 +29,7 @@ from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, make_engine, serve
 from tests.unit.clearinghouse_net import listening
 from tests.unit.livepeer_net import Net
-from tests.unit.payment_ports import GRANT_TOTAL, OPERATOR, Ports, Side, usd
+from tests.unit.payment_ports import CLEARINGHOUSE_ROLE, GRANT_TOTAL, OPERATOR, Ports, Side, usd
 
 FIXED_APP = "example/echo"
 LIVE_APP = "example/live"
@@ -84,7 +90,11 @@ async def _through_a_clearinghouse(
         transport=SdkRunnerTransport(net.url),  # the clearinghouse's signer: nobody else reaches it
     )
     async with contextlib.AsyncExitStack() as stack:
-        house = await stack.enter_async_context(make_engine(supply=house_supply))
+        folder = stack.enter_context(tempfile.TemporaryDirectory(prefix="lpb-clearinghouse-"))
+        database = f"sqlite+aiosqlite:///{folder}/clearinghouse.db"
+        house = await stack.enter_async_context(
+            make_engine(supply=house_supply, database_url=database, **CLEARINGHOUSE_ROLE)
+        )
         assert house.payments.tenants is not None
         one = await house.payments.tenants.onboard(OPERATOR, "one", usd(100), operation_ref="onboard-one")
         two = await house.payments.tenants.onboard(OPERATOR, "two", usd(100), operation_ref="onboard-two")
@@ -100,6 +110,7 @@ async def _through_a_clearinghouse(
                 "database_url": "sqlite+aiosqlite:///:memory:",
                 "secret_key": generate_secret_key(),
                 "log_json": False,
+                "role": "work",
                 "clearinghouse_url": served.url,
                 "clearinghouse_token": token,
                 "clearinghouse_tenant_id": one.tenant_id,

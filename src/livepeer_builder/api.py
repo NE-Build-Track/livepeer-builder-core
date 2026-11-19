@@ -12,7 +12,8 @@ The engine has two halves (D84), and the facade follows them:
   access keys, reconciliation and cost sync. The work routes are typed against it.
 - ``ClearinghouseApi``: the clearinghouse half: tenants and their grants, allotment and top-ups, and
   a tenant's access keys. The routes under ``/v1/clearinghouse`` are typed against it.
-- ``EngineApi``: both halves. ``create_app`` is typed against it.
+- ``EngineApi``: both halves, and the role that says which of them a deployment serves (``LPB_ROLE``).
+  ``create_app`` is typed against it.
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
 (the transport can stream), ``keys`` (engine API keys are on), ``payments.tenants`` (the tenant desk
@@ -50,6 +51,7 @@ from livepeer_builder.contracts import (
     Offering,
     OnboardedTenant,
     Reconciliation,
+    Role,
     Runner,
     SignerAnswer,
     SignerCall,
@@ -331,8 +333,12 @@ class PaymentsApi(AllowanceApi, PaymentsAdminApi, Protocol):
 
 
 class EngineApi(WorkApi, ClearinghouseApi, Protocol):
-    """The whole engine, both halves, as ``create_app`` uses it."""
+    """The whole engine, both halves, as ``create_app`` uses it. ``role`` says which half a deployment
+    serves (``LPB_ROLE``, #169): ``create_app`` mounts the routes of that role and no other. Every member
+    is there in every role; an engine in its ``clearinghouse`` role refuses to run a job."""
 
+    @property
+    def role(self) -> Role: ...
     @property
     def payments(self) -> PaymentsApi: ...
 

@@ -21,7 +21,7 @@ The engine has two sets of interfaces, and they point in opposite directions:
 
 | Set | Module | Who implements it | Who calls it |
 | --- | --- | --- | --- |
-| What the engine **offers** | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
+| What the engine **offers** | `api.py` (`ActorApi`, `WorkApi`, `ClearinghouseApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
 | What the engine **needs** | `protocols/` (ports) | adapters, the store, or the enterprise | services only |
 
 ```mermaid
@@ -64,8 +64,10 @@ classDiagram
 
 ## What the engine offers: the facade
 
-`api.py` splits the engine by role. An application that only runs jobs types against `ActorApi`;
-`http/` types against `EngineApi`. Optional capabilities are `X?` members decided once at construction:
+`api.py` splits the engine into its two halves (D84). An application that only runs jobs types against
+`ActorApi`. `WorkApi` is the work half: the actor API, and the engine's own access keys, reconciliation
+and cost sync. `ClearinghouseApi` is the clearinghouse half: allotment, top-ups and the grant desk. In
+`http/` each set of routes is typed against its half, and `create_app` against `EngineApi`, which is both. Optional capabilities are `X?` members decided once at construction:
 `jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.grants`
 (the grant desk is on). Callers check for `None`; nothing probes with `hasattr`.
 
@@ -82,19 +84,26 @@ classDiagram
         +async start() None
         +async stop() None
     }
-    class AdminApi {
+    class WorkApi {
+        <<interface>>
+        +costs EngineCostsApi
+        +keys KeysApi?
+        +authenticator Authenticator
+        +events EventFeed
+        +sessions SessionManager
+    }
+    class ClearinghouseApi {
         <<interface>>
         +payments PaymentsAdminApi
         +keys KeysApi?
-        +costs CostsAdminApi
+        +authenticator Authenticator
+        +health() EngineHealth
+        +async start() None
+        +async stop() None
     }
     class EngineApi {
         <<interface>>
         +payments PaymentsApi
-        +costs EngineCostsApi
-        +authenticator Authenticator
-        +events EventFeed
-        +sessions SessionManager
     }
     class JobsApi {
         <<interface>>
@@ -165,17 +174,19 @@ classDiagram
     }
     class BuilderEngine
     class FakeEngine
-    ActorApi <|-- EngineApi
-    AdminApi <|-- EngineApi
+    ActorApi <|-- WorkApi
+    WorkApi <|-- EngineApi
+    ClearinghouseApi <|-- EngineApi
     ActorApi --> JobsApi
     ActorApi --> CostsApi
     ActorApi --> DiscoveryApi
     ActorApi --> AllowanceApi
     JobsApi --> StreamingApi
     StreamingApi ..> JobStreamApi : returns
-    AdminApi --> PaymentsAdminApi
-    AdminApi --> KeysApi
-    AdminApi --> CostsAdminApi
+    WorkApi --> KeysApi
+    WorkApi --> CostsAdminApi
+    ClearinghouseApi --> PaymentsAdminApi
+    ClearinghouseApi --> KeysApi
     PaymentsAdminApi --> GrantsApi
     BuilderEngine ..|> EngineApi
     FakeEngine ..|> ActorApi

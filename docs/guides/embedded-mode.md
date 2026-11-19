@@ -165,7 +165,8 @@ Failures are Python exceptions, not HTTP statuses:
 
 Depend on the narrowest Protocol your code uses, not on `BuilderEngine`
 ([livepeer_builder.api](../../src/livepeer_builder/api.py)): `ActorApi` to run jobs and read their
-results, costs and catalog; `AdminApi` for operator work; `EngineApi` for both.
+results, costs and catalog; `WorkApi` when you also manage the engine's access keys, reconcile or
+sync costs; `ClearinghouseApi` for allotment, top-ups and the grant desk; `EngineApi` for all of it.
 
 ```python
 from livepeer_builder import ActorApi, ActorContext, JobRequest
@@ -179,8 +180,8 @@ async def answer(engine: ActorApi, actor: ActorContext, prompt: dict[str, str]) 
         return b"".join([chunk async for chunk in stream])
 ```
 
-Optional capabilities are `X | None` members: `jobs.streaming`, and on `AdminApi`, `keys` and
-`payments.grants`. Check for `None`; do not probe with `hasattr`.
+Optional capabilities are `X | None` members: `jobs.streaming`, `keys` on `WorkApi`, and
+`payments.grants` on `ClearinghouseApi`. Check for `None`; do not probe with `hasattr`.
 
 Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps them in step:
 

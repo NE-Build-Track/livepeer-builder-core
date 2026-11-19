@@ -7,12 +7,13 @@ See AGENTS.md and ARCHITECTURE.md at the repository root.
 
 from livepeer_builder.api import (
     ActorApi,
-    AdminApi,
+    ClearinghouseApi,
     EngineApi,
     GrantsApi,
     JobStreamApi,
     KeysApi,
     StreamingApi,
+    WorkApi,
 )
 from livepeer_builder.config import EngineSettings, generate_secret_key
 from livepeer_builder.contracts import (
@@ -88,7 +89,6 @@ __all__ = [
     "ActorAllocation",
     "ActorApi",
     "ActorContext",
-    "AdminApi",
     "AllotRequest",
     "Allowance",
     "AlreadyAllotted",
@@ -99,6 +99,7 @@ __all__ = [
     "AuthRequest",
     "BuilderEngine",
     "CallTimings",
+    "ClearinghouseApi",
     "CostSummary",
     "CursorMismatch",
     "Decorate",
@@ -156,5 +157,6 @@ __all__ = [
     "SyncReport",
     "TopUpRequest",
     "UnsupportedForBackend",
+    "WorkApi",
     "generate_secret_key",
 ]

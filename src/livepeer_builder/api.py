@@ -1,18 +1,23 @@
-"""What the engine offers: the consumer-facing surface, as Protocols split by role.
+"""What the engine offers: the consumer-facing surface, as Protocols.
 
 ``protocols`` holds what the engine *needs* (ports it calls). This module holds what it *offers*
 (what applications and the HTTP layer call). ``BuilderEngine`` satisfies these structurally, and so
 does ``livepeer_builder.testing.FakeEngine`` for the actor API.
 
+The engine has two halves (D84), and the facade follows them:
+
 - ``ActorApi``: what an application calls on behalf of its actors (its users), plus the engine's
   lifecycle. Type against this when you only run jobs.
-- ``AdminApi``: operator work (allotment, grants, keys, reconciliation).
-- ``EngineApi``: both, plus authentication and the M4 placeholders. ``http/`` is typed against it.
+- ``WorkApi``: the work half. The actor API, and what an admin of the engine does there: its own
+  access keys, reconciliation and cost sync. The work routes are typed against it.
+- ``ClearinghouseApi``: the clearinghouse half: allotment and top-ups, and the grant desk. The routes
+  under ``/v1/clearinghouse`` are typed against it.
+- ``EngineApi``: both halves. ``create_app`` is typed against it.
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
 (the transport can stream), ``keys`` (engine API keys are on), ``payments.grants`` (the grant desk is
 on). Check for ``None`` before use; never probe with ``hasattr``. Members are read-only properties so
-``EngineApi`` can narrow a member it combines.
+a wider protocol can narrow a member it combines.
 """
 
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
@@ -137,7 +142,61 @@ class ActorApi(Protocol):
     async def stop(self) -> None: ...
 
 
-# -- administration --------------------------------------------------------------------------------
+# -- the work half ---------------------------------------------------------------------------------
+
+
+class KeysApi(Protocol):
+    """Engine API keys: present only when they are on (``api_keys`` is not ``None``)."""
+
+    async def issue(
+        self,
+        admin: ActorContext,
+        *,
+        kind: CredentialKind,
+        actor_id: str,
+        tenant_id: str = "default",
+        permissions: Iterable[str] | None = None,
+        label: str = "",
+        operation_ref: str,
+    ) -> IssuedKey: ...
+    async def list_keys(self, admin: ActorContext, tenant_id: str | None = None) -> list[AccessKey]: ...
+    async def get(self, admin: ActorContext, key_id: str) -> AccessKey: ...
+    async def rotate(
+        self, admin: ActorContext, key_id: str, *, label: str | None = None, operation_ref: str
+    ) -> IssuedKey: ...
+    async def revoke(self, admin: ActorContext, key_id: str) -> None: ...
+    async def bootstrap_admin(self, label: str = "bootstrap") -> IssuedKey: ...
+
+
+class CostsAdminApi(Protocol):
+    async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]: ...
+    async def reconcile(
+        self, admin: ActorContext, tenant_id: str, actor_id: str | None, allocation_id: str | None = None
+    ) -> Reconciliation: ...
+    async def sync_now(self, admin: ActorContext) -> SyncReport: ...
+
+
+class EngineCostsApi(CostsApi, CostsAdminApi, Protocol):
+    pass
+
+
+class WorkApi(ActorApi, Protocol):
+    """The work half: jobs, runners, streaming and the cost of each job, with the engine's own access
+    keys, reconciliation and cost sync. Of payments it offers the allowance read alone."""
+
+    @property
+    def costs(self) -> EngineCostsApi: ...
+    @property
+    def keys(self) -> KeysApi | None: ...
+    @property
+    def authenticator(self) -> Authenticator: ...
+    @property
+    def events(self) -> EventFeed: ...
+    @property
+    def sessions(self) -> SessionManager: ...
+
+
+# -- the clearinghouse half ------------------------------------------------------------------------
 
 
 class GrantsApi(Protocol):
@@ -176,46 +235,19 @@ class PaymentsAdminApi(Protocol):
     def grants(self) -> GrantsApi | None: ...
 
 
-class KeysApi(Protocol):
-    """Engine API keys: present only when they are on (``api_keys`` is not ``None``)."""
-
-    async def issue(
-        self,
-        admin: ActorContext,
-        *,
-        kind: CredentialKind,
-        actor_id: str,
-        tenant_id: str = "default",
-        permissions: Iterable[str] | None = None,
-        label: str = "",
-        operation_ref: str,
-    ) -> IssuedKey: ...
-    async def list_keys(self, admin: ActorContext, tenant_id: str | None = None) -> list[AccessKey]: ...
-    async def get(self, admin: ActorContext, key_id: str) -> AccessKey: ...
-    async def rotate(
-        self, admin: ActorContext, key_id: str, *, label: str | None = None, operation_ref: str
-    ) -> IssuedKey: ...
-    async def revoke(self, admin: ActorContext, key_id: str) -> None: ...
-    async def bootstrap_admin(self, label: str = "bootstrap") -> IssuedKey: ...
-
-
-class CostsAdminApi(Protocol):
-    async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]: ...
-    async def reconcile(
-        self, admin: ActorContext, tenant_id: str, actor_id: str | None, allocation_id: str | None = None
-    ) -> Reconciliation: ...
-    async def sync_now(self, admin: ActorContext) -> SyncReport: ...
-
-
-class AdminApi(Protocol):
-    """Operator work: allotment and top-ups, the grant desk, keys, reconciliation."""
+class ClearinghouseApi(Protocol):
+    """The clearinghouse half: allotment and top-ups, and the grant desk. It runs no job. Like the work
+    half, it authenticates its callers, reports health and has the engine's lifecycle."""
 
     @property
     def payments(self) -> PaymentsAdminApi: ...
     @property
     def keys(self) -> KeysApi | None: ...
     @property
-    def costs(self) -> CostsAdminApi: ...
+    def authenticator(self) -> Authenticator: ...
+    def health(self) -> EngineHealth: ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
 
 
 # -- the whole engine ------------------------------------------------------------------------------
@@ -225,29 +257,17 @@ class PaymentsApi(AllowanceApi, PaymentsAdminApi, Protocol):
     pass
 
 
-class EngineCostsApi(CostsApi, CostsAdminApi, Protocol):
-    pass
-
-
-class EngineApi(ActorApi, AdminApi, Protocol):
-    """The whole engine, as the HTTP layer uses it."""
+class EngineApi(WorkApi, ClearinghouseApi, Protocol):
+    """The whole engine, both halves, as ``create_app`` uses it."""
 
     @property
     def payments(self) -> PaymentsApi: ...
-    @property
-    def costs(self) -> EngineCostsApi: ...
-    @property
-    def authenticator(self) -> Authenticator: ...
-    @property
-    def events(self) -> EventFeed: ...
-    @property
-    def sessions(self) -> SessionManager: ...
 
 
 __all__ = [
     "ActorApi",
-    "AdminApi",
     "AllowanceApi",
+    "ClearinghouseApi",
     "CostsAdminApi",
     "CostsApi",
     "DiscoveryApi",
@@ -260,4 +280,5 @@ __all__ = [
     "PaymentsAdminApi",
     "PaymentsApi",
     "StreamingApi",
+    "WorkApi",
 ]

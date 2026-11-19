@@ -267,8 +267,9 @@ checks stop that:
   effectively none. Provisioning takes zero or more (`ProvisionAmount`); funding an allocation, funding a
   grant and creating a grant take an amount within the format and bound (`FundingAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
-  `ValidationError` in process (for `grants.create_grant`, when it is called), before the operation
-  ledger records anything and before any provider call. A zero or negative funding or grant amount is
+  `ValidationError` when an in-process request is built, and `InvalidRequest` (400) from
+  `grants.create_grant`, which takes the amount itself and names the field, not the value (#106
+  review). Each comes before the operation ledger records anything and before any provider call. A zero or negative funding or grant amount is
   still the command's own refusal, 400, unless it also breaks the format: one with more than 18
   decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than

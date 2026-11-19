@@ -90,15 +90,12 @@ class PaymentsService:
         forwarder: SignerForwarder | None = None,
         currency: Currency = "USD",
         allowances: AllowanceReader | None = None,
-        issues_payment_keys: bool = True,
     ) -> None:
         self._store = store
         self._writes = ActorWrites(store, clock)
         self._secrets = secrets
         self._keys = PaymentKeys(secrets, self._writes)
-        # The keys an enterprise's engine pays with (#166). An engine that uses a clearinghouse is handed
-        # them and issues none of its own (#168).
-        self._issued = IssuedPaymentKeys(store if issues_payment_keys else None, clock)
+        self._issued = IssuedPaymentKeys(store, clock)  # the keys an enterprise's engine pays with (#166)
         self._policy = policy
         self._clock = clock
         self._engine_id = engine_id
@@ -113,6 +110,11 @@ class PaymentsService:
         )
         self._currency = currency
         self._allowances = allowances  # None: the engine's own records and its provider
+
+    def issue_no_payment_keys(self) -> None:
+        """For an engine that uses a clearinghouse (#168): it is handed its actors' payment keys, issues
+        none of its own and recognizes none. Called once, when the engine is assembled."""
+        self._issued = IssuedPaymentKeys(None, self._clock)
 
     # -- CredentialResolver ---------------------------------------------------------------------
 

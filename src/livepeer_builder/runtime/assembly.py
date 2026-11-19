@@ -323,9 +323,9 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         forwarder=forwarder,
         currency=settings.default_currency,
         allowances=parts.allowances,
-        # an engine that uses a clearinghouse is handed its payment keys and issues none (#168)
-        issues_payment_keys=not settings.uses_clearinghouse,
     )
+    if settings.uses_clearinghouse:  # it is handed its actors' payment keys and issues none (#168)
+        payments.issue_no_payment_keys()
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
     jobs = JobService(
         parts.store,

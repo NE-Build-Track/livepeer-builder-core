@@ -58,9 +58,7 @@ CONFINED: dict[str, tuple[str, ...]] = {
     # a runner call's address is handed to aiohttp as built, so yarl cannot re-normalize it (#113, C3).
     "yarl": ("adapters/discovery_inventory.py", "adapters/runner_address.py"),
     # sdk.py fetches /discovery itself so price_usd stays a Decimal (livepeer-python-gateway#88).
-    # adapters/signer_forward.py is the one module that hands a signer call to the signer for a
-    # clearinghouse (#166).
-    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py", "adapters/signer_forward.py"),
+    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py"),
     "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),
@@ -141,7 +139,7 @@ def test_layer_edges(path: Path) -> None:
 
 @pytest.mark.parametrize("path", module_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_third_party_packages_are_confined(path: Path) -> None:
-    relative = str(path.relative_to(SRC))
+    relative = path.relative_to(SRC).as_posix()
     for module, line in imports_of(path):
         package = module.split(".")[0]
         homes = CONFINED.get(package)

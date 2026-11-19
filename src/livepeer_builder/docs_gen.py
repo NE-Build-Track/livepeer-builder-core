@@ -8,22 +8,25 @@ from livepeer_builder.store.schema import metadata
 
 
 async def render_openapi() -> str:
-    from livepeer_builder.http import create_app
+    from livepeer_builder.http.app import shared_app
+    from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
+    from livepeer_builder.http.work import mount_work_routes
     from livepeer_builder.runtime.assembly import EngineSupply
     from livepeer_builder.testing import FakeAllocationManager
 
-    # Every optional capability on (API keys by default; the tenant desk needs a grants manager, and the
-    # signer's two paths a signer address), so the committed spec documents the whole API. A deployment
-    # without one lacks those routes. Nothing is called: the app is built and never started.
+    # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
+    # so the committed spec documents the whole API. A deployment without one lacks those routes.
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
-        signer_url="http://127.0.0.1:9",
     )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:
-        schema = create_app(engine, manage_lifecycle=False).openapi()
+        app = shared_app(engine, manage_lifecycle=False)
+        mount_work_routes(app, engine)
+        mount_clearinghouse_routes(app, engine)
+        schema = app.openapi()
     finally:
         await engine.stop()
     schema["info"]["version"] = "generated"  # keep the file stable across dev versions

@@ -290,10 +290,8 @@ named here show each one.
   `FixedClock`, `ScriptedTransport`, `ScriptedStreamTransport` (with `StreamScript` for chunks,
   pauses, mid-stream errors and slow opens), `FakeAllocationManager` (which holds grants and refuses
   as Batteries does: `add_grant(id)` gives it a tenant's grant), `FakeUsageSource` (whose `tenant_page`
-  returns one tenant's rows, by `grant_of`, a map from an allocation to its grant),
-  `FakeSigningTransport` (a scripted transport that also stands in for the signer behind a
-  clearinghouse: `forwarded` lists each call it was handed, with the credential, and `signer_answers`
-  scripts what it answers) and `MemorySecretStore`.
+  returns one tenant's rows, by `grant_of`, a map from an allocation to its grant) and
+  `MemorySecretStore`.
 - **Wire it** into `BuilderEngine.create(settings, supply=EngineSupply(...))` with an in-memory SQLite
   store, as `tests/unit/test_extension_examples.py` does.
 - **A replacement store** must pass `tests/store/test_contract.py` and `test_durability.py`.

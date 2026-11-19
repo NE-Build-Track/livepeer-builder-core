@@ -541,8 +541,7 @@ async def test_an_allocation_allotted_from_another_grant_before_165_stays_on_tha
     # the record as a release before #165 left it: the tenant's free name, and the grant beside it
     async with store.engine.begin() as conn:
         await conn.execute(update(t.actors).where(t.actors.c.actor_id == "alice").values(tenant_id="default"))
-    record = alice.allocation.model_copy(update={"tenant_id": "default"})
-    assert (await store.get_actor("default", "alice")) == record
+    assert (await store.get_actor("default", "alice")) == alice.model_copy(update={"tenant_id": "default"})
     topped = await engine.payments.top_up(
         admin, "default", "alice", TopUpRequest(amount=five, operation_ref="t")
     )

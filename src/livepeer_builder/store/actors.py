@@ -14,7 +14,7 @@ from livepeer_builder.store import schema as t
 async def get_actor(conn: AsyncConnection, tenant_id: str, actor_id: str) -> ActorAllocation | None:
     query = select(t.actors).where(t.actors.c.tenant_id == tenant_id, t.actors.c.actor_id == actor_id)
     row = (await conn.execute(query)).mappings().first()
-    return actor_from_row(row) if row else None
+    return _actor(row) if row else None
 
 
 async def save_actor(conn: AsyncConnection, actor: ActorAllocation) -> None:
@@ -111,7 +111,7 @@ async def list_actors(conn: AsyncConnection, tenant_id: str | None) -> list[Acto
     query = select(t.actors).order_by(t.actors.c.tenant_id, t.actors.c.actor_id)
     if tenant_id is not None:
         query = query.where(t.actors.c.tenant_id == tenant_id)
-    return [actor_from_row(row) for row in (await conn.execute(query)).mappings()]
+    return [_actor(row) for row in (await conn.execute(query)).mappings()]
 
 
 async def save_sighting(conn: AsyncConnection, seen: SeenActor) -> None:
@@ -149,6 +149,6 @@ def _values(actor: ActorAllocation) -> dict[str, Any]:
     return actor.model_dump(exclude={"secret_ref"}) | {"secret_ref": actor.secret_ref.ref}
 
 
-def actor_from_row(row: Any) -> ActorAllocation:
+def _actor(row: Any) -> ActorAllocation:
     data = {key: row[key] for key in ActorAllocation.model_fields if key != "secret_ref"}
     return ActorAllocation.model_validate(data | {"secret_ref": SecretRef(ref=row["secret_ref"])})

@@ -14,7 +14,12 @@ call the same service with the tenant they resolved:
   the tenant is the credential's. A tenant admin or auditor credential identifies one tenant, so these
   take those two kinds only, and refuse a clearinghouse admin, which has no tenant of its own (403);
 - **the one a clearinghouse admin names**, at the same paths under
-  ``/v1/clearinghouse/tenants/{tenant_id}``.
+  ``/v1/clearinghouse/tenants/{tenant_id}``. These take a clearinghouse admin only, and refuse a tenant
+  credential, its own tenant's path included (403).
+
+So no route lets one tenant's credential name another tenant: the check of the tenant in a path against
+the credential's, which the services' policy still makes for an embedded caller, has nothing to refuse
+here.
 
 The set is five groups, each one function, so a deployment can serve them on different listeners (#167):
 
@@ -204,18 +209,28 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
 
 def mount_named_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     """Add a tenant's routes at paths that name the tenant, under ``/v1/clearinghouse/tenants/{tenant_id}``:
-    what a clearinghouse admin calls for the tenant it chooses."""
+    what a clearinghouse admin calls for the tenant it chooses. Any other credential is refused (403)
+    before the service is asked: a tenant admin or auditor calls its own tenant's routes, which name none."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     def named_tenant(actor: Actor, tenant_id: PathId) -> TenantScope:
-        return TenantScope(actor, tenant_id)
+        return _named(actor, tenant_id)
 
     # A tenant whose grant the route reads: its id goes into the payment provider's URL path, so it is one
     # path segment (#113, C10), a 422 otherwise.
     def named_grant_tenant(actor: Actor, tenant_id: GrantTenantId) -> TenantScope:
-        return TenantScope(actor, tenant_id)
+        return _named(actor, tenant_id)
 
     _mount_tenant_scoped(app, engine, TENANT, named_tenant, named_grant_tenant)
+
+
+def _named(actor: ActorContext, tenant_id: str) -> TenantScope:
+    if actor.credential_kind != "clearinghouse_admin":
+        raise AccessDenied(
+            "a path that names a tenant is a clearinghouse admin's: a tenant admin or auditor credential "
+            "calls its own tenant's routes, under /v1/clearinghouse, which name none"
+        )
+    return TenantScope(actor, tenant_id)
 
 
 def _mount_tenant_scoped(

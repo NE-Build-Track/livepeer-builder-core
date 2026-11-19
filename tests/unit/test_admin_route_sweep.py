@@ -7,8 +7,10 @@ sync. The routes come from ``app.routes``, so an admin route added later under o
 without editing this test; one whose body has no sample fails here and says so.
 
 #165: every route that names a tenant in its path answers 403 to the admin of another tenant, before any
-lookup or provider call. Those routes come from ``app.routes`` too, so one added later is swept, or fails
-here until its body has a sample.
+lookup or provider call. Since 19 November 2026 (D87 point 3, as amended) such a route is a clearinghouse
+admin's, and it answers 403 to a tenant admin of any tenant, its own included; the tenant admin's own
+routes name no tenant (tests/unit/test_tenant_from_credential.py). Those routes come from ``app.routes``
+too, so one added later is swept, or fails here until its body has a sample.
 """
 
 import re
@@ -132,8 +134,8 @@ async def test_every_route_that_names_a_tenant_is_403_for_another_tenants_admin_
     manager: FakeAllocationManager,
 ) -> None:
     """The tenant ``default`` has an actor with an allocation, a key and a grant, so nothing is refused
-    here for being missing: each 403 is the policy's, for the tenant in the path. Both tenants' grants
-    exist at the provider, which hears of none of it."""
+    here for being missing. Both tenants' grants exist at the provider, which hears of none of it. Since
+    19 November 2026 each 403 is for the kind: a path that names a tenant is a clearinghouse admin's."""
     app, client, engine, params = surface
     manager.add_grant("other")
     outsider = await engine.keys.issue(
@@ -166,7 +168,10 @@ async def test_every_route_that_names_a_tenant_is_403_for_another_tenants_admin_
     assert manager.calls == calls_before  # the payment provider was never called
     assert await everything_stored(engine) == stored_before  # and nothing was read into a change
 
-    # the same key is an admin of its own tenant: the refusals above are for the tenant, not the kind
+    # The same key is refused at its own tenant's path too, since 19 November 2026: the refusals above are
+    # for the kind. It is an admin of its own tenant at the routes that name none, and reads that tenant.
     own = {"Authorization": f"Bearer {outsider.token}"}
-    assert (await client.get("/v1/clearinghouse/tenants/other/actors", headers=own)).status_code == 200
-    assert (await client.get("/v1/clearinghouse/tenants/other/grant", headers=own)).status_code == 200
+    assert (await client.get("/v1/clearinghouse/tenants/other/actors", headers=own)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/tenants/other/grant", headers=own)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/actors", headers=own)).json() == []
+    assert (await client.get("/v1/clearinghouse/grant", headers=own)).json()["tenant_id"] == "other"

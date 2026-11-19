@@ -6,9 +6,15 @@ spend the wallet. A deployment that sets ``LPB_HTTP_PRIVATE_PORT`` serves two li
 - the **public listener** serves no route of the private group (404, as for any path the engine does
   not know, with a credential or without one), and refuses a clearinghouse admin credential with 403 on
   every route that takes a credential;
-- the **private listener** serves every route, to a clearinghouse admin only.
+- the **private listener** serves every route but a tenant's own routes, to a clearinghouse admin only.
 
-With one listener, which is the default, nothing changes: every route, and every kind of credential.
+Since 19 November 2026 (D87 point 3, as amended) a tenant's routes come in two forms: its own, which
+name no tenant and take a tenant admin or auditor credential, on the public listener; and the same
+routes naming the tenant, which take a clearinghouse admin credential, on the private listener. The
+private group holds the second form.
+
+With one listener, which is the default, every route is served, and each takes the kinds it takes on
+two: a tenant's own routes a tenant credential, and the paths that name a tenant a clearinghouse admin.
 
 The signer's two paths (#166) are served on every listener and take a payment key, which is not an
 access key of any kind. So the listener's rule does not reach them: an access key is 401 there on every
@@ -43,7 +49,8 @@ from tests.conftest import EngineFactory
 from tests.unit.test_admin_route_sweep import SAMPLE_BODIES, everything_stored, filled
 from tests.unit.test_tenant_from_credential import SHORT_PATHS
 
-TENANTS = "/v1/clearinghouse/tenants"
+OWN = "/v1/clearinghouse"  # a tenant's own routes: no tenant in the path
+TENANTS = OWN + "/tenants"
 TENANT = TENANTS + "/{tenant_id}"
 # The guide's private table (docs/design-docs/m4-guides/iss-31-payment-configurations.md, "Routes").
 PRIVATE = {
@@ -314,20 +321,26 @@ async def test_the_private_listener_refuses_every_credential_but_a_clearinghouse
         assert (await client.get(f"{TENANTS}/default/actors")).status_code == 401
 
 
-async def test_one_listener_serves_every_route_to_every_kind_of_credential(
+async def test_one_listener_serves_every_route_and_each_form_of_a_tenants_routes_to_its_own_kinds(
     clearinghouse: Clearinghouse,
 ) -> None:
-    """The default, and what self-hosted payments runs: no private listener, so nothing is refused that
-    was accepted before #167. The clearinghouse admin key does everything it did."""
+    """The default, and what self-hosted payments runs: no private listener, so every route is served.
+    The clearinghouse admin key does everything it did, at the paths that name a tenant; since 19
+    November 2026 a tenant's admin and auditor call their own routes, which name none."""
     house = clearinghouse
     only = create_app(house.engine, manage_lifecycle=False)
-    assert served(only).keys() >= PRIVATE
+    assert served(only).keys() >= PRIVATE | SHORT_PATHS
     async with client_of(only) as client:
         assert (await client.get(TENANTS, headers=house.clearinghouse_admin)).status_code == 200
         assert (await client.get("/v1/keys", headers=house.clearinghouse_admin)).status_code == 200
-        assert (await client.get(f"{TENANTS}/default/grant", headers=house.tenant_admin)).status_code == 200
-        assert (await client.get(f"{TENANTS}/default/actors", headers=house.auditor)).status_code == 200
+        named = f"{TENANTS}/default/grant"
+        assert (await client.get(named, headers=house.clearinghouse_admin)).status_code == 200
+        assert (await client.get(OWN + "/grant", headers=house.tenant_admin)).status_code == 200
+        assert (await client.get(OWN + "/actors", headers=house.auditor)).status_code == 200
         assert (await client.get("/v1/jobs", headers=house.actor)).status_code == 200
+        # and each form refuses the other's kinds
+        assert (await client.get(named, headers=house.tenant_admin)).status_code == 403
+        assert (await client.get(OWN + "/grant", headers=house.clearinghouse_admin)).status_code == 403
 
 
 async def test_a_route_an_extension_adds_takes_the_credentials_its_listener_takes(
@@ -490,21 +503,34 @@ class KindFromHeader:
 
 async def test_the_rule_is_by_the_kind_of_credential_whatever_verified_it(make_engine: EngineFactory) -> None:
     """A token an identity provider issued with the admin scope is a clearinghouse admin credential too
-    (``LPB_JWT_ADMIN_SCOPE``), and so is one a deployment's own authenticator makes. The listener asks
-    the kind, not where the credential came from."""
+    (``LPB_JWT_ADMIN_SCOPE``), and so is one a deployment's own authenticator makes. The listener, and
+    each form of a tenant's routes, ask the kind, not where the credential came from. A form a listener
+    does not serve is 404 there, whoever asks."""
     engine = await make_engine(supply=EngineSupply(api_keys=None, authenticators=(KindFromHeader(),)))
-    actors = f"{TENANTS}/default/actors"
+    own, named = OWN + "/actors", f"{TENANTS}/default/actors"
     expected = {
-        "public": {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
-        "private": {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
-        "only": {"clearinghouse_admin": 200, "tenant_admin": 200, "auditor": 200},
+        "public": {
+            own: {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
+            named: {"clearinghouse_admin": 404, "tenant_admin": 404, "auditor": 404},
+        },
+        "private": {
+            own: {"clearinghouse_admin": 404, "tenant_admin": 404, "auditor": 404},
+            named: {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
+        },
+        "only": {
+            own: {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
+            named: {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
+        },
     }
-    for listener, answers in expected.items():
+    for listener, paths in expected.items():
         app = create_app(engine, manage_lifecycle=False, listener=listener)  # type: ignore[arg-type]
         async with client_of(app) as client:
-            got = {kind: (await client.get(actors, headers={"x-kind": kind})).status_code for kind in answers}
-            assert got == answers, listener
-            assert (await client.get(actors)).status_code == 401
+            for path, answers in paths.items():
+                got = {
+                    kind: (await client.get(path, headers={"x-kind": kind})).status_code for kind in answers
+                }
+                assert got == answers, (listener, path)
+                assert (await client.get(path)).status_code in (401, 404)
 
 
 # -- the signer's two paths (#166): on every listener, for a payment key ---------------------------------

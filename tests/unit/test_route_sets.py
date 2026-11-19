@@ -6,10 +6,13 @@ tenants, grants, allocations and payment keys. Each half's routes are one unit: 
 halves share (health, the error answers, the request limit). ``create_app`` mounts both.
 
 Since #165 every clearinghouse route that names a tenant is under ``/v1/clearinghouse/tenants``; the
-runner list a clearinghouse publishes is beside them, at ``/v1/clearinghouse/discovery`` (#166). The set
-is two groups that mount by themselves too: what a tenant's own admin calls (``mount_tenant_routes``),
-and what only a clearinghouse admin does (``mount_clearinghouse_admin_routes``), which #167 serves on a
-private listener.
+runner list a clearinghouse publishes is beside them, at ``/v1/clearinghouse/discovery`` (#166). Since
+19 November 2026 (D87 point 3, as amended) a tenant's admin and auditor call the tenant's routes at paths
+that name no tenant, and the clearinghouse admin at the paths under ``/v1/clearinghouse/tenants``. The
+set is five groups that mount by themselves too: a tenant's own routes (``mount_tenant_routes``), the
+same routes naming the tenant (``mount_named_tenant_routes``), the runner list, the signer's two paths,
+and what only a clearinghouse admin does (``mount_clearinghouse_admin_routes``). #167 serves the first
+on the public listener and the second and the last on the private one.
 
 Reconciliation, cost sync and the engine's own access keys are work routes
 (tests/unit/test_work_route_paths.py).
@@ -342,9 +345,9 @@ async def test_the_actor_list_that_took_a_tenant_in_its_query_is_a_tenants_own_a
 # -- the role chooses the set (#169) ---------------------------------------------------------------------
 
 # The clearinghouse half's routes on each of two listeners, with every optional group on, beside the
-# signer's two paths: a tenant's own routes on the public one, and what only a clearinghouse admin does on
-# the private one.
-PUBLIC_SET = OWN_TENANT.every | NAMED.every | RUNNER_LIST
+# signer's two paths: a tenant's own routes, which name no tenant, on the public one; the same routes
+# naming the tenant, and what only a clearinghouse admin does, on the private one (19 November 2026).
+PUBLIC_SET = OWN_TENANT.every | RUNNER_LIST
 PRIVATE_SET = NAMED.every | RUNNER_LIST | ADMIN_SET
 
 
@@ -380,8 +383,8 @@ async def test_the_clearinghouse_role_mounts_the_clearinghouse_set_on_two_listen
 ) -> None:
     """Health and the clearinghouse half. The public listener has a tenant's own routes, the runner list
     and the signer's two paths; the private one has the runner list, the signer's two paths and what a
-    clearinghouse admin does. No job route, no catalog, no cost route, no allowance read and none of
-    the engine's own key routes."""
+    clearinghouse admin does, the tenant's routes at the paths that name it among them. No job route, no
+    catalog, no cost route, no allowance read and none of the engine's own key routes."""
     engine = await in_role(make_engine, "clearinghouse")
     public = served(create_app(engine, manage_lifecycle=False, listener="public"))
     private = served(create_app(engine, manage_lifecycle=False, listener="private"))

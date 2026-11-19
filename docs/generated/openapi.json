@@ -3857,7 +3857,8 @@
         ],
         "summary": "List Actors",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -3916,7 +3917,8 @@
         ],
         "summary": "Get Actor",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       },
       "post": {
@@ -3983,7 +3985,8 @@
         ],
         "summary": "Allot",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4041,7 +4044,8 @@
         ],
         "summary": "Revoke",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4110,7 +4114,8 @@
         ],
         "summary": "Rotate Payment Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4178,7 +4183,8 @@
         ],
         "summary": "Set Status",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4246,7 +4252,8 @@
         ],
         "summary": "Top Up",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4295,7 +4302,8 @@
         ],
         "summary": "Get Grant",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4399,7 +4407,8 @@
         ],
         "summary": "List Tenant Keys",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       },
       "post": {
@@ -4456,7 +4465,8 @@
         ],
         "summary": "Issue Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4514,7 +4524,8 @@
         ],
         "summary": "Get Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4565,7 +4576,8 @@
         ],
         "summary": "Revoke Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },
@@ -4633,7 +4645,8 @@
         ],
         "summary": "Rotate Tenant Key",
         "tags": [
-          "clearinghouse half"
+          "clearinghouse half",
+          "private listener"
         ]
       }
     },

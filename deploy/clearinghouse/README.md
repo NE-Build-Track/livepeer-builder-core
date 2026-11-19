@@ -10,7 +10,7 @@ livepeer/clearinghouse-batteries, whose own binary and config keys say `clearing
 
 | Service | What it is | Reached by |
 | --- | --- | --- |
-| `engine` | This repository, served with `lpb serve`, with `LPB_ROLE=clearinghouse`. Its **public listener** (`:8080`) serves a tenant's own routes, the runner list and the signer's two paths. Its **private listener** (`127.0.0.1:8081` in its own container) also serves what only a clearinghouse admin does: onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report. It serves no job route and runs no job | The host, at `127.0.0.1:8180` (the public listener). An enterprise project, at `http://clearinghouse:8080` on the network `lpb-clearinghouse-edge` |
+| `engine` | This repository, served with `lpb serve`, with `LPB_ROLE=clearinghouse`. Its **public listener** (`:8080`) serves a tenant's own routes, which name no tenant and take it from the tenant admin or auditor key, the runner list and the signer's two paths. Its **private listener** (`127.0.0.1:8081` in its own container) serves what a clearinghouse admin does: the same tenant's routes at paths that name the tenant (`/v1/clearinghouse/tenants/{tenant_id}/...`), onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report, with the runner list and the signer's two paths. It serves no job route and runs no job | The host, at `127.0.0.1:8180` (the public listener). An enterprise project, at `http://clearinghouse:8080` on the network `lpb-clearinghouse-edge` |
 | `batteries` | Clearinghouse Batteries v0.0.3 (`03bc9fb`): the authorization webhook, the management API, embedded Kafka, accounting, and its on-chain listener (`--enable-onchain-listener`), which reports the wallet's deposit and reserve | The engine only, on the `inside` network. Published nowhere |
 | `signer` | livepeer/node `eee09c4` remote signer (v1.0.7), in the `batteries` network namespace. It signs with the wallet's key | The engine only, at `http://batteries:8937`. Published nowhere |
 | `discovery` | livepeer/node's `livepeer-discovery` from that commit, static mode: the orchestrators in `config/discovery.toml`. The engine publishes what it reads as the clearinghouse's runner list | The engine only. Published nowhere |
@@ -64,12 +64,15 @@ private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse
 private -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"name":"Acme","amount":{"amount":"5","currency":"USD"},"operation_ref":"onboard-acme"}' \
   http://127.0.0.1:8081/v1/clearinghouse/tenants            # onboards a tenant: its id and its admin key
+private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants/$TENANT/actors
+                                                            # one tenant's actors: the path names it
 curl -s http://127.0.0.1:8180/readyz                        # the public listener; "role": "clearinghouse"
 ```
 
 - **A clearinghouse admin key does nothing on the public listener** (403), and the routes above are 404
   there ([access.md](../../docs/contracts/access.md#listeners)). A tenant's admin and its engine use the
-  public listener, and are refused on the private one.
+  public listener, at paths that name no tenant (`/v1/clearinghouse/grant`, `/v1/clearinghouse/usage`,
+  `/v1/clearinghouse/actors/...`, `/v1/clearinghouse/keys/...`), and are refused on the private one.
 - **Hand a tenant three things:** the public listener's address, the tenant's id and its tenant admin
   key. Its engine holds nothing else of this project
   ([payments.md](../../docs/contracts/payments.md#the-remote-adapters)).

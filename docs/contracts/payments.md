@@ -112,8 +112,15 @@ clearinghouse has one for each enterprise app.
 - **One grant, for life.** It is prepaid and topped up as needed. A tenant that must stop is paused. The
   engine never closes a grant.
 - **A tenant admin divides the grant and cannot enlarge it.** The kinds and what each may do are in
-  [access.md](access.md#defaultpolicy). Another tenant's id in a path is 403, before any lookup or
-  provider call.
+  [access.md](access.md#defaultpolicy).
+- **A tenant's routes come in two forms** (D87 point 3, as Mike amended it on 19 November 2026). Its
+  admin and auditor call them at paths that name no tenant: the tenant is the credential's, and a
+  clearinghouse admin, which has no tenant of its own, is 403 there. The clearinghouse admin calls the
+  same routes at paths that name the tenant, under `/v1/clearinghouse/tenants/{tenant_id}`, and a tenant
+  credential is 403 there, its own tenant's path included, before any lookup or provider call. Both
+  forms call the same service with the tenant they resolve, so their answers are the same. No route lets
+  one tenant's credential name another tenant: on its own routes another tenant's actor or key, named by
+  its id, is missing.
 
 | Route | Who may call | What it does |
 | --- | --- | --- |
@@ -122,22 +129,26 @@ clearinghouse has one for each enterprise app.
 | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
 | `GET /v1/clearinghouse/wallet` | A clearinghouse admin | The wallet's deposit and reserve, the total of unspent grants and the signer's readiness ([the wallet report](#the-wallet-report)) |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
-| `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment) |
-| `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
+| `GET /v1/clearinghouse/grant` | The tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
+| `GET /v1/clearinghouse/actors` | The tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
+| `GET`, `POST /v1/clearinghouse/actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | The tenant's admin (the read: its auditor too) | [Allotment](#allotment) |
+| `GET`, `POST /v1/clearinghouse/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | The tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
+| `GET /v1/clearinghouse/usage` | The tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
+| Each of the five rows above under `/v1/clearinghouse/tenants/{tenant_id}`: `.../grant`, `.../actors`, `.../actors/{actor_id}/allocation` and its commands, `.../keys` and its commands, `.../usage` | A clearinghouse admin | The same, for the tenant the path names. A `tenant_admin` key is issued here (`POST .../keys` with kind `tenant_admin`) |
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
 | `POST /sign-orchestrator-info`, `POST /generate-live-payment` | A payment key | The signer's two paths, at the root: who the signer is, and one signed payment against that actor's allocation ([signing through a clearinghouse](#signing-through-a-clearinghouse)) |
 
-A clearinghouse admin may call every route but the last, for any tenant: the signer's two paths take a
-payment key and nothing else. The first five are what only a clearinghouse admin does; they are one
-group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A deployment with a private
-listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the public listener those
-five are 404, and a clearinghouse admin credential is 403 on every route that takes an access
-credential. The signer's two paths are served on both listeners, to a payment key
-([access.md](access.md#listeners)). With one listener, which is the default and what self-hosted
-payments runs, every route is served there and nothing is refused.
+The first five rows are what only a clearinghouse admin does; they are one group in
+`http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A tenant's routes are two more groups, one
+for each form (`mount_tenant_routes`, which names no tenant, and `mount_named_tenant_routes`), and the
+runner list is a group of its own. The signer's two paths take a payment key and nothing else. A
+deployment with a private listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves the clearinghouse admin's
+groups, the paths that name a tenant among them, there only: they are 404 on the public listener, and a
+clearinghouse admin credential is 403 on every route there that takes an access credential. A tenant's
+own routes are served on the public listener only. The runner list and the signer's two paths are
+served on both ([access.md](access.md#listeners)). With one listener, which is the default and what
+self-hosted payments runs, every route is served there, and each form of a tenant's routes takes the
+kinds it takes on two listeners.
 
 **The tenant desk.** Onboarding, the tenant list, the grant read and the tenant's status use the grants
 credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`,
@@ -176,8 +187,9 @@ the payment provider"), from Batteries' own 404, and so are its grant read, top-
 
 ### A tenant's usage
 
-`GET /v1/clearinghouse/tenants/{tenant_id}/usage` returns the tenant's payment records, and none of
-another tenant's (#166). It is what an enterprise's engine reads in place of Batteries' usage feed (the
+`GET /v1/clearinghouse/usage` returns the tenant's payment records to its admin or auditor, the tenant
+being the credential's, and `GET /v1/clearinghouse/tenants/{tenant_id}/usage` returns them to a
+clearinghouse admin. Neither returns another tenant's (#166). It is what an enterprise's engine reads in place of Batteries' usage feed (the
 `UsageSource` port, #168), so it answers with that port's own page, `UsagePage`, and not a summary of it.
 
 | Field | What it holds |
@@ -199,9 +211,10 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
 - **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
   refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
   Batteries' is about 135 for a grant id it issues.
-- **Who may call.** That tenant's admin or auditor, and a clearinghouse admin for any tenant. The tenant
-  is named to the access policy first, so another tenant's id is 403 before Batteries is asked. An actor
-  key is 403.
+- **Who may call.** The tenant's admin or auditor at `GET /v1/clearinghouse/usage`, for the tenant of
+  its credential, and a clearinghouse admin for any tenant at the path that names it. A tenant
+  credential at a path that names a tenant is 403, and a clearinghouse admin at the path that names
+  none, before Batteries is asked. The tenant is named to the access policy first. An actor key is 403.
 - **When Batteries fails.** Unreachable is 503. An error status, or an answer the engine cannot read, is
   502 (Batteries' own 400, 404, 409 or 422 keeps its status). Never an empty page.
 - **No orchestrator.** A Batteries usage row names no orchestrator at v0.0.3. Batteries keeps it on the
@@ -209,7 +222,7 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   fetch it. An enterprise's engine has the orchestrator on its own attempt record, which cost sync joins
   the row to.
 - **Records from before a tenant's id was its grant's id** are the grant's: the route reads the grant
-  whose id the path names. A free-named tenant (`default`) is no grant, so its page is empty, and its
+  whose id the path, or the credential, names. A free-named tenant (`default`) is no grant, so its page is empty, and its
   allocations' records are read under the id of the grant they were allotted from
   ([below](#records-from-before-a-tenants-id-was-its-grants-id)).
 - **Optional.** The route is present with a usage source that reads one tenant's records
@@ -330,8 +343,10 @@ The same limit applies to every id, label and reference a request carries (`Stor
 because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** A tenant's id is its grant's id,
-and the grant routes (`.../tenants/{tenant_id}/grant`, `.../grant/top-up`, `.../status`) place it in the
-provider's path. There the tenant id is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`,
+and the grant routes (`.../tenants/{tenant_id}/grant`, `.../grant/top-up`, `.../status`, and
+`.../tenants/{tenant_id}/usage`) place it in the provider's path. On a tenant's own routes
+(`GET /v1/clearinghouse/grant` and `/usage`) the tenant is the credential's, as its key holds it, and no
+path carries it. In a path the tenant id is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`,
 `%`, control characters and the values `.` and `..`, which a client or server would read as another path.
 Whitespace around the id is removed before the check, so the value checked is the value the engine uses:
 `" .."` is refused as `..`, and `" grant_1"` is used as `grant_1`. It is a 422 over REST before the
@@ -415,7 +430,8 @@ checks stop that:
   answers with the revoked actor as stored, as a repeat does. If the actor was allotted again
   before it wrote, it writes nothing and answers with the allocation it revoked, `revoked`: the
   answer to a revoke is never an active actor, and the new allocation is read with
-  `GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation`. Before, each of these commands saved the
+  the actor's allocation route (`GET /v1/clearinghouse/actors/{actor_id}/allocation`, or under
+  `/v1/clearinghouse/tenants/{tenant_id}` for a clearinghouse admin). Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
   revoked, and any of them could put a revoked actor back to `active`.
 
@@ -1046,8 +1062,9 @@ The allowance is a cap that **can overshoot**: Batteries authorizes on a positiv
 not reserve funds, so accounting lag can take a balance slightly negative. Guaranteed hard limits are
 stretch scope.
 
-`GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation` answers the same amounts for
-a tenant's admin or auditor, and for a clearinghouse admin (#168). Its answer is `AllocationRead`: every
+The actor's allocation route answers the same amounts: `GET /v1/clearinghouse/actors/{actor_id}/allocation`
+for the tenant's admin or auditor, and `GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation`
+for a clearinghouse admin (#168). Its answer is `AllocationRead`: every
 field of the allocation's record, where it was, and `allowance`, which is what `GET /v1/allowance`
 answers for that actor (`allocation_id`, `status`, `granted`, `spent`, `available`). Both routes make
 the one read of the provider through the same `AllowanceReader` member, so an amount means the same on

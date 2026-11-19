@@ -38,6 +38,8 @@ from tests.conftest import EngineFactory
 from tests.unit.role_engines import CLEARINGHOUSE, PRIVATE_PORT, ROLES, Role, in_role, served
 from tests.unit.test_admin_route_sweep import everything_stored, filled
 from tests.unit.test_listeners import body_for, refused
+from tests.unit.test_tenant_from_credential import NAMED as TENANT
+from tests.unit.test_tenant_from_credential import SHORT_PATHS
 
 LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention"}
 JOBS = {
@@ -201,8 +203,10 @@ async def test_a_clearinghouse_keeps_its_listeners_rules(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     """The role chooses the half, and the listener still chooses within it (#167): what only a
-    clearinghouse admin does is on the private listener alone, a clearinghouse admin key does nothing
-    on the public one, and any other key does nothing on the private one."""
+    clearinghouse admin does, and a tenant's routes at the paths that name the tenant, are on the
+    private listener alone; a tenant's own routes, which name none, are on the public one alone (D87
+    point 3, as amended on 19 November 2026). A clearinghouse admin key does nothing on the public
+    listener, and any other key does nothing on the private one."""
     house = await in_role(make_engine, "clearinghouse")
     request = AllotRequest(
         operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=usd("5")
@@ -212,13 +216,16 @@ async def test_a_clearinghouse_keeps_its_listeners_rules(
     public = create_app(house, manage_lifecycle=False, listener="public")
     private = create_app(house, manage_lifecycle=False, listener="private")
     private_only = served(private).keys() - served(public).keys()
-    assert private_only == {
+    public_only = served(public).keys() - served(private).keys()
+    named = {(method, path.replace("/v1/clearinghouse", TENANT, 1)) for method, path in SHORT_PATHS}
+    assert private_only == named | {
         ("POST", "/v1/clearinghouse/tenants"),
         ("GET", "/v1/clearinghouse/tenants"),
         ("POST", "/v1/clearinghouse/tenants/{tenant_id}/grant/top-up"),
         ("POST", "/v1/clearinghouse/tenants/{tenant_id}/status"),
         ("GET", "/v1/clearinghouse/wallet"),
     }
+    assert public_only == SHORT_PATHS
     params = {"tenant_id": "default", "actor_id": "alice", "key_id": "key_1"}
     stored_before, calls_before = await everything_stored(house), list(manager.calls)
     wrong, swept = await refused(
@@ -237,7 +244,7 @@ async def test_a_clearinghouse_keeps_its_listeners_rules(
             await client.get("/v1/clearinghouse/tenants", headers=keys["clearinghouse_admin"])
         ).status_code == 200
     async with client_of(public) as client:
-        actors = "/v1/clearinghouse/tenants/default/actors"
+        actors = "/v1/clearinghouse/actors"  # a tenant's own route: the tenant is the key's
         assert (await client.get(actors, headers=keys["tenant_admin"])).status_code == 200
 
 

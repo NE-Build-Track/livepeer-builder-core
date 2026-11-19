@@ -9,8 +9,11 @@ and its access keys under ``/v1/clearinghouse/actors`` and ``/v1/clearinghouse/k
 resolved, so their answers are the same.
 
 One rule on every listener: a short path takes the tenant kinds only, and a clearinghouse admin is
-refused there, for it has no tenant of its own. With no tenant in the path there is no other tenant to
-name: an id of another tenant's actor or key reads as missing, as the services already answer.
+refused there, for it has no tenant of its own; a path that names a tenant takes a clearinghouse admin
+only, and a tenant credential is refused there, its own tenant's path included. So no route lets one
+tenant's credential name another tenant: on a short path an id of another tenant's actor or key reads as
+missing, as the services already answer. The public listener serves the short paths, the private
+listener the paths that name a tenant, and one listener both.
 
 Two tenants on one engine with one listener (``default`` and ``other``), each with an actor ``alice`` of
 its own, so an answer that mixed the two would show.
@@ -348,3 +351,103 @@ async def test_a_credential_of_no_tenant_is_refused_on_every_short_path(
     assert not wrong, f"a short path took a {who} credential:\n" + "\n".join(wrong)
     assert manager.calls == calls_before
     assert await everything_stored(desk.engine) == stored_before
+
+
+# -- the paths that name a tenant: the clearinghouse admin's ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "who", ["default tenant admin", "other tenant admin", "default auditor", "other auditor", "actor"]
+)
+async def test_every_path_that_names_a_tenant_refuses_a_tenant_credential_its_own_tenant_included(
+    desk: Desk, manager: FakeAllocationManager, who: str
+) -> None:
+    """The replacement of #165's sweep, "another tenant in the path is 403": a tenant credential is 403 on
+    every path that names a tenant, the tenant's own included, before any lookup or provider call. The
+    paths come from the app, so one added later is swept."""
+    tenant_id, kind = who.split()[0], who.split(maxsplit=1)[-1]
+    headers = desk.actor if who == "actor" else getattr(desk.tenants[tenant_id], kind.split()[-1])
+    params = {"tenant_id": "default", "actor_id": "alice", "key_id": desk.tenants["default"].admin_key_id}
+    named = {
+        (method, route.path): route
+        for route in desk.app.routes
+        if isinstance(route, APIRoute) and "{tenant_id}" in route.path
+        for method in route.methods
+    }
+    assert len(named) >= len(SHORT_PATHS) + 2  # the tenant's routes, a grant's top-up and a tenant's status
+    stored_before, calls_before = await everything_stored(desk.engine), list(manager.calls)
+    wrong: list[str] = []
+    for (method, path), route in sorted(named.items()):
+        answer = await desk.client.request(
+            method, filled(path, params), json=body_for(route), headers=headers
+        )
+        if answer.status_code != 403:
+            wrong.append(f"{method} {path}: {answer.status_code} {answer.text[:120]}")
+    assert not wrong, f"a path that names a tenant took a {who} credential:\n" + "\n".join(wrong)
+    assert manager.calls == calls_before
+    assert await everything_stored(desk.engine) == stored_before
+
+
+async def test_a_tenant_credential_on_a_tenants_named_route_is_told_where_its_own_are(desk: Desk) -> None:
+    refused = await desk.client.get(SHORT + "/tenants/default/actors", headers=desk.tenants["default"].admin)
+    assert refused.status_code == 403
+    assert "clearinghouse admin" in refused.json()["error"] and "/v1/clearinghouse" in refused.json()["error"]
+
+
+async def test_the_clearinghouse_admin_acts_on_the_tenant_it_names(
+    desk: Desk, manager: FakeAllocationManager
+) -> None:
+    """Each tenant's routes at the path that names it, for the tenant it names and no other."""
+    client, admin = desk.client, desk.clearinghouse_admin
+    for tenant in desk.tenants.values():
+        named = NAMED.replace("{tenant_id}", tenant.id)
+        assert (await client.get(named + "/grant", headers=admin)).json()["tenant_id"] == tenant.id
+        actors = (await client.get(named + "/actors", headers=admin)).json()
+        assert {row["tenant_id"] for row in actors} == {tenant.id}
+        allotted = await client.post(
+            named + "/actors/dave/allocation",
+            json={"amount": USD, "operation_ref": f"dave-{tenant.id}"},
+            headers=admin,
+        )
+        assert allotted.status_code == 201 and allotted.json()["tenant_id"] == tenant.id
+        assert manager.allocations[allotted.json()["allocation_id"]].grant_id == tenant.id
+        issued = await client.post(
+            named + "/keys",
+            json={"kind": "tenant_admin", "actor_id": "second", "operation_ref": f"second-{tenant.id}"},
+            headers=admin,
+        )
+        assert issued.status_code == 201 and issued.json()["key"]["tenant_id"] == tenant.id
+        usage = (await client.get(named + "/usage", headers=admin)).json()
+        assert {row["allocation_id"] for row in usage["items"]} == {tenant.alice}
+
+
+# -- where each form is served ---------------------------------------------------------------------------
+
+
+async def test_each_listener_serves_its_own_form_and_its_own_schema_says_so(
+    make_engine: EngineFactory,
+) -> None:
+    """The public listener serves the short paths and no path that names a tenant; the private one the
+    paths that name a tenant and no short path; one listener both. Each app's own ``/openapi.json`` lists
+    what it serves and nothing else."""
+    engine = await make_engine()
+    named = routes_of(mount_named_tenant_routes, engine).keys()
+    for listener, has, lacks in (
+        ("public", SHORT_PATHS, named),
+        ("private", named, SHORT_PATHS),
+        ("only", SHORT_PATHS | named, set()),
+    ):
+        app = create_app(engine, manage_lifecycle=False, listener=listener)  # type: ignore[arg-type]
+        served = {
+            (method, route.path)
+            for route in app.routes
+            if isinstance(route, APIRoute)
+            for method in route.methods
+        }
+        assert served >= has and not served & lacks, listener
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://e") as client:
+            schema = (await client.get("/openapi.json")).json()
+        published = {
+            (method.upper(), path) for path, methods in schema["paths"].items() for method in methods
+        }
+        assert published >= has and not published & lacks, listener

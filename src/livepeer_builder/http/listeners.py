@@ -23,8 +23,9 @@ engine:
   only: any other credential is 403 there.
 
 ``PUBLIC_ONLY`` is a tenant's own routes, which name no tenant and take a tenant admin or auditor
-credential (D87 point 3, as amended on 19 November 2026): the private listener takes neither kind, so it
-does not serve them.
+credential; ``PRIVATE_ONLY`` holds the same routes at paths that name the tenant, which take a
+clearinghouse admin only (D87 point 3, as amended on 19 November 2026). Each listener serves the form
+the credentials it takes can call.
 
 Without ``LPB_HTTP_PRIVATE_PORT`` the engine has **one listener**, which serves every group of its role
 to every kind of credential the group takes, as it did before #167. An engine in its ``clearinghouse``
@@ -91,8 +92,8 @@ ROUTE_GROUPS: tuple[RouteGroup, ...] = (
     RouteGroup(mount_work_routes, WORK_HALF),
     # a tenant's own routes, which name no tenant: a tenant admin's or an auditor's, never on the private one
     RouteGroup(mount_tenant_routes, CLEARINGHOUSE_HALF, served_on="public"),
-    # the same routes with the tenant in the path
-    RouteGroup(mount_named_tenant_routes, CLEARINGHOUSE_HALF),
+    # the same routes with the tenant in the path: a clearinghouse admin's, never on the public one
+    RouteGroup(mount_named_tenant_routes, CLEARINGHOUSE_HALF, served_on="private"),
     # the runner list a clearinghouse publishes, which any credential of a tenant reads (#166)
     RouteGroup(mount_runner_list_routes, CLEARINGHOUSE_HALF),
     # the signer's two paths, which an enterprise's engine calls with a payment key (#166)

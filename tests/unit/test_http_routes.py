@@ -443,12 +443,14 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
         operator, kind="auditor", actor_id="dashboard", operation_ref="issue-http_routes-397"
     )
     as_auditor = {"Authorization": f"Bearer {auditor.token}"}
+    # an auditor reads its tenant's actors at its own route, which names no tenant (19 November 2026)
+    assert (await client.get("/v1/clearinghouse/actors", headers=as_auditor)).json() == listed.json()
     assert (
         await client.get("/v1/clearinghouse/tenants/default/actors", headers=as_auditor)
-    ).status_code == 200
+    ).status_code == 403  # a path that names a tenant is a clearinghouse admin's
     assert (await client.get(TENANTS, headers=as_auditor)).status_code == 403  # every tenant's
     funded = await client.post(
-        ALLOCATION + "/top-up",
+        "/v1/clearinghouse/actors/alice/allocation/top-up",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
         headers=as_auditor,
     )

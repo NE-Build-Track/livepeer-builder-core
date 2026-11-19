@@ -13,6 +13,7 @@ from livepeer_builder.contracts import ActorContext, Currency, GrantRecord, Mone
 from livepeer_builder.contracts.common import TopUpAmount
 from livepeer_builder.errors import InvalidRequest, ProviderError
 from livepeer_builder.protocols import AccessPolicy, AllocationManager
+from livepeer_builder.services.arguments import checked
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 
 _GRANT = TypeAdapter(GrantRecord)
@@ -63,7 +64,7 @@ class GrantDesk:
             raise InvalidRequest("a grant name is required")
         if amount.currency != self._currency or amount.amount <= 0:
             raise InvalidRequest(f"a grant needs a positive amount in {self._currency}")
-        amount = _AMOUNT.validate_python(amount)  # the body's rule, for an in-process call (#112, C11)
+        amount = checked(_AMOUNT, amount, "amount")  # the body's rule, for an in-process call (#112, C11)
 
         # Batteries has no idempotency key on grant creation (Q5): the tag finds an earlier run's grant
         tag = idempotency_key(

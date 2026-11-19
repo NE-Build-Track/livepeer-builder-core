@@ -21,7 +21,6 @@ from livepeer_builder.contracts.operations import OperationRef
 if TYPE_CHECKING:
     from livepeer_builder.contracts.discovery import PriceInfo
 
-AllocationMode = Literal["per_actor"]  # the only mode (D82): one allocation and key per actor
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
 
 

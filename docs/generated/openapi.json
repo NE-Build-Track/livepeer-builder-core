@@ -465,11 +465,6 @@
       "EngineHealth": {
         "additionalProperties": false,
         "properties": {
-          "allocation_mode": {
-            "const": "per_actor",
-            "title": "Allocation Mode",
-            "type": "string"
-          },
           "cost_sync_at": {
             "anyOf": [
               {
@@ -561,7 +556,6 @@
           "cost_sync_at",
           "cost_sync_error",
           "running_jobs",
-          "allocation_mode",
           "version"
         ],
         "title": "EngineHealth",

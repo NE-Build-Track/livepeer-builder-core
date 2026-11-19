@@ -65,8 +65,9 @@ no setting.
 
 Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors,
 the last cost sync, its error and the count of usage rows it has set aside (`cost_sync_set_aside`),
-running jobs, the allocation mode and the version. Logs are JSON lines; every
-line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
+running jobs and the version. It no longer reports an `allocation_mode`: `per_actor` is the only one
+(D82). Logs are JSON lines; every line has an `event` field (for example `jobs.recovered` or
+`costs.sync_failed`).
 
 `/readyz` needs no credential, so `discovery_error` and `cost_sync_error` are short fixed codes, never
 an exception's text (#113, C7). The text, which can quote a URL, a provider's words or a store error's

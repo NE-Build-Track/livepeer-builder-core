@@ -56,7 +56,7 @@ Funded evidence for both configurations is ISS-36, not this plan.
 - [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`. Built and in
   review: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
-  review.
+  review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
 
 Each pull request ticks its own line here in the same change.
 

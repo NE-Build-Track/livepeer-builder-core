@@ -3,7 +3,8 @@
 ## Configuration
 
 Settings come from `LPB_<FIELD>` environment variables (`EngineSettings.from_env`). Defaults favor
-safety: a durable SQLite file, `per_actor` payments, and admission limits on.
+safety: a durable SQLite file and admission limits on. Payments are always `per_actor`: no setting
+chooses an allocation mode or holds a payment key (D82).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -11,11 +12,10 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate`. With `false`, `start()` compares the database's revision with the package's and refuses to start on any mismatch, behind or ahead. The message names both revisions and the database that was checked, says to run `lpb migrate` against that database when it is behind, and says to start the release that migrated it when its revision is one this package does not know. It checks at start only, so replicas already running through a rolling deploy keep running |
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
 | `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused), with no userinfo, query or fragment. Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record the reader cannot use is skipped (`discovery.inventory_skipped`); an answer with records and no readable runner is a failed poll (#114, C28) |
-| `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
-| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required in `per_actor` mode with a payment provider when the built-in secret store is used: without it the engine refuses to start ([payments.md](contracts/payments.md#provisioning)) |
+| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it the engine refuses to start ([payments.md](contracts/payments.md#provisioning)) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |

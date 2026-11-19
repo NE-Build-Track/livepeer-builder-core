@@ -51,5 +51,5 @@ The orchestrator mints a fresh manifest for each 402 challenge (`core.RandomMani
 bytes from `math/rand`, written as 8 hex characters. It rejects a duplicate only while the first
 session is live (409). See T13.
 
-Signer headers are per call, so `per_actor` mode sends each actor's own key. **Deferred beyond M2:**
+Signer headers are per call, so the engine sends each actor's own key. **Deferred beyond M2:**
 #70 (runner pool size and ordering) and multipart request bodies (D24).

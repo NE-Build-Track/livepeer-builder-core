@@ -372,7 +372,6 @@ classDiagram
         +async delete(ref) None
     }
     class PaymentsService {
-        +mode per_actor or per_application
         -manager AllocationManager?
         -secrets SecretStore
         -store ActorRepo

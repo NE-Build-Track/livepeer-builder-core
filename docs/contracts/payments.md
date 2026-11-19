@@ -1,7 +1,8 @@
 # Payments and cost contract
 
-**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026) · **Code:** `contracts/payments.py`,
-`contracts/costs.py`, `services/payments.py`, `services/costs.py`, `adapters/batteries.py`
+**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82 (18 November 2026) · **Code:**
+`contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/costs.py`,
+`adapters/batteries.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.
@@ -66,13 +67,31 @@ signer's or Batteries' own text:
 
 ## Allocation modes
 
+`per_actor` is the only allocation mode (D82, 18 November 2026).
+
 | Mode | Allocation | Who enforces a user's cap | Per-user spend |
 | --- | --- | --- | --- |
-| `per_actor` (**default**) | One allocation and key per actor | The signer, at authorization | Exact: the allocation's own `spent_*` |
-| `per_application` | One allocation and key from settings (`LPB_SHARED_PAYMENT_KEY`, `LPB_SHARED_ALLOCATION_ID`) | Nobody per user; the enterprise must | Only through the engine's session log, which records that allocation |
+| `per_actor` | One allocation and key per actor | The signer, at authorization | Exact: the allocation's own `spent_*` |
 
-In `per_actor` mode there is **no fallback** to a shared key. An unprovisioned actor's job fails
-before payment with `not_provisioned`.
+There is **no shared key**, so there is nothing to fall back to. A job for an actor with no allocation,
+or with a revoked one, fails before payment with `not_provisioned` (HTTP 402), and no runner is called.
+An application that wants one shared budget runs every job as a single actor.
+
+**Removed in M4 (#162).** The `per_application` mode took one allocation and one key from the engine's
+settings and paid every actor's jobs with it. Nobody enforced a cap per user, and one engine could serve
+only one tenant. It is gone with its settings, `LPB_ALLOCATION_MODE`, `LPB_SHARED_PAYMENT_KEY` and
+`LPB_SHARED_ALLOCATION_ID`, and with `allocation_mode` in `GET /readyz`. **Upgrading:**
+
+- **From the environment.** The three variables name no setting and are ignored, like any variable the
+  engine does not know. An engine that still has them set does not pay with the shared key: each job
+  fails `not_provisioned` until its actor is provisioned.
+- **In code.** `EngineSettings` refuses the three fields as unknown, and the error does not repeat
+  their values.
+- **What to do.** Provision an allocation for each actor, or run every job as one actor and provision
+  that one ([Provisioning](#provisioning)).
+- **Unpaid calls.** `per_application` with no key ran every job unpaid. Nothing replaces that: every job
+  needs an allocation. An engine with no `LPB_SIGNER_URL` still sends unpaid calls, for provisioned
+  actors only.
 
 ## Provisioning
 
@@ -104,9 +123,9 @@ the provider itself returned cannot name another resource either.
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:
 
-- **At startup.** An engine in `per_actor` mode with a payment provider and the built-in secret store
-  refuses to start when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the
-  error names the setting. The check runs on the parts the engine will run with, after `decorate`: a
+- **At startup.** An engine with a payment provider and the built-in secret store refuses to start
+  when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the error names the
+  setting. The check runs on the parts the engine will run with, after `decorate`: a
   decorator that turns the provider off, or installs a store of its own, is not refused, and one that
   adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
   at boot, such as a sealed vault, still starts and is asked per request.
@@ -534,8 +553,8 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 `observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. In `per_actor`
-mode it balances exactly per user.
+`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/admin/reconciliation` returns each class and `balanced`. Each
+actor has its own allocation, so it balances exactly per user.
 
 **One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor
 revoked and provisioned again has a new one. The engine side therefore counts only the attempts the
@@ -555,11 +574,11 @@ allocation, so after a re-provision reconciliation never balanced again.
   attempts) is 404, so a caller who may read one application never reads what another's allocation
   spent. An earlier allocation that paid no attempt is not known to the engine: the actor's record
   keeps only the current one.
-- **Without `actor_id` in `per_actor` mode** no allocation is the current one, so the call is 404
-  unless it names one. Any allocation that paid an attempt in the application can be named: the answer
-  is 200 with `actor_id: null`, it counts the attempts that allocation paid, and `other_allocations`
-  lists every other allocation that paid an attempt in the application. There is still no single
-  figure for a whole application: each allocation reconciles on its own.
+- **Without `actor_id`** no allocation is the current one, since an allocation is an actor's, so the
+  call is 404 unless it names one. Any allocation that paid an attempt in the application can be
+  named: the answer is 200 with `actor_id: null`, it counts the attempts that allocation paid, and
+  `other_allocations` lists every other allocation that paid an attempt in the application. There is
+  still no single figure for a whole application: each allocation reconciles on its own.
 
 Which allocation paid each attempt is an optional read of a store's cost snapshot
 (`AllocationCostSnapshot` in `protocols`: `attempt_allocations`). The packaged SQL store has it. With a
@@ -636,13 +655,27 @@ The allowance is a cap that **can overshoot**: Batteries authorizes on a positiv
 not reserve funds, so accounting lag can take a balance slightly negative. Guaranteed hard limits are
 stretch scope.
 
-## Mode B
+## Payment configurations
 
-Mode B is a hosted payment operator: one Batteries instance serving many enterprises. **Deferred to
-M4 (P4).** The known gap: Batteries management credentials are global (a permission covers every
-grant), so an operator cannot safely give an engine a management credential. The options to decide
-in M4:
+A payment configuration is who runs Batteries, the signer and the wallet. There are two (ISS-31, D82).
+The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configurations.md).
 
-- grant-scoped credentials (an upstream Batteries change);
-- operator-provisioned keys plus a usage export (per application only);
-- an operator-run tenant layer.
+| Configuration | Who runs Batteries, the signer and the wallet | State |
+| --- | --- | --- |
+| Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Not built yet. M4 builds it as #162 to #169 |
+
+Both use `per_actor` allocations ([Allocation modes](#allocation-modes)). The tenant rules and the
+clearinghouse routes are added to this contract as they are built.
+
+### Mode B
+
+"Mode B" was the M2 name for the second configuration: a hosted payment operator, one Batteries
+instance serving many enterprises (D23). "Mode A" was self-hosted payments. The gap D23 recorded is
+that Batteries management credentials are global (a permission covers every grant), so an operator
+cannot safely give an engine a management credential.
+
+D74 (13 November 2026) answered it with a separately operated engine in `per_application` mode. That
+was not built. D82 (18 November 2026) replaces it with the payment clearinghouse, which needs no scoped
+credential: only the clearinghouse's own engine reaches Batteries and the signer, and no Batteries
+credential leaves it.

@@ -7,7 +7,7 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | --- | --- | --- |
 | [engine.md](engine.md): discovery, jobs, attempts, results, usage, failures, idempotency | ISS-02 | Immediate and streamed jobs implemented (streaming is optional: `jobs.streaming`); async and persistent defined (M4) |
 | [access.md](access.md): actor context, authenticators, policy, credentials | ISS-03 | API key, JWT bearer (D45) and policy implemented; trusted backend defined (M4) |
-| [payments.md](payments.md): allocation modes, provisioning, units, cost classification | ISS-04 | Implemented; Mode B defined as a gap (M4) |
+| [payments.md](payments.md): allocations, provisioning, units, cost classification | ISS-04 | Implemented for self-hosted payments; the payment clearinghouse (D82) is M4 work (ISS-31) |
 | [events.md](events.md): versioned event feed | ISS-02 | Defined; held in M3 (D60) |
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
 | [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process |

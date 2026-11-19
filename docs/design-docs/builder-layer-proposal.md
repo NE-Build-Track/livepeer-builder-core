@@ -88,7 +88,7 @@ Batteries feed.
 
 | # | Gap | Disposition |
 | --- | --- | --- |
-| 1 | Who pays: a credential per request, or per application | **Resolved:** `per_actor` (default) / `per_application` modes; a `CredentialResolver` per actor (D17) |
+| 1 | Who pays: a credential per request, or per application | **Resolved:** a credential per actor (`per_actor`), through a `CredentialResolver` (D17). The `per_application` mode was removed in M4 (D82) |
 | 2 | Cost reporting assumed Batteries; `unavailable` status | Batteries is the payment path; no `unavailable` status (missing = `pending`) |
 | 3 | Capability → app mapping in config; `allowed_orchestrators` | Deferred (T3). In the dev stack, the signer's `Orchestrators` list bounds who is paid |
 | 4 | Idempotency: join-and-return; release on pre-dispatch decline | D57: no join (409 `OperationInProgress` with the job, `Retry-After: 1`); a pre-dispatch decline releases the reference |
@@ -97,7 +97,8 @@ Batteries feed.
 
 Smaller gaps: runner registration helper (not in scope), URL-list discovery source (a
 `DiscoverySource` can do it), latency ranking (`SelectionPolicy`), long-job progress (with async, M4),
-unpaid dispatch (`per_application` with no key gives unpaid calls).
+unpaid dispatch (an engine with no signer sends unpaid calls, for provisioned actors only;
+`per_application` with no key, which did so for any actor, was removed in M4, D82).
 
 ## The proposal's open decisions
 

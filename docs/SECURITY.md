@@ -9,7 +9,6 @@
 | `LPB_SECRET_KEY` (Fernet KEK) | The deployment's secret manager | The database, backups |
 | `LPB_BATTERIES_TOKEN` | The deployment's secret manager | Clients, responses |
 | `LPB_BATTERIES_OPERATOR_TOKEN` (optional, the grant desk) | The deployment's secret manager | Clients, responses |
-| `LPB_SHARED_PAYMENT_KEY` (`per_application` mode) | The deployment's secret manager | Clients, responses, logs |
 
 Settings use `SecretStr`, so secrets don't print in reprs. `tests/unit/test_payments.py` checks that
 no plaintext payment key is stored, and `tests/unit/test_http.py` checks that none is returned.

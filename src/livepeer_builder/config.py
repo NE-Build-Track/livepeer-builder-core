@@ -103,6 +103,11 @@ class EngineSettings(Contract):
     log_json: bool = True
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8080, ge=1, le=65535)
+    # The private listener (D84, #167). Unset: one listener, which serves every route. Set: http_host and
+    # http_port are the public listener, without the routes only a clearinghouse admin calls, and this
+    # one serves every route to a clearinghouse admin only. Loopback unless the deployment says otherwise.
+    http_private_host: str = "127.0.0.1"
+    http_private_port: int | None = Field(default=None, ge=1, le=65535)
     # A /v1/ body over this is refused with 413 before it is read (D59); fits an 8 MiB raw_body as base64
     http_max_request_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
 
@@ -194,6 +199,15 @@ class EngineSettings(Contract):
             raise ValueError(
                 f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
                 f"LPB_BATTERIES_TIMEOUT_S ({self.batteries_timeout_s:g})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _two_listeners_have_two_addresses(self) -> "EngineSettings":
+        if (self.http_private_host, self.http_private_port) == (self.http_host, self.http_port):
+            raise ValueError(
+                f"LPB_HTTP_PRIVATE_PORT ({self.http_private_port}) is the public listener's port on the "
+                "same host: the private listener needs an address of its own"
             )
         return self
 

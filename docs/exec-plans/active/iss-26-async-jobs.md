@@ -40,7 +40,7 @@ From ISS-26, as amended on 13 November 2026.
   and the FakeEngine's parity.
 - [x] **19 November 2026.** Retention of stored results; the clearinghouse role refuses async jobs; a
   queued job on both sets of payment adapters; the client going away; the documents.
-- [ ] **ISS-26.** Built and in review; the pull request is linked here when it is opened.
+- [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log
 

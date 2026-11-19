@@ -590,7 +590,7 @@ async def test_a_resumed_allotment_asks_the_store_again_before_another_provider_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A stored secret excuses the check only for the provider operation it came from (review of #128).
-    Re-allotment after a revoke is a new provider operation with a new key, so a resume that would send
+    A second allotment after a revoke is a new provider operation with a new key, so a resume that would send
     it must ask the store first: skipped, it funded a second allocation and only then failed to store."""
     vault = SealedVault(sealed=False)
     engine = await make_engine(supply=EngineSupply(secret_store=vault))

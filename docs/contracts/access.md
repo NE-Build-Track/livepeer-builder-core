@@ -16,7 +16,7 @@ in adapters.
 | `actor_id` | Opaque to the engine; the owner of jobs, costs and allocations |
 | `tenant_id` | Tenant isolation; defaults to `default` |
 | `permissions` | `Operation` values (see below) |
-| `credential_kind` | `actor`, `clearinghouse_admin`, `auditor` (a read-only admin, D46) or `service` |
+| `credential_kind` | `actor`, `clearinghouse_admin` (an admin credential), `auditor` (a read-only admin, D46) or `service` |
 | `attributes` | Non-secret labels copied onto records. **Never secrets** |
 | `auth` | Provenance (method, issuer, credential id), for audit only |
 

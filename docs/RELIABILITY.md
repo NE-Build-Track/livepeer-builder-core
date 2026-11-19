@@ -4,7 +4,9 @@
 
 Settings come from `LPB_<FIELD>` environment variables (`EngineSettings.from_env`). Defaults favor
 safety: a durable SQLite file and admission limits on. Payments are always `per_actor`: no setting
-chooses an allocation mode or holds a payment key (D82).
+chooses an allocation mode or holds a payment key (D82). Three variables were renamed on 18 November
+2026 (#163), and an old one is ignored, not read as the new one: rename them before starting the new
+release ([what changes](contracts/index.md#upgrading-to-the-domain-language-names)).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

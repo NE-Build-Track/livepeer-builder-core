@@ -8,7 +8,7 @@
 | [node-signer.md](node-signer.md) | Signer webhook, durable events, sessions |
 | [sdk-gateway.md](sdk-gateway.md) | SDK calls the adapters depend on |
 | [evidence/2026-10-07-arbitrum-run.md](evidence/2026-10-07-arbitrum-run.md) | Real-node attribution evidence (7 October, previous baseline) |
-| [evidence/2026-10-12-dev-stack-paid-run.md](evidence/2026-10-12-dev-stack-paid-run.md) | Paid dev-stack run on the new baseline: allotment, attribution, reconciliation, the SDK #71 gap |
+| [evidence/2026-10-12-dev-stack-paid-run.md](evidence/2026-10-12-dev-stack-paid-run.md) | Paid dev-stack run on the new baseline: provisioning, attribution, reconciliation, the SDK #71 gap |
 | [evidence/2026-10-14-dev-stack-public-orchestrators.md](evidence/2026-10-14-dev-stack-public-orchestrators.md) | Paid jobs on public orchestrators with node `f970be6`: attribution without shims, balanced reconciliation |
 | [evidence/2026-10-19-dev-stack-session-log.md](evidence/2026-10-19-dev-stack-session-log.md) | Session-log attribution live on the NE-Build-Track pins (node v1.0.2): entries `matched`, balanced reconciliation |
 | [evidence/2026-10-20-streaming-fixes-live.md](evidence/2026-10-20-streaming-fixes-live.md) | The D34–D39 fixes live: a stream funded in 16 rounds and matched mid-stream, a client disconnect through uvicorn, `complete()` recorded as delivered |

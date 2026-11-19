@@ -111,7 +111,7 @@ Jobs that hit the network spend from an allocation. A job for an actor with no a
 ([payments.md](../contracts/payments.md)).
 
 ```python
-from livepeer_builder import ActorContext, Money, AllotRequest
+from livepeer_builder import ActorContext, AllotRequest, Money
 
 admin = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
@@ -238,7 +238,7 @@ Health is `engine.health()`, not `GET /readyz`.
 3. Run `lpb migrate` (or rely on `auto_migrate`).
 4. Construct `BuilderEngine.create(settings)`, then `await engine.start()` once per process.
 5. Map each authenticated user to an `ActorContext` with the permissions they need.
-6. Allot that actor with an admin `ActorContext` before the first paid job.
+6. Allot an allocation to that actor with an admin `ActorContext` before the first paid job.
 7. Call `engine.discovery`, `engine.jobs`, `engine.costs`, `engine.payments` in your request
    handlers. Catch `EngineError` subclasses and map them to your own API.
 8. Call `await engine.stop()` on shutdown. Back up the database and `LPB_SECRET_KEY` separately.

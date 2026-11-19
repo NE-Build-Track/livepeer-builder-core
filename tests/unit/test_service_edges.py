@@ -90,7 +90,7 @@ async def test_payments_guard_clauses(
         await engine.payments.set_status(alice, "default", "alice", "active")
 
 
-async def test_realloting_after_revoke_is_a_new_operation(
+async def test_allotting_again_after_revoke_is_a_new_operation(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
     engine = await make_engine()

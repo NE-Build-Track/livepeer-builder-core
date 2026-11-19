@@ -54,7 +54,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Revoking an allocation forgets its payment key; rotation revokes the old key | `tests/unit/test_payments.py::test_revoke_forgets_the_key`, `tests/unit/test_payments.py::test_rotation_replaces_the_key_and_revokes_the_old_one` | U | fixture | ISS-23 |
 | A job after revoke-allocation fails `not_provisioned` with no runner call | `tests/unit/test_verification_access.py::test_a_job_after_the_allocation_is_revoked_fails_not_provisioned_without_a_runner_call` | U | fixture | ISS-23 |
 | `not_provisioned` stays 402 with no reason | `tests/unit/test_payment_failures_http.py::test_not_provisioned_stays_402_and_has_no_reason` | H | fixture | ISS-12 |
-| Re-provisioning after a revoke is a new operation | `tests/unit/test_service_edges.py::test_realloting_after_revoke_is_a_new_operation` | U | fixture | ISS-11/14 |
+| Re-provisioning after a revoke is a new operation | `tests/unit/test_service_edges.py::test_allotting_again_after_revoke_is_a_new_operation` | U | fixture | ISS-11/14 |
 | On a live stack: a revoked actor key answers 401 | `scripts/live_probe.py` (revocation checks) | L | live | ISS-23 |
 | On a live stack: a revoked auditor key is 401 on admin reads | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run B | L | live | ISS-23 |
 | On a live stack: a job after revoke-allocation fails `not_provisioned` (402) with no reason | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-23 |

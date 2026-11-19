@@ -60,6 +60,14 @@ like a source checkout. Version table: `lpb_alembic_version`.
   commit rolls back to the old revision and leaves that empty copy behind. 0013 drops a leftover copy
   when it starts, up or down, and only while `lpb_actors` itself exists, so the next `lpb migrate`
   goes through. Before, it failed with "table _alembic_tmp_lpb_actors already exists" (#115).
+- **0014, the domain-language names (#163):** it renames the tenant column to `tenant_id` in the
+  five tables that have it, in place; the kind of every stored admin key, to `clearinghouse_admin`,
+  with `lpb_access_keys.kind` grown to 32 characters to hold it; three of the ledger's commands; and
+  the same names inside the result each ledger record holds. The names are listed under
+  [Upgrading to the domain-language names](index.md#upgrading-to-the-domain-language-names). Every row
+  is kept, and a downgrade puts the old names back. The run is one transaction on SQLite and on
+  PostgreSQL: one that dies before its commit changes nothing
+  (`tests/store/test_domain_language_names.py`).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

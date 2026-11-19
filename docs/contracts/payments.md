@@ -306,6 +306,11 @@ Provider calls keep their derived idempotency keys, so a resumed command replays
 | names a command still `started`, for less than `LPB_OPERATION_STALE_S` (120 s) | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After`: the seconds until a repeat may resume it |
 | names a command still `started` for longer | **Resumes** it: runs every step again from the top; each step is safe to repeat |
 
+The fingerprint and each provider idempotency key are digests, so the text they hash is a format, not a
+name: it keeps the words it was first written with (`provision`, `fund`), whatever a command or a field
+is called now. A command recorded before a rename is therefore still replayed, or resumed without
+applying twice, when it is repeated after it (#163, `tests/unit/test_hashed_forms.py`).
+
 A 409 for an admin command carries `operation: {command, operation_ref, state}` instead of a job, and
 no `Livepeer-Job-Id`. In embedded mode the replay is the return value; `OPERATION_REPLAYED` (a context
 variable in `livepeer_builder.contracts`) is `True` right after a call answered from the ledger.
@@ -372,7 +377,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   holds the provider key its earlier run recorded: that allocation is this command's (the provider key
   is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
   resume that never got that far or an actor revoked and allotted again under another reference,
-  it is refused the same way and the reference is freed. Re-allotment after a revoke is a new
+  it is refused the same way and the reference is freed. A second allotment after a revoke is a new
   command: it needs a new reference.
 - **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
   grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
@@ -688,4 +693,6 @@ credential leaves it.
 
 "Provisioning" was the name of allotment until 18 November 2026 (D83, #163): an admin allots an
 allocation to an actor, where the engine said it provisioned the actor. See [Allotment](#allotment).
-The failure kind `not_provisioned` keeps its name: the failure table belongs to ISS-28.
+The failure kind `not_provisioned` keeps its name: the failure table belongs to ISS-28. Every name that
+changed with it is under
+[Upgrading to the domain-language names](index.md#upgrading-to-the-domain-language-names).

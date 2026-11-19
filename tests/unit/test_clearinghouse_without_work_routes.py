@@ -130,6 +130,12 @@ async def test_the_payments_check_passes_there_with_every_probe(ports: Ports) ->
     before = len(ports.requests)
     report = await probe_payments(settings, client=client_of(ports))
     assert report.ok, report
+    assert [probe.name for probe in report.probes] == [
+        "clearinghouse_grant",
+        "clearinghouse_usage",
+        "clearinghouse_signer",
+        "clearinghouse_runner_list",
+    ]
     assert report.tenant is not None and report.tenant.tenant_id == ports.tenant_id
     asked = ports.requests[before:]
     assert {request.method for request in asked} == {"GET"}

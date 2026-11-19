@@ -1286,6 +1286,7 @@ A read-only command (D87): it prints what this engine's payments need and whethe
 | Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered |
 | Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
 | Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
+| Clearinghouse | `clearinghouse_signer` | `GET /sign-orchestrator-info` at the clearinghouse's address, with no credential | The answer is 405, as at a signer: the clearinghouse serves the signer's two paths, where the engine signs. A clearinghouse with no signer answers 404 |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings
@@ -1295,6 +1296,8 @@ A read-only command (D87): it prints what this engine's payments need and whethe
   `refused`, `unavailable`, `unexpected` or `not_configured`.
 - **Never printed:** a credential, an address, or anything the other side said. A probe names the
   setting to look at.
+- **No work route is called,** and the tenant admin key is sent to the tenant's routes and the runner
+  list only, never to a signer path.
 - **What the signer probe proves.** The signer's identity call is a `POST`, so it cannot be made here.
   livepeer/node registers that path for `POST` alone, so a signer answers a `GET` with 405. That says
   an HTTP server is at the address and has the signer's identity route. It does not say the signer

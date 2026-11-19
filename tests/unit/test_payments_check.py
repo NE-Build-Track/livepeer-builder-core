@@ -259,7 +259,7 @@ async def test_an_answer_that_is_no_json_is_unexpected() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(page)) as client:
         report = await probe_payments(settings(**CLEARINGHOUSE), client=client)
-    assert [probe.outcome for probe in report.probes] == ["unexpected"] * 3 and report.tenant is None
+    assert [probe.outcome for probe in report.probes] == ["unexpected"] * 4 and report.tenant is None
     assert "proxy" not in report.model_dump_json()
 
 
@@ -291,10 +291,28 @@ def test_an_engine_that_uses_a_clearinghouse_probes_the_clearinghouse_with_get_r
     assert recorder.targets == [
         "/v1/clearinghouse/tenants/grant_7/grant",
         "/v1/clearinghouse/tenants/grant_7/usage?limit=1",
+        "/sign-orchestrator-info",
         "/v1/clearinghouse/discovery",
     ]
-    assert all(headers["authorization"] == f"Bearer {TENANT_KEY}" for _, _, headers in recorder.seen)
-    assert list(probes(report)) == ["clearinghouse_grant", "clearinghouse_usage", "clearinghouse_runner_list"]
+    assert list(probes(report)) == [
+        "clearinghouse_grant",
+        "clearinghouse_usage",
+        "clearinghouse_signer",
+        "clearinghouse_runner_list",
+    ]
+    # the tenant admin key goes to the tenant's routes and the runner list, and never to a signer path
+    for _, target, headers in recorder.seen:
+        if target == "/sign-orchestrator-info":
+            assert "authorization" not in headers
+        else:
+            assert headers["authorization"] == f"Bearer {TENANT_KEY}"
+    signer = probes(report)["clearinghouse_signer"]
+    assert (signer["outcome"], signer["status_code"], signer["request"]) == (
+        "ok",
+        405,
+        "GET /sign-orchestrator-info",
+    )
+    assert signer["setting"] == "LPB_CLEARINGHOUSE_URL"
     # who the engine is there, and its grant
     assert report["tenant"] == GRANT
 
@@ -305,8 +323,9 @@ def test_a_runner_list_of_the_enterprise_own_is_not_probed_and_gets_no_key(
     url, recorder = server
     clearinghouse(monkeypatch, url, recorder, LPB_DISCOVERY_URL="http://127.0.0.1:9/discovery")
     code, report, _ = run(capsys)
-    assert code == 0 and list(probes(report)) == ["clearinghouse_grant", "clearinghouse_usage"]
-    assert len(recorder.seen) == 2
+    assert code == 0
+    assert list(probes(report)) == ["clearinghouse_grant", "clearinghouse_usage", "clearinghouse_signer"]
+    assert len(recorder.seen) == 3
 
 
 @pytest.mark.parametrize(
@@ -327,6 +346,10 @@ def test_a_runner_list_of_the_enterprise_own_is_not_probed_and_gets_no_key(
         ("/usage", (403, {"error": "another tenant"}), "clearinghouse_usage", "refused", "TENANT_ID"),
         ("/discovery", (503, {"error": "no list"}), "clearinghouse_runner_list", "unavailable", "503"),
         ("/discovery", (307, None), "clearinghouse_runner_list", "unexpected", "redirect"),
+        # a clearinghouse with no signer serves neither signer path: it cannot sign for anyone
+        ("signer", (404, {"error": "not found"}), "clearinghouse_signer", "unexpected", "signer's two paths"),
+        ("signer", (200, {"hello": "world"}), "clearinghouse_signer", "unexpected", "signer's two paths"),
+        ("signer", (503, {"error": "down"}), "clearinghouse_signer", "unavailable", "HTTP 503"),
     ],
 )
 def test_a_clearinghouse_probe_that_is_refused_exits_1_and_says_which_setting_to_look_at(
@@ -341,7 +364,7 @@ def test_a_clearinghouse_probe_that_is_refused_exits_1_and_says_which_setting_to
 ) -> None:
     url, recorder = server
     clearinghouse(monkeypatch, url, recorder)
-    [path] = [known for known in recorder.answers if known.endswith(ending)]
+    [path] = [known for known in recorder.answers if known.endswith(ending)] or [ending]
     recorder.answers[path] = answer
 
     code, report, _ = run(capsys)
@@ -349,7 +372,18 @@ def test_a_clearinghouse_probe_that_is_refused_exits_1_and_says_which_setting_to
     found = probes(report)[probe]
     assert code == 1 and report["ok"] is False
     assert found["outcome"] == outcome and said in found["detail"], found
-    assert recorder.methods == {"GET"} and len(recorder.seen) == 3
+    assert recorder.methods == {"GET"} and len(recorder.seen) == 4
+
+
+def test_a_clearinghouse_address_with_a_path_exits_2_and_sends_nothing(
+    server: tuple[str, Recorder], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The address names a scheme, a host and a port: the signer's two paths are called at its root."""
+    url, recorder = server
+    clearinghouse(monkeypatch, url, recorder, LPB_CLEARINGHOUSE_URL=url + "/pay")
+    code, report, printed = run(capsys)
+    assert code == 2 and report == {} and recorder.seen == []
+    assert "LPB_CLEARINGHOUSE_URL" in printed and "no path" in printed and url not in printed
 
 
 def test_settings_that_do_not_fit_together_exit_2_and_send_nothing(
@@ -405,7 +439,9 @@ async def test_every_request_the_check_makes_is_a_get_to_the_address_it_was_give
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
         report = await probe_payments(settings(**configuration), client=client)
 
-    assert isinstance(report, PaymentCheck) and len(sent) == 3
+    assert isinstance(report, PaymentCheck) and len(sent) == (
+        4 if "clearinghouse_url" in configuration else 3
+    )
     assert {request.method for request in sent} == {"GET"}
     assert all(request.content == b"" for request in sent)  # and no request carries a body
     hosts = {request.url.host for request in sent}
@@ -413,7 +449,7 @@ async def test_every_request_the_check_makes_is_a_get_to_the_address_it_was_give
     for secret in SECRETS:
         assert secret not in report.model_dump_json() and secret not in repr(report)
     for request in sent:  # a credential goes only to the service it belongs to
-        if request.url.host == "signer.test":
+        if request.url.host == "signer.test" or request.url.path == "/sign-orchestrator-info":
             assert "authorization" not in request.headers
             assert "livepeer-clearinghouse-token" not in request.headers
 

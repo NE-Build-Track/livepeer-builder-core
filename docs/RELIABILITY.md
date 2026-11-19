@@ -65,7 +65,7 @@ no setting.
 | `lpb bootstrap-admin` | Once per deployment; prints the first admin key once |
 | `lpb gen-secret-key` | Once; store the key in your secret manager, never in the database |
 | `lpb serve` | Run the REST service (`[server]` extra) |
-| `lpb payments check` | Read-only: every request is a GET, no engine is built and no database is opened (D87, #168). A self-hosted engine probes the signer and Batteries; an engine that uses a clearinghouse probes its grant, its usage and the runner list. Exit 0 when every probe passed, 1 when one was refused or failed, 2 when the settings are refused. It prints setting names, never a credential or an address ([payments.md](contracts/payments.md#lpb-payments-check)) |
+| `lpb payments check` | Read-only: every request is a GET, no engine is built and no database is opened (D87, #168). A self-hosted engine probes the signer and Batteries; an engine that uses a clearinghouse probes its grant, its usage, the signer's identity path there and the runner list. Exit 0 when every probe passed, 1 when one was refused or failed, 2 when the settings are refused. It prints setting names, never a credential or an address ([payments.md](contracts/payments.md#lpb-payments-check)) |
 | `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads |
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |

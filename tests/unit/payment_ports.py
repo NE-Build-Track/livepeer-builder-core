@@ -26,7 +26,13 @@ from livepeer_builder.errors import NotAuthenticated
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import AllocationManager, AllowanceReader, CredentialResolver, UsageSource
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, MemorySecretStore, make_engine
+from livepeer_builder.testing import (
+    FakeAllocationManager,
+    FakeSigningTransport,
+    FakeUsageSource,
+    MemorySecretStore,
+    make_engine,
+)
 
 Side = Literal["local", "remote"]
 AppOf = Callable[[BuilderEngine], FastAPI]
@@ -163,7 +169,12 @@ async def _local(provider: FakeAllocationManager, usage: FakeUsageSource) -> Asy
 async def _remote(
     provider: FakeAllocationManager, usage: FakeUsageSource, served: AppOf
 ) -> AsyncIterator[Ports]:
-    house_supply = EngineSupply(allocation_manager=provider, grants_manager=provider, usage_source=usage)
+    house_supply = EngineSupply(
+        allocation_manager=provider,
+        grants_manager=provider,
+        usage_source=usage,
+        transport=FakeSigningTransport(),  # a clearinghouse has a signer: it serves the signer's two paths
+    )
     async with contextlib.AsyncExitStack() as stack:
         house = await stack.enter_async_context(make_engine(supply=house_supply))
         assert house.payments.tenants is not None

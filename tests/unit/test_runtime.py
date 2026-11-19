@@ -584,7 +584,7 @@ async def test_the_http_lifespan_on_a_running_engine_is_refused_and_leaves_it_ru
     serving = httpx.ASGITransport(app=create_app(engine, manage_lifecycle=False))
     async with httpx.AsyncClient(transport=serving, base_url="http://engine") as client:
         assert (await client.get("/readyz")).status_code == 200
-        keys = await client.get("/v1/admin/keys", headers={"Authorization": f"Bearer {admin.token}"})
+        keys = await client.get("/v1/clearinghouse/keys", headers={"Authorization": f"Bearer {admin.token}"})
         assert keys.status_code == 200 and len(keys.json()) == 1
     await engine.stop()
     assert running_loops() == set()

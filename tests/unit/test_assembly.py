@@ -252,7 +252,7 @@ async def test_keys_off_removes_key_issuance_and_acceptance(
     assert engine.keys is None
     spec = (await client.get("/openapi.json")).json()
     paths = spec["paths"]
-    assert not [path for path in paths if path.startswith("/v1/admin/keys")]
+    assert not [path for path in paths if path.startswith("/v1/clearinghouse/keys")]
     # no lpk_ bearer is advertised: Swagger would offer a credential this deployment rejects
     assert "securitySchemes" not in spec.get("components", {})
     assert not [(p, m) for p, ops in paths.items() for m, op in ops.items() if "security" in op]
@@ -274,8 +274,8 @@ async def test_without_a_grants_manager_the_grant_desk_routes_do_not_exist(store
         assert with_desk.payments.grants is not None and without.payments.grants is None
         on = create_app(with_desk, manage_lifecycle=False).openapi()["paths"]
         off = create_app(without, manage_lifecycle=False).openapi()["paths"]
-        assert "/v1/admin/grants" in on and "/v1/admin/grants" not in off
-        assert "/v1/admin/grant/top-up" in off  # funding uses the engine token and stays
+        assert "/v1/clearinghouse/grants" in on and "/v1/clearinghouse/grants" not in off
+        assert "/v1/clearinghouse/grant/top-up" in off  # funding uses the engine token and stays
     finally:
         await with_desk.stop()
         await without.stop()

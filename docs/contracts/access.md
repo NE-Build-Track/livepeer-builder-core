@@ -110,7 +110,7 @@ same test fails when a route declares a plain `datetime` query parameter.
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
-| `GET /v1/admin/actors`, `GET /v1/admin/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `tenant_id`, `status` (allocations only), `allotted` and `limit`. An admin lists every tenant unless it names one; an auditor lists its own. The single read returns the allocation (`ActorAllocation`) |
+| `GET /v1/clearinghouse/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `tenant_id`, `status` (allocations only), `allotted` and `limit`. An admin lists every tenant unless it names one; an auditor lists its own. The single read returns the allocation (`ActorAllocation`) |
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -124,7 +124,7 @@ enterprise identity provider's concern.
 
 | Mode | Where it lives | Status |
 | --- | --- | --- |
-| Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/admin/keys` routes are absent and OpenAPI declares no bearer scheme |
+| Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/clearinghouse/keys` routes are absent and OpenAPI declares no bearer scheme |
 | JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | **Implemented** (D45): `LPB_AUTH=jwt` or `jwt,api_keys`. See [JWT bearer](#jwt-bearer) |
 | MCP OAuth (PKCE public clients) | Enterprise authorization server issues; engine verifies with JWT bearer and publishes RFC 9728 protected-resource metadata | Defined, with MCP (M3/M4) |
 | Trusted backend (see [service mode](#service-mode)) | `ServiceCredentialAuthenticator` | Defined, M4 |
@@ -300,7 +300,7 @@ Both are generic: no enterprise logic lives in the engine.
 
 | Credential | Issued by | Held by | Rotated / revoked by |
 | --- | --- | --- | --- |
-| Caller API key (`lpk_`) | Engine admin (`POST /v1/admin/keys`) | Client or enterprise backend | Engine admin: `rotate` (instant) / `revoke`, see the [example flow](#example-standalone-flow) |
+| Caller API key (`lpk_`) | Engine admin (`POST /v1/clearinghouse/keys`) | Client or enterprise backend | Engine admin: `rotate` (instant) / `revoke`, see the [example flow](#example-standalone-flow) |
 | Caller JWT | Enterprise identity provider | Client | Identity provider (expiry) |
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
 | Engine admin credential | `lpb bootstrap-admin`, then an admin | Operator | Engine admin |
@@ -317,12 +317,12 @@ same steps run on the dev stack.
 | Step | Call | Answer |
 | --- | --- | --- |
 | 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
-| 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
-| 3. Allot to the user | `POST /v1/admin/tenants/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "allot-alice"}` | `201` `ActorAllocation`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 2. A key for the user | `POST /v1/clearinghouse/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
+| 3. Allot to the user | `POST /v1/clearinghouse/tenants/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "allot-alice"}` | `201` `ActorAllocation`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
-| 5. Inspect the key, and who is allotted | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the allotted actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
-| 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
-| 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
+| 5. Inspect the key, and who is allotted | `GET /v1/clearinghouse/keys/{key_id}` (or `GET /v1/clearinghouse/keys` for all); `GET /v1/clearinghouse/actors` for the allotted actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 6. Rotate it | `POST /v1/clearinghouse/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
+| 7. Revoke it | `POST /v1/clearinghouse/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
 
 ### Repeated key commands
 

@@ -683,7 +683,7 @@ async def test_a_match_counts_before_sync_stores_the_projection(
 async def test_a_row_committed_while_a_sync_classifies_the_job_is_never_lost(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
     usage: FakeUsageSource, monkeypatch: pytest.MonkeyPatch,
-) -> None:  # fmt: skip  # #43 review: two syncs at once (the loop and POST /v1/admin/costs/sync)
+) -> None:  # fmt: skip  # #43 review: two syncs at once (the loop and POST /v1/clearinghouse/costs/sync)
     engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
     first = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
     usage.rows = [first]

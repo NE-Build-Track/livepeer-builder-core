@@ -1,6 +1,6 @@
 """ISS-23: authorization denial across the whole admin surface, read from the FastAPI route table.
 
-Every ``/v1/admin/*`` route answers 403 to an actor key and 401 with no credential, and every admin write
+Every ``/v1/clearinghouse/*`` route answers 403 to an actor key and 401 with no credential, and every admin write
 answers 403 to an auditor key (a read-only admin, D46). The routes come from ``app.routes``, so an admin
 route added later is swept without editing this test; one whose body has no sample fails here and says so.
 """
@@ -39,7 +39,7 @@ def admin_routes(app: FastAPI) -> list[tuple[str, str, APIRoute]]:
     return [
         (method, route.path, route)
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/v1/admin/")
+        if isinstance(route, APIRoute) and route.path.startswith("/v1/clearinghouse/")
         for method in sorted(route.methods)
     ]
 

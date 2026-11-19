@@ -93,7 +93,7 @@ async def admin_client(make_engine: EngineFactory) -> AsyncIterator[tuple[httpx.
         yield client, {"Authorization": f"Bearer {admin.token}"}
 
 
-ALLOCATION = "/v1/admin/tenants/default/actors/alice/allocation"
+ALLOCATION = "/v1/clearinghouse/tenants/default/actors/alice/allocation"
 AMOUNT = {"amount": "5", "currency": "USD"}
 
 
@@ -104,7 +104,7 @@ async def test_rest_refuses_such_a_grant_id_with_422_before_the_ledger_and_the_p
     """Each reference is still free afterwards: the ledger recorded nothing."""
     client, admin = admin_client
     commands = [
-        ("/v1/admin/grant/top-up", {"operation_ref": "g1", "amount": AMOUNT}, 204),
+        ("/v1/clearinghouse/grant/top-up", {"operation_ref": "g1", "amount": AMOUNT}, 204),
         (ALLOCATION, {"operation_ref": "p1", "amount": AMOUNT}, 201),
         (ALLOCATION + "/top-up", {"operation_ref": "f1", "amount": AMOUNT}, 200),
     ]
@@ -124,7 +124,7 @@ async def test_rest_uses_a_padded_grant_id_without_its_padding(
 ) -> None:
     client, admin = admin_client
     body = {"operation_ref": "g1", "amount": AMOUNT, "grant_id": " grant_1\n"}
-    funded = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
+    funded = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
     assert funded.status_code == 204, funded.text
     assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_1"]
     allotted = await client.post(

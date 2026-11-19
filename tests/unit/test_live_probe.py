@@ -275,7 +275,7 @@ async def test_a_201_without_a_key_id_is_a_failed_issue(capsys: pytest.CaptureFi
     """A token with no key id is not a key the probe can revoke, nor the previous one (#83)."""
 
     def no_key_id(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/admin/keys" and request.method == "POST":
+        if request.url.path == "/v1/clearinghouse/keys" and request.method == "POST":
             return httpx.Response(201, json={"token": "lpk_new"})
         return httpx.Response(200, json=[])
 

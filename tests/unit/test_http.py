@@ -83,13 +83,13 @@ async def test_job_round_trip_and_admin_boundary(
     as_alice = {"Authorization": f"Bearer {alice_token}"}
 
     forbidden = await client.post(
-        "/v1/admin/tenants/default/actors/alice/allocation",
+        "/v1/clearinghouse/tenants/default/actors/alice/allocation",
         json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p0"},
         headers=as_alice,
     )
     assert forbidden.status_code == 403
     allotted = await client.post(
-        "/v1/admin/tenants/default/actors/alice/allocation",
+        "/v1/clearinghouse/tenants/default/actors/alice/allocation",
         json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
         headers=as_admin,
     )

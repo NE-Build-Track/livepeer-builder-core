@@ -49,7 +49,7 @@ async def api(
         )
 
 
-ALLOCATION = "/v1/admin/tenants/default/actors/alice/allocation"
+ALLOCATION = "/v1/clearinghouse/tenants/default/actors/alice/allocation"
 
 
 async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource) -> None:  # type: ignore[no-untyped-def]
@@ -78,8 +78,10 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     )
     assert rotated.status_code == 200 and "lpg_" not in rotated.text
     assert (await client.get("/v1/allowance", headers=alice)).json()["granted"]["amount"] == "5"
-    assert (await client.post("/v1/admin/costs/sync", headers=admin)).json()["pages"] == 1
-    reconciliation = await client.get("/v1/admin/reconciliation", params={"actor_id": "alice"}, headers=admin)
+    assert (await client.post("/v1/clearinghouse/costs/sync", headers=admin)).json()["pages"] == 1
+    reconciliation = await client.get(
+        "/v1/clearinghouse/reconciliation", params={"actor_id": "alice"}, headers=admin
+    )
     assert reconciliation.status_code == 200
     assert (await client.post(ALLOCATION + "/revoke", headers=admin)).json()["status"] == "revoked"
     bad = await client.post(
@@ -92,25 +94,27 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
 
 async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
-    assert (await client.get("/v1/admin/grants", headers=alice)).status_code == 403
-    assert (await client.get("/v1/admin/grants", headers=admin)).json() == []
+    assert (await client.get("/v1/clearinghouse/grants", headers=alice)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/grants", headers=admin)).json() == []
     created = await client.post(
-        "/v1/admin/grants",
+        "/v1/clearinghouse/grants",
         json={"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"},
         headers=admin,
     )
     assert created.status_code == 201
     assert created.json()["name"] == "ops" and created.json()["total"] == "5"
-    assert (await client.get("/v1/admin/grants", headers=admin)).json() == [created.json()]
+    assert (await client.get("/v1/clearinghouse/grants", headers=admin)).json() == [created.json()]
 
 
 async def test_grant_top_up_is_admin_only(api, manager: FakeAllocationManager) -> None:  # type: ignore[no-untyped-def]
     client, _, admin, alice = api
     body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
-    assert (await client.post("/v1/admin/grant/top-up", json=body, headers=alice)).status_code == 403
+    assert (await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=alice)).status_code == 403
     missing = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g2"}
-    assert (await client.post("/v1/admin/grant/top-up", json=missing, headers=admin)).status_code == 400
-    funded = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
+    assert (
+        await client.post("/v1/clearinghouse/grant/top-up", json=missing, headers=admin)
+    ).status_code == 400
+    funded = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
     assert funded.status_code == 204 and funded.content == b""
     assert manager.topped_up_grants[0][0] == "grant_chosen"
 
@@ -124,7 +128,7 @@ async def test_keys_jobs_usage_and_costs_over_rest(
         json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
         headers=admin,
     )
-    keys = (await client.get("/v1/admin/keys", headers=admin)).json()
+    keys = (await client.get("/v1/clearinghouse/keys", headers=admin)).json()
     assert {k["kind"] for k in keys} == {"clearinghouse_admin", "actor"}
     transport.steps = [ScriptedTransport.ok()]
     ran = await client.post("/v1/jobs", json={"app": APP}, headers=alice)
@@ -140,13 +144,13 @@ async def test_keys_jobs_usage_and_costs_over_rest(
     assert before.status_code == 200 and before.json()["jobs_pending"] == 1
     early = (await client.get("/v1/costs/projections", headers=alice)).json()
     assert [(cost["job_id"], cost["status"]) for cost in early] == [(job_id, "pending")]
-    await client.post("/v1/admin/costs/sync", headers=admin)
+    await client.post("/v1/clearinghouse/costs/sync", headers=admin)
     summary = await client.get("/v1/costs/summary", headers=alice)
     assert summary.status_code == 200 and summary.json()["jobs_pending"] == 1
     projections = (await client.get("/v1/costs/projections", headers=alice)).json()
     assert len(projections) == 1 and projections[0]["job_id"] == job_id
     actor_key = next(k["key_id"] for k in keys if k["kind"] == "actor")
-    assert (await client.post(f"/v1/admin/keys/{actor_key}/revoke", headers=admin)).status_code == 204
+    assert (await client.post(f"/v1/clearinghouse/keys/{actor_key}/revoke", headers=admin)).status_code == 204
     assert (await client.get("/v1/jobs", headers=alice)).status_code == 401  # revoked key
 
 
@@ -256,7 +260,7 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
         assert response.status_code == expected
 
     bad = await client.post(
-        "/v1/admin/keys",
+        "/v1/clearinghouse/keys",
         json={"actor_id": "x", "permissions": ["everything"], "operation_ref": "k1"},
         headers=admin,
     )
@@ -294,18 +298,20 @@ async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFacto
 async def test_keys_are_inspected_and_rotated_over_rest(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
     actor_key = next(
-        k for k in (await client.get("/v1/admin/keys", headers=admin)).json() if k["kind"] == "actor"
+        k for k in (await client.get("/v1/clearinghouse/keys", headers=admin)).json() if k["kind"] == "actor"
     )
     alice_token = alice["Authorization"].removeprefix("Bearer ")
 
-    shown = await client.get(f"/v1/admin/keys/{actor_key['key_id']}", headers=admin)
+    shown = await client.get(f"/v1/clearinghouse/keys/{actor_key['key_id']}", headers=admin)
     assert shown.status_code == 200 and shown.json() == actor_key
     assert alice_token not in shown.text and "token" not in shown.json()  # inspection never shows a secret
-    assert (await client.get("/v1/admin/keys/key_unknown", headers=admin)).status_code == 404
-    assert (await client.get(f"/v1/admin/keys/{actor_key['key_id']}", headers=alice)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/keys/key_unknown", headers=admin)).status_code == 404
+    assert (
+        await client.get(f"/v1/clearinghouse/keys/{actor_key['key_id']}", headers=alice)
+    ).status_code == 403
 
     rotated = await client.post(
-        f"/v1/admin/keys/{actor_key['key_id']}/rotate",
+        f"/v1/clearinghouse/keys/{actor_key['key_id']}/rotate",
         json={"label": "ci", "operation_ref": "rk1"},
         headers=admin,
     )
@@ -322,11 +328,11 @@ async def test_keys_are_inspected_and_rotated_over_rest(api) -> None:  # type: i
     ).status_code == 200
 
     again = await client.post(  # no label: the key keeps its own
-        f"/v1/admin/keys/{new['key']['key_id']}/rotate", json={"operation_ref": "rk2"}, headers=admin
+        f"/v1/clearinghouse/keys/{new['key']['key_id']}/rotate", json={"operation_ref": "rk2"}, headers=admin
     )
     assert again.status_code == 201 and again.json()["key"]["label"] == "ci"
     stale = await client.post(
-        f"/v1/admin/keys/{actor_key['key_id']}/rotate", json={"operation_ref": "rk3"}, headers=admin
+        f"/v1/clearinghouse/keys/{actor_key['key_id']}/rotate", json={"operation_ref": "rk3"}, headers=admin
     )
     assert stale.status_code == 400  # already rotated, so revoked
 
@@ -414,24 +420,26 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
         headers=admin,
     )
     assert allotted.status_code == 201 and allotted.json()["label"] == "Alice Smith"
-    listed = await client.get("/v1/admin/actors", headers=admin)
+    listed = await client.get("/v1/clearinghouse/actors", headers=admin)
     assert listed.status_code == 200
     assert [(a["actor_id"], a["label"], a["allotted"], a["allocation"]["status"]) for a in listed.json()] == [
         ("alice", "Alice Smith", True, "active")
     ]  # D48: each row says whether it is allotted; the allocation is nested
-    assert (await client.get("/v1/admin/actors?allotted=false", headers=admin)).json() == []
-    assert (await client.get("/v1/admin/actors?status=paused", headers=admin)).json() == []
+    assert (await client.get("/v1/clearinghouse/actors?allotted=false", headers=admin)).json() == []
+    assert (await client.get("/v1/clearinghouse/actors?status=paused", headers=admin)).json() == []
     one = await client.get(ALLOCATION, headers=admin)
     assert one.status_code == 200 and one.json()["actor_id"] == "alice"
     assert (await client.get(ALLOCATION.replace("alice", "nobody"), headers=admin)).status_code == 404
-    assert (await client.get("/v1/admin/actors", headers=alice)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/actors", headers=alice)).status_code == 403
     operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     auditor = await engine.keys.issue(
         operator, kind="auditor", actor_id="dashboard", operation_ref="issue-http_routes-397"
     )
     as_auditor = {"Authorization": f"Bearer {auditor.token}"}
-    assert (await client.get("/v1/admin/actors", headers=as_auditor)).status_code == 200
-    assert (await client.get("/v1/admin/grants", headers=as_auditor)).status_code == 403  # every tenant's
+    assert (await client.get("/v1/clearinghouse/actors", headers=as_auditor)).status_code == 200
+    assert (
+        await client.get("/v1/clearinghouse/grants", headers=as_auditor)
+    ).status_code == 403  # every tenant's
     funded = await client.post(
         ALLOCATION + "/top-up",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
@@ -504,14 +512,14 @@ async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(a
 async def test_a_replayed_grant_top_up_is_204_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
     body = {"amount": {"amount": "10", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
-    first = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
-    again = await client.post("/v1/admin/grant/top-up", json=body, headers=admin)
+    first = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
+    again = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
     assert (first.status_code, again.status_code) == (204, 204)
     assert "Idempotent-Replayed" not in first.headers and again.headers["Idempotent-Replayed"] == "true"
 
 
 @pytest.mark.parametrize(
-    "path", [ALLOCATION + "/top-up", "/v1/admin/grant/top-up", ALLOCATION + "/rotate-payment-key"]
+    "path", [ALLOCATION + "/top-up", "/v1/clearinghouse/grant/top-up", ALLOCATION + "/rotate-payment-key"]
 )
 async def test_an_operation_ref_with_a_nul_is_422_on_top_up_and_rotate(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str
@@ -532,11 +540,11 @@ async def test_an_operation_ref_with_a_nul_is_422_on_top_up_and_rotate(  # type:
 @pytest.mark.parametrize(
     ("path", "grant_id"),
     [
-        (f"/v1/admin/tenants/default/actors/{'a' * 201}/allocation", "grant_1"),
-        (f"/v1/admin/tenants/{'a' * 201}/actors/alice/allocation", "grant_1"),
+        (f"/v1/clearinghouse/tenants/default/actors/{'a' * 201}/allocation", "grant_1"),
+        (f"/v1/clearinghouse/tenants/{'a' * 201}/actors/alice/allocation", "grant_1"),
         (ALLOCATION, "g" * 201),
-        ("/v1/admin/tenants/default/actors/a%00b/allocation", "grant_1"),
-        ("/v1/admin/tenants/a%00b/actors/alice/allocation", "grant_1"),
+        ("/v1/clearinghouse/tenants/default/actors/a%00b/allocation", "grant_1"),
+        ("/v1/clearinghouse/tenants/a%00b/actors/alice/allocation", "grant_1"),
     ],
     ids=["actor", "tenant", "grant", "actor NUL", "tenant NUL"],
 )
@@ -565,8 +573,8 @@ async def test_an_amount_the_provider_would_not_take_is_422_before_the_ledger_an
     assert (await client.post(ALLOCATION, json=allot | {"amount": good}, headers=admin)).status_code == 201
     funding = [
         (ALLOCATION + "/top-up", {"operation_ref": "f1"}, 200),
-        ("/v1/admin/grant/top-up", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
-        ("/v1/admin/grants", {"operation_ref": "c1", "name": "ops"}, 201),
+        ("/v1/clearinghouse/grant/top-up", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
+        ("/v1/clearinghouse/grants", {"operation_ref": "c1", "name": "ops"}, 201),
     ]
     if amount.startswith("-"):  # a funding amount stays positive, refused as before (400)
         funding = []
@@ -591,11 +599,11 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
     commands = [
         (ALLOCATION, {"amount": usd, "grant_id": "grant_1"}),
         (ALLOCATION + "/top-up", {"amount": usd}),
-        ("/v1/admin/grant/top-up", {"amount": usd, "grant_id": "grant_1"}),
-        ("/v1/admin/grants", {"name": "ops", "amount": usd}),
+        ("/v1/clearinghouse/grant/top-up", {"amount": usd, "grant_id": "grant_1"}),
+        ("/v1/clearinghouse/grants", {"name": "ops", "amount": usd}),
         (ALLOCATION + "/rotate-payment-key", {}),
-        ("/v1/admin/keys", {"actor_id": "bob"}),
-        (f"/v1/admin/keys/{key_id}/rotate", {"label": "ci"}),
+        ("/v1/clearinghouse/keys", {"actor_id": "bob"}),
+        (f"/v1/clearinghouse/keys/{key_id}/rotate", {"label": "ci"}),
     ]
     for path, body in commands:
         for missing in (body, body | {"operation_ref": ""}):
@@ -607,18 +615,18 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
 async def test_a_replayed_key_issue_is_201_without_the_token(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
     body = {"actor_id": "bob", "operation_ref": "k1"}
-    first = await client.post("/v1/admin/keys", json=body, headers=admin)
-    again = await client.post("/v1/admin/keys", json=body, headers=admin)
+    first = await client.post("/v1/clearinghouse/keys", json=body, headers=admin)
+    again = await client.post("/v1/clearinghouse/keys", json=body, headers=admin)
     assert (first.status_code, again.status_code) == (201, 201)
     assert first.json()["token"].startswith("lpk_") and "Idempotent-Replayed" not in first.headers
     assert again.json() == first.json() | {"token": None, "replayed": True}
     assert again.headers["Idempotent-Replayed"] == "true"
     rotate = {"operation_ref": "rk1"}
     rotated = await client.post(
-        f"/v1/admin/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
+        f"/v1/clearinghouse/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
     )
     replayed = await client.post(
-        f"/v1/admin/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
+        f"/v1/clearinghouse/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
     )
     assert replayed.status_code == 201 and replayed.json() == rotated.json() | {
         "token": None,
@@ -631,7 +639,7 @@ async def test_replayed_allotment_and_grant_creation_say_so(api) -> None:  # typ
     client, _engine, admin, _alice = api
     body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
     grant = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
-    for path, sent in ((ALLOCATION, body), ("/v1/admin/grants", grant)):
+    for path, sent in ((ALLOCATION, body), ("/v1/clearinghouse/grants", grant)):
         first = await client.post(path, json=sent, headers=admin)
         again = await client.post(path, json=sent, headers=admin)
         assert (again.status_code, again.json()) == (first.status_code, first.json()) == (201, first.json())

@@ -61,7 +61,7 @@ Every layer uses the frozen models in `contracts/`.
 ```mermaid
 flowchart TB
     subgraph UI["http/ — REST service ([server] extra)"]
-        Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/admin/*"]
+        Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/clearinghouse/*"]
     end
     subgraph Wiring["runtime/ — app wiring"]
         BE["BuilderEngine.create · start · stop · health"]
@@ -158,7 +158,7 @@ Money moves only on an admin command, with an idempotency key. The key goes stra
 sequenceDiagram
     autonumber
     actor Op as Operator (admin key)
-    participant H as REST /v1/admin/.../allocation
+    participant H as REST /v1/clearinghouse/.../allocation
     participant Pay as PaymentsService
     participant B as BatteriesClient
     participant Bat as Batteries management API
@@ -276,7 +276,7 @@ sequenceDiagram
     participant Pay as PaymentsService (AllowanceReader)
     participant DB as SqlStore
     participant Bat as Batteries
-    Op->>C: GET /v1/admin/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
+    Op->>C: GET /v1/clearinghouse/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
     C->>Pay: allocation_for(app, actor) → the current allocation
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
     C->>DB: attempt_allocations(app, actor) → which allocation paid each attempt (#115, C9)

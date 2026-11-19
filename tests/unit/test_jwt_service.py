@@ -214,12 +214,15 @@ async def test_the_rest_service_accepts_the_providers_tokens(idp: IdentityProvid
             ).status_code == 403
             admin = bearer(idp.token(scope="livepeer:admin"))
             assert (
-                await client.get("/v1/admin/reconciliation?actor_id=alice", headers=admin)
+                await client.get("/v1/clearinghouse/reconciliation?actor_id=alice", headers=admin)
             ).status_code in (200, 404)
             assert (
-                await client.get("/v1/admin/reconciliation", headers=bearer(idp.token()))
+                await client.get("/v1/clearinghouse/reconciliation", headers=bearer(idp.token()))
             ).status_code == 403
-            assert (await client.post("/v1/admin/keys", json={}, headers=admin)).status_code in (404, 405)
+            assert (await client.post("/v1/clearinghouse/keys", json={}, headers=admin)).status_code in (
+                404,
+                405,
+            )
             schemes = app.openapi()["components"]["securitySchemes"]
             assert [(s["scheme"], s.get("bearerFormat")) for s in schemes.values()] == [("bearer", "JWT")]
 
@@ -324,7 +327,7 @@ async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: Ide
             operator = bearer(
                 idp.token(sub="b715dc36", scope="livepeer:admin", preferred_username="operator")
             )
-            listed = (await client.get("/v1/admin/actors", headers=operator)).json()
+            listed = (await client.get("/v1/clearinghouse/actors", headers=operator)).json()
             assert [(a["actor_id"], a["label"], a["allotted"]) for a in listed] == [
                 ("3c446b40-7123", "alice", False)
             ]  # the operator signing in is not an actor, so is not listed

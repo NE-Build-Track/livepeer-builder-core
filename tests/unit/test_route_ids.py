@@ -16,7 +16,7 @@ from livepeer_builder import BuilderEngine
 from livepeer_builder.http import create_app
 from tests.conftest import EngineFactory
 
-ALLOCATION = "/v1/admin/tenants/{tenant}/actors/{actor}/allocation"
+ALLOCATION = "/v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation"
 REF = {"operation_ref": "r1"}
 # (method, path template, query parameter or None, body): {id} is where the bad id goes.
 ROUTES = [
@@ -24,11 +24,11 @@ ROUTES = [
     ("GET", "/v1/runners", "app", None),
     ("GET", "/v1/costs/summary", "actor_id", None),
     ("GET", "/v1/allowance", "actor_id", None),
-    ("GET", "/v1/admin/keys", "tenant_id", None),
-    ("GET", "/v1/admin/keys/{id}", None, None),
-    ("POST", "/v1/admin/keys/{id}/rotate", None, REF),
-    ("POST", "/v1/admin/keys/{id}/revoke", None, None),
-    ("GET", "/v1/admin/actors", "tenant_id", None),
+    ("GET", "/v1/clearinghouse/keys", "tenant_id", None),
+    ("GET", "/v1/clearinghouse/keys/{id}", None, None),
+    ("POST", "/v1/clearinghouse/keys/{id}/rotate", None, REF),
+    ("POST", "/v1/clearinghouse/keys/{id}/revoke", None, None),
+    ("GET", "/v1/clearinghouse/actors", "tenant_id", None),
     ("GET", ALLOCATION.format(tenant="{id}", actor="alice"), None, None),
     ("GET", ALLOCATION.format(tenant="default", actor="{id}"), None, None),
     ("POST", ALLOCATION.format(tenant="default", actor="{id}") + "/top-up",
@@ -36,9 +36,9 @@ ROUTES = [
     ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/status", None, {"status": "paused"}),
     ("POST", ALLOCATION.format(tenant="default", actor="{id}") + "/revoke", None, None),
     ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/rotate-payment-key", None, REF),
-    ("GET", "/v1/admin/reconciliation", "tenant_id", None),
-    ("GET", "/v1/admin/reconciliation", "actor_id", None),
-    ("GET", "/v1/admin/reconciliation", "allocation_id", None),
+    ("GET", "/v1/clearinghouse/reconciliation", "tenant_id", None),
+    ("GET", "/v1/clearinghouse/reconciliation", "actor_id", None),
+    ("GET", "/v1/clearinghouse/reconciliation", "allocation_id", None),
 ]  # fmt: skip
 
 

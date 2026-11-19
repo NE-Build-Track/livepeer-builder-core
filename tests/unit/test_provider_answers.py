@@ -234,9 +234,9 @@ async def test_the_rest_service_answers_a_malformed_provider_answer_with_502(
     )
     headers = {"Authorization": f"Bearer {key.token}"}
     async with httpx.AsyncClient(transport=transport, base_url="http://engine", headers=headers) as client:
-        listed = await client.get("/v1/admin/grants")
+        listed = await client.get("/v1/clearinghouse/grants")
         created = await client.post(
-            "/v1/admin/grants",
+            "/v1/clearinghouse/grants",
             json={"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"},
         )
     assert (listed.status_code, created.status_code) == (502, 502)
@@ -428,8 +428,8 @@ async def test_a_grant_read_back_the_engine_cannot_read_is_an_unknown_outcome_no
     key = await engine.keys.bootstrap_admin()
     body = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"}
     async with rest(engine, key.token) as http:
-        created = await http.post("/v1/admin/grants", json=body)
-        again = await http.post("/v1/admin/grants", json=body)
+        created = await http.post("/v1/clearinghouse/grants", json=body)
+        again = await http.post("/v1/clearinghouse/grants", json=body)
     assert (created.status_code, again.status_code) == (503, 409)  # the grant exists: unknown, and held
     assert "overloaded" not in created.text
     assert await ledger(store) == [("grant-1", "started")]
@@ -469,8 +469,8 @@ async def test_allotment_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_
     key = await engine.keys.bootstrap_admin()
     body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "g1", "operation_ref": "p-1"}
     async with rest(engine, key.token) as http:
-        created = await http.post("/v1/admin/tenants/default/actors/alice/allocation", json=body)
-        again = await http.post("/v1/admin/tenants/default/actors/alice/allocation", json=body)
+        created = await http.post("/v1/clearinghouse/tenants/default/actors/alice/allocation", json=body)
+        again = await http.post("/v1/clearinghouse/tenants/default/actors/alice/allocation", json=body)
     assert (created.status_code, again.status_code) == (502, 409)  # the key may exist: unknown, and held
     assert await ledger(store) == [("p-1", "started")]
 
@@ -559,15 +559,15 @@ async def test_a_usage_feed_whose_cursor_does_not_advance_fails_the_sync_as_an_i
 async def test_the_rest_service_answers_a_list_that_never_advances_with_502(
     make_engine: EngineFactory,
 ) -> None:
-    """``GET /v1/admin/grants`` and ``POST /v1/admin/costs/sync`` asked for the same page without end and
+    """``GET /v1/clearinghouse/grants`` and ``POST /v1/clearinghouse/costs/sync`` asked for the same page without end and
     never answered."""
     desk = BatteriesClient(BASE, "t", client=stuck(GRANT, []))
     usage = BatteriesUsageSource(BASE, "t", client=stuck(USAGE_ITEM, []))
     engine = await make_engine(supply=EngineSupply(grants_manager=desk, usage_source=usage))
     key = await engine.keys.bootstrap_admin()
     async with rest(engine, key.token) as http:
-        listed = await http.get("/v1/admin/grants")
-        synced = await http.post("/v1/admin/costs/sync")
+        listed = await http.get("/v1/clearinghouse/grants")
+        synced = await http.post("/v1/clearinghouse/costs/sync")
     assert (listed.status_code, synced.status_code) == (502, 502)
 
 

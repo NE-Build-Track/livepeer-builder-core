@@ -53,10 +53,10 @@ docker compose exec engine lpb bootstrap-admin            # prints the admin tok
 ADMIN=lpk_...
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"kind":"actor","actor_id":"alice","operation_ref":"dev-key-alice"}' \
-  http://127.0.0.1:8080/v1/admin/keys                                                  # an actor key
+  http://127.0.0.1:8080/v1/clearinghouse/keys                                                  # an actor key
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"amount":{"amount":"1","currency":"USD"},"grant_id":"<grant id>","operation_ref":"dev-allot-alice"}' \
-  http://127.0.0.1:8080/v1/admin/tenants/default/actors/alice/allocation          # explicit allotment
+  http://127.0.0.1:8080/v1/clearinghouse/tenants/default/actors/alice/allocation          # explicit allotment
 ALICE=lpk_...
 curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key
 curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
@@ -64,11 +64,11 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
   http://127.0.0.1:8080/v1/jobs
 ```
 
-`<grant id>` is the id `grant create` printed; with the grant desk on, `GET /v1/admin/grants` lists it.
+`<grant id>` is the id `grant create` printed; with the grant desk on, `GET /v1/clearinghouse/grants` lists it.
 The bootstrap admin key has no allocation of its own, so a request without `grant_id` gets 400
 `choose a grant` ([payments.md](../../docs/contracts/payments.md)).
 
-Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliation?actor_id=alice`.
+Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/clearinghouse/reconciliation?actor_id=alice`.
 
 ## Status (19 October, at the pins of that day)
 
@@ -78,7 +78,7 @@ Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliatio
   credential lacks `grants.fund`. Add both to `secrets/clearinghouse.toml` (as `config/init-secrets.py`
   writes them), save the grant-desk secret as `secrets/grant-desk-token`, set
   `LPB_BATTERIES_GRANTS_TOKEN` in `.env`, and recreate `clearinghouse` and `engine`. Without the
-  grants token the engine starts with the grant desk off (`/v1/admin/grants` is absent).
+  grants token the engine starts with the grant desk off (`/v1/clearinghouse/grants` is absent).
 - **T10 resolved:** the signer at `f970be6` pays orchestrators whose ticket recipient differs from
   their node address. Paid jobs on public orchestrators succeed and reconcile.
 - **T9 resolved:** SDK PR 5 reads node's lower-case `"state"` key, so attempts record their `auth_id`

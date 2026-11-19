@@ -28,9 +28,8 @@ DEFAULT_ACTOR_PERMISSIONS: frozenset[str] = frozenset(
     {Operation.DISCOVER, Operation.JOBS_RUN, Operation.JOBS_READ, Operation.COSTS_READ}
 )
 
-CredentialKind = Literal[
-    "actor", "clearinghouse_admin", "auditor", "service"
-]  # auditor: a read-only admin (D46)
+# auditor: a read-only admin (D46)
+CredentialKind = Literal["actor", "clearinghouse_admin", "auditor", "service"]
 
 
 class AuthProvenance(Contract):

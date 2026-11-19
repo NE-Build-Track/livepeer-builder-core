@@ -120,9 +120,8 @@ class KnownActor(Contract):
 class TopUpRequest(Contract):
     amount: TopUpAmount  # the provider's format and the engine's bound (#112, C11)
     operation_ref: OperationRef  # required: makes a retried top-up safe
-    grant_id: GrantId = (
-        ""  # a grant top-up only; an allocation top-up ignores it. One path segment (#113, C10)
-    )
+    # a grant top-up only; an allocation top-up ignores it. One path segment (#113, C10)
+    grant_id: GrantId = ""
 
 
 class Allowance(Contract):

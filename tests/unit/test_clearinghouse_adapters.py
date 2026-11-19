@@ -376,7 +376,7 @@ async def test_the_tenant_admin_key_reaches_no_other_tenant(ports: Ports) -> Non
 
     assert [grant.value.status_code, allot.value.status_code] == [403, 403]
     assert "another tenant" in grant.value.message and definite_refusal(allot.value)
-    assert allowance.value.status_code == 404  # refused in the engine: that read names no tenant
+    assert allowance.value.status_code == 403  # the allocation route names the tenant, as every other does
     assert ports.provider.unallocated(other) == Decimal(100) and not ports.provider.allocations
 
 

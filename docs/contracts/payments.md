@@ -1115,8 +1115,7 @@ place of Batteries and the signer. Three settings select that, set together or n
 
 ### Each port and its route
 
-`{t}` is the tenant and `{a}` the actor. Every path but the allowance read begins
-`/v1/clearinghouse/tenants/{t}`.
+`{t}` is the tenant and `{a}` the actor. Every path begins `/v1/clearinghouse/tenants/{t}`.
 
 | Port and member | Route | The answer becomes |
 | --- | --- | --- |
@@ -1126,7 +1125,7 @@ place of Batteries and the signer. Three settings select that, set together or n
 | `AllocationManager.top_up_allocation` | `POST /actors/{a}/allocation/top-up` with `amount`, `operation_ref` | Nothing |
 | `AllocationManager.set_allocation_status` | `POST /actors/{a}/allocation/status` with `status` | Nothing |
 | `AllocationManager.revoke_allocation` | `POST /actors/{a}/allocation/revoke` | Nothing |
-| `AllocationManager.read_allocation`, `AllowanceReader.read_allowance` | `GET /v1/allowance?actor_id={a}` | `Allowance` |
+| `AllocationManager.read_allocation`, `AllowanceReader.read_allowance` | `GET /actors/{a}/allocation` | The `allowance` of the answer ([Allowance](#allowance)). `null` there is `ProviderUnavailable`: unknown, never zero |
 | `AllocationManager.read_grant` | `GET /grant` | `TenantGrant` |
 | `AllocationManager.top_up_grant`, `set_grant_status`, `create_grant`, `list_grants`, `grant_page`, `grant_balances` | None | `AccessDenied` (403) in the engine, with nothing sent: only a clearinghouse admin does these, at the clearinghouse |
 | `AllowanceReader.allocation_for` | None: the engine's own actor record | The allocation whose payment key the engine holds |
@@ -1147,11 +1146,14 @@ place of Batteries and the signer. Three settings select that, set together or n
   at the clearinghouse. Before a top-up, a status change or a rotation the adapter reads the actor's
   allocation there, and refuses with 404 when it is not the one the engine names. A revoke of an
   allocation the clearinghouse has already ended sends nothing.
-- **The allowance read is not a clearinghouse route yet.** `GET /v1/allowance` is a work route, which a
-  clearinghouse serves today and a tenant admin may call for an actor of its tenant.
-  `GET .../actors/{a}/allocation` answers the allocation's record, with no amounts. The read is of the
-  actor's current allocation only: an earlier one cannot be read, so reconciling an earlier allocation
-  of an actor is a 404 at an engine that uses a clearinghouse (tech debt T36).
+- **No work route of the clearinghouse is called.** The allowance is read from the actor's allocation
+  route, which answers it with the record ([Allowance](#allowance)). The remote adapters, the discovery
+  reader and `lpb payments check` call the tenant's routes, the runner list and the signer's two paths,
+  and nothing else: `tests/unit/test_clearinghouse_without_work_routes.py` runs them against a
+  clearinghouse's app built with no work route.
+- **Only an actor's current allocation can be read.** The route names an actor. An allocation the
+  actor no longer holds is a 404 in the engine, with nothing asked, so reconciling an earlier
+  allocation of an actor has no provider figure at an engine that uses a clearinghouse (tech debt T40).
 
 ### Where the payment key is kept
 

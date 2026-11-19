@@ -363,7 +363,7 @@ request carries the tenant admin key as a bearer.
 | `top_up_allocation(allocation_id, amount, idempotency_key)` | `POST /actors/{a}/allocation/top-up` with `amount` and `operation_ref` | Nothing |
 | `set_allocation_status(allocation_id, status)` | `POST /actors/{a}/allocation/status` with `status` | Nothing |
 | `revoke_allocation(allocation_id)` | `POST /actors/{a}/allocation/revoke` | Nothing |
-| `read_allocation(allocation_id)` | `GET /v1/allowance?actor_id={a}` (see "Not clean" below) | `Allowance` |
+| `read_allocation(allocation_id)` | `GET /actors/{a}/allocation`, whose answer carries the allowance (it was `GET /v1/allowance?actor_id={a}` until the route answered amounts: see "Not clean" below) | `Allowance` |
 | `read_grant(grant_id)` | `GET /grant` | `TenantGrant` |
 | `top_up_grant`, `set_grant_status`, `create_grant`, `list_grants`, `grant_page`, `grant_balances` | None. Only a clearinghouse admin does these, on the private listener, where a tenant admin key is refused | Refused in the engine with `AccessDenied` (403), and nothing is sent |
 
@@ -388,7 +388,7 @@ request carries the tenant admin key as a bearer.
 | Port and member | Reaches | Note |
 | --- | --- | --- |
 | `AllowanceReader.allocation_for(tenant_id, actor_id)` | The engine's own actor record | As today: the allocation a job's attempt records is the one whose payment key the engine holds |
-| `AllowanceReader.read_allowance(allocation_id)` | `GET /v1/allowance?actor_id={a}`, with the actor found in the engine's own records | See "Not clean" |
+| `AllowanceReader.read_allowance(allocation_id)` | `GET /actors/{a}/allocation`, with the actor found in the engine's own records | See "Not clean" |
 | `UsageSource.page(cursor, limit)` | `GET /usage?cursor=&limit=` | The route's answer is the port's own page. A refused cursor (400, `cursor_mismatch`) is `CursorMismatch`, so cost sync starts again from the first page, as it does today |
 | `CredentialResolver.credential(actor)` | The engine's own actor record and secret store | The payment key the clearinghouse issued, and never any other secret |
 
@@ -433,8 +433,8 @@ The usage read and `lpb payments check` name no actor, so they need the tenant's
 | Where | What | Smallest change proposed |
 | --- | --- | --- |
 | Five members of `AllocationManager` | No actor in their arguments | Built: the optional `AllocationsByActor` protocol |
-| `read_allocation`, `read_allowance` | The guide gives this read to `GET /actors/{a}/allocation` ("allotted, spent, available and status"), and that route answers the allocation's record, with no amounts (`http/clearinghouse.py`, `get_actor`). The only route that answers an allowance is the work half's `GET /v1/allowance`, which a clearinghouse serves today and a tenant admin may call for an actor of its tenant | The adapter calls `GET /v1/allowance`. The `clearinghouse` role (P8) mounts no work route, so before P8 one of the two changes: the allocation route answers the allowance, as the guide says, or the role keeps the allowance route. For the owner |
-| `read_allowance(allocation_id)` for an earlier allocation | The clearinghouse reads an actor's current allocation only. Reconciling an earlier allocation of an actor (#115, C9) reads the provider's `spent` by allocation id | Refused with the provider's 404 (T36). A route that reads an allocation by its id, if the read is wanted |
+| `read_allocation`, `read_allowance` | The guide gives this read to `GET /actors/{a}/allocation` ("allotted, spent, available and status"), and that route answered the allocation's record, with no amounts. The only route that answered an allowance was the work half's `GET /v1/allowance` | Decided by the owner on 19 November and built: the allocation route answers the amounts as `allowance`, and the adapters read them there. No work route of the clearinghouse is called (T36, closed) |
+| `read_allowance(allocation_id)` for an earlier allocation | The clearinghouse reads an actor's current allocation only. Reconciling an earlier allocation of an actor (#115, C9) reads the provider's `spent` by allocation id | Refused with the provider's 404 (T40). A route that reads an allocation by its id, if the read is wanted |
 | The tenant's id | `UsageSource.page` and the check command name no tenant, and the engine cannot ask who it is | Built: `LPB_CLEARINGHOUSE_TENANT_ID` (T38). `GET /v1/me` (ISS-29) can replace it |
 | `revoke_key` | A rotation at the clearinghouse is one command, and the port's is two | Built: the second call sends nothing |
 | The grant members | Only a clearinghouse admin calls them | Built: refused in the engine, plainly |

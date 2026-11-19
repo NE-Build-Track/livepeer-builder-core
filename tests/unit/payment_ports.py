@@ -9,12 +9,13 @@ is the same kind of object on both sides: a test reads it to see what happened.
 """
 
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal
 
 import httpx
+from fastapi import FastAPI
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.clearinghouse import ClearinghousePorts
@@ -27,6 +28,7 @@ from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, MemorySecretStore, make_engine
 
 Side = Literal["local", "remote"]
+AppOf = Callable[[BuilderEngine], FastAPI]
 SIDES: tuple[Side, ...] = ("local", "remote")
 CLEARINGHOUSE_URL = "http://clearinghouse.test"
 GRANT_TOTAL = Decimal(100)
@@ -118,14 +120,20 @@ def usd(amount: str | int) -> Money:
 
 
 @contextlib.asynccontextmanager
-async def open_ports(side: Side) -> AsyncIterator[Ports]:
+async def open_ports(side: Side, served: AppOf | None = None) -> AsyncIterator[Ports]:
+    """``served`` builds the clearinghouse's app from its engine (remote): its public listener unless a
+    test serves something narrower."""
     provider, provider_usage = FakeAllocationManager(), FakeUsageSource()
     if side == "local":
         async with _local(provider, provider_usage) as ports:
             yield ports
     else:
-        async with _remote(provider, provider_usage) as ports:
+        async with _remote(provider, provider_usage, served or public_listener) as ports:
             yield ports
+
+
+def public_listener(house: BuilderEngine) -> FastAPI:
+    return create_app(house, manage_lifecycle=False, listener="public")
 
 
 @contextlib.asynccontextmanager
@@ -149,7 +157,9 @@ async def _local(provider: FakeAllocationManager, usage: FakeUsageSource) -> Asy
 
 
 @contextlib.asynccontextmanager
-async def _remote(provider: FakeAllocationManager, usage: FakeUsageSource) -> AsyncIterator[Ports]:
+async def _remote(
+    provider: FakeAllocationManager, usage: FakeUsageSource, served: AppOf
+) -> AsyncIterator[Ports]:
     house_supply = EngineSupply(allocation_manager=provider, grants_manager=provider, usage_source=usage)
     async with contextlib.AsyncExitStack() as stack:
         house = await stack.enter_async_context(make_engine(supply=house_supply))
@@ -161,7 +171,7 @@ async def _remote(provider: FakeAllocationManager, usage: FakeUsageSource) -> As
 
         requests: list[httpx.Request] = []
         lost: list[str] = []
-        public = create_app(house, manage_lifecycle=False, listener="public")
+        public = served(house)
         client = await stack.enter_async_context(
             httpx.AsyncClient(transport=Lossy(httpx.ASGITransport(app=public), requests, lost))
         )

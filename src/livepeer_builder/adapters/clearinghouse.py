@@ -41,11 +41,16 @@ from livepeer_builder.contracts import (
     UsagePage,
 )
 from livepeer_builder.contracts.payments import PAYMENT_KEY_PREFIX
-from livepeer_builder.errors import AccessDenied, InvalidRequest, NotProvisioned, ProviderError
+from livepeer_builder.errors import (
+    AccessDenied,
+    InvalidRequest,
+    NotProvisioned,
+    ProviderError,
+    ProviderUnavailable,
+)
 from livepeer_builder.protocols import ActorRepo, AllocationManager, SecretStore
 
 _LOG = logging.getLogger(__name__)
-ALLOWANCE = "/v1/allowance"  # the one read that is no clearinghouse route yet (payments.md)
 _LISTS_EVERY_TENANT = "lists every tenant"  # what three members of the port would do, and may not
 
 
@@ -334,14 +339,16 @@ class ClearinghousePorts:
 async def read_allowance(
     wire: ClearinghouseWire, tenant_id: str, actor_id: str, allocation_id: str
 ) -> Allowance:
-    """The allowance of the allocation ``allocation_id``, which ``actor_id`` must hold now. The route
-    reads the caller's own tenant, so an actor of any other tenant is refused before it is asked."""
-    if tenant_id != wire.tenant_id:
-        raise ProviderError(404, f"tenant {tenant_id!r} is not this engine's tenant at the clearinghouse")
-    allowance = await wire.read_as(Allowance, ALLOWANCE, {"actor_id": actor_id})
-    if allowance.allocation_id != allocation_id:
+    """The allowance of the allocation ``allocation_id``, which ``actor_id`` must hold now: read from the
+    actor's allocation route, which answers it with the record. The route names the tenant, so another
+    tenant's actor is the clearinghouse's 403. An allowance the clearinghouse could not read at its own
+    provider (``null``) is ``ProviderUnavailable``: unknown, and never read as zero."""
+    read = await wire.read_as(AllocationRead, allocation_path(tenant_id, actor_id))
+    if read.allocation_id != allocation_id:
         raise _not_held(actor_id, allocation_id)
-    return allowance
+    if read.allowance is None:
+        raise ProviderUnavailable("the clearinghouse could not read the allowance at its payment provider")
+    return read.allowance
 
 
 def _not_held(actor_id: str, allocation_id: str) -> ProviderError:

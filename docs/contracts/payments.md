@@ -92,6 +92,10 @@ only one tenant. It is gone with its settings, `LPB_ALLOCATION_MODE`, `LPB_SHARE
 - **Unpaid calls.** `per_application` with no key ran every job unpaid. Nothing replaces that: every job
   needs an allocation. An engine with no `LPB_SIGNER_URL` still sends unpaid calls, for provisioned
   actors only.
+- **What was paid before.** Attempts stored in that mode name the shared allocation, where
+  `LPB_SHARED_ALLOCATION_ID` was set. It is no actor's allocation, so it is never the current one. It
+  still reconciles when it is named, without an `actor_id`, over every actor of the application
+  ([one allocation at a time](#cost-classification)).
 
 ## Provisioning
 

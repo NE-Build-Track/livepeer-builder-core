@@ -13,8 +13,7 @@ admin key (``adapters/clearinghouse_wire.py``). The fifth, signing, is inside th
 - ``ClearinghouseCredentials`` is the ``CredentialResolver``: the payment key the clearinghouse issued
   for the actor, which the engine keeps in its secret store, and never any other secret.
 
-The mapping, member by member, is in the ISS-31 guide:
-docs/design-docs/m4-guides/iss-31-payment-configurations.md#the-remote-adapters-each-port-and-its-route
+The mapping, member by member, is in docs/contracts/payments.md#the-remote-adapters.
 """
 
 import logging

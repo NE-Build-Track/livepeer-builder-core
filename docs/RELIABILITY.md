@@ -45,6 +45,8 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging. With a private listener, this address is the public listener |
+| `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` | unset | An engine that uses a payment clearinghouse (D84, #168): the address of its public listener, the tenant admin key (a secret) and the tenant's id. Set together or not at all, and never with a Batteries or signer setting: either is refused at startup. The payment ports then reach the clearinghouse, and `LPB_DISCOVERY_URL` defaults to its runner list ([payments.md](contracts/payments.md#the-remote-adapters)). `LPB_SECRET_KEY` is still required |
+| `LPB_CLEARINGHOUSE_TIMEOUT_S` | `30` | Each request to the clearinghouse. `LPB_OPERATION_STALE_S` must be at least four times it |
 | `LPB_HTTP_PRIVATE_PORT` | unset | Turns the private listener on (D84, #167). Unset, the engine serves one listener with every route, as before. Set (1 to 65535), `lpb serve` serves two: the public one without the routes only a clearinghouse admin calls, where a clearinghouse admin credential is 403, and the private one with every route, for a clearinghouse admin only ([access.md](contracts/access.md#listeners)). Refused at startup when it is the public listener's port on the same host |
 | `LPB_HTTP_PRIVATE_HOST` | `127.0.0.1` | Where the private listener binds. Read only with `LPB_HTTP_PRIVATE_PORT`. Loopback unless set: publish the public listener, never this one |
 | `LPB_HTTP_MAX_REQUEST_BYTES` | `16777216` (16 MiB) | A `/v1/` request body over it is refused with 413 `request_too_large` before it is read (D59); at least 1024. It fits an 8 MiB `raw_body` as base64 |
@@ -63,6 +65,7 @@ no setting.
 | `lpb bootstrap-admin` | Once per deployment; prints the first admin key once |
 | `lpb gen-secret-key` | Once; store the key in your secret manager, never in the database |
 | `lpb serve` | Run the REST service (`[server]` extra) |
+| `lpb payments check` | Read-only: every request is a GET, no engine is built and no database is opened (D87, #168). A self-hosted engine probes the signer and Batteries; an engine that uses a clearinghouse probes its grant, its usage and the runner list. Exit 0 when every probe passed, 1 when one was refused or failed, 2 when the settings are refused. It prints setting names, never a credential or an address ([payments.md](contracts/payments.md#lpb-payments-check)) |
 | `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads |
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |

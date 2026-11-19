@@ -87,4 +87,13 @@ Each pull request ticks its own line here in the same change.
   each currency over every grant; the deposit and reserve are Batteries' own on-chain listener's, which
   a deployment must turn on; "ready" is the signer's identity call. Source: D82, D84 and the guide; where
   they are silent the stricter or the plainer reading was built, for Mike's review.
+- **19 November 2026, P7, first part.** Everything of #168 that does not depend on the payments route
+  is built, and signing is left as one seam. Where the guide is silent: the port names an allocation
+  and the routes an actor, so an allocation manager may be asked for one actor (`AllocationsByActor`),
+  with no member of the port changed; the engine's idempotency key is the route's `operation_ref`; a
+  payment key whose answer was lost is put right by a rotation; the tenant's id is a third setting,
+  `LPB_CLEARINGHOUSE_TENANT_ID`, until `GET /v1/me` exists; the allowance is read through
+  `GET /v1/allowance`, since the allocation route answers no amounts (T36); and `lpb payments check`
+  asks the signer `GET /sign-orchestrator-info`, whose 405 says the route is there. Source: D84, D87 and
+  the guide's "The remote adapters: each port and its route"; the rest for Mike's review.
 

@@ -1,6 +1,7 @@
 """``lpb``: operator commands (docs/RELIABILITY.md#operations). ``migrate``, ``revision``, ``backup`` and
 ``restore`` read only ``LPB_DATABASE_URL``; ``purge``, ``bootstrap-admin``, ``smoke`` and ``serve`` read the
-LPB_* settings, and only ``serve`` requires ``LPB_DISCOVERY_URL`` (#112, C23).
+LPB_* settings, and only ``serve`` requires ``LPB_DISCOVERY_URL`` (#112, C23). With a payment provider,
+``purge`` and ``bootstrap-admin``, which never allot, do not require ``LPB_SECRET_KEY`` (#106 review).
 
 lpb migrate            apply packaged migrations (production runs this before start)
 lpb revision           show the database revision and the package head
@@ -91,9 +92,18 @@ def _database_url() -> str:
     return EngineSettings.database_url_from_env()
 
 
-def _engine_settings() -> EngineSettings:
-    """The LPB_* settings for an engine that serves nothing: the discovery address is optional."""
-    return EngineSettings.from_env(defaults={"discovery_url": NO_DISCOVERY_URL})
+def _engine_settings(**stand_ins: Any) -> EngineSettings:
+    """The LPB_* settings for an engine that serves nothing: the discovery address is optional, and so is
+    each setting ``stand_ins`` gives a value for the environment leaves unset."""
+    return EngineSettings.from_env(defaults={"discovery_url": NO_DISCOVERY_URL, **stand_ins})
+
+
+def _settings_that_allot_nothing() -> EngineSettings:
+    """purge and bootstrap-admin never allot, so they keep no payment key. Without LPB_SECRET_KEY they get a
+    key for this run only, as they get a discovery address, and the engine's check that a payment
+    provider's keys can be kept is met (#106 review). smoke gets none: it proves the engine starts as
+    serve would."""
+    return _engine_settings(secret_key=generate_secret_key())
 
 
 async def _migrate(_: argparse.Namespace) -> None:
@@ -133,7 +143,7 @@ async def _verify(args: argparse.Namespace) -> None:
 
 
 async def _purge(_: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(_engine_settings())
+    engine = await BuilderEngine.create(_settings_that_allot_nothing())
     try:
         _emit((await engine.purge()).model_dump())
     finally:
@@ -141,7 +151,7 @@ async def _purge(_: argparse.Namespace) -> None:
 
 
 async def _bootstrap(args: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(_engine_settings())
+    engine = await BuilderEngine.create(_settings_that_allot_nothing())
     try:
         if engine.keys is None:
             raise SystemExit("API keys are disabled in this deployment")

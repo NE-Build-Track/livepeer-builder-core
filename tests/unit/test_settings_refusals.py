@@ -133,6 +133,17 @@ REFUSED_IN_CODE = [
         ),
         id="the clearinghouse address's field validator",
     ),
+    pytest.param(  # #163 review: neither tenant source has a default
+        {"auth": "jwt", "jwt_issuer": "https://idp.invalid/", "jwt_audience": "engine"},
+        (
+            "value_error",
+            (),
+            "Value error, LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and "
+            "LPB_JWT_TENANT_ID must be set: the claim that names each token's tenant, or the one tenant "
+            "every token is in; neither is set",
+        ),
+        id="the rule on a JWT's tenant",
+    ),
     pytest.param(
         {"discovery_url": ABSENT},
         ("missing", ("discovery_url",), "Field required"),

@@ -50,7 +50,9 @@ def jwt_authenticator() -> JwtBearerAuthenticator:
         raise AssertionError(f"no key is fetched for an unreadable token: {request.url}")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(unreachable))
-    return JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience="aud"), JwksCache(client, ISSUER))
+    return JwtBearerAuthenticator(
+        JwtSettings(issuer=ISSUER, audience="aud", tenant_id="default"), JwksCache(client, ISSUER)
+    )
 
 
 def test_the_cap_is_16_kib_and_a_nested_token_fits_under_it() -> None:

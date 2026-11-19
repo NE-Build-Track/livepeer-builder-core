@@ -136,7 +136,7 @@ async def _through_a_clearinghouse(
             manager=payments._manager,
             allowances=payments._allowances,
             usage=engine.costs._worker._source,
-            credentials=engine.jobs._credentials,
+            credentials=engine.jobs._dispatcher._credentials,
             clearinghouse=house,
             token=token,
             seen=served.seen,

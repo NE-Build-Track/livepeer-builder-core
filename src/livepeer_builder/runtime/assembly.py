@@ -55,6 +55,7 @@ from livepeer_builder.runtime.payment_defaults import payment_defaults
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.discovery import DiscoveryService, MostCapacityFirst
+from livepeer_builder.services.dispatch import Dispatcher
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.ledger import OperationLedger
@@ -323,22 +324,24 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     admission = AdmissionLimiter(
         settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app, runs_jobs=runs_jobs
     )
-    jobs = JobService(
+    stream_limits = StreamLimits(
+        finalize_timeout_s=settings.stream_finalize_timeout_s,
+        drain_timeout_s=settings.stream_drain_timeout_s,
+        settle_s=settings.stream_settle_s,
+        open_grace_s=settings.stream_open_grace_s,
+    )
+    dispatcher = Dispatcher(  # the paid call, one for every way a job runs
         parts.store,
         discovery,
         parts.transport,
         parts.selection,
         parts.credentials or payments,
-        parts.policy,
-        admission,
         parts.clock,
-        StreamLimits(
-            finalize_timeout_s=settings.stream_finalize_timeout_s,
-            drain_timeout_s=settings.stream_drain_timeout_s,
-            settle_s=settings.stream_settle_s,
-            open_grace_s=settings.stream_open_grace_s,
-        ),
+        stream_limits,
         max_paid_attempts=settings.max_paid_attempts,
+    )
+    jobs = JobService(
+        parts.store, dispatcher, parts.transport, parts.policy, admission, parts.clock, stream_limits
     )
     # Cost sync attributes the provider's usage to this engine's jobs: an engine that runs none has no
     # worker. A tenant's usage route reads the provider itself (TenantUsage, above).

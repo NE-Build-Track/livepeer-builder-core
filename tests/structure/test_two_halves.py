@@ -52,7 +52,7 @@ from livepeer_builder.http.work import mount_work_routes
 from livepeer_builder.protocols import clearinghouse, conditional_writes, persistence
 from livepeer_builder.runtime import payment_defaults
 from livepeer_builder.services.costs import CostService, CostSyncWorker
-from livepeer_builder.services.jobs import JobService
+from livepeer_builder.services.dispatch import Dispatcher
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "livepeer_builder"
 GUIDE = "docs/design-docs/m4-guides/iss-31-payment-configurations.md"
@@ -62,6 +62,7 @@ WORK = {
     "services/admission.py",
     "services/costs.py",
     "services/discovery.py",
+    "services/dispatch.py",  # the paid call, which every way of running a job goes through (ISS-26)
     "services/evidence.py",
     "services/failover.py",
     "services/failure_codes.py",
@@ -324,9 +325,9 @@ def test_every_protocol_is_a_payment_port_or_named_as_not_one() -> None:
 
 def test_the_work_half_holds_the_ports_it_pays_and_reads_through() -> None:
     """The ports are in use where the guide says, so the checks above are not passing on nothing."""
-    job = typing.get_type_hints(JobService.__init__)
-    assert job["transport"] is protocols.RunnerTransport  # signing happens inside it
-    assert job["credentials"] is protocols.CredentialResolver
+    paid_call = typing.get_type_hints(Dispatcher.__init__)  # where every job is paid for (ISS-26)
+    assert paid_call["transport"] is protocols.RunnerTransport  # signing happens inside it
+    assert paid_call["credentials"] is protocols.CredentialResolver
     assert typing.get_type_hints(CostService.__init__)["allowances"] == protocols.AllowanceReader | None
     assert typing.get_type_hints(CostSyncWorker.__init__)["source"] is protocols.UsageSource
 

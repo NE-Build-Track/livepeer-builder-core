@@ -78,8 +78,8 @@ class BuilderEngine:
         background loops.
 
         An engine in its ``clearinghouse`` role (#169) starts none of the work half's machinery: it
-        resolves no interrupted job, and runs no cost sync and no retention purge, because it holds no
-        job. It still reads discovery, for the runner list it publishes.
+        resolves no interrupted job, and runs no cost sync, no retention purge and no async worker,
+        because it holds no job. It still reads discovery, for the runner list it publishes.
 
         If starting fails (a schema that does not match, a store error, or a cancellation), the engine stops:
         what ``create`` opened is closed before the error reaches the caller, and a new engine is needed.
@@ -98,6 +98,9 @@ class BuilderEngine:
             await self._require_current_schema()
             if runs_jobs:
                 await self.jobs.recover_interrupted()
+                # what the async worker finds waiting (ISS-26): counted here, before any loop runs, so
+                # the worker's loop reads the queue only while a job waits
+                await self.jobs.worker.count_queue()
             await self.discovery.refresh()
         except BaseException:
             await run_shielded(self.stop())  # __aexit__ and a lifespan's finally never run after this
@@ -108,6 +111,8 @@ class BuilderEngine:
             self._tasks += [
                 asyncio.create_task(self.costs.run(self._stop), name="lpb-cost-sync"),
                 asyncio.create_task(self._retention_loop(), name="lpb-retention"),
+                # after recover_interrupted, which put back the jobs a restart left claimed (ISS-26)
+                asyncio.create_task(self.jobs.worker.run(self._stop), name="lpb-async-jobs"),
             ]
         _LOG.info(
             "engine started",
@@ -124,6 +129,7 @@ class BuilderEngine:
     async def stop(self) -> None:
         await self.jobs.close_streams()  # before the store closes: open streams drain, then end abandoned
         self._stop.set()
+        await self.jobs.worker.drain()  # running async jobs end or are cancelled; none is claimed after
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -153,6 +159,8 @@ class BuilderEngine:
             cost_sync_error=self.costs.last_error,
             cost_sync_set_aside=self.costs.set_aside_rows,
             running_jobs=self.admission.running,
+            queued_jobs=self.jobs.worker.queued_jobs,
+            oldest_queued_s=self.jobs.worker.oldest_queued_s,
             version=package_version(),
         )
 

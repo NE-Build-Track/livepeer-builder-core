@@ -725,6 +725,22 @@
             ],
             "title": "Discovery Observed At"
           },
+          "oldest_queued_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Queued S"
+          },
+          "queued_jobs": {
+            "default": 0,
+            "title": "Queued Jobs",
+            "type": "integer"
+          },
           "ready": {
             "title": "Ready",
             "type": "boolean"
@@ -848,7 +864,8 @@
               "runner_rejected",
               "runner_error",
               "interrupted",
-              "abandoned"
+              "abandoned",
+              "result_not_stored"
             ],
             "title": "Kind",
             "type": "string"
@@ -869,7 +886,8 @@
                   "not_authorized",
                   "allowance_exhausted",
                   "signer_unavailable",
-                  "signer_unknown"
+                  "signer_unknown",
+                  "cancelled"
                 ],
                 "type": "string"
               },
@@ -1158,6 +1176,18 @@
                 "type": "null"
               }
             ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
           },
           "state": {
             "enum": [
@@ -2038,11 +2068,23 @@
       },
       "ResultRef": {
         "additionalProperties": false,
-        "description": "Where a result lives. M2 keeps immediate results inline (not retained) and records their shape.",
+        "description": "Where a result lives, and its shape. An immediate result is ``inline``: returned once and not\nretained. An async job's is ``stored`` (ISS-26): the engine keeps the bytes until ``expires_at`` and\nserves them at ``location``. A stored reference with no location names a result the engine could\nnot keep (the job failed ``result_not_stored``): its size and hash are all that is left.",
         "properties": {
           "content_type": {
             "title": "Content Type",
             "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           },
           "location": {
             "anyOf": [
@@ -4458,7 +4500,17 @@
                 "schema": {}
               }
             },
-            "description": "The runner's own status, content type and body. With `Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives (docs/contracts/engine.md#streaming)."
+            "description": "The runner's own status, content type and body. With `Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives (docs/contracts/engine.md#streaming). For `mode=\"async\"`, the job a repeated `operation_ref` already named, with `Idempotent-Replayed: true`."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "`mode=\"async\"`: the job, queued. `Location` and `Livepeer-Job-Id` name it; read it and its result back by id (docs/contracts/engine.md#async-jobs)."
           },
           "422": {
             "content": {
@@ -4525,6 +4577,54 @@
           }
         ],
         "summary": "Get Job",
+        "tags": [
+          "work half"
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_job_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Job",
         "tags": [
           "work half"
         ]

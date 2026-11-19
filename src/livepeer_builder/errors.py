@@ -84,6 +84,35 @@ class JobFailed(EngineError):
         self.job = job
 
 
+class JobNotFinished(EngineError):
+    """The job has not ended, so it has no result yet (409, ``job_not_finished``, ``Retry-After``; ISS-26).
+    ``job`` is the job as it is now, ``queued`` or ``running``. Ask again later."""
+
+    def __init__(self, job: Job, retry_after_s: int = 1) -> None:
+        super().__init__(f"job {job.id} is {job.state}: it has no result yet")
+        self.job = job
+        self.retry_after_s = retry_after_s
+
+
+class ResultExpired(EngineError):
+    """The job succeeded and the engine no longer holds its result, or never did (410, ``result_expired``;
+    ISS-26): a stored result past its time, or the result of an immediate job, which was returned once
+    and not kept. ``job`` still records the result's size and hash."""
+
+    def __init__(self, job: Job, why: str) -> None:
+        super().__init__(f"the result of job {job.id} is gone: {why}")
+        self.job = job
+
+
+class JobNotQueued(EngineError):
+    """A cancel of a job that is not waiting in the queue (409, ``job_not_queued``; D69): it is running,
+    or it has ended. Only a queued job is cancelled; ``job`` is the job as it is now."""
+
+    def __init__(self, job: Job) -> None:
+        super().__init__(f"job {job.id} is {job.state}: only a queued job can be cancelled")
+        self.job = job
+
+
 class NoCapacity(EngineError):
     """Admission limits refused the job before dispatch (503 with Retry-After)."""
 

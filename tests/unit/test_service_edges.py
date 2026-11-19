@@ -23,7 +23,6 @@ from livepeer_builder.errors import (
     InvalidRequest,
     JobFailed,
     NotFound,
-    NotImplementedInMilestone,
     ProviderError,
     ProviderUnavailable,
     RunnerCallError,
@@ -240,7 +239,7 @@ async def test_job_guard_clauses(
     engine = await make_engine()
     with pytest.raises(InvalidRequest, match="must start with"):
         await engine.jobs.run(alice, JobRequest(app=APP, path="no-slash"))
-    with pytest.raises(NotImplementedInMilestone):
+    with pytest.raises(InvalidRequest, match="async"):  # submit queues an async job (ISS-26); was a 501
         await engine.jobs.submit(alice, JobRequest(app=APP))
     with pytest.raises(NotFound):
         await engine.jobs.get(alice, uuid4())

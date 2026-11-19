@@ -1,8 +1,9 @@
 # Engine contract: discovery, jobs, results, usage
 
-**Ticket:** ISS-02 (streaming: M3, [plan](../exec-plans/completed/streaming-jobs.md)) · **Code:** `contracts/discovery.py`,
-`contracts/jobs.py`, `services/discovery.py`, `services/jobs.py` · **Status:** immediate execution and streaming
-implemented; async and persistent reserved.
+**Ticket:** ISS-02 (streaming: M3, [plan](../exec-plans/completed/streaming-jobs.md); async jobs: M4, ISS-26) ·
+**Code:** `contracts/discovery.py`, `contracts/jobs.py`, `services/discovery.py`, `services/jobs.py`,
+`services/dispatch.py`, `services/async_jobs.py` · **Status:** immediate, streamed and async execution
+implemented; persistent reserved.
 
 Every model is a frozen pydantic v2 class. The same class is used in-process and as the REST
 schema ([generated/openapi.json](../generated/openapi.json)), so the two integration modes cannot
@@ -148,7 +149,7 @@ refuses it earlier) fails that attempt, unpaid, as `invalid runner URL`, like an
 
 | State | Meaning |
 | --- | --- |
-| `queued` | Reserved for async jobs (M4) |
+| `queued` | An async job waiting for a worker: nothing was dispatched or paid yet ([async jobs](#async-jobs)) |
 | `running` | Dispatching. A restart resolves leftover `running` jobs on start |
 | `succeeded` | A runner answered 2xx |
 | `failed` | It ended with a known outcome: nothing went out that might have run the work, or the runner answered with an error. After failing over, the failure is the last runner's. `failure.payment_sent` says whether any attempt was paid |
@@ -353,10 +354,11 @@ retention window may dispatch again, so use UUIDs or ULIDs.
 
 ### Failures
 
-`Failure` has `kind`, `message`, `status_code`, `body`, `payment_sent` and, for a payment failure,
-`reason` (D58). **Branch on `kind` for behavior** (it decides failover and cost) and on `reason` for
-what to tell the builder. `reason` is set only on `payment` and `payment_unknown`; jobs stored before
-D58 have none. For a payment failure `message` is the engine's own words ("the signer refused payment:
+`Failure` has `kind`, `message`, `status_code`, `body`, `payment_sent` and, for a payment failure or a
+cancel, `reason` (D58, D69). **Branch on `kind` for behavior** (it decides failover and cost) and on
+`reason` for what to tell the builder. `reason` is set only on `payment` and `payment_unknown`, and
+`cancelled` on `abandoned` (a queued async job its owner cancelled, ISS-26); jobs stored before D58 have
+none. Its type is `FailureReason`, which holds `PaymentReason`'s four values and `cancelled`. For a payment failure `message` is the engine's own words ("the signer refused payment:
 allowance exhausted (HTTP 402)") and `status_code` is the signer's status, when it answered; the
 signer's URL and its own text go to the engine log only, and `body` is never the signer's
 ([payments.md](payments.md#who-answers-what)).
@@ -381,6 +383,8 @@ the last kind alone.
 | `runner_error` (5xx) | | yes | 502 | The runner failed after it ran, or the engine did (`engine error: …`). Not run again automatically: try later with a new `operation_ref`. Every `runner_error` answers HTTP 502; the runner's own status is `failure.status_code`. A paid runner **500** ran and is `failed_after_payment`, never billable, and the job is `failed`. A paid runner **502 or 504** may still be running behind the orchestrator's proxy, so that attempt is `uncertain` until usage settles it (D52). Read `job.state`: when it is `uncertain`, wait for the cost before running it again |
 | `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran; the next start resolves it `uncertain` when anything may have paid, else `failed`. Read the job: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): no attempt, or every attempt refused before the app ran with nothing paid, as after a restart mid-failover. Otherwise treat it as `timeout` |
 | `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | The caller left the stream before its end ([how a stream ends](#how-a-stream-ends)); the bytes it did not read are gone. Read the job for the outcome and cost. To get the result, run it again with a new `operation_ref` |
+| `abandoned` (an async job cancelled while queued) | `cancelled` | no | 410 from `GET /v1/jobs/{id}/result` | Its owner cancelled it before a worker claimed it ([cancel](#cancel)): nothing ran, nothing was paid, and its cost is `none`. Submit it again to run it: the same `operation_ref` queues a new job, since it never reached a runner |
+| `result_not_stored` (async) | | yes | 502 | The runner answered an async job and was paid, and the answer was larger than `LPB_ASYNC_RESULT_MAX_BYTES`, so the engine kept none of it ([results](#results-of-an-async-job)). The job's `ResultRef` keeps the answer's size and `sha256`. The payment is `failed_after_payment`, never billable. Ask for a smaller answer (a runner's own option, a smaller output), or run it as an immediate job, whose answer is returned inline. A repeat under the same `operation_ref` answers with this job |
 
 `not_provisioned` and `allowance_exhausted` are both 402: `kind` tells them apart. A 403 from
 `POST /v1/jobs` is either the access policy (`AccessDenied`, no job in the body) or `not_authorized`
@@ -478,7 +482,7 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   included (#113, C27). An app serving a stream over its own HTTP layer should do the same; without it,
   a closed iterator is the caller stopping.
 - **The runner's `Content-Type` goes out unchanged**, streamed, buffered or read back as a stored
-  result (`GET /v1/jobs/{id}/result`, 501 until ISS-26) (#113, C27): its parameters
+  result (`GET /v1/jobs/{id}/result`, [async jobs](#async-jobs)) (#113, C27): its parameters
   (`charset`, `profile`, `boundary`) are kept, and the engine adds none, not even a `charset` to a
   `text/` type. A runner that sends none is `application/octet-stream`. `RunnerReply.content_type`,
   `JobStream.content_type` and the stored `ResultRef.content_type` are that same header value.
@@ -507,7 +511,9 @@ payment evidence so far; a deadline during signer identity, before the runner is
 ## Inputs and results in M3
 
 What a builder sends, what comes back, and what the engine keeps (D59). The engine moves bytes between
-the caller and a runner: it hosts no media and keeps no result in M3. Stored results are M4 (ISS-26).
+the caller and a runner: it hosts no media, and keeps no result of an immediate or streamed job. An
+async job's request is kept while it waits and its result is stored (M4, ISS-26: [async
+jobs](#async-jobs)).
 The REST path through this section is [guides/rest-builder.md](../guides/rest-builder.md).
 
 ### Inputs
@@ -522,8 +528,9 @@ The REST path through this section is [guides/rest-builder.md](../guides/rest-bu
 - **A URL inside a payload is passed to the runner unchanged, and the runner fetches it.** The engine
   does not fetch, host, validate or rewrite media. The URL must be reachable from the runner, and stay
   so until the runner has read it (a signed URL's expiry included).
-- Neither is kept: the job records a fingerprint of the request for [idempotency](#idempotency), not
-  its body.
+- Neither is kept for an immediate or streamed job: the job records a fingerprint of the request for
+  [idempotency](#idempotency), not its body. An async job's request is kept until the job ends
+  ([submit](#submit)).
 
 ### Results
 
@@ -533,9 +540,11 @@ builder can check a copy it saved: hash the saved bytes and compare. A stream's 
 bytes the caller received ([how a stream ends](#how-a-stream-ends)). Save the result when the job
 returns; the engine cannot give it again.
 
-`storage="stored"` (a retrievable `location`) is reserved for async results (M4). Until then,
-`GET /v1/jobs/{id}/result` checks the permission (403) and the owner (404 for another actor's job or a
-missing one), then answers 501 with `milestone: "M4"` and `ticket: "ISS-26"`.
+`storage="stored"`, with a `location` to read it from and an `expires_at`, is an async job's result
+([results of an async job](#results-of-an-async-job)). For an immediate job, `GET /v1/jobs/{id}/result` checks the
+permission (403) and the owner (404 for another actor's job or a missing one), then answers 410,
+`code: result_expired`, with the job: its result was returned once and never kept. Until ISS-26 it
+answered 501.
 
 ### Provider-hosted assets
 
@@ -567,8 +576,9 @@ them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job,
 A job records its `state`, `failure`, `result` (a `ResultRef`, on success), reported `usage`, its
 labels and its times. Each attempt records the runner and orchestrator it called, the allocation that
 paid, the sessions the signer signed, `payment_sent`, its `outcome`, the status code and its times
-([jobs and attempts](#jobs-and-attempts)). Neither records the request body or the result's bytes. The
-cost is read beside the job (`GET /v1/jobs/{id}/cost`). `LPB_RETENTION_JOBS_DAYS` purges `succeeded`
+([jobs and attempts](#jobs-and-attempts)). Neither records the request body or the result's bytes; an
+async job's are kept apart from its record, for a time ([async jobs](#async-jobs)). The cost is read
+beside the job (`GET /v1/jobs/{id}/cost`). `LPB_RETENTION_JOBS_DAYS` purges `succeeded`
 and `failed` jobs; `uncertain` ones are kept ([persistence.md](persistence.md#retention)).
 
 ## Measured usage
@@ -602,13 +612,147 @@ packaged SQL store has it. With a supplied store without it, the engine checks t
 calls `set_usage`, which updates unconditionally: a repeat is answered as in the table, but two reports
 at the same moment can still both succeed, the later write replacing the earlier, as before.
 
-## Async jobs (reserved, M4 · ISS-26)
+## Async jobs
 
-`JobRequest.mode="async"` → `jobs.submit` returns a `queued` job at once. A worker runs the same
-single-shot paid call, the result is stored (`ResultRef.storage="stored"`), and the caller polls
-`GET /v1/jobs/{id}` and `/result`. A client disconnect never cancels or re-runs the job.
-Runner-level recovery handles (a runner's own submit/poll routes, declared per capability) are an
-optional extension. Today `mode="async"` answers 501.
+A job that outlives the request that created it (D69, ISS-26). `jobs.submit(actor, request)` with
+`mode="async"` (REST: `POST /v1/jobs` with `"mode": "async"`) stores the job `queued` and returns it at
+once. A worker in the engine's own process claims it and runs the paid call `jobs.run` runs: the same
+discovery, selection, failover (D52), paid-attempt cap (D55), attempt written before the call and manifest
+stored before signing (D54). The owner reads the job back by id and, once it has succeeded, its stored
+result. Async jobs belong to the work half: an engine in its `clearinghouse` role refuses `jobs.submit`
+(`InvalidRequest`) and runs no worker ([RELIABILITY.md](../RELIABILITY.md#roles)).
+
+`jobs.run`, `jobs.streaming.stream` and the REST stream refuse `mode="async"` with 400 (`InvalidRequest`),
+and `jobs.submit` refuses any other mode. Until ISS-26 `mode="async"` answered 501.
+
+### Submit
+
+`jobs.submit` checks what does not change while the job waits, before anything is stored: the
+`jobs.run` permission, the request and its path, the [repeat rules](#a-repeated-submit), and that the
+actor has an allocation. It discovers nothing, pays nothing and takes no admission slot.
+
+| Submit | Answer |
+| --- | --- |
+| Accepted | The job, `queued`. REST: **202**, the job, `Location: /v1/jobs/{id}` and `Livepeer-Job-Id` |
+| The reference names an existing job | That job, in whatever state it is. REST: **200**, `Idempotent-Replayed: true`, `Location` and `Livepeer-Job-Id` ([below](#a-repeated-submit)) |
+| `return_http_errors`, or a stream (`?stream=true`, `Accept: text/event-stream`) | 400 `InvalidRequest`: only a stream hands back a runner's error answer, and an async job's answer is read once it has ended |
+| The actor has no allocation | The job is recorded `failed`, `not_provisioned`, and raised as `JobFailed` (402), as `jobs.run` fails it. Nothing is queued |
+| `LPB_ASYNC_MAX_QUEUED` jobs are already queued | `NoCapacity`, 503 + `Retry-After`. Nothing is stored |
+
+The job is stored with what it will run with, in one transaction: its request (a `raw_body` as its bytes)
+and a snapshot of the actor it was authorized for: `actor_id`, `tenant_id`, `permissions`,
+`credential_kind` and `attributes`, never `auth` or `display_name`. **Authorization is decided at
+submit** (D69 (8)): an access key revoked while the job waits does not stop it, because the job belongs to
+the actor, not to the key. The allocation is read again at dispatch, so spending still stops: an
+allocation revoked while the job waited fails it `not_provisioned`, and one that is spent fails it
+`payment` with the signer's reason, each with nothing paid. With a payment clearinghouse
+(`LPB_ROLE=work`), `not_provisioned` means the actor has no allocation there.
+
+### Running
+
+- **A slot, then a claim.** The worker takes an admission slot first (`LPB_MAX_CONCURRENT_JOBS` and
+  `LPB_MAX_CONCURRENT_JOBS_PER_APP`, shared with immediate jobs and streams), then claims the job with
+  one conditional write (`queued` to `running`). A claim that finds the job gone (a cancel, the queue's
+  time limit) gives the slot back. No async job runs outside the admission limits, and at most
+  `LPB_ASYNC_WORKERS` of them run at once.
+- **Oldest first**, leaving out an app at its per-app limit, so one busy app does not hold up the others.
+- **When.** A submit wakes the worker at once. While jobs wait it also looks every `LPB_ASYNC_POLL_S`,
+  and whenever a job of its own ends. An engine with nothing queued makes no query for the queue.
+- **`timeout_s` counts from the claim**, which `Job.started_at` records. `started_at` is `null` while
+  the job is queued, and for an immediate job, which starts when it is created.
+- **The queue's time limit.** A job still `queued` `LPB_ASYNC_QUEUE_TTL_S` after it was submitted ends
+  `failed`, `no_capacity`, with no attempt: nothing was paid, and its cost is `none`.
+- **A client that goes away changes nothing.** The job belongs to the worker, not to the request that
+  submitted it.
+
+| State | An async job |
+| --- | --- |
+| `queued` | Waiting for a worker. Nothing was dispatched or paid. Its cost is `pending`, never `none`: it may yet pay |
+| `running` | A worker claimed it (`started_at`) and runs the paid call |
+| `succeeded` | A runner answered 2xx and the answer is stored |
+| `failed` | As for `jobs.run`, and also: cancelled while queued, past the queue's time limit, or a paid answer the engine could not store |
+| `uncertain` | As for `jobs.run` |
+
+### Results of an async job
+
+A succeeded async job's answer is stored in `lpb_job_results`, in the transaction that ends the job, so
+a job is never `succeeded` without its bytes. Its `ResultRef` is `storage="stored"`, with the
+`content_type` the runner sent, `size_bytes`, `sha256`, `location` (`/v1/jobs/{id}/result`) and
+`expires_at`, when the bytes go (`LPB_RETENTION_RESULTS_DAYS` after the job ended; `null` keeps them as
+long as the job). `jobs.result(actor, job_id)` (REST: `GET /v1/jobs/{id}/result`) checks the permission
+(`jobs.read`, 403) and the owner (404 for another actor's job or a missing one) first (D44), then:
+
+| The job | `jobs.result` | REST |
+| --- | --- | --- |
+| `succeeded`, its result stored | `JobResult`: the bytes, their content type, and `data` when they are a JSON object | 200, the bytes, with the runner's `Content-Type` unchanged |
+| `queued` or `running` | `JobNotFinished` | 409, `code: job_not_finished`, `Retry-After: 1`, the job in the body |
+| `failed` or `uncertain` | `JobFailed`, as `jobs.run` would have raised it | The failure's status from [the failure table](#failures), the job in the body |
+| `succeeded`, its stored result past `expires_at` or purged | `ResultExpired` | 410, `code: result_expired`, the job in the body: its `ResultRef` still says what the result was |
+| `succeeded`, an immediate job | `ResultExpired` | 410, `code: result_expired`: an immediate result is returned once and never kept ([results](#results)) |
+
+**A paid answer the engine could not store.** An answer larger than `LPB_ASYNC_RESULT_MAX_BYTES` is not
+stored: the job ends `failed`, `result_not_stored`, and its `ResultRef` keeps the answer's `size_bytes`
+and `sha256` with no `location`. The attempt keeps outcome `succeeded` and its payment, and its cost class
+is `failed_after_payment`, never billable: the cost follows the job (D69 (4)). The same holds when the
+transaction that ends the job fails: no bytes are stored, and the job ends as an immediate job that
+lost its end does, `runner_error` and `uncertain` when it was paid. It is never `succeeded` without its
+bytes.
+
+**What is stored, and for how long.** A queued job's request is kept until the job ends, in the same
+transaction that ends it. A stored result is kept until `expires_at`, and the job's record until
+`LPB_RETENTION_JOBS_DAYS` purges it ([persistence.md](persistence.md#retention)). Neither is encrypted
+by the engine (D69 (5)): the operator protects the database. The worst case for queued inputs is
+`LPB_ASYNC_MAX_QUEUED` requests at the request limit: about 16 GiB at the defaults (1000 jobs, 16 MiB). A
+stored result is at most `LPB_ASYNC_RESULT_MAX_BYTES` (16 MiB), for as long as it is kept. A result's
+bytes, and any URL inside them, go only to the job's owner and never into a log.
+
+### Cancel
+
+`jobs.cancel(actor, job_id)` (REST: `POST /v1/jobs/{id}/cancel`) cancels a job that is still `queued`
+(D69 (3)). It needs `jobs.run` and the job's owner, as a usage report does. One conditional write ends the
+job `failed`, with kind `abandoned` and reason `cancelled`: nothing was dispatched or paid, and its cost
+is `none`. Cancelling a cancelled job again answers with it, 200, and writes nothing. A job a worker has
+claimed, or one that ended another way, is not cancelled: `JobNotQueued`, 409, `code: job_not_queued`,
+the job in the body. A cancelled job's result is 410. When the events feed is built (ISS-46) it reports a
+cancel as `job.finished` with reason `cancelled`.
+
+### A repeated submit
+
+The reference rules of [idempotency](#idempotency), for an async request (D69 (1)). The fingerprint gains
+`mode` only when it is `async`, so the fingerprints of immediate requests are unchanged.
+
+| The reference names a job that… | Answer | Queued? |
+| --- | --- | --- |
+| does not exist | Queues it | yes |
+| is an immediate job, or has a different fingerprint | 409 `OperationConflict`: an immediate and an async request under one reference are two requests | no |
+| failed and never reached a runner ([the closed list](#idempotency); a cancelled job, one past the queue's time limit, and one that ended before its first attempt are on it) | Queues a **new job** under the same reference, with `retry_of` the old one | yes |
+| exists in any other state, `queued` and `running` included | **That job**: 200 with `Idempotent-Replayed: true` over REST | no |
+
+Two submits of one reference at the same moment meet at the unique index: one job is stored, and the
+other is answered with it.
+
+### Restart and stop
+
+| Left behind | On start | Why |
+| --- | --- | --- |
+| `queued` | Stays queued; the worker takes it | Nothing went out |
+| `running`, **no attempt** | Back to `queued` while it was claimed fewer than 3 times; then `failed`, `interrupted` | The attempt row is written before any runner call, so nothing went out. The claim count stops a job that brings the engine down before its first attempt from being claimed for ever |
+| `running`, with an attempt | `uncertain` or `failed`, as for any job ([behavior](#behavior-the-contract-fixes), 3) | It may have run or paid. The engine never runs it again (no replacement execution) |
+
+`engine.stop()` stops claiming, lets running async jobs end for up to `LPB_ASYNC_DRAIN_TIMEOUT_S`, then
+cancels the rest: one stopped before its first attempt goes back to the queue, and any other ends as a
+cancelled immediate job does, `uncertain` when it may have paid. `stop()` returns once every end is
+written.
+
+### Polling
+
+Polling is the only way to learn that a job ended (D69 (7)): `GET /v1/jobs/{id}` carries `Retry-After: 1`
+while the job is `queued` or `running`. There is no long poll and no webhook. `GET /readyz` reports
+`queued_jobs` and `oldest_queued_s`: alert on the age of the oldest job, not on the depth of the queue.
+
+**Where the runner standard plugs in later.** A runner's own submit and poll routes, and a provider
+request id that lets a late result be collected, are ISS-48's. The job record and the `ResultRef` leave
+room for that id without a new table.
 
 ## Persistent sessions
 
@@ -627,7 +771,8 @@ sessions are distinct from continuous media streaming, which is stretch scope. T
 These are the explicit decisions for ISS-02.
 
 - **No HA.** One engine process per database. Neither SQLite nor PostgreSQL implies multi-instance
-  scheduling.
+  scheduling. The async worker runs in that one process: a job's claim is a compare-and-set, but there
+  is no lease, so a second engine on the same database is not detected (tech debt T44).
 - **No exactly-once.** At most one job per `operation_ref` reaches a runner (a job that never did may
   be dispatched again, see [idempotency](#idempotency)). Paid-but-unknown is `uncertain`;
   the engine never retries it automatically.
@@ -658,7 +803,7 @@ request = JobRequest(
 
 In the stock REST JSON request envelope, `raw_body` uses URL-safe base64, as generated in
 OpenAPI. Embedded Python callers use bytes directly. Request bodies are not added to job
-records. The operation fingerprint includes a raw-body digest/length, content type and
+records; an async job keeps its request, raw body included, apart from the record until it ends. The operation fingerprint includes a raw-body digest/length, content type and
 normalized headers; legacy JSON fingerprints are unchanged. A changed body under the same
 operation reference remains an operation conflict. No database migration is needed.
 

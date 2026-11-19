@@ -5,7 +5,8 @@ cost sync).
 One unit, mounted by itself or beside the clearinghouse set (D84). It is typed against ``WorkApi``, so it
 cannot call a clearinghouse command. Routes are thin: each authenticates, then makes one engine call, and
 authorization lives in the services' AccessPolicy checks. ``GET /v1/offerings`` is public. Reserved
-contracts (async jobs, sessions, events) answer 501.
+contracts (sessions, events) answer 501. The result route and the cancel route of an async job are in
+``http/job_handles.py``, mounted here with the rest.
 """
 
 from typing import Annotated
@@ -34,6 +35,7 @@ from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.http.auth import actor_dependency
 from livepeer_builder.http.bodies import IssueKeyBody, JobRequest, RotateKeyBody, UsageBody
+from livepeer_builder.http.job_handles import POLL_AFTER_S, add_job_handle_routes, submitted
 from livepeer_builder.http.params import PathId, QueryId, QueryInstant, QueryTime
 from livepeer_builder.http.replies import JOB_ID_HEADER, replay
 from livepeer_builder.http.streaming import stream_response
@@ -59,8 +61,14 @@ def mount_work_routes(app: FastAPI, engine: WorkApi) -> None:
             200: {
                 "description": "The runner's own status, content type and body. With "
                 "`Accept: text/event-stream` or `?stream=true` the body is streamed as it arrives "
-                "(docs/contracts/engine.md#streaming)."
-            }
+                '(docs/contracts/engine.md#streaming). For `mode="async"`, the job a repeated '
+                "`operation_ref` already named, with `Idempotent-Replayed: true`."
+            },
+            202: {
+                "model": Job,
+                "description": '`mode="async"`: the job, queued. `Location` and `Livepeer-Job-Id` '
+                "name it; read it and its result back by id (docs/contracts/engine.md#async-jobs).",
+            },
         },
     )
     async def run_job(
@@ -69,7 +77,12 @@ def mount_work_routes(app: FastAPI, engine: WorkApi) -> None:
         request: Request,
         stream: Annotated[bool, Query(description="stream the runner's response as it arrives")] = False,
     ) -> Response:
-        if stream or "text/event-stream" in request.headers.get("accept", ""):
+        streamed = stream or "text/event-stream" in request.headers.get("accept", "")
+        if body.mode == "async":  # queued: the answer is the job, and its result is read back later
+            if streamed:
+                raise InvalidRequest("an async job is not streamed: read its result once it has ended")
+            return await submitted(engine, actor, body)
+        if streamed:
             streaming = engine.jobs.streaming
             if streaming is None:
                 raise InvalidRequest("the configured runner transport does not support streaming")
@@ -93,14 +106,13 @@ def mount_work_routes(app: FastAPI, engine: WorkApi) -> None:
         return list(await engine.jobs.list_jobs(actor, limit=limit, before=before))
 
     @app.get("/v1/jobs/{job_id}", response_model=Job)
-    async def get_job(actor: Actor, job_id: UUID) -> Job:
-        return await engine.jobs.get(actor, job_id)
+    async def get_job(actor: Actor, job_id: UUID, response: Response) -> Job:
+        job = await engine.jobs.get(actor, job_id)
+        if job.state in ("queued", "running"):  # not ended: when to read it again (ISS-26)
+            response.headers["Retry-After"] = POLL_AFTER_S
+        return job
 
-    @app.get("/v1/jobs/{job_id}/result", status_code=200)
-    async def get_result(actor: Actor, job_id: UUID) -> Response:
-        result = await engine.jobs.result(actor, job_id)
-        # as the job route: the stored content type as a header, since media_type would add a charset (C27)
-        return Response(content=result.content, headers={"Content-Type": result.content_type})
+    add_job_handle_routes(app, engine)  # the stored result, and the cancel of a queued job
 
     @app.post("/v1/jobs/{job_id}/usage", response_model=Job)
     async def report_usage(actor: Actor, job_id: UUID, body: UsageBody) -> Job:

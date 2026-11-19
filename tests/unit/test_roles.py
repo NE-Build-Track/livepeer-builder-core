@@ -39,12 +39,13 @@ from tests.unit.role_engines import CLEARINGHOUSE, PRIVATE_PORT, ROLES, Role, in
 from tests.unit.test_admin_route_sweep import everything_stored, filled
 from tests.unit.test_listeners import body_for, refused
 
-LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention"}
+LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention", "lpb-async-jobs"}  # the last: ISS-26
 JOBS = {
     ("POST", "/v1/jobs"),
     ("GET", "/v1/jobs"),
     ("GET", "/v1/jobs/{job_id}"),
     ("GET", "/v1/jobs/{job_id}/result"),
+    ("POST", "/v1/jobs/{job_id}/cancel"),
     ("POST", "/v1/jobs/{job_id}/usage"),
     ("GET", "/v1/jobs/{job_id}/cost"),
 }

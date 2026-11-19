@@ -18,18 +18,31 @@ import functools
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import Final
 from uuid import UUID, uuid4
 
 from livepeer_builder.contracts import (
+    OPERATION_REPLAYED,
     ActorContext,
     Attempt,
+    Failure,
     Job,
     JobRequest,
     JobResult,
+    JobState,
     Operation,
     ResourceRef,
 )
-from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound, NotImplementedInMilestone
+from livepeer_builder.errors import (
+    InvalidRequest,
+    JobFailed,
+    JobNotFinished,
+    JobNotQueued,
+    NoCapacity,
+    NotFound,
+    NotProvisioned,
+    ResultExpired,
+)
 from livepeer_builder.protocols import (
     AccessPolicy,
     Clock,
@@ -38,16 +51,23 @@ from livepeer_builder.protocols import (
     StreamingRunnerTransport,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
+from livepeer_builder.services.async_jobs import AsyncJobWorker
 from livepeer_builder.services.dispatch import Dispatcher
 from livepeer_builder.services.failover import recover_interrupted
-from livepeer_builder.services.operations import check_operation, claim_operation
+from livepeer_builder.services.operations import (
+    check_async_operation,
+    check_operation,
+    claim_async_operation,
+    claim_operation,
+)
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
 from livepeer_builder.services.usage_reports import report_once
-from livepeer_builder.utils import run_shielded
+from livepeer_builder.utils import json_body, run_shielded
 
 _LOG = logging.getLogger(__name__)
+CANCELLED: Final = "cancelled"  # the reason on the failure of a job its caller cancelled while queued
 
 
 class JobService:
@@ -60,9 +80,12 @@ class JobService:
         admission: AdmissionLimiter,
         clock: Clock,
         stream_limits: StreamLimits | None = None,
+        worker: AsyncJobWorker | None = None,
     ) -> None:
         self._store = store
         self._dispatcher = dispatcher
+        # Runs what submit queues (ISS-26). The engine starts its loop; a test steps it with run_once().
+        self.worker = worker or AsyncJobWorker(store, dispatcher, admission, clock)
         self._transport = transport
         self._policy = policy
         self._admission = admission
@@ -153,13 +176,98 @@ class JobService:
             await asyncio.gather(*(stream.abandon(message) for stream in left), *finishing)
 
     async def submit(self, actor: ActorContext, request: JobRequest) -> Job:
-        del request
+        """Queue one async job and return it at once, ``queued`` (ISS-26). Nothing is dispatched, paid or
+        admitted here: a worker claims the job and runs the paid call ``run`` runs
+        (``services/async_jobs.py``). The caller reads its end back with ``get`` and ``result``.
+
+        What cannot change while the job waits is checked now: the permission, the request, the
+        reference and the actor's allocation, whose absence fails the job here as ``run`` fails it
+        (``JobFailed``, ``not_provisioned``). A repeated ``operation_ref`` returns the job it names, in
+        any state, and sets ``OPERATION_REPLAYED`` (D69 (1)); a changed request is ``OperationConflict``.
+        A full queue is ``NoCapacity``, with nothing stored."""
         self._policy.check(actor, Operation.JOBS_RUN)
-        raise NotImplementedInMilestone("async jobs", "M4", "ISS-26")
+        self._admission.check_runs_jobs()
+        if request.mode != "async":
+            raise InvalidRequest('jobs.submit queues a job with mode="async"; jobs.run runs an immediate one')
+        if request.return_http_errors:  # only a stream hands the caller a runner's error answer
+            raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
+        if request.path and not request.path.startswith("/"):
+            raise InvalidRequest("path must start with '/'")
+        OPERATION_REPLAYED.set(False)
+        fingerprint = request_fingerprint(request)
+        held, retrying = await check_async_operation(self._store, actor, request.operation_ref, fingerprint)
+        if held is None:
+            job = self._new_job(actor, request, "queued")
+            held = await self._unallotted(actor, job, fingerprint, retrying)
+        if held is None:
+            if await self.worker.count_queue() >= self.worker.limits.max_queued:
+                raise NoCapacity("the queue is full; submit again later")
+            queue = functools.partial(self._store.enqueue_job, job, fingerprint, request, actor)
+            held = await claim_async_operation(queue, retrying)
+        if held is None:
+            self.worker.queued(job)
+            return job
+        OPERATION_REPLAYED.set(True)
+        return held
+
+    async def _unallotted(
+        self, actor: ActorContext, job: Job, fingerprint: str, retrying: UUID | None
+    ) -> Job | None:
+        """``None`` for an actor with an allocation. One without fails here, before it is queued, as
+        ``run`` fails it: the job is recorded ``failed``, ``not_provisioned``, and raised. Should another
+        request have taken the reference meanwhile, the job holding it is the answer."""
+        try:
+            await self._dispatcher.check_allocation(actor)
+        except NotProvisioned as missing:
+            failure = Failure(kind="not_provisioned", message=str(missing))
+            failed = job.model_copy(
+                update={"state": "failed", "failure": failure, "completed_at": job.created_at}
+            )
+            record = functools.partial(self._store.create_job, failed, fingerprint)
+            held = await claim_async_operation(record, retrying)
+            if held is None:
+                raise JobFailed(failed) from missing
+            return held
+        return None
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
-        await self._owned(actor, Operation.JOBS_READ, job_id)
-        raise NotImplementedInMilestone("stored job results", "M4", "ISS-26")
+        """The stored result of an async job (ISS-26), after the permission and ownership checks (D44).
+        A job that has not ended is ``JobNotFinished``; one that failed or is uncertain is ``JobFailed``,
+        as ``run`` would have raised it; a succeeded job whose bytes the engine does not hold is
+        ``ResultExpired``: an immediate job's were never kept, and a stored result has its time."""
+        job = await self._owned(actor, Operation.JOBS_READ, job_id)
+        if job.state in ("queued", "running"):
+            raise JobNotFinished(job)
+        if job.state != "succeeded":
+            raise JobFailed(job)
+        stored = job.result if job.result is not None and job.result.storage == "stored" else None
+        if stored is None:
+            raise ResultExpired(job, "the result of an immediate job is returned once and not kept")
+        content = await self._store.read_result(job.id, self._clock.now())
+        if content is None:
+            raise ResultExpired(job, "it expired, or was removed with the retention purge")
+        return JobResult(
+            job=job,
+            status_code=200,
+            content=content,
+            content_type=stored.content_type,
+            data=json_body(content, stored.content_type),
+        )
+
+    async def cancel(self, actor: ActorContext, job_id: UUID) -> Job:
+        """Cancel a job that is still queued (D69): one conditional write ends it ``failed``, reason
+        ``cancelled``, with nothing dispatched and nothing paid. A job a worker already claimed, or one
+        that ended another way, is ``JobNotQueued``. Cancelling a cancelled job again answers with it.
+        Like a usage report, it needs the permission to run the job, not to read it."""
+        job = await self._owned(actor, Operation.JOBS_RUN, job_id)
+        failure = Failure(kind="abandoned", message="cancelled before it ran", reason=CANCELLED)
+        cancelled = await self._store.cancel_queued(job.id, failure, self._clock.now())
+        now = await self._store.get_job(job.id) or job
+        if cancelled:
+            await self.worker.count_queue()
+        elif now.failure is None or now.failure.reason != CANCELLED:
+            raise JobNotQueued(now)
+        return now
 
     async def get(self, actor: ActorContext, job_id: UUID) -> Job:
         return await self._owned(actor, Operation.JOBS_READ, job_id)
@@ -203,7 +311,7 @@ class JobService:
         request's fingerprint and the failed job a new one supersedes, if the repeat may run again."""
         self._policy.check(actor, Operation.JOBS_RUN)
         if request.mode == "async":
-            raise NotImplementedInMilestone("async jobs", "M4", "ISS-26")
+            raise InvalidRequest('mode="async" is queued with jobs.submit; jobs.run and a stream wait')
         if request.path and not request.path.startswith("/"):
             raise InvalidRequest("path must start with '/'")
         fingerprint = request_fingerprint(request)
@@ -211,7 +319,7 @@ class JobService:
             return fingerprint, None
         return fingerprint, await check_operation(self._store, actor, request.operation_ref, fingerprint)
 
-    def _new_job(self, actor: ActorContext, request: JobRequest) -> Job:
+    def _new_job(self, actor: ActorContext, request: JobRequest, state: JobState = "running") -> Job:
         return Job(
             id=uuid4(),
             actor_id=actor.actor_id,
@@ -221,7 +329,7 @@ class JobService:
             app=request.app,
             capability=request.capability,
             model=request.model,
-            state="running",
+            state=state,
             attempts=(),
             failure=None,
             result=None,

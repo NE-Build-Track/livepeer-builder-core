@@ -25,6 +25,11 @@ class EngineHealth(Contract):
     # cost sync of this process
     cost_sync_set_aside: int | None = None
     running_jobs: int
+    # Async jobs waiting for a worker, and how long the oldest has waited (ISS-26). Alert on the age, not
+    # on the depth: a deep queue that drains is healthy, and one old job means nothing is being claimed.
+    # Counted when a job is submitted or cancelled and at each step of the worker.
+    queued_jobs: int = 0
+    oldest_queued_s: float | None = None
     version: str
 
 

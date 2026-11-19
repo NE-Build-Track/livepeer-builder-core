@@ -14,7 +14,7 @@ import pytest
 
 from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import ActorContext, JobRequest
-from livepeer_builder.errors import AccessDenied, NotFound, NotImplementedInMilestone
+from livepeer_builder.errors import AccessDenied, NotFound, ResultExpired
 from livepeer_builder.testing import ScriptedTransport
 from tests.conftest import EngineFactory, allot
 
@@ -27,6 +27,7 @@ ROUTES: dict[str, tuple[str, Call]] = {
     "get": ("jobs.read", lambda e, a, j: e.jobs.get(a, j)),
     "result": ("jobs.read", lambda e, a, j: e.jobs.result(a, j)),
     "report_usage": ("jobs.run", lambda e, a, j: e.jobs.report_usage(a, j, {"tokens": 1})),
+    "cancel": ("jobs.run", lambda e, a, j: e.jobs.cancel(a, j)),
     "cost": ("costs.read", lambda e, a, j: e.costs.for_job(a, j)),
 }
 LISTS: dict[str, tuple[str, Callable[[BuilderEngine, ActorContext], Awaitable[Any]]]] = {
@@ -87,12 +88,16 @@ async def test_another_actors_job_and_a_missing_one_are_404(
             await call(engine, bob, target)
 
 
-async def test_a_stored_result_is_501_only_for_the_owner(
-    make_engine: EngineFactory, transport: ScriptedTransport, alice: ActorContext
+async def test_only_the_owner_learns_that_an_immediate_jobs_result_was_not_kept(
+    make_engine: EngineFactory, transport: ScriptedTransport, alice: ActorContext, bob: ActorContext
 ) -> None:
+    """The owner's answer was a 501 until stored results were built (ISS-26). It is ``ResultExpired``
+    now, and still only the owner's: anybody else gets the ``NotFound`` of a missing job."""
     engine, job_id = await engine_with_job(make_engine, transport, alice)
-    with pytest.raises(NotImplementedInMilestone):
+    with pytest.raises(ResultExpired):
         await engine.jobs.result(alice, job_id)
+    with pytest.raises(NotFound):
+        await engine.jobs.result(bob, job_id)
 
 
 async def test_a_usage_report_needs_jobs_run_and_not_jobs_read(

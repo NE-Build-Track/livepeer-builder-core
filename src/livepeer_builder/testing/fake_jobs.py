@@ -28,11 +28,11 @@ from livepeer_builder.services.ownership import check_owner, job_resource, sees_
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.usage_reports import usage_to_store
+from livepeer_builder.testing.fake_async import RESULT_LOCATION, FakeQueue, scripted_failure
 from livepeer_builder.testing.fake_parts import FakeDiscovery
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
-    UNCERTAIN_OUTCOMES,
     Fails,
     Raises,
     Reply,
@@ -54,7 +54,7 @@ class FakeStreaming:
         )
 
 
-class FakeJobs:
+class FakeJobs(FakeQueue):
     def __init__(
         self,
         replies: Mapping[tuple[str, str], Reply | Fails | Raises],
@@ -68,12 +68,15 @@ class FakeJobs:
         self._discovery = discovery
         self.policy = DefaultPolicy()  # the engine's default policy and answer rule (D44)
         self._jobs: dict[UUID, Job] = {}
-        self._results: dict[UUID, JobResult] = {}
+        self._results: dict[UUID, Reply] = {}  # the stored results of async jobs (ISS-26)
+        self._waiting: dict[UUID, tuple[ActorContext, JobRequest]] = {}  # queued, oldest first
         self._operations: dict[tuple[str, str, str], tuple[str, UUID]] = {}
 
     def reply_for(self, actor: ActorContext, request: JobRequest) -> Reply:
         """The scripted reply, after the checks the engine makes before it dispatches."""
         self.policy.check(actor, Operation.JOBS_RUN)  # first, as the engine's _admit_request
+        if request.mode == "async":  # then the mode, as the engine: an async job is queued with submit
+            raise InvalidRequest('mode="async" is queued with jobs.submit; jobs.run and a stream wait')
         if request.path and not request.path.startswith("/"):  # then the path, as the engine (#113, C3)
             raise InvalidRequest("path must start with '/'")
         self.requests.append((actor, request))
@@ -82,20 +85,7 @@ class FakeJobs:
         if isinstance(scripted, Raises):
             raise scripted.error
         if isinstance(scripted, Fails):
-            failure = Failure(
-                kind=scripted.kind,
-                message=scripted.message,
-                status_code=scripted.status_code,
-                body=scripted.body,
-                payment_sent=scripted.payment_sent,
-                reason=scripted.reason,
-            )
-            outcome = attempt_outcome(scripted.kind)  # a paid 502 or 504 may have run, as in the engine
-            may_have_run = attempt_verdict(outcome, scripted.status_code, True) == "uncertain"
-            paid_unknown = scripted.payment_sent and (outcome in UNCERTAIN_OUTCOMES or may_have_run)
-            signer_unknown = outcome == "payment_unknown"  # the signer may have charged, paid or not
-            state: JobState = "uncertain" if paid_unknown or signer_unknown else "failed"
-            raise JobFailed(self.record(actor, request, state, failure))
+            raise JobFailed(self.record(actor, request, *scripted_failure(scripted)))
         return scripted
 
     def _check_operation(self, actor: ActorContext, request: JobRequest) -> None:
@@ -117,14 +107,16 @@ class FakeJobs:
         failure: Failure | None,
         *,
         reply: Reply | None = None,
+        queued: Job | None = None,
     ) -> Job:
         """Store a job with one attempt on the first runner for the app, as the engine would record it.
 
         A failure before dispatch (no offering, no capacity, no allocation) has no attempt. A succeeded
-        ``reply`` sets the attempt's status and the job's ``ResultRef``.
+        ``reply`` sets the attempt's status and the job's ``ResultRef``. ``queued`` is an async job that
+        now runs (ISS-26): it keeps its id and its creation time, and its result is ``stored``.
         """
         now = datetime.now(UTC)
-        job_id = uuid4()
+        job_id = queued.id if queued is not None else uuid4()
         dispatched = failure is None or failure.kind not in NOT_DISPATCHED
         used = self._discovery.candidates(request.app)[:1] if dispatched else []
         if state == "running":
@@ -155,17 +147,18 @@ class FakeJobs:
         result = None
         if reply is not None and state == "succeeded":
             result = ResultRef(
-                storage="inline",
+                storage="inline" if queued is None else "stored",
                 content_type=reply.content_type,
                 size_bytes=len(reply.content),
                 sha256=hashlib.sha256(reply.content).hexdigest(),
+                location=None if queued is None else RESULT_LOCATION.format(job_id=job_id),
             )
         job = Job(
             id=job_id,
             actor_id=actor.actor_id,
             tenant_id=actor.tenant_id,
             operation_ref=request.operation_ref,
-            mode="immediate",
+            mode=request.mode,
             app=request.app,
             capability=None,
             model=None,
@@ -174,8 +167,9 @@ class FakeJobs:
             failure=failure,
             result=result,
             usage=None,
-            created_at=now,
+            created_at=now if queued is None else queued.created_at,
             completed_at=None if state == "running" else now,
+            started_at=None if queued is None else now,
         )
         self._jobs[job.id] = job
         if request.operation_ref is not None:
@@ -236,15 +230,13 @@ class FakeJobs:
             raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
         reply = self.reply_for(actor, request)
         job = self.record(actor, request, "succeeded", None, reply=reply)
-        result = JobResult(
+        return JobResult(  # returned once and not kept, as the engine's immediate result
             job=job,
             status_code=reply.status_code,
             content=reply.content,
             content_type=reply.content_type,
             data=reply.data,
         )
-        self._results[job.id] = result
-        return result
 
     async def get(self, actor: ActorContext, job_id: UUID) -> Job:
         return self.owned(actor, Operation.JOBS_READ, job_id)
@@ -279,12 +271,6 @@ class FakeJobs:
             for job in self._jobs.values()
             if job.tenant_id == tenant_id and actor_id in (None, job.actor_id)
         ]
-
-    async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
-        self.owned(actor, Operation.JOBS_READ, job_id)
-        if job_id not in self._results:
-            raise NotFound(f"job {job_id} has no result")
-        return self._results[job_id]
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
         """Stored once on the job, by the engine's own rule (#115, C20): the same quantities again get the

@@ -116,8 +116,10 @@ async def test_failures_and_reserved_routes(api: tuple[httpx.AsyncClient, Builde
     assert unallotted.status_code == 402
     assert unallotted.json()["job"]["failure"]["kind"] == "not_provisioned"
 
-    reserved = await client.post("/v1/jobs", json={"app": "example/echo", "mode": "async"}, headers=as_alice)
-    assert reserved.status_code == 501 and reserved.json()["milestone"] == "M4"
+    # an async job is no longer reserved (ISS-26; tests/unit/test_async_http.py): an actor with no
+    # allocation fails it at submit, as it fails an immediate one
+    queued = await client.post("/v1/jobs", json={"app": "example/echo", "mode": "async"}, headers=as_alice)
+    assert queued.status_code == 402 and queued.json()["job"]["failure"]["kind"] == "not_provisioned"
     assert (await client.get("/v1/events", headers=as_alice)).status_code == 501
     assert (
         await client.post("/v1/sessions", json={"app": "example/echo"}, headers=as_alice)

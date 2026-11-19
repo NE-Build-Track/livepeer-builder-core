@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import cast
 
 from livepeer_builder.contracts import (
@@ -60,6 +60,10 @@ from livepeer_builder.utils import run_shielded
 
 _LOG = logging.getLogger(__name__)
 
+# How a succeeded job ends: given the job, the runner's reply and the attempts, write the end and return
+# the job as it ended.
+KeepResult = Callable[[Job, RunnerReply, Sequence[Attempt]], Awaitable[Job]]
+
 
 class Dispatcher:
     def __init__(
@@ -81,6 +85,11 @@ class Dispatcher:
         self._clock = clock
         self._stream_limits = stream_limits or StreamLimits()
         self._max_paid_attempts = max_paid_attempts  # D55
+
+    async def check_allocation(self, actor: ActorContext) -> None:
+        """Raise ``NotProvisioned`` for an actor with no allocation to pay from. An async job is checked
+        here when it is submitted, to fail fast, and again when it is dispatched (ISS-26)."""
+        await self._credentials.credential(actor)
 
     async def _candidates(
         self, job: Job, actor: ActorContext, request: JobRequest, attempts: list[Attempt]
@@ -167,8 +176,17 @@ class Dispatcher:
         return JobFailed(await self.finish(job, "failed", failure, None, attempts))
 
     async def dispatch(
-        self, job: Job, actor: ActorContext, request: JobRequest, attempts: list[Attempt]
+        self,
+        job: Job,
+        actor: ActorContext,
+        request: JobRequest,
+        attempts: list[Attempt],
+        *,
+        keep: KeepResult | None = None,
     ) -> JobResult:
+        """Run ``job`` on the runners that can do it, until one answers or none is left. ``keep`` ends a
+        succeeded job in place of the default, which records the shape of a result returned inline: the
+        async worker stores the bytes there (ISS-26)."""
         candidates, credential = await self._candidates(job, actor, request, attempts)
         last: RunnerCallError | None = None
         for number, runner in enumerate(candidates, start=1):
@@ -191,7 +209,7 @@ class Dispatcher:
                 }
             )
             await self._store.finish_attempt(attempts[-1])
-            finished = await self.finish(job, "succeeded", None, _result_ref(reply), attempts)
+            finished = await (keep or self._returned_inline)(job, reply, attempts)
             return JobResult(
                 job=finished,
                 status_code=reply.status_code,
@@ -276,6 +294,9 @@ class Dispatcher:
         except Exception:
             _LOG.exception("could not close job", extra={"event": "jobs.close_failed", "job_id": str(job.id)})
 
+    async def _returned_inline(self, job: Job, reply: RunnerReply, attempts: Sequence[Attempt]) -> Job:
+        return await self.finish(job, "succeeded", None, _result_ref(reply), attempts)
+
     async def finish(
         self,
         job: Job,
@@ -283,9 +304,22 @@ class Dispatcher:
         failure: Failure | None,
         result: ResultRef | None,
         attempts: Sequence[Attempt],
+        *,
+        content: bytes | None = None,
     ) -> Job:
+        """Write the job's end. With ``content``, the bytes of a succeeded job's result are stored in the
+        same transaction (ISS-26). Only a running job ends: one that already ended is left as it is, and
+        that is logged, not raised, since the caller has nothing to undo."""
         completed = self._clock.now()
-        await self._store.finish_job(job.id, state, failure, result, completed)
+        if content is not None and result is not None:
+            ended = await self._store.finish_job_with_result(job.id, result, content, completed)
+        else:
+            ended = await self._store.finish_job(job.id, state, failure, result, completed)
+        if ended is False:  # a supplied store that answers nothing has written, as it did before the guard
+            _LOG.warning(
+                "the job had already ended; its record is unchanged",
+                extra={"event": "jobs.finish_missed", "job_id": str(job.id), "state": state},
+            )
         return job.model_copy(
             update={
                 "state": state,

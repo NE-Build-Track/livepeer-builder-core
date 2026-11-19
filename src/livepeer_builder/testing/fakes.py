@@ -77,11 +77,13 @@ async def report_signed(on_signed: OnSigned | None, manifest_ids: Sequence[str],
 
 @dataclass
 class ScriptedTransport(FakeSignerProbe):
-    """Returns or raises the scripted steps in order and records every call."""
+    """Returns or raises the scripted steps in order and records every call. With a ``gate``, each call
+    waits for it once it is recorded, so a test can hold a job ``running`` and let it go."""
 
     steps: list[Step] = field(default_factory=list)
     calls: list[tuple[str, str | None]] = field(default_factory=list)
     pays: bool = True  # whether a credential pays the runner, as a transport with a signer does
+    gate: asyncio.Event | None = None
 
     async def call(
         self,
@@ -94,6 +96,8 @@ class ScriptedTransport(FakeSignerProbe):
         if not self.steps:
             raise AssertionError("ScriptedTransport ran out of steps")
         step = self.steps.pop(0)
+        if self.gate is not None:
+            await self.gate.wait()
         if isinstance(step, RunnerCallError):
             await report_signed(on_signed, step.manifest_ids, step.payment_sent)
             raise step

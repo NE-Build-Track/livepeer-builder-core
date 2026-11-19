@@ -22,10 +22,10 @@ from livepeer_builder.contracts import (
     Runner,
 )
 from livepeer_builder.errors import (
+    InvalidRequest,
     JobFailed,
     NoCapacity,
     NotFound,
-    NotImplementedInMilestone,
     OperationConflict,
     OperationExists,
     OperationInProgress,
@@ -755,12 +755,14 @@ async def test_admission_refuses_before_dispatch(
     assert (await first).job.state == "succeeded"
 
 
-async def test_reserved_execution_modes_fail_loudly(make_engine: EngineFactory, alice: ActorContext) -> None:
+async def test_run_refuses_an_async_request(make_engine: EngineFactory, alice: ActorContext) -> None:
+    """An async job is queued with ``jobs.submit`` (ISS-26; tests/unit/test_async_jobs.py). Until M4 this
+    was a 501: the mode was reserved."""
     engine = await make_engine()
-    with pytest.raises(NotImplementedInMilestone, match="M4"):
+    with pytest.raises(InvalidRequest, match=r"jobs\.submit"):
         await engine.jobs.run(alice, JobRequest(app=APP, mode="async"))
-    with pytest.raises(NotFound):  # D44: permission and ownership come before the 501; the owner's 501 is
-        await engine.jobs.result(alice, uuid4())  # in test_ownership.py
+    with pytest.raises(NotFound):  # D44: permission and ownership come before anything about a result
+        await engine.jobs.result(alice, uuid4())
 
 
 async def test_other_actors_jobs_are_invisible(

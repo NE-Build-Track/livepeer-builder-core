@@ -28,6 +28,9 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     """
     applied = [row for row in rows if row.status == "applied"]
     running = job.state not in ENDED
+    # A runner's answer the engine could not keep is paid for and not delivered: the attempt succeeded,
+    # the job did not, and the cost follows the job (D69 (4)).
+    reply_lost = job.failure is not None and job.failure.kind == "result_not_stored"
     last = max((attempt.number for attempt in job.attempts), default=0)
     attempts: list[AttemptCost] = []
     for attempt in job.attempts:
@@ -71,7 +74,7 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
             )
             continue
         cost_class: CostClass
-        if attempt.outcome == "succeeded":
+        if attempt.outcome == "succeeded" and not reply_lost:
             cost_class = "delivered"
         elif last_word:
             cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D52)

@@ -1,7 +1,7 @@
 """ISS-15 (D59): job history pages over REST, and what the docs promise about inputs and results.
 
 Results are returned inline once and not kept; the job keeps a ``ResultRef`` (size and sha256) so a
-builder can check a copy it saved, and ``GET /v1/jobs/{id}/result`` answers 501 until M4 (ISS-26).
+builder can check a copy it saved, and ``GET /v1/jobs/{id}/result`` answers 410 for it (ISS-26).
 """
 
 import hashlib
@@ -113,16 +113,19 @@ async def test_before_needs_a_time_with_its_offset(history: History, before: str
     assert response.status_code == 422
 
 
-async def test_the_result_route_is_404_for_another_actors_job_then_501_naming_m4_and_iss_26(
+async def test_the_result_route_is_404_for_another_actors_job_then_410_for_an_immediate_job(
     history: History,
 ) -> None:
+    """Until ISS-26 the owner's answer was a 501 naming M4. An immediate job's result is returned once
+    and not kept, so the route answers 410 for it; a stored result is an async job's
+    (tests/unit/test_async_http.py)."""
     job_id = await history.run(history.alice)
     assert (await history.client.get(f"/v1/jobs/{job_id}/result", headers=history.bob)).status_code == 404
-    reserved = await history.client.get(f"/v1/jobs/{job_id}/result", headers=history.alice)
-    assert reserved.status_code == 501
-    body = reserved.json()
-    assert (body["milestone"], body["ticket"]) == ("M4", "ISS-26")
-    assert "M4 (ISS-26)" in body["error"]
+    gone = await history.client.get(f"/v1/jobs/{job_id}/result", headers=history.alice)
+    assert gone.status_code == 410
+    body = gone.json()
+    assert (body["code"], body["job"]["id"]) == ("result_expired", job_id)
+    assert body["job"]["result"]["storage"] == "inline" and "not kept" in body["error"]
 
 
 # -- inputs and results through the real runner call (tests/unit/livepeer_net.py) ----------------------

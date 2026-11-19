@@ -21,5 +21,7 @@ def request_fingerprint(request: JobRequest) -> str:
         fields["headers"] = request.headers
     if request.return_http_errors:
         fields["return_http_errors"] = True
+    if request.mode == "async":  # so an immediate and an async request under one reference conflict
+        fields["mode"] = "async"
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

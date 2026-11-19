@@ -48,6 +48,7 @@ WORK = {
     ("GET", "/v1/jobs"),
     ("GET", "/v1/jobs/{job_id}"),
     ("GET", "/v1/jobs/{job_id}/result"),
+    ("POST", "/v1/jobs/{job_id}/cancel"),  # a queued async job's cancel (ISS-26)
     ("POST", "/v1/jobs/{job_id}/usage"),
     ("GET", "/v1/jobs/{job_id}/cost"),
     ("GET", "/v1/costs/projections"),

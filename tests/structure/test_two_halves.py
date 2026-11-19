@@ -60,6 +60,7 @@ GUIDE = "docs/design-docs/m4-guides/iss-31-payment-configurations.md"
 # Network capabilities, runner choice, the runner call, streaming, job records and the cost of each job.
 WORK = {
     "services/admission.py",
+    "services/async_jobs.py",  # the worker that runs queued jobs (ISS-26)
     "services/cost_classes.py",  # the cost class of each attempt, a pure function
     "services/costs.py",
     "services/discovery.py",
@@ -75,6 +76,7 @@ WORK = {
     "services/streams.py",
     "services/usage_intake.py",
     "services/usage_reports.py",
+    "http/job_handles.py",  # an async job's result and its cancel (ISS-26)
     "http/streaming.py",
     "http/work.py",
 }

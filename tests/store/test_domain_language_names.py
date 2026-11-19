@@ -143,6 +143,10 @@ def in_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: json.dumps(row, default=str))
 
 
+# What a later revision gives a row that was there before it: 0016's claim columns (ISS-26).
+SINCE: dict[str, dict[str, Any]] = {"lpb_jobs": {"started_at": None, "claims": 0}}
+
+
 def renamed(row: dict[str, Any]) -> dict[str, Any]:
     """A row of revision 0013 as the head names it."""
     named = {("tenant_id" if name == "application_id" else name): value for name, value in row.items()}
@@ -169,7 +173,7 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     migrated: tuple[AsyncEngine, str], clock: FixedClock
 ) -> None:
     engine, job_id = migrated
-    assert await current_revision(engine) == head_revision() == "0015"
+    assert await current_revision(engine) == head_revision() == "0016"
     store, now = SqlStore(engine), clock.now()
 
     alice = ActorAllocation(
@@ -341,12 +345,17 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
         await upgrade(engine)
         head = await stored(engine, old_names=False)
         for name in ("lpb_access_keys", "lpb_jobs", "lpb_actors", "lpb_actor_sightings"):
-            assert head[name] == in_order([renamed(row) for row in before[name]])
+            assert head[name] == in_order([renamed(row) | SINCE.get(name, {}) for row in before[name]])
+        head_tables = await table_names(engine)
 
         await interrupted(engine, "down", "0013")
         assert await current_revision(engine) == head_revision()
         assert await stored(engine, old_names=False) == head
-        assert await table_names(engine) == tables
+        # Every table of the head is still there. Until 0016 (ISS-26) the first step down was 0015's
+        # DROP TABLE, which SQLite's driver committed before 0014 opened its transaction, so this run
+        # left lpb_payment_keys dropped under the head revision, and comparing with revision 0013's
+        # tables hid it. 0016's step down begins with an UPDATE, so the whole run is one transaction.
+        assert await table_names(engine) == head_tables
         async with engine.connect() as conn:
             assert (await conn.execute(select(func.count()).select_from(t.operations))).scalar_one() == 4
     finally:

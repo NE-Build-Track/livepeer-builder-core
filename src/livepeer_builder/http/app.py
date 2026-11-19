@@ -30,6 +30,8 @@ from livepeer_builder.errors import (
     EngineError,
     InvalidRequest,
     JobFailed,
+    JobNotFinished,
+    JobNotQueued,
     NoCapacity,
     NotAuthenticated,
     NotFound,
@@ -40,6 +42,7 @@ from livepeer_builder.errors import (
     OperationInProgress,
     ProviderError,
     ProviderUnavailable,
+    ResultExpired,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
 from livepeer_builder.http.listeners import ListenerName, mount_listener_routes
@@ -58,10 +61,12 @@ _FAILURE_STATUS = {
     "runner_rejected": 422,
     "runner_error": 502,
     "interrupted": 502,
+    "result_not_stored": 502,  # the runner answered, and its reply was more than the engine stores
 }
 _RETRY_AFTER = {"no_capacity": "5", "refused": "5", "unreachable": "5", "payment": "10"}
-# A signer refusal is the payer's to fix, not a reason to retry (D58): no Retry-After.
-_REFUSAL_STATUS = {"not_authorized": 403, "allowance_exhausted": 402}
+# A signer refusal is the payer's to fix, not a reason to retry (D58): no Retry-After. A job its caller
+# cancelled while it was queued never ran and never will (D69): its result is gone for good.
+_REFUSAL_STATUS = {"not_authorized": 403, "allowance_exhausted": 402, "cancelled": 410}
 _HELD = {"command", "operation_ref", "state"}  # what a 409 shows of an admin command holding the reference
 
 
@@ -168,6 +173,21 @@ def _install_error_handlers(app: FastAPI, engine: WorkApi | ClearinghouseApi) ->
         headers, held = _holder(exc)
         held.pop("job", None)
         return problem(409, str(exc), headers, code="operation_conflict", **held)
+
+    @app.exception_handler(JobNotFinished)
+    async def _not_finished(_: Request, exc: JobNotFinished) -> Response:
+        headers = {JOB_ID_HEADER: str(exc.job.id), "Retry-After": str(exc.retry_after_s)}
+        return problem(409, str(exc), headers, code="job_not_finished", job=exc.job.model_dump(mode="json"))
+
+    @app.exception_handler(JobNotQueued)
+    async def _not_queued(_: Request, exc: JobNotQueued) -> Response:
+        headers = {JOB_ID_HEADER: str(exc.job.id)}
+        return problem(409, str(exc), headers, code="job_not_queued", job=exc.job.model_dump(mode="json"))
+
+    @app.exception_handler(ResultExpired)
+    async def _expired(_: Request, exc: ResultExpired) -> Response:
+        headers = {JOB_ID_HEADER: str(exc.job.id)}
+        return problem(410, str(exc), headers, code="result_expired", job=exc.job.model_dump(mode="json"))
 
     @app.exception_handler(AlreadyAllotted)
     async def _allotted(_: Request, exc: AlreadyAllotted) -> Response:

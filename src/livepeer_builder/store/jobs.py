@@ -11,7 +11,17 @@ from sqlalchemy import String, and_, cast, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from livepeer_builder.contracts import Attempt, Failure, Job, JobState, MeasuredUsage, ResultRef
+from livepeer_builder.contracts import (
+    ActorContext,
+    Attempt,
+    Failure,
+    Job,
+    JobRequest,
+    JobState,
+    MeasuredUsage,
+    ResultRef,
+)
+from livepeer_builder.store import job_queue as queue
 from livepeer_builder.store import operation_refs as refs
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.matching import bump_evidence
@@ -31,6 +41,24 @@ class SqlJobs:
         ``retry_of`` re-dispatches under the same reference (D57): one transaction marks that failed job
         superseded by this one, a compare-and-set, then inserts this one. If another retry already
         superseded it, the answer comes from the job now holding the reference."""
+        await self._insert_job(job, fingerprint, retry_of, None)
+
+    async def enqueue_job(
+        self,
+        job: Job,
+        fingerprint: str | None,
+        request: JobRequest,
+        actor: ActorContext,
+        *,
+        retry_of: UUID | None = None,
+    ) -> None:
+        """``create_job`` for a ``queued`` async job (ISS-26): the same transaction stores what it will
+        run with, so a job is never queued without its request."""
+        await self._insert_job(job, fingerprint, retry_of, queue.request_values(job.id, request, actor))
+
+    async def _insert_job(
+        self, job: Job, fingerprint: str | None, retry_of: UUID | None, waiting: dict[str, Any] | None
+    ) -> None:
         values = _job_values(job) | {"request_fingerprint": fingerprint}
         if retry_of is not None:
             values["retry_of"] = str(retry_of)
@@ -39,13 +67,15 @@ class SqlJobs:
                 if retry_of is not None:
                     await refs.supersede(conn, retry_of, job)
                 await conn.execute(insert(t.jobs).values(values))
+                if waiting is not None:
+                    await conn.execute(insert(t.job_requests).values(waiting))
         except (IntegrityError, refs.Superseded):
             if job.operation_ref is None:
                 raise
             found = await self.job_by_operation_ref(job.tenant_id, job.actor_id, job.operation_ref)
             if found is None:
                 if retry_of is not None:  # the failed job is gone (retention): the reference is free
-                    return await self.create_job(job, fingerprint)
+                    return await self._insert_job(job, fingerprint, None, waiting)
                 raise
             raise refs.taken(*found, fingerprint) from None
 
@@ -120,15 +150,12 @@ class SqlJobs:
         failure: Failure | None,
         result: ResultRef | None,
         completed_at: datetime,
-    ) -> None:
-        values = {
-            "state": state,
-            "failure": failure.model_dump(mode="json") if failure else None,
-            "result": result.model_dump(mode="json") if result else None,
-            "completed_at": completed_at,
-        }
+    ) -> bool:
+        """End a ``running`` job, and only a running one (ISS-26): a late writer never reopens a job that
+        ended, and a queued one ends by its own writes (``store/job_queue.py``). The request stored for
+        an async job goes in the same transaction."""
         async with self.engine.begin() as conn:
-            await conn.execute(update(t.jobs).where(t.jobs.c.id == str(job_id)).values(values))
+            return await queue.end_running(conn, job_id, state, failure, result, completed_at)
 
     async def set_usage(self, job_id: UUID, usage: MeasuredUsage) -> None:
         async with self.engine.begin() as conn:
@@ -208,6 +235,7 @@ def _job_values(job: Job) -> dict[str, Any]:
         "usage": job.usage.model_dump(mode="json") if job.usage else None,
         "created_at": job.created_at,
         "completed_at": job.completed_at,
+        "started_at": job.started_at,
     }
 
 

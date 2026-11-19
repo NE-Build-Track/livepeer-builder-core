@@ -42,6 +42,10 @@ ROUTES = [
 ]  # fmt: skip
 
 
+# A query parameter a route requires, so the bad one is the only one refused (#163 review: no tenant default)
+REQUIRED = {"/v1/clearinghouse/reconciliation": {"tenant_id": "default"}}
+
+
 @pytest.fixture
 async def api(make_engine: EngineFactory) -> AsyncIterator[tuple[httpx.AsyncClient, dict[str, str]]]:
     engine: BuilderEngine = await make_engine()
@@ -67,7 +71,7 @@ async def test_a_path_or_query_id_the_store_cannot_hold_is_422_before_any_query(
     if query is None:
         url, params = template.format(id=quote(bad, safe="")), None
     else:
-        url, params = template, {query: bad}
+        url, params = template, REQUIRED.get(template, {}) | {query: bad}
     answer = await client.request(method, url, params=params, json=body, headers=admin)
     assert answer.status_code == 422, answer.text
     (error,) = answer.json()["detail"]

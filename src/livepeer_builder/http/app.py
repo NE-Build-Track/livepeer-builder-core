@@ -387,7 +387,7 @@ def create_app(
     @app.get("/v1/clearinghouse/reconciliation", response_model=Reconciliation)
     async def reconcile(
         actor: Actor,
-        tenant_id: Annotated[StoredText, Query()] = "default",
+        tenant_id: Annotated[StoredText, Query()],  # required (#163 review): never a tenant unnamed
         actor_id: QueryId = None,
         # an earlier allocation of the actor; absent: the current one, and empty is a 422, not "absent"
         allocation_id: Annotated[StoredText | None, Query(min_length=1)] = None,

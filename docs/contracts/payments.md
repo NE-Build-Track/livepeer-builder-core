@@ -566,7 +566,7 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 `observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/clearinghouse/reconciliation` returns each class and `balanced`. Each
+`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/clearinghouse/reconciliation?tenant_id=...` returns each class and `balanced`; the tenant is required (#163 review). Each
 actor has its own allocation, so it balances exactly per user.
 
 **One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor

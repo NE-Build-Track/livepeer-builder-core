@@ -25,7 +25,9 @@ The REST surface is generated into [../generated/openapi.json](../generated/open
 
 On 18 November 2026 the names in every contract followed the domain language (D83, #163). Only names
 changed: no behaviour, no status code and no permission, except where an old name would otherwise be
-ignored without a word (#163 review): an engine with JWT must name where a token's tenant comes from.
+ignored without a word (#163 review): an engine with JWT must name where a token's tenant comes from,
+a key request and a reconciliation must name their tenant, and every request body refuses a field it
+does not know.
 No old name is kept as an alias: an old route is 404, an old field is refused as unknown, and an old
 environment variable is ignored.
 
@@ -58,7 +60,9 @@ environment variable is ignored.
 - **Migrate.** `lpb migrate` applies revision 0014, or the engine does at start with
   `LPB_AUTO_MIGRATE` ([persistence.md](persistence.md#migrations)). Every row is kept.
 - **Move the clients.** A client that sends `application_id`, the kind `admin` or an old path is
-  refused. The builder console and the sample apps move with their next pin.
+  refused. So is a key request without `tenant_id` and a reconciliation without `?tenant_id=`: neither
+  is read as `default` any more, and any field a request body does not know is a 422 (#163 review).
+  The builder console and the sample apps move with their next pin.
 
 **What a repeat gets.** An admin command recorded before the upgrade is still answered from its record
 when it is repeated under the new names: the ledger compares the same fingerprint, and the provider

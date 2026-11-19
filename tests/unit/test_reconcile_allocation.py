@@ -184,15 +184,23 @@ async def test_the_rest_route_takes_the_allocation_as_a_typed_query_id(
     headers = {"Authorization": f"Bearer {key.token}"}
     route = "/v1/clearinghouse/reconciliation"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
-        current = await client.get(route, params={"actor_id": "alice"}, headers=headers)
+        current = await client.get(
+            route, params={"tenant_id": "default", "actor_id": "alice"}, headers=headers
+        )
         earlier = await client.get(
-            route, params={"actor_id": "alice", "allocation_id": first}, headers=headers
+            route,
+            params={"tenant_id": "default", "actor_id": "alice", "allocation_id": first},
+            headers=headers,
         )
         unknown = await client.get(
-            route, params={"actor_id": "alice", "allocation_id": "nope"}, headers=headers
+            route,
+            params={"tenant_id": "default", "actor_id": "alice", "allocation_id": "nope"},
+            headers=headers,
         )
         long = await client.get(
-            route, params={"actor_id": "alice", "allocation_id": "x" * 201}, headers=headers
+            route,
+            params={"tenant_id": "default", "actor_id": "alice", "allocation_id": "x" * 201},
+            headers=headers,
         )
     assert current.status_code == 200
     assert (current.json()["allocation_id"], current.json()["other_allocations"]) == (second, [first])
@@ -218,7 +226,7 @@ async def test_an_empty_allocation_id_is_refused_not_read_as_the_current_allocat
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         empty = await client.get(
             "/v1/clearinghouse/reconciliation",
-            params={"actor_id": "alice", "allocation_id": ""},
+            params={"tenant_id": "default", "actor_id": "alice", "allocation_id": ""},
             headers=headers,
         )
     assert empty.status_code == 422, empty.text

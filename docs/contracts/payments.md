@@ -66,7 +66,8 @@ signer's or Batteries' own text:
   ("provider HTTP 500: the allowance could not be read"); the provider's text goes to the
   `payments.allowance_failed` log line;
 - the engine refuses to start with an `LPB_SIGNER_URL` that has userinfo, a query or a fragment, so
-  the URL it logs holds no secret; a refused setting is never echoed.
+  the URL it logs holds no secret; a refused setting is never echoed, in any form of the refusal
+  ([SECURITY.md](../SECURITY.md#secrets)).
 
 ## Allocation modes
 

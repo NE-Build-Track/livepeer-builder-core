@@ -12,6 +12,7 @@ Batteries here is the real adapter over an in-memory HTTP transport that filters
 import base64
 import json
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -19,7 +20,7 @@ import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesUsageSource
-from livepeer_builder.contracts import ActorContext, UsagePage
+from livepeer_builder.contracts import ActorContext, Money, UsagePage
 from livepeer_builder.errors import AccessDenied, CursorMismatch
 from livepeer_builder.protocols import TenantUsageSource
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource
@@ -324,11 +325,7 @@ async def test_the_shipped_fake_pages_one_tenants_rows(manager: FakeAllocationMa
     assert len((await fake.page(None, limit=1000)).items) == 2  # the feed cost sync reads is as it was
 
 
-def _usd(amount: str) -> Any:
-    from decimal import Decimal
-
-    from livepeer_builder.contracts import Money
-
+def _usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 

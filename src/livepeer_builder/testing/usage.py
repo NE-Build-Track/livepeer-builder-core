@@ -21,10 +21,14 @@ class FakeUsageSource:
         self.page_size = page_size
         self.grant_of = dict(grant_of or {})
 
-    async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
+    async def page(  # NOSONAR - async by protocol (UsageSource); the fake awaits nothing
+        self, cursor: str | None, limit: int = 1000
+    ) -> UsagePage:
         return self._paged(self.rows, "c", cursor, limit)
 
-    async def tenant_page(self, tenant_id: str, cursor: str | None, limit: int = 1000) -> UsagePage:
+    async def tenant_page(  # NOSONAR - async by protocol (TenantUsageSource)
+        self, tenant_id: str, cursor: str | None, limit: int = 1000
+    ) -> UsagePage:
         rows = [row for row in self.rows if self.grant_of.get(row.allocation_id or "") == tenant_id]
         return self._paged(rows, f"t:{tenant_id}:", cursor, limit)
 

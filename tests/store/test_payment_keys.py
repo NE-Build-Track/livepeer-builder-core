@@ -6,12 +6,14 @@ key, in ``lpb_payment_keys``: one row for each actor, bound to the allocation th
 hash finds its actor only while that actor still holds that allocation and it is not revoked.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
 import pytest
 from sqlalchemy import func, insert, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from livepeer_builder.contracts import AccessKey, ActorAllocation, OperationRecord, SecretRef
@@ -193,8 +195,6 @@ async def test_a_first_payment_key_is_issued_only_where_the_allocation_has_none(
 async def test_two_first_payment_keys_for_one_allocation_at_the_same_time_leave_one(
     database_url: str, clock: FixedClock
 ) -> None:
-    import asyncio
-
     first, second = await SqlStore.connect(database_url), await SqlStore.connect(database_url)
     try:
         alice = actor(clock)
@@ -218,8 +218,6 @@ async def test_two_replacements_for_an_actor_with_no_key_at_the_same_time_leave_
 ) -> None:
     """Two rotations of an allocation that has no key yet (one allotted before #166), on two connections.
     Both keep a key by their own account, and the actor holds exactly one of them: one row for an actor."""
-    import asyncio
-
     first, second = await SqlStore.connect(database_url), await SqlStore.connect(database_url)
     try:
         alice = actor(clock)
@@ -286,8 +284,6 @@ async def test_a_payment_key_is_removed_only_with_the_allocation_it_was_issued_f
 
 async def test_one_hash_is_one_actors(sql: SqlStore, clock: FixedClock) -> None:
     """A token is 32 random bytes, so two actors never share one; the table refuses it all the same."""
-    from sqlalchemy.exc import IntegrityError
-
     row = {"allocation_id": "a", "token_hash": "h" * 64, "created_at": clock.now(), "tenant_id": "default"}
     async with sql.engine.begin() as conn:
         await conn.execute(insert(t.payment_keys).values(row | {"actor_id": "alice"}))

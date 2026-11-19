@@ -9,6 +9,7 @@ included (Batteries keeps ``spent_*`` on a revoked allocation, late charges too)
 
 from decimal import Decimal
 
+import httpx
 import pytest
 
 from livepeer_builder.contracts import ActorContext, AllotRequest, Money
@@ -63,8 +64,6 @@ async def test_a_spent_figure_the_engine_cannot_read_is_never_a_zero(spent: obje
 async def test_the_tenant_list_and_the_grant_read_show_what_each_tenant_spent(
     make_engine: EngineFactory, manager: FakeAllocationManager, admin: ActorContext
 ) -> None:
-    import httpx
-
     engine = await make_engine()
     manager.add_grant("other", total=50)
     for tenant, actor in (("default", "alice"), ("default", "bob"), ("other", "carol")):

@@ -211,6 +211,12 @@ Costs nothing. Check: `lpb payments check` exits 0 and its `tenant` is tenant on
 are not empty and not `stale`; the allotment prints alice's allocation, `active`. Read the rates in the
 offerings now, and stop here if `ALLOT` does not cover one job.
 
+**A runner is paid before it reads the request.** A job the runner refuses (a path it does not serve,
+an input it does not take) is still charged, and the engine records it as failed after payment. Run a
+job whose `path` and `payload` are known to work on that runner, or accept the price of a refusal. The
+run of 19 November 2026 is in
+[the evidence](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
+
 ### 4. Proof (a): a paid fixed job from the enterprise's engine
 
 ```sh
@@ -272,6 +278,28 @@ cd ../dev-stack
 docker compose up -d --build                    # as its README says, with its own secrets/ and .env
 docker compose exec -T engine lpb payments check            # role both; exit 0
 ```
+
+The dev stack's README copies the wallet's two files into its `secrets/` folder. To copy nothing, keep
+an override file outside the repository and name it after `compose.yaml` with a second `-f`. It mounts
+the key folder read-only into the signer and gives the signer the same start as the clearinghouse
+project's, with the two file names written out:
+
+```yaml
+services:
+  signer:
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf %s "$$(cat /run/wallet/<password file>)" > /dev/shm/wallet-password
+        exec /usr/local/bin/livepeer-signer --data-dir /data/node --config /etc/signer.toml \
+          --keystore-file /run/wallet/<key file> --keystore-password-file /dev/shm/wallet-password
+    volumes:
+      - {type: bind, source: <the wallet's key folder>, target: /run/wallet, read_only: true}
+```
+
+A project name of its own (`docker compose -p <name> ...`) gives the proof new volumes and leaves an
+existing dev stack's records alone.
 
 Then its README's "Use" section, with one tenant, one actor, an allocation of `ALLOT` and `FIXED_JOB`.
 **Costs** the price of one fixed job. Check: the job `succeeded` with `payment_sent`, its cost is

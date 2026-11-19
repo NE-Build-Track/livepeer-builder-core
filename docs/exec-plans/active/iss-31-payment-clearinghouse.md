@@ -11,8 +11,9 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P8 are built and in review. The three paid proofs of P8 are run from the
-  runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook).
+- **Progress:** P1 to P8 are built and in review. The three paid proofs of P8 were run on
+  19 November 2026 from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
+  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
 
 ## Goal
 

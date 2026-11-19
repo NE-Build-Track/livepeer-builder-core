@@ -609,7 +609,9 @@ One builder-core issue each, all sub-issues of ISS-31.
    and needs the private listener, a signer, Batteries and the grants credential. A setting that
    contradicts the role is refused at startup. `lpb payments check` and `lpb smoke` follow the role.
    The two Compose projects are `deploy/clearinghouse` and `deploy/enterprise`, with a proof runbook
-   in `deploy/README.md`; they were brought up without money, and the three paid proofs are run from
-   the runbook. Left open: an engine server in its `work` role has no route that allots (T41), a
+   in `deploy/README.md`. The three paid proofs were run from it on 19 November 2026
+   ([the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md)); a
+   fixed-price job that succeeds is not among them, because both fixed-price runners tried refused
+   the request after they were paid. Left open: an engine server in its `work` role has no route that allots (T41), a
    clearinghouse has no route that issues a second clearinghouse admin key (T42), and the projects
    have no TLS proxy (T43).

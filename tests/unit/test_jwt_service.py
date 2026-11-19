@@ -214,12 +214,12 @@ async def test_the_rest_service_accepts_the_providers_tokens(idp: IdentityProvid
             ).status_code == 403
             admin = bearer(idp.token(scope="livepeer:admin"))
             assert (
-                await client.get("/v1/clearinghouse/reconciliation?actor_id=alice", headers=admin)
+                await client.get("/v1/costs/reconciliation?actor_id=alice", headers=admin)
             ).status_code in (200, 404)
             assert (
-                await client.get("/v1/clearinghouse/reconciliation", headers=bearer(idp.token()))
+                await client.get("/v1/costs/reconciliation", headers=bearer(idp.token()))
             ).status_code == 403
-            assert (await client.post("/v1/clearinghouse/keys", json={}, headers=admin)).status_code in (
+            assert (await client.post("/v1/keys", json={}, headers=admin)).status_code in (
                 404,
                 405,
             )

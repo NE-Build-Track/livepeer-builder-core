@@ -148,7 +148,7 @@ async def test_a_revoked_admin_or_auditor_key_is_401_on_admin_routes(
     issued = await engine.keys.issue(admin, kind=kind, actor_id=f"{kind}-1", operation_ref=f"key-{kind}")  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {issued.token}"}
     reads = (
-        "/v1/clearinghouse/keys",
+        "/v1/keys",
         "/v1/clearinghouse/actors",
         "/v1/clearinghouse/tenants/default/actors/alice/allocation",
     )
@@ -207,11 +207,9 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest(
     assert await twice(allocation + "/status", {"status": "paused"}) == [200, 200]
     assert await twice(allocation + "/revoke") == [200, 200]  # a retry gets the first answer (D61)
     assert (await client.get(allocation, headers=as_admin)).json()["status"] == "revoked"
-    assert await twice(f"/v1/clearinghouse/keys/{key.key_id}/revoke") == [204, 204]
+    assert await twice(f"/v1/keys/{key.key_id}/revoke") == [204, 204]
     assert (
         await client.post(allocation.replace("alice", "nobody") + "/revoke", headers=as_admin)
     ).status_code == 404
-    assert (
-        await client.post("/v1/clearinghouse/keys/lpk_unknown/revoke", headers=as_admin)
-    ).status_code == 400
-    assert (await client.get(f"/v1/clearinghouse/keys/{key.key_id}", headers=as_admin)).json()["revoked_at"]
+    assert (await client.post("/v1/keys/lpk_unknown/revoke", headers=as_admin)).status_code == 400
+    assert (await client.get(f"/v1/keys/{key.key_id}", headers=as_admin)).json()["revoked_at"]

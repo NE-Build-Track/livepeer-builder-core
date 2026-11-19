@@ -775,13 +775,13 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
-| `POST, GET /v1/clearinghouse/keys`, `GET /v1/clearinghouse/keys/{id}`, `POST /v1/clearinghouse/keys/{id}/rotate`, `POST /v1/clearinghouse/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
+| `POST, GET /v1/keys`, `GET /v1/keys/{id}`, `POST /v1/keys/{id}/rotate`, `POST /v1/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `GET /v1/clearinghouse/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
 | `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation` |
 | `GET, POST /v1/clearinghouse/grants` | `payments.grants.*` | only when `payments.grants` is set |
 | `POST /v1/clearinghouse/grant/top-up` | `payments.top_up_grant` | `204` |
-| `GET /v1/clearinghouse/reconciliation` | `costs.reconcile` | `Reconciliation` |
-| `POST /v1/clearinghouse/costs/sync` | `costs.sync_now` | `SyncReport` |
+| `GET /v1/costs/reconciliation` | `costs.reconcile` | `Reconciliation` |
+| `POST /v1/costs/sync` | `costs.sync_now` | `SyncReport` |
 
 The generated schema is [generated/openapi.json](../generated/openapi.json); CI fails when it drifts.
 

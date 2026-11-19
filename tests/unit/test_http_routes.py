@@ -78,10 +78,8 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     )
     assert rotated.status_code == 200 and "lpg_" not in rotated.text
     assert (await client.get("/v1/allowance", headers=alice)).json()["granted"]["amount"] == "5"
-    assert (await client.post("/v1/clearinghouse/costs/sync", headers=admin)).json()["pages"] == 1
-    reconciliation = await client.get(
-        "/v1/clearinghouse/reconciliation", params={"actor_id": "alice"}, headers=admin
-    )
+    assert (await client.post("/v1/costs/sync", headers=admin)).json()["pages"] == 1
+    reconciliation = await client.get("/v1/costs/reconciliation", params={"actor_id": "alice"}, headers=admin)
     assert reconciliation.status_code == 200
     assert (await client.post(ALLOCATION + "/revoke", headers=admin)).json()["status"] == "revoked"
     bad = await client.post(
@@ -128,7 +126,7 @@ async def test_keys_jobs_usage_and_costs_over_rest(
         json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
         headers=admin,
     )
-    keys = (await client.get("/v1/clearinghouse/keys", headers=admin)).json()
+    keys = (await client.get("/v1/keys", headers=admin)).json()
     assert {k["kind"] for k in keys} == {"clearinghouse_admin", "actor"}
     transport.steps = [ScriptedTransport.ok()]
     ran = await client.post("/v1/jobs", json={"app": APP}, headers=alice)
@@ -144,13 +142,13 @@ async def test_keys_jobs_usage_and_costs_over_rest(
     assert before.status_code == 200 and before.json()["jobs_pending"] == 1
     early = (await client.get("/v1/costs/projections", headers=alice)).json()
     assert [(cost["job_id"], cost["status"]) for cost in early] == [(job_id, "pending")]
-    await client.post("/v1/clearinghouse/costs/sync", headers=admin)
+    await client.post("/v1/costs/sync", headers=admin)
     summary = await client.get("/v1/costs/summary", headers=alice)
     assert summary.status_code == 200 and summary.json()["jobs_pending"] == 1
     projections = (await client.get("/v1/costs/projections", headers=alice)).json()
     assert len(projections) == 1 and projections[0]["job_id"] == job_id
     actor_key = next(k["key_id"] for k in keys if k["kind"] == "actor")
-    assert (await client.post(f"/v1/clearinghouse/keys/{actor_key}/revoke", headers=admin)).status_code == 204
+    assert (await client.post(f"/v1/keys/{actor_key}/revoke", headers=admin)).status_code == 204
     assert (await client.get("/v1/jobs", headers=alice)).status_code == 401  # revoked key
 
 
@@ -260,7 +258,7 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
         assert response.status_code == expected
 
     bad = await client.post(
-        "/v1/clearinghouse/keys",
+        "/v1/keys",
         json={"actor_id": "x", "permissions": ["everything"], "operation_ref": "k1"},
         headers=admin,
     )
@@ -297,21 +295,17 @@ async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFacto
 
 async def test_keys_are_inspected_and_rotated_over_rest(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
-    actor_key = next(
-        k for k in (await client.get("/v1/clearinghouse/keys", headers=admin)).json() if k["kind"] == "actor"
-    )
+    actor_key = next(k for k in (await client.get("/v1/keys", headers=admin)).json() if k["kind"] == "actor")
     alice_token = alice["Authorization"].removeprefix("Bearer ")
 
-    shown = await client.get(f"/v1/clearinghouse/keys/{actor_key['key_id']}", headers=admin)
+    shown = await client.get(f"/v1/keys/{actor_key['key_id']}", headers=admin)
     assert shown.status_code == 200 and shown.json() == actor_key
     assert alice_token not in shown.text and "token" not in shown.json()  # inspection never shows a secret
-    assert (await client.get("/v1/clearinghouse/keys/key_unknown", headers=admin)).status_code == 404
-    assert (
-        await client.get(f"/v1/clearinghouse/keys/{actor_key['key_id']}", headers=alice)
-    ).status_code == 403
+    assert (await client.get("/v1/keys/key_unknown", headers=admin)).status_code == 404
+    assert (await client.get(f"/v1/keys/{actor_key['key_id']}", headers=alice)).status_code == 403
 
     rotated = await client.post(
-        f"/v1/clearinghouse/keys/{actor_key['key_id']}/rotate",
+        f"/v1/keys/{actor_key['key_id']}/rotate",
         json={"label": "ci", "operation_ref": "rk1"},
         headers=admin,
     )
@@ -328,11 +322,11 @@ async def test_keys_are_inspected_and_rotated_over_rest(api) -> None:  # type: i
     ).status_code == 200
 
     again = await client.post(  # no label: the key keeps its own
-        f"/v1/clearinghouse/keys/{new['key']['key_id']}/rotate", json={"operation_ref": "rk2"}, headers=admin
+        f"/v1/keys/{new['key']['key_id']}/rotate", json={"operation_ref": "rk2"}, headers=admin
     )
     assert again.status_code == 201 and again.json()["key"]["label"] == "ci"
     stale = await client.post(
-        f"/v1/clearinghouse/keys/{actor_key['key_id']}/rotate", json={"operation_ref": "rk3"}, headers=admin
+        f"/v1/keys/{actor_key['key_id']}/rotate", json={"operation_ref": "rk3"}, headers=admin
     )
     assert stale.status_code == 400  # already rotated, so revoked
 
@@ -602,8 +596,8 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
         ("/v1/clearinghouse/grant/top-up", {"amount": usd, "grant_id": "grant_1"}),
         ("/v1/clearinghouse/grants", {"name": "ops", "amount": usd}),
         (ALLOCATION + "/rotate-payment-key", {}),
-        ("/v1/clearinghouse/keys", {"actor_id": "bob"}),
-        (f"/v1/clearinghouse/keys/{key_id}/rotate", {"label": "ci"}),
+        ("/v1/keys", {"actor_id": "bob"}),
+        (f"/v1/keys/{key_id}/rotate", {"label": "ci"}),
     ]
     for path, body in commands:
         for missing in (body, body | {"operation_ref": ""}):
@@ -615,18 +609,18 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
 async def test_a_replayed_key_issue_is_201_without_the_token(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
     body = {"actor_id": "bob", "operation_ref": "k1"}
-    first = await client.post("/v1/clearinghouse/keys", json=body, headers=admin)
-    again = await client.post("/v1/clearinghouse/keys", json=body, headers=admin)
+    first = await client.post("/v1/keys", json=body, headers=admin)
+    again = await client.post("/v1/keys", json=body, headers=admin)
     assert (first.status_code, again.status_code) == (201, 201)
     assert first.json()["token"].startswith("lpk_") and "Idempotent-Replayed" not in first.headers
     assert again.json() == first.json() | {"token": None, "replayed": True}
     assert again.headers["Idempotent-Replayed"] == "true"
     rotate = {"operation_ref": "rk1"}
     rotated = await client.post(
-        f"/v1/clearinghouse/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
+        f"/v1/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
     )
     replayed = await client.post(
-        f"/v1/clearinghouse/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
+        f"/v1/keys/{first.json()['key']['key_id']}/rotate", json=rotate, headers=admin
     )
     assert replayed.status_code == 201 and replayed.json() == rotated.json() | {
         "token": None,

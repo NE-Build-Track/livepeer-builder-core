@@ -2556,29 +2556,6 @@
         "summary": "List Actors"
       }
     },
-    "/v1/clearinghouse/costs/sync": {
-      "post": {
-        "operationId": "sync_costs_v1_clearinghouse_costs_sync_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SyncReport"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Sync Costs"
-      }
-    },
     "/v1/clearinghouse/grant/top-up": {
       "post": {
         "operationId": "top_up_grant_v1_clearinghouse_grant_top_up_post",
@@ -2681,322 +2658,6 @@
           }
         ],
         "summary": "Create Grant"
-      }
-    },
-    "/v1/clearinghouse/keys": {
-      "get": {
-        "operationId": "list_keys_v1_clearinghouse_keys_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "tenant_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tenant Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/AccessKey"
-                  },
-                  "title": "Response List Keys V1 Clearinghouse Keys Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Keys"
-      },
-      "post": {
-        "operationId": "issue_key_v1_clearinghouse_keys_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IssueKeyBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssuedKey"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Issue Key"
-      }
-    },
-    "/v1/clearinghouse/keys/{key_id}": {
-      "get": {
-        "operationId": "get_key_v1_clearinghouse_keys__key_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "key_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Key Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccessKey"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Key"
-      }
-    },
-    "/v1/clearinghouse/keys/{key_id}/revoke": {
-      "post": {
-        "operationId": "revoke_key_v1_clearinghouse_keys__key_id__revoke_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "key_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Key Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Revoke Key"
-      }
-    },
-    "/v1/clearinghouse/keys/{key_id}/rotate": {
-      "post": {
-        "operationId": "rotate_access_key_v1_clearinghouse_keys__key_id__rotate_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "key_id",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "title": "Key Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RotateKeyBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssuedKey"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Rotate Access Key"
-      }
-    },
-    "/v1/clearinghouse/reconciliation": {
-      "get": {
-        "operationId": "reconcile_v1_clearinghouse_reconciliation_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "tenant_id",
-            "required": false,
-            "schema": {
-              "default": "default",
-              "maxLength": 200,
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "actor_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Actor Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "allocation_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Allocation Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Reconciliation"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Reconcile"
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": {
@@ -3418,6 +3079,87 @@
         "summary": "Cost Projections"
       }
     },
+    "/v1/costs/reconciliation": {
+      "get": {
+        "operationId": "reconcile_v1_costs_reconciliation_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "default": "default",
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "allocation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allocation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reconciliation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile"
+      }
+    },
     "/v1/costs/summary": {
       "get": {
         "operationId": "cost_summary_v1_costs_summary_get",
@@ -3502,6 +3244,29 @@
           }
         ],
         "summary": "Cost Summary"
+      }
+    },
+    "/v1/costs/sync": {
+      "post": {
+        "operationId": "sync_costs_v1_costs_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Costs"
       }
     },
     "/v1/events": {
@@ -3869,6 +3634,241 @@
           }
         ],
         "summary": "Report Usage"
+      }
+    },
+    "/v1/keys": {
+      "get": {
+        "operationId": "list_keys_v1_keys_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccessKey"
+                  },
+                  "title": "Response List Keys V1 Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Keys"
+      },
+      "post": {
+        "operationId": "issue_key_v1_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Key"
+      }
+    },
+    "/v1/keys/{key_id}": {
+      "get": {
+        "operationId": "get_key_v1_keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Key"
+      }
+    },
+    "/v1/keys/{key_id}/revoke": {
+      "post": {
+        "operationId": "revoke_key_v1_keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Key"
+      }
+    },
+    "/v1/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_access_key_v1_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Access Key"
       }
     },
     "/v1/offerings": {

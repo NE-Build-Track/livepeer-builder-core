@@ -276,7 +276,7 @@ sequenceDiagram
     participant Pay as PaymentsService (AllowanceReader)
     participant DB as SqlStore
     participant Bat as Batteries
-    Op->>C: GET /v1/clearinghouse/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
+    Op->>C: GET /v1/costs/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
     C->>Pay: allocation_for(app, actor) → the current allocation
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
     C->>DB: attempt_allocations(app, actor) → which allocation paid each attempt (#115, C9)

@@ -10,6 +10,10 @@ docs/design-docs/m4-guides/iss-31-payment-configurations.md ("Words used here").
 No old name is kept beside the new one: no alias, no deprecated route, no fallback setting. An old
 environment variable names no setting and is ignored.
 
+Since #164 the work routes that #163 left under ``/v1/clearinghouse`` are at their own paths: an engine's
+own access keys under ``/v1/keys``, and reconciliation and cost sync under ``/v1/costs`` (D87). Their old
+paths are old names too.
+
 Not checked here, because they are not these names: an app id (``app`` on offerings and jobs, ISS-48), the
 failure kind ``not_provisioned`` (ISS-28), and the words Batteries and the signer use on their own wire.
 """
@@ -48,6 +52,11 @@ OLD_NAMES = {
     r"\bPaymentCredential\b": "PaymentKey",
     r"(?i)operator_token": "batteries_grants_token (LPB_BATTERIES_GRANTS_TOKEN)",
     r"rotate-key\b": "rotate-payment-key",
+    # work routes, which #164 moved out of the clearinghouse prefix (a tenant's keys, from #165, are under
+    # /v1/clearinghouse/tenants/{tenant_id}/keys, which none of these matches)
+    r"/v1/clearinghouse/keys\b": "/v1/keys (an engine's own access keys are work routes)",
+    r"/v1/clearinghouse/reconciliation\b": "/v1/costs/reconciliation",
+    r"/v1/clearinghouse/costs\b": "/v1/costs/sync",
 }
 # Methods of the embedded API and of the payment ports that carried an old word.
 OLD_METHODS = {
@@ -156,6 +165,7 @@ async def test_no_route_uses_an_old_name(make_engine: EngineFactory) -> None:
                 )
     assert len(routes) >= 30  # every route today; fewer means the walk missed some
     assert any(route.path.startswith("/v1/clearinghouse/tenants/{tenant_id}/") for route in routes)
+    assert {"/v1/keys", "/v1/costs/reconciliation", "/v1/costs/sync"} <= {route.path for route in routes}
     assert not offenders, f"{FIX}\n" + "\n".join(offenders)
 
 

@@ -339,7 +339,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,
-  and `GET /v1/clearinghouse/grants` and `POST /v1/clearinghouse/costs/sync` never answered. A longer cycle (a cursor that
+  and `GET /v1/clearinghouse/grants` and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
   comes back after other pages) is not detected. A grant, in a list or read alone,
   must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
@@ -562,7 +562,7 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 `observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/clearinghouse/reconciliation` returns each class and `balanced`. Each
+`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/costs/reconciliation` returns each class and `balanced`. Each
 actor has its own allocation, so it balances exactly per user.
 
 **One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor
@@ -614,7 +614,7 @@ since its projection was stored, from its matched usage rows. A paid job therefo
 meanwhile can never make it count a usage row twice or nowhere.
 
 Sync commits usage rows, then session matches, then projections, one transaction each, and two syncs
-can run at once (the loop and `POST /v1/clearinghouse/costs/sync`). Each job has an evidence version: a new
+can run at once (the loop and `POST /v1/costs/sync`). Each job has an evidence version: a new
 usage row on a matched session, a changed match or a late session report increments it in the same
 transaction. A projection records the version it was computed from, read before the job's evidence,
 and stands for the job only while that version is current; a save never replaces a projection computed

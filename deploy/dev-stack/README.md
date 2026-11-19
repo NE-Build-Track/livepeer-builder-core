@@ -53,7 +53,7 @@ docker compose exec engine lpb bootstrap-admin            # prints the admin tok
 ADMIN=lpk_...
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"kind":"actor","actor_id":"alice","operation_ref":"dev-key-alice"}' \
-  http://127.0.0.1:8080/v1/clearinghouse/keys                                          # an actor key
+  http://127.0.0.1:8080/v1/keys                                                        # an actor key
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"amount":{"amount":"1","currency":"USD"},"grant_id":"<grant id>","operation_ref":"dev-allot-alice"}' \
   http://127.0.0.1:8080/v1/clearinghouse/tenants/default/actors/alice/allocation  # explicit allotment
@@ -68,7 +68,7 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
 The bootstrap admin key has no allocation of its own, so a request without `grant_id` gets 400
 `choose a grant` ([payments.md](../../docs/contracts/payments.md)).
 
-Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/clearinghouse/reconciliation?actor_id=alice`.
+Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/costs/reconciliation?actor_id=alice`.
 
 ## Status (19 October, at the pins of that day)
 

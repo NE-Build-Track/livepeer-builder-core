@@ -236,7 +236,7 @@ mode, with no code:
 | Field | From |
 | --- | --- |
 | `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at allotment (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
-| `tenant_id` | `LPB_JWT_TENANT_CLAIM` when set, otherwise `LPB_JWT_TENANT_ID` (`default`, at most 200 characters: a longer one fails at startup); a claim over 200 characters is a 401 |
+| `tenant_id` | `LPB_JWT_TENANT_CLAIM`, the claim that names it, or `LPB_JWT_TENANT_ID`, the one tenant every token is in (at most 200 characters: a longer one fails at startup). Exactly one is set: neither has a default, and with neither or both the engine refuses to start (#163 review). A claim over 200 characters is a 401 |
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
 | `credential_kind` | `clearinghouse_admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |

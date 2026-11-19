@@ -24,8 +24,10 @@ The REST surface is generated into [../generated/openapi.json](../generated/open
 ## Upgrading to the domain-language names
 
 On 18 November 2026 the names in every contract followed the domain language (D83, #163). Only names
-changed: no behaviour, no status code and no permission. No old name is kept as an alias: an old route
-is 404, an old field is refused as unknown, and an old environment variable is ignored.
+changed: no behaviour, no status code and no permission, except where an old name would otherwise be
+ignored without a word (#163 review): an engine with JWT must name where a token's tenant comes from.
+No old name is kept as an alias: an old route is 404, an old field is refused as unknown, and an old
+environment variable is ignored.
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -48,11 +50,11 @@ is 404, an old field is refused as unknown, and an old environment variable is i
 **Before you start the new release:**
 
 - **Rename the environment variables.** An old one names no setting and is ignored, like any variable
-  the engine does not know, and the engine still starts. With `LPB_JWT_APPLICATION_CLAIM` ignored, every
-  token is read as the tenant `LPB_JWT_TENANT_ID` (`default`), so tenants that the claim kept apart are
-  one tenant. With `LPB_JWT_APPLICATION_ID` ignored, tokens are read as `default` and no longer reach
-  the records of the tenant they had. With `LPB_BATTERIES_OPERATOR_TOKEN` ignored, the grant desk is
-  off.
+  the engine does not know. With `jwt` in `LPB_AUTH`, an engine still set with
+  `LPB_JWT_APPLICATION_CLAIM` or `LPB_JWT_APPLICATION_ID` refuses to start: exactly one of
+  `LPB_JWT_TENANT_CLAIM` and `LPB_JWT_TENANT_ID` must be set, and neither has a default (#163 review),
+  so tokens are never put in a tenant nobody chose. With `LPB_BATTERIES_OPERATOR_TOKEN` ignored, the
+  grant desk is off.
 - **Migrate.** `lpb migrate` applies revision 0014, or the engine does at start with
   `LPB_AUTO_MIGRATE` ([persistence.md](persistence.md#migrations)). Every row is kept.
 - **Move the clients.** A client that sends `application_id`, the kind `admin` or an old path is

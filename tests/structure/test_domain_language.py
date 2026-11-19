@@ -218,8 +218,23 @@ def test_an_old_environment_variable_is_ignored() -> None:
         "LPB_BATTERIES_OPERATOR_TOKEN": "not-read",
     }
     settings = EngineSettings.from_env(old)
-    assert settings.jwt_tenant_claim is None and settings.jwt_tenant_id == "default"
+    assert settings.jwt_tenant_claim is None and settings.jwt_tenant_id is None
     assert settings.batteries_grants_token is None
+
+
+def test_an_engine_with_jwt_still_set_with_the_old_tenant_variables_refuses_to_start() -> None:
+    """#163 review: ignored, the old claim variable left every token in one tenant, so users of different
+    organisations shared it. Neither new variable has a default, so the engine refuses to start and
+    names them."""
+    jwt = {
+        "LPB_DISCOVERY_URL": "http://discovery:8939/discovery",
+        "LPB_AUTH": "jwt",
+        "LPB_JWT_ISSUER": "https://idp.example/",
+        "LPB_JWT_AUDIENCE": "engine",
+    }
+    for old in ({"LPB_JWT_APPLICATION_CLAIM": "org"}, {"LPB_JWT_APPLICATION_ID": "acme"}):
+        with pytest.raises(ValidationError, match="LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID"):
+            EngineSettings.from_env(jwt | old)
 
 
 def test_the_public_api_exports_no_old_name() -> None:

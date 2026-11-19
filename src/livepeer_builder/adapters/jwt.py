@@ -46,8 +46,8 @@ class JwtSettings:
     audience: str
     algorithms: tuple[str, ...] = ("RS256", "ES256")
     actor_claim: str = "sub"
-    tenant_claim: str | None = None  # None: every token is in tenant_id
-    tenant_id: str = "default"  # at most 200 characters, like a claim (``_identity``)
+    tenant_claim: str | None = None  # exactly one of these (#163 review): the claim naming the tenant,
+    tenant_id: str | None = None  # or the one tenant of every token, at most 200 characters like a claim
     scope_claim: str = "scope"
     scope_prefix: str = ""
     admin_scope: str | None = None  # None: no token is an admin credential
@@ -59,8 +59,17 @@ class JwtSettings:
     name_claim: str | None = "preferred_username"  # the display name for the operator's actor list (D48)
 
     def __post_init__(self) -> None:
-        if len(self.tenant_id) > 200:  # every record stores it in 200 characters (store.schema.ID)
+        if (self.tenant_claim is None) == (self.tenant_id is None):  # neither has a default
+            raise ValueError("set exactly one of tenant_claim and tenant_id: where each token's tenant is")
+        if self.tenant_id is not None and len(self.tenant_id) > 200:  # every record stores 200 (schema.ID)
             raise ValueError("the JWT tenant id is longer than 200 characters")
+
+    def tenant(self, claims: dict[str, Any]) -> str:
+        """The token's tenant: its claim's value, or the one tenant every token is in."""
+        if self.tenant_claim is not None:
+            return _identity(claims, self.tenant_claim)
+        assert self.tenant_id is not None  # __post_init__: exactly one is set
+        return self.tenant_id
 
     @property
     def strict(self) -> bool:
@@ -393,7 +402,7 @@ class JwtBearerAuthenticator:
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
         settings = self._settings
         actor_id = _identity(claims, settings.actor_claim)
-        tenant_id = _identity(claims, settings.tenant_claim) if settings.tenant_claim else settings.tenant_id
+        tenant_id = settings.tenant(claims)
         scopes = _scopes(claims.get(settings.scope_claim))
         named = {
             scope.removeprefix(settings.scope_prefix)

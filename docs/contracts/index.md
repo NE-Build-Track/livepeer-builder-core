@@ -14,11 +14,22 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
 
+## Upgrading to the M4 hardening (#112 to #115)
+
+- **An empty `operation_ref` is refused** (#113, C19). A job or session request that sends
+  `operation_ref: ""` is a 422 that names the field (a `ValidationError` in process), before anything
+  is written; it used to count as a reference. A client that sends an empty string for "no retry key"
+  leaves the field out instead ([engine.md](engine.md#idempotency)).
+
 ## Upgrading to the domain-language names
 
 On 18 November 2026 the names in every contract followed the domain language (D83, #163). Only names
-changed: no behaviour, no status code and no permission. No old name is kept as an alias: an old route
-is 404, an old field is refused as unknown, and an old environment variable is ignored.
+changed: no behaviour, no status code and no permission, except where an old name would otherwise be
+ignored without a word (#163 review): an engine with JWT must name where a token's tenant comes from,
+a key request and a reconciliation must name their tenant, and every request body refuses a field it
+does not know.
+No old name is kept as an alias: an old route is 404, an old field is refused as unknown, and an old
+environment variable is ignored.
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -41,15 +52,17 @@ is 404, an old field is refused as unknown, and an old environment variable is i
 **Before you start the new release:**
 
 - **Rename the environment variables.** An old one names no setting and is ignored, like any variable
-  the engine does not know, and the engine still starts. With `LPB_JWT_APPLICATION_CLAIM` ignored, every
-  token is read as the tenant `LPB_JWT_TENANT_ID` (`default`), so tenants that the claim kept apart are
-  one tenant. With `LPB_JWT_APPLICATION_ID` ignored, tokens are read as `default` and no longer reach
-  the records of the tenant they had. With `LPB_BATTERIES_OPERATOR_TOKEN` ignored, the grant desk is
-  off.
+  the engine does not know. With `jwt` in `LPB_AUTH`, an engine still set with
+  `LPB_JWT_APPLICATION_CLAIM` or `LPB_JWT_APPLICATION_ID` refuses to start: exactly one of
+  `LPB_JWT_TENANT_CLAIM` and `LPB_JWT_TENANT_ID` must be set, and neither has a default (#163 review),
+  so tokens are never put in a tenant nobody chose. With `LPB_BATTERIES_OPERATOR_TOKEN` ignored, the
+  grant desk is off.
 - **Migrate.** `lpb migrate` applies revision 0014, or the engine does at start with
   `LPB_AUTO_MIGRATE` ([persistence.md](persistence.md#migrations)). Every row is kept.
 - **Move the clients.** A client that sends `application_id`, the kind `admin` or an old path is
-  refused. The builder console and the sample apps move with their next pin.
+  refused. So is a key request without `tenant_id` and a reconciliation without `?tenant_id=`: neither
+  is read as `default` any more, and any field a request body does not know is a 422 (#163 review).
+  The builder console and the sample apps move with their next pin.
 
 **What a repeat gets.** An admin command recorded before the upgrade is still answered from its record
 when it is repeated under the new names: the ledger compares the same fingerprint, and the provider
@@ -115,7 +128,7 @@ field is kept as an alias: an old path is 404, and an old field is a 422.
 | Key commands, in embedded mode | `keys.get(admin, key_id)`, `keys.rotate(...)`, `keys.revoke(admin, key_id)` | Each also takes an optional `tenant_id`, the tenant a route named |
 | The `AllocationManager` port | | Three more methods, which the tenant desk calls on the grants manager: `read_grant`, `grant_balances`, `set_grant_status` |
 | The command a ledger record names | `create_grant` | `onboard_tenant`, and `set_tenant_status`. Records of `create_grant` are kept |
-| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id. `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
+| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id, and `create_grant` the next `grant_<n>` no grant holds (#165 review). `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
 | The `engine.started` log line | `grant_desk` | `tenant_desk` |
 
 **Before you start the new release:**

@@ -32,7 +32,7 @@ ADMIN_PATHS = ("/v1/clearinghouse/", "/v1/keys", "/v1/costs/reconciliation", "/v
 USD = {"amount": "0.01", "currency": "USD"}
 # A valid body for each admin body model, so a denial is the policy's answer and never a 422.
 SAMPLE_BODIES: dict[str, dict[str, Any]] = {
-    "IssueKeyBody": {"actor_id": "mallory", "operation_ref": "sweep"},
+    "IssueKeyBody": {"actor_id": "mallory", "tenant_id": "default", "operation_ref": "sweep"},
     "RotateKeyBody": {"operation_ref": "sweep"},
     "AllotBody": {"amount": USD, "operation_ref": "sweep"},
     "TopUpRequest": {"amount": USD, "operation_ref": "sweep"},
@@ -87,6 +87,15 @@ def filled(path: str, params: dict[str, str]) -> str:
     return re.sub(r"\{(\w+)\}", lambda match: params[match.group(1)], path)
 
 
+def query_for(route: APIRoute, params: dict[str, str]) -> dict[str, str]:
+    """Each query parameter the route requires, from the same real ids, so a denial is never a 422."""
+    return {
+        field.alias: params[field.alias]
+        for field in route.dependant.query_params
+        if field.field_info.is_required()
+    }
+
+
 async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a_credential(
     surface: tuple[FastAPI, httpx.AsyncClient, BuilderEngine, dict[str, str]],
     admin: ActorContext,
@@ -111,7 +120,8 @@ async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a
         if method in WRITES:
             callers.append(("auditor", as_auditor, 403))
         for who, headers, expected in callers:
-            answer = await client.request(method, url, json=body, headers=headers)
+            query = query_for(route, params)
+            answer = await client.request(method, url, params=query, json=body, headers=headers)
             if answer.status_code != expected:
                 wrong.append(f"{method} {path} as {who}: {answer.status_code}, expected {expected}")
     assert not wrong, "an admin route answered a caller it must refuse:\n" + "\n".join(wrong)

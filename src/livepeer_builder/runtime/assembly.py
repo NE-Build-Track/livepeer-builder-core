@@ -198,14 +198,14 @@ async def default_parts(
     else:
         allocation_manager = None
 
-    operator = (
-        settings.batteries_operator_token.get_secret_value() if settings.batteries_operator_token else None
+    grants_token = (
+        settings.batteries_grants_token.get_secret_value() if settings.batteries_grants_token else None
     )
     grants_manager: AllocationManager | None
     if not isinstance(supply.grants_manager, _Unset):
         grants_manager = supply.grants_manager
-    elif settings.batteries_url and operator:
-        desk = BatteriesClient(settings.batteries_url, operator, timeout_s=settings.batteries_timeout_s)
+    elif settings.batteries_url and grants_token:
+        desk = BatteriesClient(settings.batteries_url, grants_token, timeout_s=settings.batteries_timeout_s)
         own(stack, desk, desk.aclose)
         grants_manager = desk
     else:

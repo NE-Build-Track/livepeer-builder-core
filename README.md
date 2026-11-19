@@ -71,7 +71,7 @@ export LPB_DATABASE_URL=sqlite+aiosqlite:///./livepeer-builder.db
 export LPB_DISCOVERY_URL=http://discovery:8939/discovery
 export LPB_SIGNER_URL=https://signer.example LPB_BATTERIES_URL=https://batteries.example
 export LPB_BATTERIES_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
-export LPB_BATTERIES_OPERATOR_TOKEN=...   # optional: turns on the grant desk (list and create grants)
+export LPB_BATTERIES_GRANTS_TOKEN=...   # optional: turns on the grant desk (list and create grants)
 uv run lpb migrate
 uv run lpb bootstrap-admin   # prints the first admin key once
 uv run lpb serve

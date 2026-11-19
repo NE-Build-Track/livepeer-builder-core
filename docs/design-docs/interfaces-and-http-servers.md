@@ -395,7 +395,7 @@ classDiagram
         +async sync_once() SyncReport
     }
     class BatteriesClient {
-        engine token, or operator token for the grant desk
+        engine token, or grants token for the grant desk
     }
     class BatteriesUsageSource {
         GET /v1/usage

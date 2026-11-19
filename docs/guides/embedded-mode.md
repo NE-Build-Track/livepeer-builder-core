@@ -201,7 +201,7 @@ Your process is the process that holds the engine. There is no separate `lpb ser
 
 - Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it),
   `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
-  `EngineSettings`. `LPB_BATTERIES_OPERATOR_TOKEN` only turns on the grant desk
+  `EngineSettings`. `LPB_BATTERIES_GRANTS_TOKEN` only turns on the grant desk
   (`engine.payments.grants`); an application that never lists or creates grants leaves it unset.
 - Run `lpb migrate`, or leave `LPB_AUTO_MIGRATE=true`.
 - Run `lpb bootstrap-admin` only if you will use engine-issued admin keys. Embed can pass an

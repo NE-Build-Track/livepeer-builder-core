@@ -78,7 +78,7 @@ def test_package_version_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine_module.package_version() == "0.0.0+unknown"
 
 
-async def test_batteries_without_an_operator_token_starts_without_the_grant_desk() -> None:
+async def test_batteries_without_a_grants_token_starts_without_the_grant_desk() -> None:
     settings = EngineSettings(
         database_url=MEMORY,
         batteries_url="https://batteries.example",
@@ -100,7 +100,7 @@ async def test_default_adapters_follow_settings() -> None:
         signer_url="https://signer.example",
         batteries_url="https://batteries.example",
         batteries_token="t",
-        batteries_operator_token="desk",
+        batteries_grants_token="desk",
         secret_key=generate_secret_key(),
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
@@ -121,12 +121,12 @@ async def test_a_discovery_url_reads_the_discovery_service() -> None:
         assert isinstance(parts.discovery_source, HttpDiscoverySource)
 
 
-async def test_operator_token_wires_a_separate_grants_client() -> None:
+async def test_grants_token_wires_a_separate_grants_client() -> None:
     settings = EngineSettings(
         database_url=MEMORY,
         batteries_url="https://batteries.example",
         batteries_token="actor",
-        batteries_operator_token="operator",
+        batteries_grants_token="operator",
         secret_key=generate_secret_key(),
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",

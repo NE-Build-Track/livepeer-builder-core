@@ -141,7 +141,7 @@ class ActorApi(Protocol):
 
 
 class GrantsApi(Protocol):
-    """The grant desk: present only with a grants manager (``LPB_BATTERIES_OPERATOR_TOKEN``)."""
+    """The grant desk: present only with a grants manager (``LPB_BATTERIES_GRANTS_TOKEN``)."""
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]: ...
     async def create_grant(

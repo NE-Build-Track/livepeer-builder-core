@@ -71,7 +71,7 @@ class EngineSettings(Contract):
     default_currency: Currency = "USD"
     batteries_url: str | None = None  # management API and usage feed
     batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
-    batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
+    batteries_grants_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
     batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)

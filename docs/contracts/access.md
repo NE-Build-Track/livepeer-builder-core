@@ -305,7 +305,7 @@ Both are generic: no enterprise logic lives in the engine.
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
 | Engine admin credential | `lpb bootstrap-admin`, then an admin | Operator | Engine admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
-| Batteries operator credential (grant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_OPERATOR_TOKEN`), optional; without it the grant desk is off | Batteries operator |
+| Batteries grants credential (grant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the grant desk is off | Batteries operator |
 | Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 

@@ -160,8 +160,8 @@ checks stop that:
 | `allot(AllotRequest(tenant, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; fund it instead |
 | `top_up(…, TopUpRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
 | `top_up_grant(TopUpRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
-| `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN` | read |
-| `grants.create_grant(name, amount, operation_ref=…)` | `POST /v1/grants` with `LPB_BATTERIES_OPERATOR_TOKEN`, tagged `metadata.lpb_operation` | the ledger; Batteries has none on grants, so a resume finds the tagged grant (Q5) |
+| `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN` | read |
+| `grants.create_grant(name, amount, operation_ref=…)` | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation` | the ledger; Batteries has none on grants, so a resume finds the tagged grant (Q5) |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_payment_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
@@ -281,7 +281,7 @@ checks stop that:
   narrow that. An actor key cannot call these routes (`admin.allocations`).
 - **The engine's management credential** is least-privilege: `allocations.*`, `api_keys.*`,
   `usage.read`, and `grants.fund`. It has **no `grants.*`**.
-- **Listing and creating grants** uses `LPB_BATTERIES_OPERATOR_TOKEN` (`grants.read`, `grants.create`).
+- **Listing and creating grants** uses `LPB_BATTERIES_GRANTS_TOKEN` (`grants.read`, `grants.create`).
   The token is optional. Without it the grant desk is off: `engine.payments.grants` is `None` and the
   grant list and create routes are absent. Topping up grants still works with `LPB_BATTERIES_TOKEN`.
 - **Cost sync** reads `GET /v1/usage` with no grant filter. Rows for allocations this engine did not

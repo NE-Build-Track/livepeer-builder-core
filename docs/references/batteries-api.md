@@ -12,7 +12,7 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
 - **Ids in paths:** every id the engine places in a route below (`{id}`) is percent-encoded as one path
   segment (`adapters/batteries.py`, `segment`; #113, C10), and the ids `.` and `..` are encoded too
   (`%2E`, `%2E%2E`).
-- **Grant desk** (`LPB_BATTERIES_OPERATOR_TOKEN`): `grants.read` and `grants.create`. Optional: without
+- **Grant desk** (`LPB_BATTERIES_GRANTS_TOKEN`): `grants.read` and `grants.create`. Optional: without
   it the engine starts with the grant desk off (`list_grants`/`create_grant` and their routes absent).
 
 | Engine call | Route | Notes |
@@ -21,8 +21,8 @@ Authoritative source: the Batteries `README.md` and `internal/app/management.go`
 | `create_key` | `POST /v1/api-keys` `{allocation_id, name}` | Key rotation |
 | `top_up_allocation` | `POST /v1/allocations/{id}/fund` `{amount_*}` | Reactivates an `exhausted` allocation |
 | `top_up_grant` | `POST /v1/grants/{id}/fund` `{amount_*}` | `Idempotency-Key` is `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
-| `list_grants` | `GET /v1/grants` | Operator token. `{items: [...], next_cursor}` |
-| `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*}` | Operator token. `grants.create` |
+| `list_grants` | `GET /v1/grants` | Grants token. `{items: [...], next_cursor}` |
+| `create_grant` | `POST /v1/grants` `{name, status, sponsor, amount_*}` | Grants token. `grants.create` |
 | `set_allocation_status` | `PATCH /v1/allocations/{id}/status` `{status: active \| paused}` | |
 | `revoke_allocation` | `POST /v1/allocations/{id}/revoke` | Unused funds return to the grant; repeat-safe |
 | `revoke_key` | `POST /v1/api-keys/{id}/revoke` | |

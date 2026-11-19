@@ -29,8 +29,8 @@ def idempotency_key(engine_id: str, operation: str, step: str) -> str:
 class GrantDesk:
     """Listing and creating grants: an optional capability (decision 7 in the DI refactor plan).
 
-    Present only when a grants manager exists (``LPB_BATTERIES_OPERATOR_TOKEN``, or one supplied).
-    The engine's own token can top up grants but not list or create them, so without the operator
+    Present only when a grants manager exists (``LPB_BATTERIES_GRANTS_TOKEN``, or one supplied).
+    The engine's own token can top up grants but not list or create them, so without the grants
     credential the desk is absent rather than failing at first use.
     """
 

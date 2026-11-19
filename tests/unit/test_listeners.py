@@ -10,10 +10,15 @@ spend the wallet. A deployment that sets ``LPB_HTTP_PRIVATE_PORT`` serves two li
 
 With one listener, which is the default, nothing changes: every route, and every kind of credential.
 
+The signer's two paths (#166) are served on every listener and take a payment key, which is not an
+access key of any kind. So the listener's rule does not reach them: an access key is 401 there on every
+listener, a clearinghouse admin's included, and a live payment key signs on both.
+
 The routes are read from each app, so a route added later is swept without editing this file: a new
 route of the private group must be 404 on the public listener, and a new route of any group must refuse
-a clearinghouse admin there. A route that takes no credential is named in ``NO_CREDENTIAL``, so adding
-one is a decision somebody made.
+a clearinghouse admin there. A route that takes no credential is named in ``NO_CREDENTIAL``, and one that takes a
+payment key in ``PAYMENT_KEY``, each with its own expected answers, so adding one is a decision somebody
+made.
 """
 
 import importlib
@@ -28,13 +33,13 @@ from fastapi import Depends, FastAPI
 from fastapi.routing import APIRoute
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, AuthRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, AuthRequest, Money
 from livepeer_builder.http import actor_dependency, create_app, listeners
 from livepeer_builder.http.app import shared_app
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.http.work import mount_work_routes
-from livepeer_builder.testing import FakeAllocationManager
-from tests.conftest import EngineFactory, allot
+from livepeer_builder.testing import FakeAllocationManager, FakeSigningTransport
+from tests.conftest import EngineFactory
 from tests.unit.test_admin_route_sweep import SAMPLE_BODIES, everything_stored, filled
 
 TENANTS = "/v1/clearinghouse/tenants"
@@ -96,15 +101,44 @@ class Clearinghouse:
     tenant_admin: dict[str, str]
     auditor: dict[str, str]
     actor: dict[str, str]
+    signer: FakeSigningTransport  # the signer behind the engine: it records every call handed to it
+    payment_key: dict[str, str]  # alice's payment key, as the SDK sends a signer its credential
+    batteries_key: str  # the Batteries key of alice's allocation, which never leaves the engine
+
+    @property
+    def access_keys(self) -> dict[str, dict[str, str]]:
+        """An access key of every kind the engine issues."""
+        return {
+            "clearinghouse_admin": self.clearinghouse_admin,
+            "tenant_admin": self.tenant_admin,
+            "auditor": self.auditor,
+            "actor": self.actor,
+        }
+
+    def listeners(self) -> dict[str, FastAPI]:
+        """The app of each listener, and of a deployment with one."""
+        only = create_app(self.engine, manage_lifecycle=False)
+        return {"only": only, "public": self.public, "private": self.private}
 
 
 @pytest.fixture
-async def clearinghouse(make_engine: EngineFactory, admin: ActorContext) -> Clearinghouse:
+async def clearinghouse(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
+) -> Clearinghouse:
     """The tenant ``default`` has a grant, an actor with an allocation and a key of each kind, so nothing
-    below is refused for being missing."""
-    engine = await make_engine()
+    below is refused for being missing. The engine's transport forwards signer calls, as the packaged
+    one with a signer does, so the signer's two paths are served."""
+    signer = FakeSigningTransport()
+    engine = await make_engine(supply=EngineSupply(transport=signer))
     assert engine.keys is not None
-    await allot(engine, ActorContext(actor_id="alice"))
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
+        tenant_id="default",
+        actor_id="alice",
+        amount=Money.model_validate({"amount": "5", "currency": "USD"}),
+    )
+    allotted = await engine.payments.allot(admin, request)
+    assert allotted.payment_key is not None
     issue = engine.keys.issue
     alice = await issue(admin, kind="actor", actor_id="alice", operation_ref="listeners-alice")
     tenant_admin = await issue(admin, kind="tenant_admin", actor_id="desk", operation_ref="listeners-desk")
@@ -123,6 +157,9 @@ async def clearinghouse(make_engine: EngineFactory, admin: ActorContext) -> Clea
         tenant_admin=bearer(tenant_admin.token),
         auditor=bearer(auditor.token),
         actor=bearer(alice.token),
+        signer=signer,
+        payment_key=bearer(allotted.payment_key.token),
+        batteries_key=manager.keys[allotted.api_key_id][1],
     )
 
 
@@ -160,15 +197,19 @@ async def test_the_private_routes_are_404_on_the_public_listener_with_a_credenti
 
 # Routes that take no credential, on any listener: health, and the public catalog (#5).
 NO_CREDENTIAL = {("GET", "/livez"), ("GET", "/readyz"), ("GET", "/v1/offerings")}
+# Routes that take a payment key and nothing else, on any listener: the signer's two paths (#166). An
+# access key of any kind is no credential there, so their answer to one is 401, never the listener's 403.
+PAYMENT_KEY = {("POST", "/sign-orchestrator-info"), ("POST", "/generate-live-payment")}
 
 
 async def refused(
     app: FastAPI, params: dict[str, str], headers: dict[str, str], reason: str
 ) -> tuple[list[str], int]:
-    """Call every route of ``app`` that takes a credential with ``headers``. What did not answer 403
-    with ``reason``, and how many routes were called."""
+    """Call every route of ``app`` that takes an access key with ``headers``. What did not answer 403
+    with ``reason``, and how many routes were called. The routes that take a payment key have their own
+    expected answer, below."""
     wrong: list[str] = []
-    routes = {key: route for key, route in served(app).items() if key not in NO_CREDENTIAL}
+    routes = {key: route for key, route in served(app).items() if key not in NO_CREDENTIAL | PAYMENT_KEY}
     async with client_of(app) as client:
         for (method, path), route in sorted(routes.items()):
             answer = await client.request(method, filled(path, params), json=body_for(route), headers=headers)
@@ -181,15 +222,22 @@ async def test_a_clearinghouse_admin_key_is_403_on_every_route_of_the_public_lis
     clearinghouse: Clearinghouse, manager: FakeAllocationManager
 ) -> None:
     """The ticket's "a clearinghouse admin key does nothing there". Every route of the public listener
-    that takes a credential refuses it, work routes included, before the provider or the store hears of
-    the request."""
+    that takes an access key refuses it, work routes included, before the provider or the store hears of
+    the request. Every route of the public listener is in one of three sets: these, the ones that take
+    no credential, and the ones that take a payment key, where the key is 401."""
     house = clearinghouse
     stored_before, calls_before = await everything_stored(house.engine), list(manager.calls)
     wrong, swept = await refused(
         house.public, house.params, house.clearinghouse_admin, "not accepted on the public listener"
     )
     assert swept >= 30, f"the sweep found too few routes to be meaningful: {swept}"
+    assert swept == len(served(house.public)) - len(NO_CREDENTIAL) - len(PAYMENT_KEY)
     assert not wrong, "the public listener took a clearinghouse admin key:\n" + "\n".join(wrong)
+    async with client_of(house.public) as client:
+        for method, path in sorted(PAYMENT_KEY):
+            answer = await client.request(method, path, content=b"{}", headers=house.clearinghouse_admin)
+            assert answer.status_code == 401, f"{method} {path}: {answer.status_code}"
+    assert not house.signer.forwarded  # and the signer was handed nothing
     assert manager.calls == calls_before  # the payment provider was never called
     assert await everything_stored(house.engine) == stored_before
 
@@ -200,7 +248,7 @@ async def test_the_routes_that_take_no_credential_are_the_ones_named_here(
     """A route missing from ``NO_CREDENTIAL`` is swept above, and one named there answers without a
     credential. So a route that takes no credential cannot be added to a listener unnoticed."""
     for app in (clearinghouse.public, clearinghouse.private):
-        assert served(app).keys() >= NO_CREDENTIAL
+        assert served(app).keys() >= NO_CREDENTIAL | PAYMENT_KEY
         async with client_of(app) as client:
             for method, path in sorted(NO_CREDENTIAL):
                 assert (await client.request(method, path)).status_code == 200, (method, path)
@@ -389,3 +437,73 @@ async def test_the_rule_is_by_the_kind_of_credential_whatever_verified_it(make_e
             got = {kind: (await client.get(actors, headers={"x-kind": kind})).status_code for kind in answers}
             assert got == answers, listener
             assert (await client.get(actors)).status_code == 401
+
+
+# -- the signer's two paths (#166): on every listener, for a payment key ---------------------------------
+
+
+async def test_the_signers_two_paths_are_served_on_every_listener(clearinghouse: Clearinghouse) -> None:
+    """An enterprise's engine reaches a clearinghouse at its public listener, so the two paths are there.
+    Every public route is also on the private one, and a deployment with one listener has them."""
+    for name, app in clearinghouse.listeners().items():
+        assert served(app).keys() >= PAYMENT_KEY, name
+
+
+async def test_only_a_payment_key_is_answered_on_the_signers_paths_whatever_the_listener(
+    clearinghouse: Clearinghouse, manager: FakeAllocationManager
+) -> None:
+    """No credential, an access key of every kind and a Batteries key are each 401 on both paths of
+    every listener, with nothing handed to the signer. A clearinghouse admin key is 401 here on the
+    private listener too, and a tenant's key is 401 here on the public one too: neither is a payment
+    key, and the listener's rule about kinds is never asked."""
+    house = clearinghouse
+    callers = {"no credential": {}, "a Batteries key": bearer(house.batteries_key), **house.access_keys}
+    stored_before, calls_before = await everything_stored(house.engine), list(manager.calls)
+    wrong: list[str] = []
+    for name, app in house.listeners().items():
+        async with client_of(app) as client:
+            for method, path in sorted(PAYMENT_KEY):
+                for who, headers in callers.items():
+                    answer = await client.request(method, path, content=b"{}", headers=headers)
+                    if answer.status_code != 401 or "payment key" not in answer.text:
+                        wrong.append(f"{name}: {method} {path} as {who}: {answer.status_code} {answer.text}")
+    assert not wrong, "a signer path answered something that is no payment key:\n" + "\n".join(wrong)
+    assert not house.signer.forwarded
+    assert manager.calls == calls_before
+    assert await everything_stored(house.engine) == stored_before
+
+
+async def test_a_live_payment_key_signs_on_the_public_and_on_the_private_listener(
+    clearinghouse: Clearinghouse,
+) -> None:
+    """The signer's paths are served on every listener, by the owner's decision, and what they take is a
+    payment key on each: the private listener's "clearinghouse admin only" is a rule about access keys.
+    Each call reaches the signer once, with the actor's Batteries key in the payment key's place."""
+    house = clearinghouse
+    for name, app in house.listeners().items():
+        house.signer.forwarded.clear()
+        async with client_of(app) as client:
+            for method, path in sorted(PAYMENT_KEY):
+                answer = await client.request(method, path, content=b"{}", headers=house.payment_key)
+                assert answer.status_code == 200, (
+                    f"{name}: {method} {path}: {answer.status_code} {answer.text}"
+                )
+        assert [(call.call, call.credential) for call in house.signer.forwarded] == [
+            ("generate-live-payment", house.batteries_key),
+            ("sign-orchestrator-info", house.batteries_key),
+        ], name
+
+
+async def test_each_listeners_own_schema_names_the_signers_paths_and_what_they_take(
+    clearinghouse: Clearinghouse,
+) -> None:
+    """The public listener publishes the two paths, with the payment key as their credential. They are
+    in no private group, so they carry no ``private listener`` tag on any listener."""
+    for name, app in clearinghouse.listeners().items():
+        async with client_of(app) as client:
+            schema = (await client.get("/openapi.json")).json()
+        for method, path in sorted(PAYMENT_KEY):
+            operation = schema["paths"][path][method.lower()]
+            assert operation["security"] == [{"PaymentKey": []}], (name, path)
+            assert listeners.PRIVATE_TAG not in operation.get("tags", []), (name, path)
+        assert schema["components"]["securitySchemes"]["PaymentKey"]["bearerFormat"] == "lpp", name

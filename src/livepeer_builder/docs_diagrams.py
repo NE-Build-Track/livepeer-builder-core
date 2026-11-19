@@ -72,6 +72,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "RunnerTransport": (SdkRunnerTransport, ClearinghouseSigningNotBuilt),
     "StreamingRunnerTransport": (SdkRunnerTransport, ClearinghouseSigningNotBuilt),
     "RunnerStream": (SdkRunnerStream,),
+    "SignerForwarder": (SdkRunnerTransport,),
     "CredentialResolver": (PaymentsService, ClearinghouseCredentials),
     "AllocationManager": (BatteriesClient, ClearinghouseAllocations),
     "AllocationsByActor": (ClearinghouseAllocations,),

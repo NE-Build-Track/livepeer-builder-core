@@ -2716,6 +2716,12 @@
         "description": "An engine API key: `lpk_...`",
         "scheme": "bearer",
         "type": "http"
+      },
+      "PaymentKey": {
+        "bearerFormat": "lpp",
+        "description": "An actor's payment key: `lpp_...`, issued when its allocation is allotted",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -2725,6 +2731,37 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/generate-live-payment": {
+      "post": {
+        "description": "Sign one payment against the allocation of the actor whose payment key this is. Fixed work\ncalls it once; live work calls it every payment cycle, with the signer's `state` from the cycle\nbefore. An empty allocation is the signer's 402.",
+        "operationId": "generate_live_payment_generate_live_payment_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "The signer's own answer: its status, body and content type, whatever the status."
+          },
+          "401": {
+            "description": "No live payment key. Nothing was sent to the signer."
+          },
+          "502": {
+            "description": "`code: signer_outcome_unknown`. The call left and no usable answer came back."
+          },
+          "503": {
+            "description": "`code: signer_not_reached`. The signer was not reached: nothing was sent."
+          }
+        },
+        "security": [
+          {
+            "PaymentKey": []
+          }
+        ],
+        "summary": "Generate Live Payment"
+      }
+    },
     "/readyz": {
       "get": {
         "operationId": "readyz_readyz_get",
@@ -2741,6 +2778,37 @@
           }
         },
         "summary": "Readyz"
+      }
+    },
+    "/sign-orchestrator-info": {
+      "post": {
+        "description": "Who the clearinghouse's signer is: the call the gateway SDK begins every payment with. It\nsigns no payment. It still takes a payment key: nothing here answers without one.",
+        "operationId": "sign_orchestrator_info_sign_orchestrator_info_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "The signer's own answer: its status, body and content type, whatever the status."
+          },
+          "401": {
+            "description": "No live payment key. Nothing was sent to the signer."
+          },
+          "502": {
+            "description": "`code: signer_outcome_unknown`. The call left and no usable answer came back."
+          },
+          "503": {
+            "description": "`code: signer_not_reached`. The signer was not reached: nothing was sent."
+          }
+        },
+        "security": [
+          {
+            "PaymentKey": []
+          }
+        ],
+        "summary": "Sign Orchestrator Info"
       }
     },
     "/v1/allowance": {

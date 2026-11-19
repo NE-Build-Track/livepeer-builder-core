@@ -55,6 +55,7 @@ from livepeer_builder.http.bodies import (
 )
 from livepeer_builder.http.params import GrantTenantId, PathId, QueryId
 from livepeer_builder.http.replies import replay, replayed
+from livepeer_builder.http.signing import mount_signing_routes
 
 TENANTS = "/v1/clearinghouse/tenants"
 TENANT = TENANTS + "/{tenant_id}"
@@ -65,9 +66,11 @@ WALLET = "/v1/clearinghouse/wallet"
 
 
 def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
-    """Add the clearinghouse half's routes to ``app``: both groups."""
+    """Add the clearinghouse half's routes to ``app``: both groups, and the signer's two paths, which an
+    enterprise's engine calls with a payment key (``http/signing.py``, #166)."""
     mount_tenant_routes(app, engine)
     mount_clearinghouse_admin_routes(app, engine)
+    mount_signing_routes(app, engine)
 
 
 def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> None:

@@ -154,10 +154,10 @@ tenant's id for every allocation allotted from now on), `LPB_BATTERIES_GRANTS_TO
 
 ## Upgrading to payment keys, a tenant's usage and the runner list
 
-On 19 November 2026 the clearinghouse gained what an enterprise's engine needs from it besides a signed
-payment (D87, #166): a payment key for each actor, the tenant's usage and the runner list. The payments
-route itself follows. Two answers gained a field, one contract gained a required field, and two routes are
-new. No path, body or status code of an existing route changed.
+On 19 November 2026 the clearinghouse gained what an enterprise's engine needs from it (D87, #166): a
+payment key for each actor, the signer's two paths that take one, the tenant's usage and the runner list.
+Two answers gained a field, one contract gained a required field, and four routes are new. No path, body
+or status code of an existing route changed.
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -167,12 +167,15 @@ new. No path, body or status code of an existing route changed.
 | `TenantGrant` (the tenant list, the grant read) | `tenant_id`, `name`, `status`, `total`, `unallocated` | and `spent`, required: what the tenant's allocations have spent |
 | A tenant's payment records | not served | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` (`UsagePage`); `engine.payments.usage` |
 | The clearinghouse's runner list | not served | `GET /v1/clearinghouse/discovery`, livepeer/node's document; `engine.runner_list` |
+| Signing a payment for another engine | not served | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, at the root, each with a payment key, on an engine with a signer (`LPB_SIGNER_URL`); `engine.payments.signing` |
 | A usage cursor the provider refuses, over REST | `CursorMismatch` had no status of its own | 400, `code: cursor_mismatch` |
-| The facade | `PaymentsAdminApi`, `ClearinghouseApi` | `PaymentsAdminApi.usage` (`TenantUsageApi \| None`), `ClearinghouseApi.runner_list` (`RunnerListApi \| None`) |
+| The facade | `PaymentsAdminApi`, `ClearinghouseApi` | `PaymentsAdminApi.usage` (`TenantUsageApi \| None`), `PaymentsAdminApi.signing` (`PaymentSigningApi \| None`), `ClearinghouseApi.runner_list` (`RunnerListApi \| None`) |
 | The `AllocationManager` port | `read_grant` and `grant_balances` return a `TenantGrant` | The same, and each states `spent` |
-| Optional protocols | | `PaymentKeyRepo` (a store), `TenantUsageSource` (a usage source), `DiscoveryDocumentSource` (a discovery source). A supplied part without one runs without what it serves |
+| Optional protocols | | `PaymentKeyRepo` (a store), `TenantUsageSource` (a usage source), `DiscoveryDocumentSource` (a discovery source), `SignerForwarder` (a runner transport). A supplied part without one runs without what it serves |
 | `FakeUsageSource` (`livepeer_builder.testing`) | `page` | and `tenant_page`, with `grant_of`, a map from an allocation to the grant it was allotted from |
-| Root exports | | `KeyedAllocation`, `IssuedPaymentKey`, `UsagePage`, `UsageRow`, `SetAsideUsage` |
+| The signer behind a clearinghouse, in a test | | `FakeSigningTransport` (`livepeer_builder.testing`): a scripted transport that also forwards signer calls and records each as a `ForwardedSignerCall` |
+| The published schema | | The two signer paths, with the security scheme `PaymentKey`. `lpb gen-docs` builds its engine with a signer address so they are in it |
+| Root exports | | `KeyedAllocation`, `IssuedPaymentKey`, `UsagePage`, `UsageRow`, `SetAsideUsage`, `SignerAnswer`, `SignerCall`, and the errors `SignerNotReached` and `SignerOutcomeUnknown` |
 
 **Before you start the new release:**
 
@@ -187,6 +190,9 @@ new. No path, body or status code of an existing route changed.
   fails.
 - **Move the clients.** A client that reads the allocation from the two answers keeps working. One that
   refuses unknown fields is generated again from the OpenAPI document.
+- **An engine with a signer serves two more paths, at the root.** A deployment whose proxy publishes the
+  engine publishes `POST /sign-orchestrator-info` and `POST /generate-live-payment` with it. They answer
+  a payment key only. With self-hosted payments nothing calls them, and a proxy may leave them out.
 
 **What a repeat gets.** The repeat of an allotment or a rotation recorded before the upgrade is answered
 from its record, with `payment_key` `{"token": null, "replayed": true}`: no key is issued by a replay.
@@ -207,8 +213,9 @@ existing route changed, and no credential is refused that was accepted. There is
 | --- | --- | --- |
 | Listeners | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | The same, unless `LPB_HTTP_PRIVATE_PORT` is set. Then two: that address is the public listener, and `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1`) with `LPB_HTTP_PRIVATE_PORT` is the private one ([access.md](access.md#listeners)) |
 | Onboarding, the tenant list, a grant's top-up and a tenant's status, with two listeners | | 404 on the public listener; served on the private one |
-| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener; accepted on the private one |
+| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener that takes an access credential; accepted on the private one |
 | A tenant admin, auditor, actor or service credential, with two listeners | | Accepted on the public listener as before; 403 on every route of the private one |
+| The signer's two paths (#166), with two listeners | | Served on both, to a payment key. An access key of any kind is 401 on them, as with one listener |
 | The wallet | not served | `GET /v1/clearinghouse/wallet` (`WalletReport`), a clearinghouse admin's; `engine.payments.wallet` ([payments.md](payments.md#the-wallet-report)) |
 | `create_app` | `create_app(engine, *, manage_lifecycle, max_request_bytes)` | and `listener`: `"only"` (the default), `"public"` or `"private"` |
 | `serve`, `lpb serve` | One server | Two servers over one engine when `LPB_HTTP_PRIVATE_PORT` is set. `extend` runs once for each app |
@@ -242,7 +249,7 @@ On 19 November 2026 the engine gained the remote adapters of four payment ports 
 `lpb payments check` (D84, D87, #168). A deployment that sets nothing new runs self-hosted payments as
 before: no route, body, status code or stored record changed, and there is no migration. Signing through
 a clearinghouse is not built yet, so an engine that uses one cannot pay for a job
-([payments.md](payments.md#signing-through-a-clearinghouse)).
+([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghouse)).
 
 | What | Before | Now |
 | --- | --- | --- |

@@ -134,6 +134,16 @@ class CursorMismatch(EngineError):
     """The provider rejected a usage cursor for this route or filter set."""
 
 
+class SignerNotReached(EngineError):
+    """A clearinghouse could not hand a signer call to its signer: the connection was never made, or the
+    actor's key could not be read. Nothing was sent, so nothing was signed (503, ``signer_not_reached``)."""
+
+
+class SignerOutcomeUnknown(EngineError):
+    """A signer call left the clearinghouse and no usable answer came back: a timeout, a dropped
+    connection, a redirect. The signer may have signed (502, ``signer_outcome_unknown``)."""
+
+
 class NotImplementedInMilestone(EngineError):
     """A contract defined in M2 whose implementation belongs to a later milestone (501). A feature held
     by a decision, with no milestone yet, has ``milestone`` ``"held"`` and names the decision."""

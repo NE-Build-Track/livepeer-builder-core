@@ -178,9 +178,10 @@ in one process:
 | Address | `LPB_HTTP_HOST`, `LPB_HTTP_PORT` | `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1` unless set), `LPB_HTTP_PRIVATE_PORT` |
 | Routes | Every route but the private group | Every route |
 | The private group: onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report | 404, as any path the engine does not know, with a credential or without one | Served |
-| A clearinghouse admin credential | 403 on every route that takes a credential, the work routes included | Accepted |
+| A clearinghouse admin credential | 403 on every route that takes an access credential, the work routes included | Accepted |
 | A tenant admin, an auditor, an actor or a service credential | Accepted, as with one listener | 403 on every route, its own tenant's included |
 | No credential, or a bad one | 401 | 401 |
+| The signer's two paths, `POST /sign-orchestrator-info` and `POST /generate-live-payment` (#166) | Served. A live payment key signs. Anything else is 401: no credential, a Batteries key, and an access key of any kind, a clearinghouse admin's included | Served, and the same answers: a live payment key signs here too |
 | `/livez`, `/readyz`, `GET /v1/offerings` | Served, with no credential | Served, with no credential |
 | `/openapi.json`, `/docs` | The public listener's routes only | Every route |
 
@@ -190,6 +191,13 @@ in one process:
 - **A tenant admin key of kind `tenant_admin` is issued on the private listener:**
   `POST .../tenants/{tenant_id}/keys` is served on both, and only a clearinghouse admin may issue that
   kind ([a tenant's access keys](#a-tenants-access-keys)).
+- **The signer's two paths are on every listener, and the rule about kinds does not reach them.** They
+  take a payment key, which is no access credential and has no kind
+  ([payments.md](payments.md#signing-through-a-clearinghouse)). An enterprise's engine reaches a
+  clearinghouse at its public listener, so they are served there; every public route is also on the
+  private one, so they are served there too, and a live payment key signs on both. An access key is
+  401 on them on every listener: a clearinghouse admin key gets 401 there, not the public listener's
+  403, and a tenant's key gets 401 there, not the private listener's 403.
 - **The credential rule is a property of the listener, not of each route.** It is applied where every
   route authenticates (`http/auth.py`), by kind, after the credential is verified. A route added later
   is covered with no check of its own, and so is a route an extension adds with `actor_dependency`
@@ -198,7 +206,9 @@ in one process:
 - **Which group is on which listener is one table,** in `http/listeners.py`. A group of routes that is
   in neither of its two tuples fails a test (`tests/unit/test_listeners.py`), which also reads the
   routes from each app: every route of the private group is 404 on the public listener, and every route
-  of the public listener refuses a clearinghouse admin key before the provider or the store is asked.
+  that takes an access credential refuses a clearinghouse admin key on the public listener before the
+  provider or the store is asked. The routes that take no credential, and the two that take a payment
+  key, are named there with their own answers, so a new one is a decision somebody made.
 - **The published schema.** `docs/generated/openapi.json` is generated from a deployment with one
   listener, so it has every route; the routes of the private group carry the tag `private listener`.
 - **Publish the public listener only.** The private one listens on loopback unless
@@ -388,8 +398,10 @@ Both are generic: no enterprise logic lives in the engine.
   only a clearinghouse admin issues another. A deployment with a private listener accepts a
   clearinghouse admin credential there only ([listeners](#listeners)).
 - **Payment keys (#166):** a payment key (`lpp_`) is no access key. It asks a clearinghouse for one
-  actor's payments and nothing else: as a bearer on any other route it gets what no credential gets,
-  401 ([payments.md](payments.md#payment-keys)).
+  actor's payments and nothing else, at the signer's two paths (`POST /sign-orchestrator-info`,
+  `POST /generate-live-payment`): as a bearer on any other route it gets what no credential gets, 401.
+  Those two paths do not go through the authenticator chain: a payment key is the one credential there,
+  and an access key or a JWT is 401 ([payments.md](payments.md#signing-through-a-clearinghouse)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 

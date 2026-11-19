@@ -14,8 +14,15 @@ with an app of its own over the one engine:
 Without ``LPB_HTTP_PRIVATE_PORT`` the engine has **one listener**, which serves every group to every
 kind of credential, as it did before #167.
 
+The rule about kinds is a rule about access credentials. The signer's two paths (``http/signing.py``,
+#166) take a payment key, which is no access credential and has no kind: they are served on every
+listener, a live payment key signs on each, and anything else is 401 there, a clearinghouse admin
+credential included.
+
 To serve a new group of routes, add its mount function to ``EVERY_LISTENER`` or to ``PRIVATE_ONLY``. A
-group in neither is served nowhere (tests/unit/test_listeners.py).
+group in neither is served nowhere (tests/unit/test_listeners.py). ``mount_clearinghouse_routes`` still
+adds the clearinghouse half's whole set to an app a caller builds for itself; no listener's app is built
+from it.
 
 The credential rule is applied where every route authenticates (``http/auth.py``), from the listener
 this module puts on ``app.state``, so a route added later is covered without a check of its own.
@@ -32,13 +39,15 @@ from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.errors import AccessDenied
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_admin_routes, mount_tenant_routes
+from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
 
 ListenerName = Literal["only", "public", "private"]
 Mount = Callable[[FastAPI, EngineApi], None]
 
-# Served on every listener: the work half's routes, and what a tenant's own admin or auditor calls.
-EVERY_LISTENER: tuple[Mount, ...] = (mount_work_routes, mount_tenant_routes)
+# Served on every listener: the work half's routes, what a tenant's own admin or auditor calls, and the
+# signer's two paths, which an enterprise's engine calls with a payment key (#166).
+EVERY_LISTENER: tuple[Mount, ...] = (mount_work_routes, mount_tenant_routes, mount_signing_routes)
 # Never served on the public listener: what only a clearinghouse admin does.
 PRIVATE_ONLY: tuple[Mount, ...] = (mount_clearinghouse_admin_routes,)
 

@@ -27,6 +27,14 @@ Baseline livepeer/node `eee09c4` (v1.0.7; was `f45d83f`, 10 commits after v1.0.6
   down or lags by 30 seconds, or four first reads of a new payer and orchestrator pair are already running), signing fails
   400 `payer funds unavailable`, as it did before when a direct read failed, and `/readyz` on the
   metrics port answers 503.
+- **Behind a clearinghouse (#166):** a clearinghouse's engine serves the signer's two paths and hands
+  each call to this signer (`adapters/signer_forward.py`). It relies on four things read at the pin.
+  `POST /sign-orchestrator-info` reads no body and asks nobody: it signs the signer's own address
+  (`service.go`, `signInfo`). `POST /generate-live-payment` reads at most 1 MiB and answers 400 for more.
+  The authorization webhook gets every header of the request (`auth.go`: `{headers, state}`), so the
+  clearinghouse sends the Batteries key and no header of its caller's, and `docs/signer.md` asks a proxy
+  to overwrite `Signer-` headers. A webhook decision of 400 to 599 is the signer's status, which is how
+  an empty allocation is its 402 and a paused one its 403.
 - **Readiness, as the engine can ask it (#167):** the wallet report asks the signer with
   `POST /sign-orchestrator-info` on its main port, the call the SDK begins every payment with. At the
   pin it takes no credential (`signer/service.go`, `signInfo`): it answers the wallet's address and a

@@ -195,7 +195,16 @@ class BuilderEngine:
             raise RuntimeError(mismatch)
 
     async def _retention_loop(self) -> None:
-        if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:
+        """Purge every ``retention_interval_s`` while a retention setting is on. The first purge runs at
+        start where it did before ISS-26: with job or usage retention on. Results retention is on by
+        default (D69 (6)), and alone it waits one interval first, so an engine with the default settings
+        adds no write at start beside its caller's own first ones. An expired result is never served
+        meanwhile (``read_result`` reads its ``expires_at``): only its space waits."""
+        settings = self.settings
+        at_start = settings.retention_jobs_days is not None or settings.retention_usage_days is not None
+        if not at_start and settings.retention_results_days is None:
+            return
+        if not at_start and await self._stopped_within(settings.retention_interval_s):
             return
         while not self._stop.is_set():
             try:
@@ -203,7 +212,13 @@ class BuilderEngine:
                 _LOG.info("retention purge", extra={"event": "store.purged", **report.model_dump()})
             except Exception:
                 _LOG.exception("retention purge failed", extra={"event": "store.purge_failed"})
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.settings.retention_interval_s)
-            except TimeoutError:
-                continue
+            if await self._stopped_within(settings.retention_interval_s):
+                return
+
+    async def _stopped_within(self, seconds: float) -> bool:
+        """Wait up to ``seconds`` for the engine to stop. Whether it did."""
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=seconds)
+        except TimeoutError:
+            return False
+        return True

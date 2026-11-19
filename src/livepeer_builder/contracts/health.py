@@ -38,6 +38,9 @@ class PurgeReport(Contract):
 
     jobs_deleted: int
     usage_rows_deleted: int
+    # The stored results of async jobs whose time had passed (ISS-26): their bytes, not their jobs. 0 from
+    # a store that keeps none.
+    results_deleted: int = 0
 
 
 # What one probe of the payments check found. "ok": the answer the probe looks for. "refused": the other

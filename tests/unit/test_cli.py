@@ -82,7 +82,7 @@ def test_gen_secret_key_smoke_and_purge(db: Path, capsys: pytest.CaptureFixture[
     smoke = output(capsys)
     assert smoke["ok"] is True and smoke["schema_revision"] == "0016"
     assert run("purge") == 0
-    assert output(capsys) == {"jobs_deleted": 0, "usage_rows_deleted": 0}
+    assert output(capsys) == {"jobs_deleted": 0, "usage_rows_deleted": 0, "results_deleted": 0}  # ISS-26
 
 
 async def _running_job(db: Path) -> Job:

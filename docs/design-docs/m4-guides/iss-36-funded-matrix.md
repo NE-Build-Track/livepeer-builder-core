@@ -233,8 +233,9 @@ configuration 2. The matrix keeps its seven rows.
 - **Row F** uses an engine server in its `work` role.
 - **Evidence item 6.** The clearinghouse admin's top-up of the grant and the tenant admin's allotment take
   the place of the operator funding step.
-- **`lpb payments check`** was part of the 13 November design and is not in the rewritten ISS-31 guide.
-  The precondition in the runbook needs a replacement, which is John's to choose.
+- **`lpb payments check`** is kept as a read-only check (D87), so the precondition in the runbook stands.
+  A self-hosted engine probes the signer and Batteries. An engine that uses a clearinghouse probes the
+  clearinghouse. It is built with the remote adapters (#168).
 - **The cost sync route** in the runbook moves to the work half (#164).
 
 ## Delivery slices

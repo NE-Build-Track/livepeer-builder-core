@@ -1,11 +1,12 @@
 # ISS-31: Both payment-operation configurations
 
 > **Rewritten on 18 November 2026.** Mike replaced the design locked on 13 November (D74). The second
-> configuration is now a **payment clearinghouse**. The decisions are D82 to D86 in
+> configuration is now a **payment clearinghouse**. The decisions are D82 to D87 in
 > [m4-decisions.md](../m4-decisions.md), and the answers are under [Questions locked](#questions-locked).
 > The 13 November design (`separately_operated`, `per_application` only) is not built.
 
-**Status:** locked by Mike on 18 November 2026. John confirms the two positions marked below.\
+**Status:** locked by Mike on 18 November 2026, with the open points settled the same day (D87). The
+work is tracked in [the exec plan](../../exec-plans/active/iss-31-payment-clearinghouse.md).\
 **Tracker:** ISS-31 ([Network-Engineering-SPE#45](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/45)),
 source task P4, amended on 18 November. Its work is eight builder-core issues, #162 to #169 (P1 to P8).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
@@ -176,10 +177,11 @@ served here, for any tenant.
 | `GET /v1/clearinghouse/wallet` | The deposit and reserve, the total of unspent grants, and the signer's readiness |
 
 **Work half.** The job, offering, runner, cost and allowance routes keep their paths. Reconciliation and
-cost sync move here from `/v1/admin`.
+cost sync move here from `/v1/admin`, as `GET /v1/costs/reconciliation` and `POST /v1/costs/sync`. The
+access keys of an enterprise's own engine are under `/v1/keys`.
 
-The names follow D83. Eight paths are proposals for John to settle: payments, usage, discovery, tenant
-status, both sets of key routes, reconciliation and cost sync.
+The names follow D83. The eight paths that began as proposals are locked (D87): payments, usage,
+discovery, tenant status, both sets of key routes, reconciliation and cost sync.
 
 ### What builder-core can do without an upstream change
 
@@ -206,8 +208,14 @@ separate credential files.
 Limits to write down: one host; the same people run both sides; top-up and wallet funding are manual
 steps; one signer for the wallet; no availability promise.
 
-Where the files live is open: `deploy/` in this repository, in place of the planned
-`deploy/separate-operator/`, or the separate `self-hosted-payments` template, which ISS-37 documents.
+The two Compose projects live in this repository's `deploy/` folder, in place of the planned
+`deploy/separate-operator/` (D87). The separate `self-hosted-payments` template stays the installable
+reference, which ISS-37 documents.
+
+**`lpb payments check`** is kept from the 13 November design as a read-only command (D87). It prints the
+role and probes what that role needs. A self-hosted engine probes the signer and Batteries. An engine
+that uses a clearinghouse probes the clearinghouse: who it is, its grant and its usage. It never writes,
+and ISS-36's runbook uses it as a precondition.
 
 ### Docs to change
 
@@ -232,7 +240,8 @@ section; the tenant rules and the routes follow with their tickets) and the conf
 | `http/app.py`, `http/server.py` | Route groups for the two halves; the public and private listeners |
 | `adapters/` (new files) | Remote adapters for the five ports; the payments route's key swap |
 | `runtime/assembly.py` | Wire the role: which routes mount and which adapters are used |
-| `deploy/` | The two Compose projects, if they live here |
+| `cli.py` | `lpb payments check`, read-only, for each role |
+| `deploy/` | The two Compose projects |
 
 ## Test plan (test-driven)
 
@@ -265,6 +274,9 @@ no Batteries call recorded.
 [ ] role clearinghouse mounts no job routes; role work mounts no clearinghouse routes
 [ ] role work runs a paid job through role clearinghouse with two tenants
 [ ] role both still runs a paid job by itself
+[ ] lpb payments check probes the signer and Batteries in role both, and the clearinghouse in role work
+[ ] lpb payments check never sends a non-GET request; it exits 1 when a probe is refused
+[ ] a clearinghouse that is unreachable or not ready fails a job as retry; an unknown outcome as check
 ```
 
 **Definition of done.** Every item `[x]`, `[=]` or `[-]` with a reason; the checks in `AGENTS.md`
@@ -314,12 +326,19 @@ Locked by Mike on 18 November 2026. They replace the four answers of 13 November
 - **Operation and scope** (D86): the console runs twice at a clearinghouse and top-up is manual; the work
   is inside M4.
 
-**For John to confirm.**
+**The open points, settled by Mike on 18 November (D87).** They were first left for John.
 
 - **The key that signs for an actor:** a payment key for each actor, issued at allotment. The engine
   already stores one key for each actor and presents it this way.
 - **The runner list:** the clearinghouse's list is the default, and an enterprise may use its own
   discovery. Nothing is enforced at signing in the first version.
+- **The eight route paths** are as written under Routes.
+- **The two Compose projects** live in this repository's `deploy/` folder.
+- **`lpb payments check`** is kept as a read-only check for each role.
+- **The Keycloak realm's `operator` role** is renamed and maps to `clearinghouse_admin`. A second role
+  maps to `tenant_admin` (ISS-33).
+- **A clearinghouse failure** is classified like a signer failure: unreachable or not ready is `retry`,
+  an unknown outcome is `check`, and a refusal keeps its reason (ISS-28).
 
 **Not in the first version.** Automated top-ups; federation through the clearinghouse's own sign-in
 service and support for several issuers; wallet alerts and automatic funding; refusing payments to

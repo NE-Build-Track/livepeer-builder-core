@@ -221,8 +221,9 @@ here and says where this flow applies.
 - **The second application is a second tenant.** `LPB_JWT_APPLICATION_CLAIM` becomes
   `LPB_JWT_TENANT_CLAIM` (#163).
 - **The role claim's values** follow the kinds of D83: `clearinghouse_admin`, `tenant_admin` and
-  `auditor`, and absent for an actor. The realm's `operator` role is renamed with them. Which admin kind
-  it maps to in an engine with the `both` role is for this ticket's pull request.
+  `auditor`, and absent for an actor. The realm's `operator` role is renamed and maps to
+  `clearinghouse_admin`, because a self-hosted enterprise runs its whole stack. A second realm role maps
+  to `tenant_admin`. Locked on 18 November (D87).
 - **Routes in the probe.** The `/v1/admin/keys` and `/v1/admin/actors` checks move to the clearinghouse
   routes of the ISS-31 guide.
 - **#126 is replaced.** The design for admins scoped to one application is now D85 and #165.

@@ -33,6 +33,7 @@ from livepeer_builder.contracts import (
     UsagePage,
 )
 from livepeer_builder.protocols.clearinghouse import PaymentKeyRepo as PaymentKeyRepo
+from livepeer_builder.protocols.clearinghouse import TenantUsageSource as TenantUsageSource
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo
 from livepeer_builder.protocols.conditional_writes import UsageOnceRepo as UsageOnceRepo
 from livepeer_builder.protocols.persistence import ActorRepo as ActorRepo

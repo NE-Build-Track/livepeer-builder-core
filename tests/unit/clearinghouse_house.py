@@ -3,6 +3,7 @@ tenants, each with its own tenant admin key. The parts are ``tests/unit/test_ten
 
 import contextlib
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -12,8 +13,9 @@ from tests.unit.test_tenants import House, onboard
 
 
 @contextlib.asynccontextmanager
-async def open_house(make_engine: EngineFactory) -> AsyncIterator[House]:
-    engine = await make_engine()
+async def open_house(make_engine: EngineFactory, **parts: Any) -> AsyncIterator[House]:
+    """``parts`` go to the engine factory: ``supply=EngineSupply(...)`` replaces one of the shared fakes."""
+    engine = await make_engine(**parts)
     assert engine.keys is not None
     admin = {"Authorization": f"Bearer {(await engine.keys.bootstrap_admin()).token}"}
     app = create_app(engine, manage_lifecycle=False)

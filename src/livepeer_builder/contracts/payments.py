@@ -78,13 +78,15 @@ TenantStatus = Literal["active", "paused"]  # what an admin sets; a grant is nev
 class TenantGrant(Contract):
     """A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's
     id. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation
-    larger than it."""
+    larger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked
+    ones included (#166)."""
 
     tenant_id: str
     name: str
     status: str  # the provider's word: active or paused (draft or closed for a grant made elsewhere)
     total: Money
     unallocated: Money
+    spent: Money
 
 
 class OnboardedTenant(Contract):

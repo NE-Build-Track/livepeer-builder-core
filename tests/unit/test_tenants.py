@@ -209,7 +209,7 @@ async def test_the_tenants_id_is_the_grants_id_and_no_route_takes_a_separate_gra
     grant = (await house.client.get(house.one.path("/grant"), headers=house.one.admin)).json()
     assert grant == {
         "tenant_id": house.one.id, "name": "one", "status": "active",
-        "total": usd("100"), "unallocated": usd("95"),
+        "total": usd("100"), "unallocated": usd("95"), "spent": usd("0"),
     }  # fmt: skip
     # no request of any route has a grant id: not in a path, a query string or a body
     schema = create_app(house.engine, manage_lifecycle=False).openapi()

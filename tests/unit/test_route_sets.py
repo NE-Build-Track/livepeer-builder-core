@@ -77,11 +77,13 @@ TENANT_KEYS = {  # a tenant's access keys: only when engine API keys are on
     ("POST", TENANT + "/keys/{key_id}/revoke"),
 }
 GRANT_READ = {("GET", TENANT + "/grant")}  # only when the tenant desk is on
+# only with a usage source that reads one tenant's records (#166)
+USAGE_READ = {("GET", TENANT + "/usage")}
 # What only a clearinghouse admin does: a private listener's routes (#167).
 ADMIN_ROUTES = {("POST", TENANT + "/grant/top-up")}
 TENANT_DESK = {("POST", TENANTS), ("GET", TENANTS), ("POST", TENANT + "/status")}  # only when it is on
 CLEARINGHOUSE = TENANT_ROUTES | ADMIN_ROUTES
-OPTIONAL = TENANT_KEYS | GRANT_READ | TENANT_DESK
+OPTIONAL = TENANT_KEYS | GRANT_READ | TENANT_DESK | USAGE_READ
 # Gone since #165, with no alias: the tenant is in the path, and a tenant's id is its grant's id.
 REMOVED = [
     ("GET", "/v1/clearinghouse/actors"),
@@ -175,8 +177,10 @@ async def test_each_optional_group_is_absent_from_its_own_set_when_it_is_off(
 ) -> None:
     """Engine API keys off: neither set has a key route. The tenant desk off: the clearinghouse set has
     no onboarding, tenant list, grant read or tenant status. The grant's top-up uses the engine's own
-    provider credential and stays."""
-    off = EngineSupply(api_keys=None, authenticators=(HeaderAuthenticator(),), grants_manager=None)
+    provider credential and stays. No usage source: no tenant's usage is served (#166)."""
+    off = EngineSupply(
+        api_keys=None, authenticators=(HeaderAuthenticator(),), grants_manager=None, usage_source=None
+    )
     engine = await make_engine(supply=off)
     work = shared_app(engine, manage_lifecycle=False)
     mount_work_routes(work, engine)
@@ -194,7 +198,7 @@ async def test_the_two_groups_of_the_clearinghouse_set_mount_by_themselves(
     engine = await make_engine()
     tenants = shared_app(engine, manage_lifecycle=False)
     mount_tenant_routes(tenants, engine)
-    assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ
+    assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ
     private = shared_app(engine, manage_lifecycle=False)
     mount_clearinghouse_admin_routes(private, engine)
     assert served(private) == HEALTH | ADMIN_ROUTES | TENANT_DESK

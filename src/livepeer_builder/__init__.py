@@ -58,11 +58,14 @@ from livepeer_builder.contracts import (
     SecretRef,
     Session,
     SessionRequest,
+    SetAsideUsage,
     SignedSession,
     SyncReport,
     TenantGrant,
     TenantState,
     TopUpRequest,
+    UsagePage,
+    UsageRow,
 )
 from livepeer_builder.errors import (
     AccessDenied,
@@ -159,6 +162,7 @@ __all__ = [
     "SecretRef",
     "Session",
     "SessionRequest",
+    "SetAsideUsage",
     "SignedSession",
     "StreamingApi",
     "SyncReport",
@@ -167,6 +171,8 @@ __all__ = [
     "TenantsApi",
     "TopUpRequest",
     "UnsupportedForBackend",
+    "UsagePage",
+    "UsageRow",
     "WorkApi",
     "generate_secret_key",
 ]

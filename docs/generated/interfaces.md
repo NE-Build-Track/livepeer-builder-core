@@ -83,6 +83,10 @@ classDiagram
         <<interface>>
         +async page(cursor, limit) UsagePage
     }
+    class TenantUsageSource {
+        <<interface>>
+        +async tenant_page(tenant_id, cursor, limit) UsagePage
+    }
     class AllowanceReader {
         <<interface>>
         +async allocation_for(tenant_id, actor_id) str?
@@ -184,6 +188,7 @@ classDiagram
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
+    TenantUsageSource <|.. BatteriesUsageSource
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
@@ -217,6 +222,7 @@ classDiagram
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
+| `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |

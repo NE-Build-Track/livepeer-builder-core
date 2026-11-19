@@ -8,7 +8,7 @@ on each. They are re-exported from ``livepeer_builder.protocols``.
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from livepeer_builder.contracts import ActorAllocation
+from livepeer_builder.contracts import ActorAllocation, UsagePage
 
 
 @runtime_checkable
@@ -45,3 +45,16 @@ class PaymentKeyRepo(Protocol):
         """The actor whose payment key has this hash, while it still holds the allocation the key was
         issued for and that allocation is not revoked; otherwise ``None``."""
         ...
+
+
+@runtime_checkable
+class TenantUsageSource(Protocol):
+    """Optional for a usage source: one tenant's payment records, and nothing of another's (#166). A
+    tenant's id is its grant's id (D83), so the source filters by that grant. ``BatteriesUsageSource``
+    has it, with Batteries' own ``grant_id`` filter.
+
+    A page is the ``UsageSource`` port's: its rows, the rows the source set aside, and a cursor bound to
+    the tenant, which another tenant's read refuses with ``CursorMismatch``. Without it the engine serves
+    no tenant's usage: the usage route is absent."""
+
+    async def tenant_page(self, tenant_id: str, cursor: str | None, limit: int = 1000) -> UsagePage: ...

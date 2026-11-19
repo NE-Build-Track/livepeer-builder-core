@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     TenantGrant,
     TenantState,
     TopUpRequest,
+    UsagePage,
 )
 from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.http.auth import actor_dependency
@@ -46,7 +47,7 @@ from livepeer_builder.http.bodies import (
     TenantKeyBody,
     TenantStatusBody,
 )
-from livepeer_builder.http.params import GrantTenantId, PathId
+from livepeer_builder.http.params import GrantTenantId, PathId, QueryId
 from livepeer_builder.http.replies import replay, replayed
 
 TENANTS = "/v1/clearinghouse/tenants"
@@ -112,6 +113,21 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         async def get_grant(actor: Actor, tenant_id: GrantTenantId) -> TenantGrant:
             """The grant's total, its unallocated balance and its status."""
             return await desk.grant(actor, tenant_id)
+
+    if engine.payments.usage is not None:  # needs a source that reads one tenant's usage
+        usage = engine.payments.usage
+
+        @app.get(TENANT + "/usage")
+        async def tenant_usage(
+            actor: Actor,
+            tenant_id: GrantTenantId,
+            cursor: QueryId = None,
+            limit: Annotated[int, Query(ge=1, le=1000)] = 1000,
+        ) -> UsagePage:
+            """One page of the tenant's payment records, oldest first: the payment provider's usage rows
+            for the tenant's grant, and none of another tenant's. ``cursor`` is the last page's
+            ``next_cursor``, which is empty on the last page."""
+            return await usage.page(actor, tenant_id, cursor, limit)
 
     @app.get(TENANT + "/actors")
     async def list_actors(

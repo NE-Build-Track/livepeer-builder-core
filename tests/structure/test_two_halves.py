@@ -70,6 +70,7 @@ CLEARINGHOUSE = {
     "services/issued_payment_keys.py",
     "services/payment_keys.py",
     "services/payments.py",
+    "services/tenant_usage.py",
     "services/tenants.py",
     "http/clearinghouse.py",
 }
@@ -100,7 +101,8 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
 # both: a work module asks for the narrow repo it needs (JobRepo, CostRepo).
 # PaymentKeyRepo is where a clearinghouse keeps the payment keys it issues (#166): the work half is
-# handed one through CredentialResolver and never looks one up.
+# handed one through CredentialResolver and never looks one up. TenantUsageSource is how a clearinghouse
+# reads one tenant's usage at the provider: the work half reads usage through UsageSource.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
@@ -108,6 +110,7 @@ BEHIND_THE_PORTS = {
     "ActorRepo",
     "ActorCommandRepo",
     "PaymentKeyRepo",
+    "TenantUsageSource",
     "EngineStore",
 }
 NOT_PAYMENTS = {

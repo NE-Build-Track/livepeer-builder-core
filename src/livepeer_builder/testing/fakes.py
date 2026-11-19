@@ -426,11 +426,16 @@ class FakeAllocationManager:
 
     async def read_grant(self, grant_id: str) -> TenantGrant:  # NOSONAR - async by protocol
         self._called("read_grant")
-        return _tenant_grant(self._grant(grant_id))
+        return _tenant_grant(self._grant(grant_id), self._spent(grant_id))
 
     async def grant_balances(self) -> list[TenantGrant]:  # NOSONAR - async by protocol
         self._called("grant_balances")
-        return [_tenant_grant(self._held[grant.id]) for grant in self.grants]
+        return [_tenant_grant(self._held[grant.id], self._spent(grant.id)) for grant in self.grants]
+
+    def _spent(self, grant_id: str) -> Decimal:
+        """What the grant's allocations have spent, the revoked ones included, as Batteries reports it."""
+        spent = (held.spent for held in self.allocations.values() if held.grant_id == grant_id)
+        return sum(spent, Decimal(0))
 
     async def set_grant_status(self, grant_id: str, status: str) -> None:  # NOSONAR - async by protocol
         self._called("set_grant_status")
@@ -462,7 +467,7 @@ class FakeAllocationManager:
         return NewAllocationKey(allocation_id=allocation_id, api_key_id=key_id, secret=SecretStr(secret))
 
 
-def _tenant_grant(grant: _Grant) -> TenantGrant:
+def _tenant_grant(grant: _Grant, spent: Decimal) -> TenantGrant:
     currency: Currency = "USD" if grant.record.currency == "USD" else "ETH"
     return TenantGrant(
         tenant_id=grant.record.id,
@@ -470,4 +475,5 @@ def _tenant_grant(grant: _Grant) -> TenantGrant:
         status=grant.record.status,
         total=Money(amount=grant.total, currency=currency),
         unallocated=Money(amount=grant.unallocated, currency=currency),
+        spent=Money(amount=spent, currency=currency),
     )

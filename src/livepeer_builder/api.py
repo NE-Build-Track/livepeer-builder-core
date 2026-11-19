@@ -16,8 +16,9 @@ The engine has two halves (D84), and the facade follows them:
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
 (the transport can stream), ``keys`` (engine API keys are on), ``payments.tenants`` (the tenant desk
-is on). Check for ``None`` before use; never probe with ``hasattr``. Members are read-only properties so
-a wider protocol can narrow a member it combines.
+is on), ``payments.usage`` (the usage source reads one tenant's records). Check for ``None`` before use;
+never probe with ``hasattr``. Members are read-only properties so a wider protocol can narrow a member it
+combines.
 """
 
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
@@ -53,6 +54,7 @@ from livepeer_builder.contracts import (
     TenantState,
     TenantStatus,
     TopUpRequest,
+    UsagePage,
 )
 from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
@@ -231,6 +233,15 @@ class TenantsApi(Protocol):
     ) -> TenantState: ...
 
 
+class TenantUsageApi(Protocol):
+    """A tenant's payment records: present only with a usage source that reads one tenant's
+    (``TenantUsageSource``, as the Batteries source does)."""
+
+    async def page(
+        self, reader: ActorContext, tenant_id: str, cursor: str | None = None, limit: int = 1000
+    ) -> UsagePage: ...
+
+
 class PaymentsAdminApi(Protocol):
     async def allot(self, admin: ActorContext, request: AllotRequest) -> KeyedAllocation: ...
     async def top_up(
@@ -256,6 +267,8 @@ class PaymentsAdminApi(Protocol):
     async def get_actor(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
     @property
     def tenants(self) -> TenantsApi | None: ...
+    @property
+    def usage(self) -> TenantUsageApi | None: ...
 
 
 class ClearinghouseApi(Protocol):
@@ -303,6 +316,7 @@ __all__ = [
     "PaymentsAdminApi",
     "PaymentsApi",
     "StreamingApi",
+    "TenantUsageApi",
     "TenantsApi",
     "WorkApi",
 ]

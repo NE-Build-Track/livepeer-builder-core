@@ -38,6 +38,7 @@ from livepeer_builder.protocols import (
     SecretStore,
     SelectionPolicy,
     SessionManager,
+    TenantUsageSource,
     UsageSource,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
@@ -51,6 +52,7 @@ from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
+from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
 
 _LOG = logging.getLogger(__name__)
@@ -288,6 +290,9 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         tenants = TenantDesk(
             parts.grants_manager, parts.policy, settings.default_currency, ledger, settings.engine_id, keys
         )
+    usage: TenantUsage | None = None
+    if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
+        usage = TenantUsage(parts.usage_source, parts.policy)
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -297,6 +302,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         ledger=ledger,
         manager=parts.allocation_manager,
         tenants=tenants,
+        usage=usage,
         currency=settings.default_currency,
     )
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)

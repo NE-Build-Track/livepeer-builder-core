@@ -67,6 +67,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient,),
     "UsageSource": (BatteriesUsageSource,),
+    "TenantUsageSource": (BatteriesUsageSource,),
     "AllowanceReader": (PaymentsService,),
     "EngineStore": (SqlStore,),
     "StoreMaintenance": (SqlMaintenance,),

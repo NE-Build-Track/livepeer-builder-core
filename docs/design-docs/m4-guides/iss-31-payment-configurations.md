@@ -56,8 +56,9 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | The runner list | Since P5 (#166) `GET /v1/clearinghouse/discovery` serves the livepeer/node document the clearinghouse's own discovery source last read, byte for byte, to a tenant's admin or auditor. Today's reader reads it once its HTTP client sends a credential, which is P7's to add. Before P5 no engine served a list | `services/runner_list.py`, `adapters/sdk.py`; [discovery.md](../../contracts/discovery.md#the-clearinghouses-runner-list) |
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
 | Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one. Since P3 (#164) a structure test fails when the work half reaches payments another way | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`), `tests/structure/test_two_halves.py` |
-| Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. Since P4 the clearinghouse set is two groups that also mount by themselves: a tenant's own routes, and what only a clearinghouse admin does, for the private listener of P6. One app mounts both, always: no role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
-| Listener | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | `http/server.py`, `http/app.py` |
+| Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. Since P4 the clearinghouse set is two groups that also mount by themselves: a tenant's own routes, and what only a clearinghouse admin does, for the private listener of P6. Since P6 (#167) one table says which listener serves which group (`http/listeners.py`); with one listener the app mounts every group. No role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
+| Listeners | Since P6 (#167) one by default, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route for every kind of credential: what self-hosted payments runs. `LPB_HTTP_PRIVATE_PORT` turns on a private listener (`LPB_HTTP_PRIVATE_HOST`, loopback unless set): two apps over one engine in one process. The public listener serves no route of the private group (404) and refuses a `clearinghouse_admin` credential (403) on every route; the private one serves every route, to a `clearinghouse_admin` only. The rule is applied where every route authenticates, so a route added later is covered. The `clearinghouse` role (P8) will require the private listener. Before P6 there was one listener | `http/listeners.py`, `http/auth.py`, `http/server.py`, `config.py`; [access.md](../../contracts/access.md#listeners) |
+| The wallet | Since P6 (#167) `GET /v1/clearinghouse/wallet`, in the private group, for a `clearinghouse_admin`: the deposit and reserve as Batteries' on-chain listener has confirmed them (ETH, with the block it has read to), the total of unspent grants for each currency (each grant's total less what its allocations spent), and whether the signer answers its identity call. Nothing is converted and no margin is computed. The deposit and reserve need Batteries' on-chain listener, which is off by default; "ready" is the signer's identity call, not its `/readyz`. Before P6 nothing reported the wallet | `services/wallet.py`, `adapters/batteries_escrow.py`, `adapters/sdk.py`; [payments.md](../../contracts/payments.md#the-wallet-report) |
 | Consumer apps | ChatLPT and the inference gateway embed the engine in `per_application`. The inference gateway refuses any other mode | their `deploy/.env.example`; inference-gateway `runtime.py:121` |
 
 ### Batteries at the pin (why the engine draws the line)
@@ -250,6 +251,12 @@ tenant check on writes to `access.md`, the tenant boundary to `SECURITY.md`, the
 old and the new routes and fields are in
 [the contracts index](../../contracts/index.md#upgrading-to-tenants-at-the-clearinghouse).
 
+P6 (#167) added the listeners to `access.md`, the wallet report to `payments.md`, the two settings and
+how two listeners start and stop to `RELIABILITY.md`, the private listener to `SECURITY.md`, the escrow
+report to `batteries-api.md`, the signer's identity call as a readiness probe to `node-signer.md`, and
+`escrow.read` to the grants credential in the dev stack. What a deployment does is in
+[the contracts index](../../contracts/index.md#upgrading-to-a-public-and-a-private-listener).
+
 ## Code areas
 
 | File | Change |
@@ -288,9 +295,9 @@ no Batteries call recorded.
 [ ] the payments route signs for its own actor only; an empty allocation is 402
 [ ] a fixed job and a live job are paid through the payments route
 [x] the usage route returns one tenant's records (P5, #166)
-[ ] onboarding, top-up, tenant status and the wallet are 404 on the public listener
-[ ] a clearinghouse_admin credential is 403 on the public listener
-[ ] the wallet route reports the deposit, the reserve, unspent grants and signer readiness
+[x] onboarding, top-up, tenant status and the wallet are 404 on the public listener (P6, #167)
+[x] a clearinghouse_admin credential is 403 on the public listener (P6, #167)
+[x] the wallet route reports the deposit, the reserve, unspent grants and signer readiness (P6, #167)
 [ ] the shared port suite passes against the local and the remote adapters
 [ ] role clearinghouse mounts no job routes; role work mounts no clearinghouse routes
 [ ] role work runs a paid job through role clearinghouse with two tenants
@@ -407,6 +414,15 @@ One builder-core issue each, all sub-issues of ISS-31.
    on the tenant list, and the payment key that allotment returns, are P5's. The routes only a
    clearinghouse admin calls are one group, which P6 puts on the private listener.
 5. **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
-6. **P6 (#167).** A public and a private listener.
+6. **P6 (#167).** A public and a private listener. Built: `LPB_HTTP_PRIVATE_PORT` turns the private
+   listener on, and without it one listener serves everything, as before, so self-hosted payments is
+   unchanged. With it, `lpb serve` runs two servers over one engine in one process: the engine starts
+   once and stops once, an address that cannot be bound stops both, and neither serves without the
+   other. One table (`http/listeners.py`) says which group of routes each listener serves and which
+   credentials it takes: the private group is 404 on the public listener, a `clearinghouse_admin`
+   credential is 403 there on every route, and the private listener takes a `clearinghouse_admin`
+   only. The wallet report (`GET /v1/clearinghouse/wallet`) is in the private group, through two new
+   optional protocols (`EscrowSource`, `SignerProbe`). The payments route of P5, when it is built, is
+   one more group in that table. Requiring the private listener for the `clearinghouse` role is P8's.
 7. **P7 (#168).** Remote adapters for the five payment ports.
 8. **P8 (#169).** The engine's role setting.

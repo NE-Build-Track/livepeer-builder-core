@@ -46,7 +46,7 @@ def listening(port: int) -> bool:
 
 @pytest.fixture(autouse=True)
 def the_root_logger_as_it_was() -> Iterator[None]:
-    """``serve`` configures logging, as an application does. The test run's own handlers come back."""
+    """``serve`` configures logging, as an entrypoint does. The test run's own handlers come back."""
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
     yield

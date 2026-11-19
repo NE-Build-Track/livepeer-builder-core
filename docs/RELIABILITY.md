@@ -15,7 +15,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
 | `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused), with no userinfo, query or fragment. Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record the reader cannot use is skipped (`discovery.inventory_skipped`); an answer with records and no readable runner is a failed poll (#114, C28) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
-| `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read`, `grants.create`, `grants.fund`, `grants.status` and `allocations.read`. Optional: without it the tenant desk is off (`payments.tenants` is `None`; onboarding, the tenant list, a grant's read and a tenant's status are absent) |
+| `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read`, `grants.create`, `grants.fund`, `grants.status`, `allocations.read` and, for the wallet report (#167), `escrow.read`. Optional: without it the tenant desk is off (`payments.tenants` is `None`; onboarding, the tenant list, a grant's read, a tenant's status and the wallet report are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
 | `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it the engine refuses to start ([payments.md](contracts/payments.md#allotment)) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
@@ -44,7 +44,9 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_JWT_NAME_CLAIM` | `preferred_username` | The person's display name, recorded on first sign-in for the operator's actor list (D48); empty turns it off |
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
-| `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging |
+| `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging. With a private listener, this address is the public listener |
+| `LPB_HTTP_PRIVATE_PORT` | unset | Turns the private listener on (D84, #167). Unset, the engine serves one listener with every route, as before. Set (1 to 65535), `lpb serve` serves two: the public one without the routes only a clearinghouse admin calls, where a clearinghouse admin credential is 403, and the private one with every route, for a clearinghouse admin only ([access.md](contracts/access.md#listeners)). Refused at startup when it is the public listener's port on the same host |
+| `LPB_HTTP_PRIVATE_HOST` | `127.0.0.1` | Where the private listener binds. Read only with `LPB_HTTP_PRIVATE_PORT`. Loopback unless set: publish the public listener, never this one |
 | `LPB_HTTP_MAX_REQUEST_BYTES` | `16777216` (16 MiB) | A `/v1/` request body over it is refused with 413 `request_too_large` before it is read (D59); at least 1024. It fits an 8 MiB `raw_body` as base64 |
 
 ## Operations
@@ -64,6 +66,15 @@ no setting.
 | `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads |
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |
+
+**Two listeners in one process (#167).** With `LPB_HTTP_PRIVATE_PORT` set, `lpb serve` binds both
+addresses before the engine starts. An address that is taken is logged, the one bound before it is
+released, and the process exits with the status it exits with for one listener; the engine has not
+started. The engine starts once, before either listener accepts a request, and stops once, after both
+have ended. Neither serves without the other: SIGINT or SIGTERM ends both (a second Ctrl-C does not wait
+for open connections), and a listener that ends for a reason of its own ends the other. `lpb serve` then
+exits 0. Both listeners answer `/livez` and `/readyz`, from the one engine, so a health check may use
+either. The log line `http.listeners_bound` names both addresses.
 
 Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors,
 the last cost sync, its error and the count of usage rows it has set aside (`cost_sync_set_aside`),

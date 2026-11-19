@@ -118,6 +118,13 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   [evidence](../../docs/references/evidence/2026-10-30-m3-live-suite.md)).
 - **The signer container runs as root** (`user: "0:0"`) so bind-mounted secrets stay readable.
   Discovery and clearinghouse run as their images' own users. This is dev only.
+- **Stacks created before 19 November 2026** have a `grant-desk` credential without `escrow.read`,
+  which the wallet report (`GET /v1/clearinghouse/wallet`, #167) reads Batteries' escrow report with.
+  Add it to that credential in `secrets/clearinghouse.toml` and recreate `clearinghouse`; until then
+  the route answers 502. This stack runs Batteries without its on-chain listener, so the report's
+  `escrow` is empty here: the deposit and reserve are reported once Batteries runs with
+  `--enable-onchain-listener`, an RPC address of its own and the signer's address
+  ([payments.md](../../docs/contracts/payments.md#the-wallet-report)).
 - **The engine image runs as `lpb` (uid 10001)**, and `/.dockerignore` keeps `secrets/`, `.env`,
   `.venv` and caches out of the build context. An `engine-data` volume created by an older, root-run
   image needs its ownership fixed once:

@@ -206,6 +206,18 @@ The same engine serves both integration modes: call it in-process with your own 
   To hold the engine yourself, build it with `BuilderEngine.create` and pass it to
   `livepeer_builder.http.create_app`. Logging is left to the host.
 
+**Two listeners (#167).** With `LPB_HTTP_PRIVATE_PORT` set, `serve` runs a public and a private
+listener over the one engine, each with an app of its own
+([access.md](../contracts/access.md#listeners)). `extend` then runs once for each app, with the same
+engine, and `app.state.listener.name` is `"public"` or `"private"` (`"only"` with one listener), so a
+hook can add a route to one of them. A route that authenticates with `actor_dependency` takes the
+credentials its listener takes: a clearinghouse admin is 403 on the public one, and anyone else on the
+private one. A route that authenticates another way does not get that rule. `build_app` builds one app,
+so it raises `ValueError` when the setting is on: run `serve`, or hold the engine yourself and build
+each app with `create_app(engine, listener="public")` and `create_app(engine, listener="private")`.
+Start that engine once: pass `manage_lifecycle=False` to both and start it yourself, or leave it on for
+one app and start that app first.
+
 `extend(app, engine)` receives the app and the engine, so a router gets the engine as an argument
 rather than from `app.state`. `actor_dependency(engine)` is the dependency the built-in routes use:
 an extra endpoint that depends on it gets the same authenticators, and the same 401 for a missing

@@ -196,3 +196,42 @@ and shows it.
 **What keeps its name.** `PaymentKey`, what the work half's `CredentialResolver` returns: the key the
 runner call presents, which with self-hosted payments is the Batteries key. `pipeline` on a usage row,
 Batteries' word for the capability. The route and the command `rotate-payment-key`.
+
+## Upgrading to a public and a private listener
+
+On 19 November 2026 the engine gained a private listener and the wallet report (D84, #167). A deployment
+that sets nothing new serves one listener, as before: no route, body, status code or stored record of an
+existing route changed, and no credential is refused that was accepted. There is no migration.
+
+| What | Before | Now |
+| --- | --- | --- |
+| Listeners | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | The same, unless `LPB_HTTP_PRIVATE_PORT` is set. Then two: that address is the public listener, and `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1`) with `LPB_HTTP_PRIVATE_PORT` is the private one ([access.md](access.md#listeners)) |
+| Onboarding, the tenant list, a grant's top-up and a tenant's status, with two listeners | | 404 on the public listener; served on the private one |
+| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener; accepted on the private one |
+| A tenant admin, auditor, actor or service credential, with two listeners | | Accepted on the public listener as before; 403 on every route of the private one |
+| The wallet | not served | `GET /v1/clearinghouse/wallet` (`WalletReport`), a clearinghouse admin's; `engine.payments.wallet` ([payments.md](payments.md#the-wallet-report)) |
+| `create_app` | `create_app(engine, *, manage_lifecycle, max_request_bytes)` | and `listener`: `"only"` (the default), `"public"` or `"private"` |
+| `serve`, `lpb serve` | One server | Two servers over one engine when `LPB_HTTP_PRIVATE_PORT` is set. `extend` runs once for each app |
+| `build_app` | One app | The same. With `LPB_HTTP_PRIVATE_PORT` set it raises `ValueError`: it builds one listener's app |
+| The published schema | | The routes of the private group carry the tag `private listener` |
+| The facade | `PaymentsAdminApi` | `PaymentsAdminApi.wallet` (`WalletApi \| None`) |
+| Optional protocols | | `EscrowSource` (a grants manager), `SignerProbe` (a runner transport). A supplied part without one runs without the wallet report |
+| `FakeAllocationManager`, `ScriptedTransport` (`livepeer_builder.testing`) | | `escrow` and `escrow_accounts`; `signer` and `signer_readiness` |
+| Root exports | | `WalletReport`, `EscrowAccount`, `UnspentGrants`, `SignerReadiness` |
+| The grants credential (`LPB_BATTERIES_GRANTS_TOKEN`) | `grants.read`, `grants.create`, `grants.fund`, `grants.status`, `allocations.read` | and `escrow.read`, for the wallet report |
+
+**Before you start the new release:**
+
+- **Nothing, to keep one listener.** Leave `LPB_HTTP_PRIVATE_PORT` unset.
+- **For the wallet report, give the grants credential `escrow.read`.** Without it the route answers 502
+  and names the permission; every other route is unaffected. For the deposit and reserve, run Batteries
+  with its on-chain listener; without it the report's `escrow` is empty.
+- **To serve two listeners,** set `LPB_HTTP_PRIVATE_PORT`, publish the public listener only, and move
+  every use of a clearinghouse admin key to the private address: it is refused on the public one. Health
+  checks may use either.
+- **A caller's own implementation of `PaymentsAdminApi`** states `wallet` (`None` serves no report).
+- **An entrypoint that calls `build_app`** keeps `LPB_HTTP_PRIVATE_PORT` unset, or builds each app with
+  `create_app(engine, listener=...)` over an engine it starts itself.
+
+**What a later release changes.** The `clearinghouse` role of ISS-31 (#169) will require the private
+listener. Until then two listeners are a deployment's choice.

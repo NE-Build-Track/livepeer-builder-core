@@ -20,6 +20,7 @@ from livepeer_builder.adapters.clearinghouse import (
     ClearinghouseCredentials,
     ClearinghouseUsage,
 )
+from livepeer_builder.adapters.clearinghouse_signing import ClearinghouseSigningNotBuilt
 from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
 from livepeer_builder.adapters.runner_call import SdkRunnerStream
@@ -68,8 +69,8 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "DiscoverySource": (HttpDiscoverySource,),
     "DiscoveryDocumentSource": (HttpDiscoverySource,),
     "SelectionPolicy": (MostCapacityFirst,),
-    "RunnerTransport": (SdkRunnerTransport,),
-    "StreamingRunnerTransport": (SdkRunnerTransport,),
+    "RunnerTransport": (SdkRunnerTransport, ClearinghouseSigningNotBuilt),
+    "StreamingRunnerTransport": (SdkRunnerTransport, ClearinghouseSigningNotBuilt),
     "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService, ClearinghouseCredentials),
     "AllocationManager": (BatteriesClient, ClearinghouseAllocations),

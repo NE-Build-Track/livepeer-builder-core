@@ -7,8 +7,7 @@ clearinghouse: every payment port then reaches it, and nothing of Batteries or a
 settings refuse a mix of the two (``config.py``).
 
 **Signing** is inside the runner transport. ``ThroughClearinghouse.transport`` is the one place that
-decides how an engine that uses a clearinghouse signs. It builds the SDK's transport with no signer
-today: such an engine signs nothing.
+decides how an engine that uses a clearinghouse signs. It builds ``ClearinghouseSigningNotBuilt`` today.
 
 The adapters are imported inside the methods, not at module level, so importing the package loads no
 HTTP client or SDK (tests/structure/test_import_weight.py).
@@ -131,9 +130,9 @@ class ThroughClearinghouse:
 
     def transport(self) -> RunnerTransport:
         """The signing seam: how an engine that uses a clearinghouse signs is decided here alone."""
-        from livepeer_builder.adapters.sdk import SdkRunnerTransport
+        from livepeer_builder.adapters.clearinghouse_signing import ClearinghouseSigningNotBuilt
 
-        return SdkRunnerTransport(None, self._settings.max_payment_challenge_retries)  # None: no signer
+        return ClearinghouseSigningNotBuilt(self._settings.max_payment_challenge_retries)
 
     def _ports(self) -> "ClearinghousePorts":
         from livepeer_builder.adapters.clearinghouse import ClearinghousePorts

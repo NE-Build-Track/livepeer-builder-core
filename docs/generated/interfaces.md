@@ -177,6 +177,7 @@ classDiagram
     class ClearinghouseAllocations
     class ClearinghouseAllowances
     class ClearinghouseCredentials
+    class ClearinghouseSigningNotBuilt
     class ClearinghouseUsage
     class DefaultPolicy
     class EncryptedDbSecretStore
@@ -204,7 +205,9 @@ classDiagram
     DiscoveryDocumentSource <|.. HttpDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
+    RunnerTransport <|.. ClearinghouseSigningNotBuilt
     StreamingRunnerTransport <|.. SdkRunnerTransport
+    StreamingRunnerTransport <|.. ClearinghouseSigningNotBuilt
     RunnerStream <|.. SdkRunnerStream
     CredentialResolver <|.. PaymentsService
     CredentialResolver <|.. ClearinghouseCredentials
@@ -246,7 +249,9 @@ classDiagram
 | `DiscoveryDocumentSource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `RunnerTransport` | `ClearinghouseSigningNotBuilt` | `livepeer_builder.adapters.clearinghouse_signing` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `StreamingRunnerTransport` | `ClearinghouseSigningNotBuilt` | `livepeer_builder.adapters.clearinghouse_signing` |
 | `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `CredentialResolver` | `ClearinghouseCredentials` | `livepeer_builder.adapters.clearinghouse` |

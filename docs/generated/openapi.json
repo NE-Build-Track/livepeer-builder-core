@@ -806,6 +806,7 @@
         "type": "object"
       },
       "IssueKeyBody": {
+        "additionalProperties": false,
         "properties": {
           "actor_id": {
             "maxLength": 200,
@@ -852,7 +853,6 @@
             "title": "Permissions"
           },
           "tenant_id": {
-            "default": "default",
             "maxLength": 200,
             "minLength": 1,
             "title": "Tenant Id",
@@ -861,6 +861,7 @@
         },
         "required": [
           "actor_id",
+          "tenant_id",
           "operation_ref"
         ],
         "title": "IssueKeyBody",
@@ -1833,6 +1834,7 @@
         "type": "object"
       },
       "RotateBody": {
+        "additionalProperties": false,
         "properties": {
           "operation_ref": {
             "maxLength": 200,
@@ -1848,6 +1850,7 @@
         "type": "object"
       },
       "RotateKeyBody": {
+        "additionalProperties": false,
         "properties": {
           "label": {
             "anyOf": [
@@ -2225,6 +2228,7 @@
         "type": "object"
       },
       "StatusBody": {
+        "additionalProperties": false,
         "properties": {
           "status": {
             "enum": [
@@ -2373,6 +2377,7 @@
         "type": "object"
       },
       "TenantStatusBody": {
+        "additionalProperties": false,
         "properties": {
           "operation_ref": {
             "maxLength": 200,
@@ -2418,6 +2423,7 @@
         "type": "object"
       },
       "UsageBody": {
+        "additionalProperties": false,
         "properties": {
           "quantities": {
             "additionalProperties": {
@@ -3575,9 +3581,8 @@
           {
             "in": "query",
             "name": "tenant_id",
-            "required": false,
+            "required": true,
             "schema": {
-              "default": "default",
               "maxLength": 200,
               "title": "Tenant Id",
               "type": "string"

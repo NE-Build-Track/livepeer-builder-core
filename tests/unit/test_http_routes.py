@@ -79,7 +79,11 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert rotated.status_code == 200 and "lpg_" not in rotated.text
     assert (await client.get("/v1/allowance", headers=alice)).json()["granted"]["amount"] == "5"
     assert (await client.post("/v1/costs/sync", headers=admin)).json()["pages"] == 1
-    reconciliation = await client.get("/v1/costs/reconciliation", params={"actor_id": "alice"}, headers=admin)
+    reconciliation = await client.get(
+        "/v1/costs/reconciliation",
+        params={"tenant_id": "default", "actor_id": "alice"},
+        headers=admin,
+    )
     assert reconciliation.status_code == 200
     assert (await client.post(ALLOCATION + "/revoke", headers=admin)).json()["status"] == "revoked"
     bad = await client.post(
@@ -268,7 +272,7 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
 
     bad = await client.post(
         "/v1/keys",
-        json={"actor_id": "x", "permissions": ["everything"], "operation_ref": "k1"},
+        json={"actor_id": "x", "tenant_id": "default", "permissions": ["everything"], "operation_ref": "k1"},
         headers=admin,
     )
     assert bad.status_code == 400
@@ -610,7 +614,7 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
         (TENANTS + "/default/keys", {"actor_id": "dashboard"}),
         (TENANTS + f"/default/keys/{key_id}/rotate", {"label": "ci"}),
         (ALLOCATION + "/rotate-payment-key", {}),
-        ("/v1/keys", {"actor_id": "bob"}),
+        ("/v1/keys", {"actor_id": "bob", "tenant_id": "default"}),
         (f"/v1/keys/{key_id}/rotate", {"label": "ci"}),
     ]
     for path, body in commands:
@@ -622,7 +626,7 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
 
 async def test_a_replayed_key_issue_is_201_without_the_token(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
-    body = {"actor_id": "bob", "operation_ref": "k1"}
+    body = {"actor_id": "bob", "tenant_id": "default", "operation_ref": "k1"}
     first = await client.post("/v1/keys", json=body, headers=admin)
     again = await client.post("/v1/keys", json=body, headers=admin)
     assert (first.status_code, again.status_code) == (201, 201)
@@ -671,3 +675,24 @@ async def test_allotment_an_actor_already_allotted_is_409_already_allotted(api) 
     assert refused.status_code == 409 and refused.json()["code"] == "already_allotted"
     assert refused.json()["actor"] == first.json()
     assert "Idempotent-Replayed" not in refused.headers
+
+
+async def test_a_key_request_names_its_tenant_and_nothing_else(api) -> None:  # type: ignore[no-untyped-def]
+    """#163 review: a client still sending ``application_id`` got a key for the tenant ``default``, with a
+    201. Now ``tenant_id`` is required and a field the body does not know is refused: a 422, no key."""
+    client, _engine, admin, _alice = api
+    named_the_old_way = {"actor_id": "bob", "application_id": "acme", "operation_ref": "k-old"}
+    unnamed = {"actor_id": "bob", "operation_ref": "k-none"}
+    with_more = {"actor_id": "bob", "tenant_id": "acme", "tenant": "acme", "operation_ref": "k-more"}
+    for body, refused in ((named_the_old_way, "tenant_id"), (unnamed, "tenant_id"), (with_more, "tenant")):
+        answer = await client.post("/v1/keys", json=body, headers=admin)
+        assert answer.status_code == 422, (body, answer.text)
+        assert refused in {detail["loc"][-1] for detail in answer.json()["detail"]}
+    issued = await client.post(
+        "/v1/keys",
+        json={"actor_id": "bob", "tenant_id": "acme", "operation_ref": "k-acme"},
+        headers=admin,
+    )
+    assert issued.status_code == 201 and issued.json()["key"]["tenant_id"] == "acme"
+    keys = await client.get("/v1/keys", params={"tenant_id": "default"}, headers=admin)
+    assert "bob" not in {key["actor_id"] for key in keys.json()}

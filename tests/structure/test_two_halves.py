@@ -67,6 +67,7 @@ WORK = {
 # Tenants, grants, allocations, payment keys, signing and usage.
 CLEARINGHOUSE = {
     "services/actor_writes.py",
+    "services/allocation_read.py",  # an allocation with its amounts, for a tenant's admin (#168)
     "services/grants.py",
     "services/issued_payment_keys.py",
     "services/payment_keys.py",

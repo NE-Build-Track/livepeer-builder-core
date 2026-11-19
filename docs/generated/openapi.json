@@ -146,6 +146,93 @@
         "title": "ActorAllocation",
         "type": "object"
       },
+      "AllocationRead": {
+        "additionalProperties": false,
+        "description": "The answer to reading one actor's allocation (#168): the allocation's record, and its amounts as\nthe payment provider reports them now. ``allowance`` is what the allowance read answers for the\nsame actor, by the same read of the provider: what was allotted (``granted``), what is spent, what\nis available, and the provider's status. An enterprise's engine reads an actor's allowance here.\n\n``allowance`` is ``None`` when the provider could not be read: unknown, never zero. The record is\nthe engine's own and is answered either way.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "allowance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Allowance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AllocationRead",
+        "type": "object"
+      },
       "AllotBody": {
         "additionalProperties": false,
         "properties": {
@@ -3065,6 +3152,7 @@
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": {
       "get": {
+        "description": "The actor's allocation: its record, and as `allowance` what the payment provider reports for\nit now (allotted, spent, available, status). `allowance` is `null` when the provider could not\nbe read.",
         "operationId": "get_actor_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_get",
         "parameters": [
           {
@@ -3093,7 +3181,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ActorAllocation"
+                  "$ref": "#/components/schemas/AllocationRead"
                 }
               }
             },

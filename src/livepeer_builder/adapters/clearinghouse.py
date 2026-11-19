@@ -29,6 +29,7 @@ from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import (
     ActorAllocation,
     ActorContext,
+    AllocationRead,
     Allowance,
     GrantPage,
     GrantRecord,
@@ -206,7 +207,7 @@ class _ActorAllocation(ClearinghouseAllocations):
         """Repeat-safe, as at the provider. An actor that holds another allocation at the clearinghouse
         was revoked and allotted again there, so the one named has ended already: the other is not this
         command's to revoke."""
-        held = await self._wire.read_as(ActorAllocation, self._path())
+        held = await self._wire.read_as(AllocationRead, self._path())
         if held.allocation_id == allocation_id and held.status != "revoked":
             await self._wire.write(self._path("/revoke"))
 
@@ -217,7 +218,7 @@ class _ActorAllocation(ClearinghouseAllocations):
         """The actor's allocation at the clearinghouse, when it is the one the engine names. The routes
         act on whichever allocation the actor holds there, so a command about another one is refused
         before it is sent, as the provider answers an allocation id it does not hold."""
-        held = await self._wire.read_as(ActorAllocation, self._path())
+        held = await self._wire.read_as(AllocationRead, self._path())
         if held.allocation_id != allocation_id:
             raise _not_held(self._actor_id, allocation_id)
         return held

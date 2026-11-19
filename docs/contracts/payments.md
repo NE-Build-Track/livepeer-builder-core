@@ -1046,6 +1046,23 @@ The allowance is a cap that **can overshoot**: Batteries authorizes on a positiv
 not reserve funds, so accounting lag can take a balance slightly negative. Guaranteed hard limits are
 stretch scope.
 
+`GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation` answers the same amounts for
+a tenant's admin or auditor, and for a clearinghouse admin (#168). Its answer is `AllocationRead`: every
+field of the allocation's record, where it was, and `allowance`, which is what `GET /v1/allowance`
+answers for that actor (`allocation_id`, `status`, `granted`, `spent`, `available`). Both routes make
+the one read of the provider through the same `AllowanceReader` member, so an amount means the same on
+both. `granted` is what was allotted, top-ups included, and a revoke lowers it by what it returns.
+
+| The allocation... | `allowance` |
+| --- | --- |
+| is active, paused or exhausted | The provider's amounts and its status |
+| is revoked | The same: the provider still reports what a revoked allocation spent |
+| could not be read at the provider (it is down, or answered an error) | `null`. The record is still answered, as it was before the route read the provider: unknown, never zero. The failure is logged (`payments.allocation_allowance_unread`) |
+
+An actor with no allocation is 404, as before, and the provider is not asked. In embedded mode the read
+is `payments.get_allocation`; `payments.get_actor` still returns the record alone. An enterprise's
+engine reads an actor's allowance from this route ([the remote adapters](#the-remote-adapters)).
+
 ## Payment configurations
 
 A payment configuration is who runs Batteries, the signer and the wallet. There are two (ISS-31, D82).

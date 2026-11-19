@@ -21,6 +21,7 @@ from livepeer_builder.contracts import (
     OPERATION_REPLAYED,
     ActorAllocation,
     ActorContext,
+    AllocationRead,
     AllocationStatus,
     AllotRequest,
     Allowance,
@@ -55,6 +56,7 @@ from livepeer_builder.protocols import (
     SignerForwarder,
 )
 from livepeer_builder.services.actor_writes import ActorWrites
+from livepeer_builder.services.allocation_read import with_allowance
 from livepeer_builder.services.grants import idempotency_key
 from livepeer_builder.services.issued_payment_keys import IssuedPaymentKeys
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
@@ -293,6 +295,10 @@ class PaymentsService:
         if actor is None:
             raise NotFound(f"actor {actor_id!r} has no allocation")
         return actor
+
+    async def get_allocation(self, admin: ActorContext, tenant_id: str, actor_id: str) -> AllocationRead:
+        """The actor's record with the amounts the provider reports for its allocation (#168)."""
+        return await with_allowance(await self.get_actor(admin, tenant_id, actor_id), self.read_allowance)
 
     async def top_up(
         self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest

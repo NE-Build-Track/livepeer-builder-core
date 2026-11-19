@@ -74,6 +74,7 @@ from livepeer_builder.contracts.operations import (
 )
 from livepeer_builder.contracts.payments import (
     ActorAllocation,
+    AllocationRead,
     AllocationStatus,
     AllotRequest,
     Allowance,
@@ -108,6 +109,7 @@ __all__ = [
     "AccessKey",
     "ActorAllocation",
     "ActorContext",
+    "AllocationRead",
     "AllocationStatus",
     "AllotRequest",
     "Allowance",

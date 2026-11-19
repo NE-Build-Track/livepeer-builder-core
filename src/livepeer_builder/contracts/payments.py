@@ -269,6 +269,23 @@ class Allowance(Contract):
     available: Money | None
 
 
+class AllocationRead(ActorAllocation):
+    """The answer to reading one actor's allocation (#168): the allocation's record, and its amounts as
+    the payment provider reports them now. ``allowance`` is what the allowance read answers for the
+    same actor, by the same read of the provider: what was allotted (``granted``), what is spent, what
+    is available, and the provider's status. An enterprise's engine reads an actor's allowance here.
+
+    ``allowance`` is ``None`` when the provider could not be read: unknown, never zero. The record is
+    the engine's own and is answered either way."""
+
+    allowance: Allowance | None = None
+
+    @property
+    def allocation(self) -> ActorAllocation:
+        """The allocation as the store keeps it: without the amounts."""
+        return ActorAllocation.model_validate(self.model_dump(exclude={"allowance"}))
+
+
 class NewAllocationKey(Contract):
     """What the provider returns when it mints a key. The secret goes straight to a SecretStore."""
 

@@ -61,7 +61,8 @@ Every layer uses the frozen models in `contracts/`.
 ```mermaid
 flowchart TB
     subgraph UI["http/ — REST service ([server] extra)"]
-        Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/clearinghouse/*"]
+        Work["work routes: /v1/jobs, /v1/offerings, /v1/costs, /v1/keys"]
+        Clearinghouse["clearinghouse routes: /v1/clearinghouse/*"]
     end
     subgraph Wiring["runtime/ — app wiring"]
         BE["BuilderEngine.create · start · stop · health"]
@@ -123,7 +124,7 @@ flowchart LR
 sequenceDiagram
     autonumber
     actor C as Client
-    participant H as http/app.py
+    participant H as http/ (a route)
     participant Chain as AuthenticatorChain
     participant K as ApiKeyAuthenticator
     participant S as SqlStore (lpb_access_keys)

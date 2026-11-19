@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1, P2 and P3 are built and in review. P4 to P8 follow in order.
+- **Progress:** P1 to P4 are built and in review. P5 to P8 follow in order.
 
 ## Goal
 
@@ -46,7 +46,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177).
 - [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes. Built and in review:
   [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
-- [ ] **P4 (#165).** Tenants at the clearinghouse.
+- [ ] **P4 (#165).** Tenants at the clearinghouse. Built and in review:
+  [#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179).
 - [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
 - [ ] **P6 (#167).** A public and a private listener.
 - [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`.
@@ -73,3 +74,7 @@ Each pull request ticks its own line here in the same change.
   Source: Mike.
 - **18 November 2026.** The sample enterprise apps and the console break when they next move their pin.
   That is accepted, and they are fixed after this work lands (#116). Source: Mike.
+- **18 November 2026, P4.** A record written before a tenant's id was its grant's id is not re-keyed:
+  #165 rewrites no row. An existing allocation stays on the grant its record names, and nothing new is
+  allotted to a tenant whose id is not a grant's id. Whether to re-key existing deployments is open.
+  Source: Mike (not to rewrite rows in #165); the rest follows from it.

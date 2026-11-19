@@ -48,11 +48,12 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | Self-hosted payments | Done in M3: the console's stack runs the engine, Batteries and the signer on one host | console `docs/references/m3-environment.md` (ISS-13) |
 | Allocation modes | `per_actor` is the only mode since P1 (#162). At `719378f` `per_application` was built too: it took one allocation and one key from settings for the whole engine | `services/payments.py`. The settings `allocation_mode`, `shared_payment_key` and `shared_allocation_id` are gone from `config.py` |
 | Names | Since P2 (#163) routes, classes, settings and records use the domain language: `tenant_id`, the kind `clearinghouse_admin`, `allot`, `top_up`, `PaymentKey`, `LPB_BATTERIES_GRANTS_TOKEN`, and the `/v1/clearinghouse` prefix. At `719378f` they said `application_id`, `admin`, `provision`, `fund`, `PaymentCredential`, `LPB_BATTERIES_OPERATOR_TOKEN` and `/v1/admin` | `contracts/`, `http/app.py`, `config.py`, migration 0014 |
-| Admin authority | `DefaultPolicy.check` returns at once for kind `clearinghouse_admin`, before any tenant check | `services/policy.py:32` |
-| Writes and the policy | Allot, top up, status, revoke and payment key rotation call the policy with no resource, so the path or body chooses the tenant | `services/payments.py`, `services/keys.py` |
+| Admin authority | Since P4 (#165) there are two admin kinds. `DefaultPolicy.check` still returns at once for `clearinghouse_admin`, an admin of every tenant. A `tenant_admin` is an admin of its own tenant only: it divides its grant and cannot enlarge it, and it changes no admin key. At `719378f` there was one admin kind | `services/policy.py` |
+| Writes and the policy | Since P4 (#165) allot, top up, status, revoke, payment key rotation and every key command pass the tenant they act on to the policy, so a tenant admin is confined there and another tenant in a path is 403 before any lookup or Batteries call. At `719378f` they passed no resource, so the path or body chose the tenant | `services/payments.py`, `services/keys.py`, `services/tenants.py` |
+| Tenants | Since P4 (#165) a tenant's id is its Batteries grant's id. `POST /v1/clearinghouse/tenants` onboards one (its grant and its first tenant admin key), and its grant, actors, allocations and keys are nested under `/v1/clearinghouse/tenants/{tenant_id}`. `grant_id` is gone from `AllotRequest`, `TopUpRequest` and their bodies. Records written before keep the grant they name: nothing is re-keyed | `services/tenants.py`, `http/clearinghouse.py`; [payments.md](../../contracts/payments.md#tenants) |
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
 | Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one. Since P3 (#164) a structure test fails when the work half reaches payments another way | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`), `tests/structure/test_two_halves.py` |
-| Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. One app mounts both, always: no role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
+| Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. Since P4 the clearinghouse set is two groups that also mount by themselves: a tenant's own routes, and what only a clearinghouse admin does, for the private listener of P6. One app mounts both, always: no role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
 | Listener | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | `http/server.py`, `http/app.py` |
 | Consumer apps | ChatLPT and the inference gateway embed the engine in `per_application`. The inference gateway refuses any other mode | their `deploy/.env.example`; inference-gateway `runtime.py:121` |
 
@@ -240,6 +241,12 @@ architecture documents and the dev stack's README, and added the two halves to `
 old and the new paths are in
 [the contracts index](../../contracts/index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
 
+P4 (#165) added the tenant rules and the tenant routes to `payments.md`, the kind `tenant_admin` and the
+tenant check on writes to `access.md`, the tenant boundary to `SECURITY.md`, the grant calls to
+`batteries-api.md`, and the grants credential's permissions to `RELIABILITY.md` and the dev stack. The
+old and the new routes and fields are in
+[the contracts index](../../contracts/index.md#upgrading-to-tenants-at-the-clearinghouse).
+
 ## Code areas
 
 | File | Change |
@@ -268,12 +275,12 @@ no Batteries call recorded.
 
 ```text
 [x] per_actor is the only mode; the allocation mode and shared-key settings are gone (P1, #162)
-[ ] onboarding creates one grant and returns the tenant id and one tenant admin key, once
-[ ] the tenant's id is the grant's id; no route takes a separate grant id
-[ ] a tenant admin allots, tops up, pauses and revokes allocations in its own tenant
-[ ] another tenant in the path is 403, before any lookup or Batteries call
-[ ] a tenant admin cannot onboard a tenant, top up its grant or issue a tenant admin key
-[ ] an allocation larger than the grant's unallocated balance is refused
+[x] onboarding creates one grant and returns the tenant id and one tenant admin key, once (P4, #165)
+[x] the tenant's id is the grant's id; no route takes a separate grant id (P4, #165)
+[x] a tenant admin allots, tops up, pauses and revokes allocations in its own tenant (P4, #165)
+[x] another tenant in the path is 403, before any lookup or Batteries call (P4, #165)
+[x] a tenant admin cannot onboard a tenant, top up its grant or issue a tenant admin key (P4, #165)
+[x] an allocation larger than the grant's unallocated balance is refused (P4, #165)
 [ ] allotment returns a payment key once; rotation replaces it and the old one stops
 [ ] the payments route signs for its own actor only; an empty allocation is 402
 [ ] a fixed job and a live job are paid through the payments route
@@ -386,7 +393,16 @@ One builder-core issue each, all sub-issues of ISS-31.
    structure test (`tests/structure/test_two_halves.py`) holds the work half to the five payment
    ports. The routes that P4 nests under a tenant stay where P2 left them: the actor list, the grant
    list and creation, and the grant top-up.
-4. **P4 (#165).** Tenants at the clearinghouse.
+4. **P4 (#165).** Tenants at the clearinghouse. Built
+   ([#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179)): the kind `tenant_admin`, confined by
+   the access policy, to which every write now passes its tenant; onboarding
+   (`POST /v1/clearinghouse/tenants`), the tenant list, and a tenant's grant, status, actors,
+   allocations and access keys under `/v1/clearinghouse/tenants/{tenant_id}`. A tenant's id is its
+   grant's id: `grant_id` left the allot and top-up requests, and the actor list, the grant list and
+   creation and the grant top-up left their old paths with no alias. No migration, and no existing
+   record is re-keyed: an allocation allotted before stays on the grant its record names. Payment usage
+   on the tenant list, and the payment key that allotment returns, are P5's. The routes only a
+   clearinghouse admin calls are one group, which P6 puts on the private listener.
 5. **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
 6. **P6 (#167).** A public and a private listener.
 7. **P7 (#168).** Remote adapters for the five payment ports.

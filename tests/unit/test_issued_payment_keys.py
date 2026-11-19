@@ -272,7 +272,8 @@ async def test_no_other_allocation_command_shows_or_changes_a_payment_key(house:
 
 async def test_a_payment_key_authenticates_nothing_on_any_route(house: House) -> None:
     """Presented as a bearer on every route the engine serves, a payment key gets what no credential
-    gets. The payments route, which takes one, is not built yet (#166, part two)."""
+    gets. The signer's two paths, which take one, are not on this engine: its scripted transport
+    forwards no signer call (tests/unit/test_signing_routes.py has them)."""
     token = token_of(await allot(house, house.one, "alice"))
     as_payment_key = {"Authorization": f"Bearer {token}"}
     app = create_app(house.engine, manage_lifecycle=False)

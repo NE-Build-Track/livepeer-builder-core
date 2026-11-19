@@ -2,7 +2,8 @@
 
 **Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82, D83 and D87 (18 November 2026) ·
 **Code:** `contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
-`services/issued_payment_keys.py`, `services/tenant_usage.py`, `services/costs.py`, `adapters/batteries.py`
+`services/issued_payment_keys.py`, `services/payment_signing.py`, `services/tenant_usage.py`,
+`services/costs.py`, `adapters/batteries.py`, `adapters/signer_forward.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.
@@ -126,6 +127,7 @@ clearinghouse has one for each enterprise app.
 | `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
+| `POST /sign-orchestrator-info`, `POST /generate-live-payment` | A payment key | The signer's two paths, at the root: who the signer is, and one signed payment against that actor's allocation ([signing through a clearinghouse](#signing-through-a-clearinghouse)) |
 
 A clearinghouse admin may call every route, for any tenant. The first four are what only a clearinghouse
 admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`), which
@@ -424,8 +426,9 @@ checks stop that:
 
 A payment key is what an enterprise's engine presents when it asks a clearinghouse to sign a payment for
 one actor (D87, #166). It may ask for that actor's payments and nothing else. The clearinghouse swaps it
-for the actor's Batteries key (`lpg_`), which never leaves the clearinghouse. The route that takes a
-payment key, `POST /v1/clearinghouse/payments`, is not built yet: the key comes first.
+for the actor's Batteries key (`lpg_`), which never leaves the clearinghouse. It is presented at the
+signer's two paths, which the clearinghouse serves
+([signing through a clearinghouse](#signing-through-a-clearinghouse)).
 
 - **Its form.** `lpp_` and 32 random bytes as URL-safe text, 47 characters in all. An access key is
   `lpk_` and a Batteries key `lpg_`, so the three are told apart at sight.
@@ -454,8 +457,8 @@ payment key, `POST /v1/clearinghouse/payments`, is not built yet: the key comes 
   allocation finds nobody whether or not it was removed, and never finds an allocation allotted later.
   A paused or exhausted allocation keeps its key: Batteries refuses the payment (403, 402), not the
   clearinghouse the key.
-- **Not an access key.** As a bearer on any route the engine serves today, a payment key gets what no
-  credential gets: 401. Only the payments route will read one.
+- **Not an access key.** As a bearer on any route but the signer's two paths, a payment key gets what no
+  credential gets: 401. And on those two paths nothing else is a credential: an access key is 401 there.
 - **Finding the actor.** `payments.resolve_payment_key(token)` returns the actor's `ActorAllocation`
   for a live key, and raises `NotAuthenticated` for anything else: a key never issued, one a rotation
   replaced, one of a revoked allocation, an access key, a Batteries key.
@@ -470,6 +473,88 @@ payment key, `POST /v1/clearinghouse/payments`, is not built yet: the key comes 
 - **Every change is logged**, never with the token or its hash: `payments.payment_key_issued`,
   `payments.payment_key_replaced` and `payments.payment_key_stopped`, each with the tenant, the actor
   and the allocation.
+
+## Signing through a clearinghouse
+
+A payment clearinghouse serves the signer's two paths at the root of its listener, each called with a
+payment key (D87 point 3, as Mike amended it on 19 November 2026; #166):
+
+| Route | What it does |
+| --- | --- |
+| `POST /sign-orchestrator-info` | Who the clearinghouse's signer is: its address and a signature. The call every payment begins with. It signs no payment |
+| `POST /generate-live-payment` | Signs one payment against the allocation of the actor whose payment key it is. Fixed work calls it once. Live work calls it every payment cycle (3 seconds), with the signer's `state` from the cycle before |
+
+They are at the root, and there is no `POST /v1/clearinghouse/payments`, because the gateway SDK calls a
+signer at these two paths of the signer address's origin and drops any path in that address
+(`livepeer_gateway.remote_signer` and `http._http_origin` at the pin). So the SDK is not changed: an
+enterprise's engine gives it the clearinghouse's address where the signer's goes, and an actor's payment
+key where the Batteries key goes.
+
+**The credential.** `Authorization: Bearer lpp_...`, as the SDK sends a signer its credential on both
+calls (`adapters/sdk.py`; the scheme's case does not matter). Anything else is 401 on both paths, the
+identity path included, with `WWW-Authenticate: Bearer` and nothing forwarded: no header, another scheme,
+an access key (`lpk_`), a Batteries key (`lpg_`), and a payment key that was never issued, was replaced by
+a rotation, or belongs to a revoked allocation.
+
+**The swap.** The clearinghouse finds the actor of the payment key, reads that actor's Batteries key
+from its own secret store and calls its signer with it, once. A key signs for its own actor only: no
+other actor's Batteries key is ever read for it.
+
+- **What goes to the signer:** the request body as it arrived, byte for byte (the signer's `state` is
+  signed, and a price is a float the SDK wrote), its content type, and the Batteries key as the bearer.
+  No other header of the caller's is sent, since the signer hands every header to the Batteries webhook.
+  The payment key is not sent.
+- **What comes back:** the signer's answer as it is, whatever its status: the status, the body and the
+  content type, with `Cache-Control: no-store` and no other header. The Batteries key is in no answer and
+  no log line; an answer that held it would be withheld as an unknown outcome.
+- **The body is bounded** at 1 MiB, as the signer bounds it (`signer/service.go`), with the signer's
+  answer for a larger one: 400. Nothing is forwarded.
+
+**The clearinghouse decides nothing about money.** Whether an allocation can pay is Batteries' decision,
+which the signer asks for before it signs, and the answer comes back as the signer gave it. So the SDK
+and the engine read each case as they do with self-hosted payments ([who answers what](#who-answers-what)):
+
+| The allocation | The clearinghouse answers | The engine reports |
+| --- | --- | --- |
+| is empty: exhausted, or its balance is below the fee | the signer's 402 | `payment` / `allowance_exhausted` |
+| is paused, or its tenant is (the grant is inactive) | the signer's 403 | `payment` / `not_authorized` |
+| was revoked at the clearinghouse | 401: its payment key stopped, and nothing is forwarded | `payment` / `not_authorized` |
+| has a Batteries key that Batteries revoked | the signer's 401 | `payment` / `not_authorized` |
+
+Every other signer answer passes through the same way: 400 and 481 (`payment_refused`), 480 (the engine
+asks the runner for a fresh challenge), 482 (the SDK skips a payment cycle) and a 5xx.
+
+**When the signer gives no answer.** The gateway SDK gives a signer call 5 seconds and does not retry.
+The clearinghouse's own call ends after 4 seconds, connecting after 2, on a connection of its own, with
+no retry, no redirect followed and no proxy read from the environment. What it answers by itself is in the signer's error shape
+(`{"error": {"message": ...}}`), with a `code` for the two failures a signer cannot have:
+
+| What happened | Sent to the signer? | Answer | At `/sign-orchestrator-info` the engine reports | While signing, the engine reports |
+| --- | --- | --- | --- | --- |
+| No live payment key | No | 401 | `payment` / `not_authorized` | `payment` / `not_authorized`, unpaid |
+| A body over 1 MiB | No | 400 | `payment_refused` | `payment_refused`, unpaid |
+| The signer answered | Yes | The signer's own | As with self-hosted payments | As with self-hosted payments |
+| The signer was not reached: the connection was never made (refused, no such host, no connection in 2 seconds), or the actor's key could not be read from the secret store | No | 503, `code: signer_not_reached`, `Retry-After: 10` | `payment` / `signer_unavailable`: retry | Today `payment_unknown` / `signer_unknown`, as any 5xx while signing. An engine that uses a clearinghouse reads the `code` and reports `signer_unavailable` (#168) |
+| The call left and no usable answer came back: a timeout, a dropped connection, a redirect, an answer that held the key | Yes, or perhaps | 502, `code: signer_outcome_unknown` | `payment` / `signer_unavailable` (nothing is signed at this path) | `payment_unknown` / `signer_unknown`: it may have charged |
+
+The `code` is in the body, which the SDK keeps on the error it raises (`LivepeerHTTPError.body`), so an
+engine reads it with the SDK unmodified. A 5xx with no `code` is never read as "nothing was sent": a
+proxy in front of the clearinghouse answers 502, 503 and 504 of its own. When in doubt the clearinghouse
+says `signer_outcome_unknown`.
+
+- **A rotation ends an actor's live work.** Batteries binds a payment session to the key that opened
+  it, and rotating the payment key rotates the Batteries key too, so the next cycle of a stream that is
+  running is refused and its funding stops. The same holds with self-hosted payments.
+- **Each call is logged** as `payments.signer_call`, with the tenant, the actor, the allocation, the
+  path and what came of it (`answered` and the status, `not_reached` or `unknown`), never with a key. The
+  signer's address and the reason for a failure are in that line and in no answer.
+- **Optional.** The two paths are present on an engine whose runner transport forwards a signer call
+  (`SignerForwarder` in `protocols`, which `SdkRunnerTransport` has) and has a signer
+  (`LPB_SIGNER_URL`). On any other engine they are absent, and `engine.payments.signing` is `None`. An
+  engine with self-hosted payments serves them too: it has both halves.
+- **What the clearinghouse sees:** the payment's terms, which are the orchestrator's payment parameters,
+  the capability (`app`), the price ceiling and the payment's id. Never the job, its prompt or its
+  result.
 
 ## Repeat-safe commands
 
@@ -886,15 +971,15 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Not built yet. M4 builds it as #162 to #169 |
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
-([Tenants](#tenants)). Of the routes an enterprise's engine calls at a clearinghouse, two are built
-(#166): [a tenant's usage](#a-tenants-usage) and the
-[runner list](discovery.md#the-clearinghouses-runner-list). The key the third one takes is built too
-([payment keys](#payment-keys)); the payments route itself is not yet.
+([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166):
+[the signer's two paths](#signing-through-a-clearinghouse), with a [payment key](#payment-keys);
+[a tenant's usage](#a-tenants-usage); and the [runner list](discovery.md#the-clearinghouses-runner-list).
+The engine that calls them is #168.
 
 The engine's routes are two sets (D84, #164). The **clearinghouse routes** are tenants and their grants,
 a tenant's actors and their allocations, and a tenant's access keys and usage, all under
-`/v1/clearinghouse/tenants` since #165 ([Tenants](#tenants)), and the runner list at
-`/v1/clearinghouse/discovery`. The
+`/v1/clearinghouse/tenants` since #165 ([Tenants](#tenants)), the runner list at
+`/v1/clearinghouse/discovery`, and the signer's two paths at the root. The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
 engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The

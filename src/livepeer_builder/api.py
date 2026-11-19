@@ -49,6 +49,8 @@ from livepeer_builder.contracts import (
     OnboardedTenant,
     Reconciliation,
     Runner,
+    SignerAnswer,
+    SignerCall,
     SyncReport,
     TenantGrant,
     TenantState,
@@ -242,6 +244,16 @@ class TenantUsageApi(Protocol):
     ) -> UsagePage: ...
 
 
+class PaymentSigningApi(Protocol):
+    """A clearinghouse's signing for the engines of its tenants: present only when the runner transport
+    forwards a signer call (``SignerForwarder``, as the SDK transport with a signer does)."""
+
+    async def payer(self, authorization: str | None) -> ActorAllocation: ...
+    async def forward(
+        self, call: SignerCall, payer: ActorAllocation, body: bytes, content_type: str
+    ) -> SignerAnswer: ...
+
+
 class PaymentsAdminApi(Protocol):
     async def allot(self, admin: ActorContext, request: AllotRequest) -> KeyedAllocation: ...
     async def top_up(
@@ -269,6 +281,8 @@ class PaymentsAdminApi(Protocol):
     def tenants(self) -> TenantsApi | None: ...
     @property
     def usage(self) -> TenantUsageApi | None: ...
+    @property
+    def signing(self) -> PaymentSigningApi | None: ...
 
 
 class RunnerListApi(Protocol):
@@ -322,6 +336,7 @@ __all__ = [
     "JobStreamApi",
     "JobsApi",
     "KeysApi",
+    "PaymentSigningApi",
     "PaymentsAdminApi",
     "PaymentsApi",
     "RunnerListApi",

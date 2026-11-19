@@ -50,12 +50,14 @@ from livepeer_builder.protocols import (
     AllocationManager,
     Clock,
     SecretStore,
+    SignerForwarder,
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.grants import idempotency_key
 from livepeer_builder.services.issued_payment_keys import IssuedPaymentKeys
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PaymentKeys
+from livepeer_builder.services.payment_signing import PaymentSigning
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
 from livepeer_builder.utils import BODY_LIMIT
@@ -79,6 +81,7 @@ class PaymentsService:
         manager: AllocationManager | None = None,
         tenants: TenantDesk | None = None,
         usage: TenantUsage | None = None,
+        forwarder: SignerForwarder | None = None,
         currency: Currency = "USD",
     ) -> None:
         self._store = store
@@ -93,6 +96,10 @@ class PaymentsService:
         self._manager = manager
         self.tenants = tenants  # None: the tenant desk is off (no grants manager)
         self.usage = usage  # None: no source reads one tenant's usage (#166)
+        # None: nothing forwards a signer call, so the signer's two paths are not served (#166)
+        self.signing = (
+            None if forwarder is None else PaymentSigning(self.resolve_payment_key, secrets, forwarder)
+        )
         self._currency = currency
 
     # -- CredentialResolver ---------------------------------------------------------------------
@@ -384,10 +391,10 @@ class PaymentsService:
         return self._issued.shown(rotated, minted, replayed=OPERATION_REPLAYED.get())
 
     async def resolve_payment_key(self, token: str) -> ActorAllocation:
-        """The actor a payment key signs for (D87, #166): what the payments route asks before it swaps in
-        that actor's Batteries key. A key that was never issued, was replaced by a rotation, or belongs
-        to a revoked allocation is ``NotAuthenticated``, and so is anything that is no payment key: an
-        access key, a Batteries key."""
+        """The actor a payment key signs for (D87, #166): what the signer's two paths ask before that
+        actor's Batteries key is put in the payment key's place (``PaymentSigning``). A key that was never
+        issued, was replaced by a rotation, or belongs to a revoked allocation is ``NotAuthenticated``,
+        and so is anything that is no payment key: an access key, a Batteries key."""
         actor = await self._issued.actor_of(token)
         if actor is None:
             raise NotAuthenticated("unknown or stopped payment key")

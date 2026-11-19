@@ -338,8 +338,10 @@ Both are generic: no enterprise logic lives in the engine.
   bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
   only a clearinghouse admin issues another.
 - **Payment keys (#166):** a payment key (`lpp_`) is no access key. It asks a clearinghouse for one
-  actor's payments and nothing else: as a bearer on any other route it gets what no credential gets,
-  401 ([payments.md](payments.md#payment-keys)).
+  actor's payments and nothing else, at the signer's two paths (`POST /sign-orchestrator-info`,
+  `POST /generate-live-payment`): as a bearer on any other route it gets what no credential gets, 401.
+  Those two paths do not go through the authenticator chain: a payment key is the one credential there,
+  and an access key or a JWT is 401 ([payments.md](payments.md#signing-through-a-clearinghouse)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 

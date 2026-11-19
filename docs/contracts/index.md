@@ -90,3 +90,64 @@ names a path ([repeat-safe commands](payments.md#repeat-safe-commands)).
 **What stays under `/v1/clearinghouse`.** The allocation routes, the actor list, the grant list and
 creation, and the grant top-up. They are the clearinghouse set. The last four take their final shape,
 nested under a tenant, with #165.
+
+## Upgrading to tenants at the clearinghouse
+
+On 18 November 2026 a tenant became an account at the clearinghouse, with an admin of its own (D83,
+#165). A tenant's id is its grant's id, so no route or body takes a separate grant id, and the routes
+that took a tenant in a query string or a grant in a body are nested under the tenant. No old path or
+field is kept as an alias: an old path is 404, and an old field is a 422.
+
+| What | Before | Now |
+| --- | --- | --- |
+| The actor list | `GET /v1/clearinghouse/actors?tenant_id=` | `GET /v1/clearinghouse/tenants/{tenant_id}/actors` |
+| The grant list | `GET /v1/clearinghouse/grants` (`GrantRecord[]`) | `GET /v1/clearinghouse/tenants` (`TenantGrant[]`: each tenant with its grant's `total` and `unallocated`) |
+| Creating a grant | `POST /v1/clearinghouse/grants` `{name, amount, operation_ref}`, `201` `GrantRecord` | `POST /v1/clearinghouse/tenants` `{name, amount, operation_ref, admin_actor_id?}`, `201` `OnboardedTenant`: the tenant's id (the grant's) and its first tenant admin key. `amount` may be zero |
+| A grant's top-up | `POST /v1/clearinghouse/grant/top-up` with `grant_id` in the body | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` |
+| A grant's balance and status | not served | `GET /v1/clearinghouse/tenants/{tenant_id}/grant`; `POST /v1/clearinghouse/tenants/{tenant_id}/status` |
+| A tenant's access keys | `/v1/keys`, with `tenant_id` in the body | also `/v1/clearinghouse/tenants/{tenant_id}/keys`, for the kinds `auditor` and `tenant_admin`. `/v1/keys` is unchanged |
+| `grant_id` on allotment and top-up | A field of `AllotRequest`, `TopUpRequest` and their REST bodies; empty used the grant of the caller's own allocation | Gone. The grant is the tenant's. A body that names one is a 422, and so is the field on either contract |
+| The kinds | `actor`, `clearinghouse_admin`, `auditor`, `service` | and `tenant_admin`, an admin of one tenant |
+| The operations | `admin.keys`, `admin.allocations`, `admin.costs`, `admin.read` | and `admin.tenants`: onboarding, the tenant list, a grant's top-up, a tenant's status. A grant's top-up and the grant list needed `admin.allocations` before |
+| `ResourceRef`, as an `AccessPolicy` receives it | `kind`, `tenant_id`, `owner_actor_id`, `id`; allot, top-up, status, revoke and key commands passed none | Those commands pass the tenant they act on. New: the kind `tenant`, and `credential_kind` for a key command |
+| The grant desk, in embedded mode | `engine.payments.grants` (`GrantsApi`: `list_grants`, `create_grant`) | `engine.payments.tenants` (`TenantsApi`: `onboard`, `list_tenants`, `grant`, `set_status`) |
+| A grant's top-up, in embedded mode | `payments.top_up_grant(admin, TopUpRequest(..., grant_id=))` | `payments.top_up_grant(admin, tenant_id, TopUpRequest(...))` |
+| Key commands, in embedded mode | `keys.get(admin, key_id)`, `keys.rotate(...)`, `keys.revoke(admin, key_id)` | Each also takes an optional `tenant_id`, the tenant a route named |
+| The `AllocationManager` port | | Three more methods, which the tenant desk calls on the grants manager: `read_grant`, `grant_balances`, `set_grant_status` |
+| The command a ledger record names | `create_grant` | `onboard_tenant`, and `set_tenant_status`. Records of `create_grant` are kept |
+| `FakeAllocationManager` (`livepeer_builder.testing`) | Took any grant id, and `calls` listed some calls | Holds grants: an unknown grant is its 404, and an allocation or top-up larger than the unallocated balance its 409. `add_grant(id)` gives it a grant under a chosen id. `calls` lists every call. `make_engine` starts with a grant for the tenant `default` |
+| The `engine.started` log line | `grant_desk` | `tenant_desk` |
+
+**Before you start the new release:**
+
+- **No migration.** The schema is unchanged, and no row is rewritten or deleted. The kind `tenant_admin`
+  fits the column revision 0014 widened.
+- **Finish every `started` allotment and grant creation.** After the upgrade neither can be resumed
+  (below). Repeat each under its reference until it answers, on the old release.
+- **Give the grants credential what the tenant desk needs:** `grants.read`, `grants.create`,
+  `grants.fund` (to onboard a tenant with an amount), `grants.status` and `allocations.read`
+  (`LPB_BATTERIES_GRANTS_TOKEN`). It had `grants.read` and `grants.create`.
+- **Move the clients.** The builder console and the sample apps move with their next pin.
+
+**An engine that has tenants already.** Before this change a tenant's id was a free name, often
+`default`, and its actors recorded their grant beside it. What such a deployment can and cannot do is
+under [records from before a tenant's id was its grant's id](payments.md#records-from-before-a-tenants-id-was-its-grants-id):
+every existing allocation works as before, on its own grant, and nothing new is allotted to a tenant
+whose id is not a grant's id. Whether those records are re-keyed to the grant's id is not decided, and
+this release does not do it.
+
+**What a repeat gets.** No repeat of a command recorded before the upgrade reaches the provider under a
+key it has not seen:
+
+| Recorded before the upgrade | Repeated after it |
+| --- | --- |
+| An allocation's top-up, a payment key rotation, a key issue or rotation | As before: replayed, or resumed under the same provider key. Their requests did not change |
+| A grant's top-up | Replayed, or resumed under the same provider key, when it is sent to `.../tenants/{that grant's id}/grant/top-up`: the fingerprint and the key hash the same text |
+| An allotment that finished, whose request named its grant | Replayed, when the actor's record still names that grant. The request no longer names one, so the engine takes it from the record |
+| An allotment that finished, whose request named no grant (the caller's own allocation chose it) | 409 `operation_conflict`. Nothing is sent. The allocation exists: read it |
+| An allotment still `started` | 409 `operation_conflict`, however old. It is never resumed: no actor is saved yet, so nothing says which grant it named. If its first call reached Batteries, that allocation stays there, funded, with no record in the engine, and has to be revoked at Batteries by hand. That is why each one is finished before the upgrade |
+| A grant creation, finished or `started` | The route is gone. Onboarding under the same reference is another command: 409 `operation_conflict`, before any provider call |
+
+**What keeps its name.** `ActorAllocation.grant_id` (the grant an allocation was allotted from: the
+tenant's id for every allocation allotted from now on), `LPB_BATTERIES_GRANTS_TOKEN`,
+`EngineSupply.grants_manager`, the permission strings, and the words Batteries uses on its own API.

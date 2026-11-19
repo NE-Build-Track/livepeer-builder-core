@@ -27,7 +27,6 @@ async def allotted(make_engine: EngineFactory, admin: ActorContext, **settings: 
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     await engine.payments.allot(admin, request)
     return engine
@@ -112,7 +111,6 @@ async def test_a_paid_refusal_at_open_fails_over_to_another_orchestrator(
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     await engine.payments.allot(admin, allot)
     transport.opens = [
@@ -232,7 +230,6 @@ async def test_a_stream_obeys_the_paid_attempt_cap(
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     await engine.payments.allot(admin, allot)
     transport.opens = [
@@ -274,7 +271,6 @@ async def test_a_stream_failure_after_a_paid_failover_says_a_payment_went_out(
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     await engine.payments.allot(admin, allot)
     transport.opens = [

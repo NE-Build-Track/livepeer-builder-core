@@ -140,8 +140,13 @@ class OperationLedger:
         steps: Callable[[RunningOperation], Awaitable[T]],
         answer: TypeAdapter[T],
         context: Mapping[str, str] | None = None,
+        earlier_request: Callable[[], Awaitable[Mapping[str, Any]]] | None = None,
     ) -> T:
-        """Run ``steps`` once per ``operation_ref``; a repeat gets the first run's result back."""
+        """Run ``steps`` once per ``operation_ref``; a repeat gets the first run's result back.
+
+        ``earlier_request`` is the request as an earlier release recorded it, for a command whose request
+        lost a field since. It is asked only when a held record does not match ``request``: a record
+        that matches the earlier form is this command's too, and is replayed or resumed as its own."""
         OPERATION_REPLAYED.set(False)
         record = OperationRecord(
             tenant_id=caller.tenant_id,
@@ -155,7 +160,10 @@ class OperationLedger:
         )
         held = await self._repo.begin_operation(record)
         if held is not None:
-            if held.fingerprint != record.fingerprint:
+            if held.fingerprint != record.fingerprint and not (
+                earlier_request is not None
+                and held.fingerprint == fingerprint(command, await earlier_request())
+            ):
                 raise OperationConflict(held)  # before any provider call
             if held.state == "done":
                 return _replayed(held, answer)

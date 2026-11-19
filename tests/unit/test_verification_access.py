@@ -30,7 +30,7 @@ async def allotted(make_engine: EngineFactory, admin: ActorContext, *actors: str
             admin,
             AllotRequest(
                 operation_ref=f"allot:default:{actor_id}", tenant_id="default", actor_id=actor_id,
-                amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
+                amount=Money(amount=Decimal("5"), currency="USD"),
             ),
         )  # fmt: skip
     return engine
@@ -149,7 +149,7 @@ async def test_a_revoked_admin_or_auditor_key_is_401_on_admin_routes(
     headers = {"Authorization": f"Bearer {issued.token}"}
     reads = (
         "/v1/keys",
-        "/v1/clearinghouse/actors",
+        "/v1/clearinghouse/tenants/default/actors",
         "/v1/clearinghouse/tenants/default/actors/alice/allocation",
     )
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [200, 200, 200]

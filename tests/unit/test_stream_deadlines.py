@@ -99,7 +99,6 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     await engine.payments.allot(admin, request)
     # The deadline must land in the hang (5 s), never in an earlier phase: a slow sign-orchestrator-info
@@ -139,7 +138,6 @@ async def test_a_first_byte_deadline_while_the_signer_identifies_is_signer_unava
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     await engine.payments.allot(admin, request)
     with pytest.raises(JobFailed) as failed:

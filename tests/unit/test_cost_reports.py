@@ -42,7 +42,6 @@ async def allot(engine: BuilderEngine, admin: ActorContext, actor_id: str = "ali
         tenant_id="default",
         actor_id=actor_id,
         amount=Money(amount=Decimal(1), currency="ETH"),
-        grant_id="grant_1",
     )
     return (await engine.payments.allot(admin, request)).allocation_id
 

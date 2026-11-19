@@ -327,7 +327,7 @@ async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: Ide
             operator = bearer(
                 idp.token(sub="b715dc36", scope="livepeer:admin", preferred_username="operator")
             )
-            listed = (await client.get("/v1/clearinghouse/actors", headers=operator)).json()
+            listed = (await client.get("/v1/clearinghouse/tenants/default/actors", headers=operator)).json()
             assert [(a["actor_id"], a["label"], a["allotted"]) for a in listed] == [
                 ("3c446b40-7123", "alice", False)
             ]  # the operator signing in is not an actor, so is not listed

@@ -12,7 +12,7 @@ async def render_openapi() -> str:
     from livepeer_builder.runtime.assembly import EngineSupply
     from livepeer_builder.testing import FakeAllocationManager
 
-    # Every optional capability on (API keys by default; the grant desk needs a grants manager),
+    # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
     # so the committed spec documents the whole API. A deployment without one lacks those routes.
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",

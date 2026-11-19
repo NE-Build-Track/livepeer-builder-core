@@ -126,7 +126,6 @@ async def real(
             tenant_id="default",
             actor_id="alice",
             amount=amount,
-            grant_id="grant_1",
         )
         await engine.payments.allot(ADMIN, request)
         yield engine

@@ -22,6 +22,7 @@
             "enum": [
               "actor",
               "clearinghouse_admin",
+              "tenant_admin",
               "auditor",
               "service"
             ],
@@ -146,15 +147,10 @@
         "type": "object"
       },
       "AllotBody": {
+        "additionalProperties": false,
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/Money-Input"
-          },
-          "grant_id": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Grant Id",
-            "type": "string"
           },
           "label": {
             "default": "",
@@ -796,72 +792,6 @@
         "title": "Fees",
         "type": "object"
       },
-      "GrantBody": {
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Money-Input"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "operation_ref": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Operation Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "amount",
-          "operation_ref"
-        ],
-        "title": "GrantBody",
-        "type": "object"
-      },
-      "GrantRecord": {
-        "additionalProperties": false,
-        "description": "A Batteries grant the operator can allot allocations from.",
-        "properties": {
-          "currency": {
-            "title": "Currency",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Metadata",
-            "type": "object"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "total": {
-            "title": "Total",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "status",
-          "currency",
-          "total"
-        ],
-        "title": "GrantRecord",
-        "type": "object"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -888,6 +818,7 @@
             "enum": [
               "actor",
               "clearinghouse_admin",
+              "tenant_admin",
               "auditor",
               "service"
             ],
@@ -1656,6 +1587,71 @@
         "title": "Offering",
         "type": "object"
       },
+      "OnboardBody": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_actor_id": {
+            "default": "tenant-admin",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Admin Actor Id",
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "operation_ref"
+        ],
+        "title": "OnboardBody",
+        "type": "object"
+      },
+      "OnboardedTenant": {
+        "additionalProperties": false,
+        "description": "The answer to onboarding a tenant (D83, #165): the tenant, whose id is the id of the grant the\nprovider created for it, and its first tenant admin key. The key's token is in the answer to the\nfirst successful call only: the engine keeps its hash, so a repeat of the reference answers\n``token: null`` and ``replayed: true``, as issuing any access key does.",
+        "properties": {
+          "admin_key": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssuedKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "admin_key"
+        ],
+        "title": "OnboardedTenant",
+        "type": "object"
+      },
       "PriceInfo": {
         "additionalProperties": false,
         "description": "``price_info`` as advertised. ``price`` and ``price_usd`` are exact decimals, all four fields optional.\n\nA JSON number ``Decimal`` cannot hold is absent here. The runner is still kept, and ``payable_rate``\nreports that the price cannot be paid.",
@@ -2281,17 +2277,131 @@
         "title": "SyncReport",
         "type": "object"
       },
+      "TenantGrant": {
+        "additionalProperties": false,
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "unallocated": {
+            "$ref": "#/components/schemas/Money-Output"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "status",
+          "total",
+          "unallocated"
+        ],
+        "title": "TenantGrant",
+        "type": "object"
+      },
+      "TenantKeyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "auditor",
+            "enum": [
+              "auditor",
+              "tenant_admin"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_id",
+          "operation_ref"
+        ],
+        "title": "TenantKeyBody",
+        "type": "object"
+      },
+      "TenantState": {
+        "additionalProperties": false,
+        "description": "The answer to pausing or resuming a tenant: the status its grant now has.",
+        "properties": {
+          "status": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "status"
+        ],
+        "title": "TenantState",
+        "type": "object"
+      },
+      "TenantStatusBody": {
+        "properties": {
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "operation_ref"
+        ],
+        "title": "TenantStatusBody",
+        "type": "object"
+      },
       "TopUpRequest": {
         "additionalProperties": false,
+        "description": "A top-up of an allocation or of a tenant's grant. The path names which: the body names no grant.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/Money-Input"
-          },
-          "grant_id": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Grant Id",
-            "type": "string"
           },
           "operation_ref": {
             "maxLength": 200,
@@ -2449,26 +2559,88 @@
         "summary": "Allowance"
       }
     },
-    "/v1/clearinghouse/actors": {
+    "/v1/clearinghouse/tenants": {
       "get": {
-        "description": "Allotted actors and people an identity provider signed in (D46, D48).",
-        "operationId": "list_actors_v1_clearinghouse_actors_get",
+        "operationId": "list_tenants_v1_clearinghouse_tenants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TenantGrant"
+                  },
+                  "title": "Response List Tenants V1 Clearinghouse Tenants Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tenants"
+      },
+      "post": {
+        "description": "Create the tenant's grant and its first tenant admin key, whose token is shown once.",
+        "operationId": "onboard_tenant_v1_clearinghouse_tenants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardedTenant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Onboard Tenant"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors": {
+      "get": {
+        "description": "The tenant's allotted actors and the people an identity provider signed in (D46, D48).",
+        "operationId": "list_actors_v1_clearinghouse_tenants__tenant_id__actors_get",
         "parameters": [
           {
-            "in": "query",
+            "in": "path",
             "name": "tenant_id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tenant Id"
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
             }
           },
           {
@@ -2530,7 +2702,7 @@
                   "items": {
                     "$ref": "#/components/schemas/KnownActor"
                   },
-                  "title": "Response List Actors V1 Clearinghouse Actors Get",
+                  "title": "Response List Actors V1 Clearinghouse Tenants  Tenant Id  Actors Get",
                   "type": "array"
                 }
               }
@@ -2554,110 +2726,6 @@
           }
         ],
         "summary": "List Actors"
-      }
-    },
-    "/v1/clearinghouse/grant/top-up": {
-      "post": {
-        "operationId": "top_up_grant_v1_clearinghouse_grant_top_up_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TopUpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Top Up Grant"
-      }
-    },
-    "/v1/clearinghouse/grants": {
-      "get": {
-        "operationId": "list_grants_v1_clearinghouse_grants_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/GrantRecord"
-                  },
-                  "title": "Response List Grants V1 Clearinghouse Grants Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Grants"
-      },
-      "post": {
-        "operationId": "create_grant_v1_clearinghouse_grants_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GrantBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GrantRecord"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Grant"
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": {
@@ -3026,6 +3094,427 @@
           }
         ],
         "summary": "Top Up"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/grant": {
+      "get": {
+        "description": "The grant's total, its unallocated balance and its status.",
+        "operationId": "get_grant_v1_clearinghouse_tenants__tenant_id__grant_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grant"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/grant/top-up": {
+      "post": {
+        "operationId": "top_up_grant_v1_clearinghouse_tenants__tenant_id__grant_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Up Grant"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys": {
+      "get": {
+        "operationId": "list_tenant_keys_v1_clearinghouse_tenants__tenant_id__keys_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccessKey"
+                  },
+                  "title": "Response List Tenant Keys V1 Clearinghouse Tenants  Tenant Id  Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tenant Keys"
+      },
+      "post": {
+        "description": "Issue an auditor key for the tenant, or, as a clearinghouse admin, another tenant admin key.",
+        "operationId": "issue_tenant_key_v1_clearinghouse_tenants__tenant_id__keys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Tenant Key"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}": {
+      "get": {
+        "operationId": "get_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tenant Key"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/revoke": {
+      "post": {
+        "operationId": "revoke_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Tenant Key"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Tenant Key"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/status": {
+      "post": {
+        "description": "Pause or resume the tenant by pausing or resuming its grant.",
+        "operationId": "set_tenant_status_v1_clearinghouse_tenants__tenant_id__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantStatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Tenant Status"
       }
     },
     "/v1/costs/projections": {

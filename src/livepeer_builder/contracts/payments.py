@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, SecretStr, computed_field, field_validator
 
+from livepeer_builder.contracts.access import IssuedKey
 from livepeer_builder.contracts.common import (
     AllotAmount,
     Contract,
     Currency,
-    GrantId,
     Money,
     StoredText,
     TopUpAmount,
@@ -38,7 +38,8 @@ class SecretRef(Contract):
 
 
 class AllotRequest(Contract):
-    """Explicit, admin-authorized allotment. There is no automatic allotment."""
+    """Explicit, admin-authorized allotment. There is no automatic allotment. The allocation is allotted
+    from the tenant's grant, whose id is the tenant's id (D83): the request names no grant."""
 
     # ``StoredText``: allotment funds a provider key before it saves the actor, so an id or a label
     # the store could not keep is refused here, before any provider call.
@@ -48,12 +49,11 @@ class AllotRequest(Contract):
     # the provider's format and the engine's bound (#112, C11)
     amount: AllotAmount
     label: StoredText = ""
-    grant_id: GrantId = ""  # empty uses the grant of the caller's own allocation; one path segment (C10)
     operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
 
 
 class GrantRecord(Contract):
-    """A Batteries grant the operator can allot allocations from."""
+    """A grant as the payment provider keeps it. Its id is its tenant's id (D83)."""
 
     id: str
     name: str
@@ -72,9 +72,45 @@ class GrantPage(Contract):
     next_cursor: str | None = None
 
 
+TenantStatus = Literal["active", "paused"]  # what an admin sets; a grant is never closed (D82)
+
+
+class TenantGrant(Contract):
+    """A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's
+    id. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation
+    larger than it."""
+
+    tenant_id: str
+    name: str
+    status: str  # the provider's word: active or paused (draft or closed for a grant made elsewhere)
+    total: Money
+    unallocated: Money
+
+
+class OnboardedTenant(Contract):
+    """The answer to onboarding a tenant (D83, #165): the tenant, whose id is the id of the grant the
+    provider created for it, and its first tenant admin key. The key's token is in the answer to the
+    first successful call only: the engine keeps its hash, so a repeat of the reference answers
+    ``token: null`` and ``replayed: true``, as issuing any access key does."""
+
+    tenant_id: str
+    name: str
+    admin_key: IssuedKey | None  # None when engine access keys are off (LPB_AUTH=jwt)
+
+
+class TenantState(Contract):
+    """The answer to pausing or resuming a tenant: the status its grant now has."""
+
+    tenant_id: str
+    status: TenantStatus
+
+
 class ActorAllocation(Contract):
     tenant_id: str
     actor_id: str
+    # The provider's grant the allocation was allotted from: the tenant's id, for every allocation
+    # allotted since a tenant and its grant share one id (D83, #165). A record written before that
+    # keeps the grant it names.
     grant_id: str
     allocation_id: str
     api_key_id: str
@@ -118,10 +154,10 @@ class KnownActor(Contract):
 
 
 class TopUpRequest(Contract):
+    """A top-up of an allocation or of a tenant's grant. The path names which: the body names no grant."""
+
     amount: TopUpAmount  # the provider's format and the engine's bound (#112, C11)
     operation_ref: OperationRef  # required: makes a retried top-up safe
-    # a grant top-up only; an allocation top-up ignores it. One path segment (#113, C10)
-    grant_id: GrantId = ""
 
 
 class Allowance(Contract):

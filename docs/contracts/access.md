@@ -1,7 +1,7 @@
 # Access contract
 
-**Tickets:** ISS-03, ISS-08, #49 (ISS-33) · **Design accepted:** 12 October 2026 (decisions D12–D16);
-ISS-08 on 26 October (D44); JWT bearer on 26 October (D45) · **Code:** `contracts/access.py`, `protocols/`,
+**Tickets:** ISS-03, ISS-08, #49 (ISS-33), #165 (ISS-31) · **Design accepted:** 12 October 2026 (decisions D12–D16);
+ISS-08 on 26 October (D44); JWT bearer on 26 October (D45); the tenant admin on 18 November (D83) · **Code:** `contracts/access.py`, `protocols/`,
 `services/policy.py`, `services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/jwt.py`,
 `adapters/secrets.py`
 
@@ -14,20 +14,23 @@ in adapters.
 | Field | Meaning |
 | --- | --- |
 | `actor_id` | Opaque to the engine; the owner of jobs, costs and allocations |
-| `tenant_id` | Tenant isolation; defaults to `default` |
+| `tenant_id` | Tenant isolation; defaults to `default`. A tenant's id is its grant's id ([payments.md](payments.md#tenants)) |
 | `permissions` | `Operation` values (see below) |
-| `credential_kind` | `actor`, `clearinghouse_admin` (an admin credential), `auditor` (a read-only admin, D46) or `service` |
+| `credential_kind` | `actor`, `clearinghouse_admin` (an admin of every tenant), `tenant_admin` (an admin of one tenant, its own: D83), `auditor` (a read-only admin of one tenant, D46) or `service` |
 | `attributes` | Non-secret labels copied onto records. **Never secrets** |
 | `auth` | Provenance (method, issuer, credential id), for audit only |
 
 **Operations:** `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`, `admin.keys`,
-`admin.allocations`, `admin.costs`, `admin.read`, `actors.assert`. `admin.read` is every admin read of one
-tenant: the key list and key inspection, the actor list and one actor's allocation, and
-reconciliation. The other `admin.*` operations are the writes. The grant list is `admin.allocations`:
-grants fund every tenant and carry none, so only an admin reads them, never an auditor.
+`admin.allocations`, `admin.costs`, `admin.read`, `admin.tenants`, `actors.assert`. `admin.read` is every
+admin read of one tenant: the key list and key inspection, the actor list and one actor's allocation,
+the tenant's grant, and reconciliation. The other `admin.*` operations are the writes.
+`admin.tenants` (#165) is what only a clearinghouse admin does to a tenant: onboard it, list every
+tenant, top up its grant, pause or resume it. The tenant list is every tenant's grant, so no tenant
+admin and no auditor reads it.
 
 **Where the admin routes are.** The routes are two sets (D84, #164). The clearinghouse set, under
-`/v1/clearinghouse`, has the actor list, the allocation routes and the grant routes. The work set has
+`/v1/clearinghouse/tenants`, has tenants and their grants, a tenant's actors and their allocations, and a
+tenant's access keys ([payments.md](payments.md#tenants)). The work set has
 three groups of admin routes beside the routes every actor calls: an engine's own access keys
 (`/v1/keys`), reconciliation (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`). The
 set a route is in decides nothing about access: each route needs the operation it needed before.
@@ -67,9 +70,26 @@ class AccessPolicy(Protocol):
 
 ## DefaultPolicy
 
-- **Admin operations** (`admin.*`) need an **admin credential**: one of kind `clearinghouse_admin`. A
-  permission string on an actor key is not enough.
-- **An admin credential** may act on any tenant's records.
+- **Admin operations** (`admin.*`) need an **admin credential**: one of kind `clearinghouse_admin` or
+  `tenant_admin`. A permission string on an actor key is not enough.
+- **A clearinghouse admin credential** may act on any tenant's records.
+- **A tenant admin credential** (D83, #165) is an admin of its own tenant and of no other. It divides
+  its tenant's grant and cannot enlarge it:
+  - **In its own tenant** it does what an admin does: allot, top up, pause and revoke allocations,
+    rotate payment keys, issue and manage keys that are not admin keys, read its grant, its actors and
+    their allocations, and, on the work set, read every actor's jobs and costs and reconcile.
+  - **Another tenant** is `AccessDenied`, whatever the operation: 403 for a tenant a route or a body
+    names, before any lookup or provider call. Another tenant's record found by its id alone (a job, a
+    key under `/v1/keys`) reads as missing, as for anyone ([Answers](#answers)).
+  - **Never, in any tenant:** `admin.tenants` (onboard a tenant, list tenants, top up a grant, set a
+    tenant's status); cost sync (`admin.costs`), which reads every tenant's usage; `actors.assert`; and
+    issuing, rotating or revoking a `tenant_admin` or `clearinghouse_admin` key, its own included.
+  - **It is confined by the policy, not by each route.** Every write passes the tenant it acts on to the
+    policy as the resource (`ResourceRef.tenant_id`), and a key command passes the key's kind
+    (`ResourceRef.credential_kind`). A write that names no tenant is refused to a tenant admin, so a
+    command that forgot to name one fails closed.
+  - In this release a tenant admin credential is an engine key of kind `tenant_admin`. Mapping an
+    identity provider's role to it is ISS-33.
 - **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
   `events.read`, across every actor of its own tenant. Every write is `AccessDenied`, and so is any
   record of another tenant. It is for a dashboard or an audit reader that must not move money. An
@@ -116,7 +136,22 @@ same test fails when a route declares a plain `datetime` query parameter.
 | `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
-| `GET /v1/clearinghouse/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `tenant_id`, `status` (allocations only), `allotted` and `limit`. An admin lists every tenant unless it names one; an auditor lists its own. The single read returns the allocation (`ActorAllocation`) |
+| `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor of the tenant (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `status` (allocations only), `allotted` and `limit`. A tenant admin or an auditor lists its own tenant; a clearinghouse admin lists any. The single read returns the allocation (`ActorAllocation`). In embedded mode `payments.list_actors` still takes `tenant_id=None`, which is every tenant for a clearinghouse admin and its own for anyone else |
+| `GET /v1/clearinghouse/tenants/{tenant}/grant` | `admin.read` ([payments.md](payments.md#tenants)) |
+| `POST /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants`, `POST .../tenants/{tenant}/grant/top-up`, `POST .../tenants/{tenant}/status` | `admin.tenants`: a clearinghouse admin |
+
+**Every route that names a tenant answers the same way (#165):**
+
+| The request | Answer |
+| --- | --- |
+| No credential, or a bad one | 401 |
+| A kind that may not call the route (an actor on an admin route, an auditor on a write, a tenant admin on `admin.tenants`) | 403 |
+| Another tenant's id in the path | 403, before any store lookup or provider call |
+| A record that does not exist (no such actor, key or grant) | 404 (400 for a key's rotate or revoke, as before) |
+| No allocation, or an empty one, when a job needs it | 402 |
+
+`tests/unit/test_admin_route_sweep.py` reads the routes from the app, so a route added later that names a
+tenant is held to the third row.
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -295,10 +330,11 @@ Both are generic: no enterprise logic lives in the engine.
 - **Browser:** browsers never hold admin, management or payment credentials. A browser reaches the
   engine through the enterprise backend, or directly with a JWT whose audience is the engine. CORS is
   off by default.
-- **Admin:** `clearinghouse_admin` is a distinct credential kind. The first admin key comes from
-  `lpb bootstrap-admin`, which works only while no active admin key exists, and only when engine API
-  keys are on. There is no network
-  bootstrap route and no static admin token.
+- **Admin:** `clearinghouse_admin` and `tenant_admin` are distinct credential kinds. The first
+  clearinghouse admin key comes from `lpb bootstrap-admin`, which works only while no active
+  clearinghouse admin key exists, and only when engine API keys are on. There is no network
+  bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
+  only a clearinghouse admin issues another.
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 
@@ -309,9 +345,11 @@ Both are generic: no enterprise logic lives in the engine.
 | Caller API key (`lpk_`) | Engine admin (`POST /v1/keys`) | Client or enterprise backend | Engine admin: `rotate` (instant) / `revoke`, see the [example flow](#example-standalone-flow) |
 | Caller JWT | Enterprise identity provider | Client | Identity provider (expiry) |
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
-| Engine admin credential | `lpb bootstrap-admin`, then an admin | Operator | Engine admin |
+| Clearinghouse admin credential | `lpb bootstrap-admin`, then a clearinghouse admin | Operator | Clearinghouse admin |
+| Tenant admin key | Onboarding the tenant (`POST /v1/clearinghouse/tenants`), then a clearinghouse admin (`POST .../tenants/{tenant_id}/keys`, kind `tenant_admin`) | The enterprise app | Clearinghouse admin; never a tenant admin |
+| A tenant's auditor key | That tenant's admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
-| Batteries grants credential (grant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the grant desk is off | Batteries operator |
+| Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
 | Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 
@@ -324,11 +362,32 @@ same steps run on the dev stack.
 | --- | --- | --- |
 | 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
 | 2. A key for the user | `POST /v1/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
-| 3. Allot to the user | `POST /v1/clearinghouse/tenants/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "allot-alice"}` | `201` `ActorAllocation`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 3. Allot to the user | `POST /v1/clearinghouse/tenants/{tenant_id}/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "allot-alice"}`, where the tenant's id is its grant's id (onboard the tenant first, and issue the user's key with that `tenant_id`) | `201` `ActorAllocation`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
-| 5. Inspect the key, and who is allotted | `GET /v1/keys/{key_id}` (or `GET /v1/keys` for all); `GET /v1/clearinghouse/actors` for the allotted actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
-| 6. Rotate it | `POST /v1/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
+| 5. Inspect the key, and who is allotted | `GET /v1/keys/{key_id}` (or `GET /v1/keys` for all); `GET /v1/clearinghouse/tenants/{tenant_id}/actors` for the allotted actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 6. Rotate it | `POST /v1/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, tenant and permissions carry over. A revoked or unknown key answers 400 |
 | 7. Revoke it | `POST /v1/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
+
+### A tenant's access keys
+
+A tenant's keys are also under its own path, in the clearinghouse set (D87, #165):
+`GET`, `POST /v1/clearinghouse/tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`,
+`POST .../keys/{key_id}/rotate` and `POST .../keys/{key_id}/revoke`. They are the commands above with the
+tenant taken from the path:
+
+- **The body names no tenant** (a `tenant_id` there is a 422) **and takes two kinds:** `auditor` (the
+  default) and `tenant_admin`. An actor's or a service's key belongs to an engine that runs jobs, and
+  is issued under `/v1/keys`.
+- **A tenant admin** issues, lists, inspects, rotates and revokes its tenant's keys that are not admin
+  keys. Issuing, rotating or revoking a `tenant_admin` key is 403 for it, its own key included.
+- **A clearinghouse admin** issues another tenant admin key with kind `tenant_admin`, and revokes one.
+- **A key of another tenant** named under this tenant's path is missing: 404 for the read, 400 for a
+  rotate or revoke, as for a key that never existed.
+
+Under `/v1/keys`, where no path names a tenant, a tenant admin is confined the same way: it lists its
+own tenant's keys, a body that names another tenant (or leaves the default, `default`) is 403, another
+tenant's key is missing, and an admin key is 403. A tenant admin key is bound to its tenant when it is
+issued, and rotation carries the tenant over: nothing moves a key to another tenant.
 
 ### Repeated key commands
 

@@ -51,6 +51,7 @@ from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
+from livepeer_builder.services.tenants import TenantDesk
 
 _LOG = logging.getLogger(__name__)
 
@@ -277,6 +278,16 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         rate_max_age_s=settings.rate_max_age_s,
     )
     ledger = OperationLedger(parts.store, parts.clock, settings.operation_stale_s)  # one, for every command
+    authenticators: list[Authenticator] = list(parts.authenticators)
+    keys: KeyService | None = None
+    if parts.api_keys is not None:
+        authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
+        keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
+    tenants: TenantDesk | None = None
+    if parts.grants_manager is not None:  # otherwise the tenant desk is off
+        tenants = TenantDesk(
+            parts.grants_manager, parts.policy, settings.default_currency, ledger, settings.engine_id, keys
+        )
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -285,7 +296,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         engine_id=settings.engine_id,
         ledger=ledger,
         manager=parts.allocation_manager,
-        grants=parts.grants_manager,
+        tenants=tenants,
         currency=settings.default_currency,
     )
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
@@ -310,11 +321,6 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     costs = CostService(
         parts.store, parts.policy, parts.clock, worker, payments, settings.cost_sync_interval_s
     )
-    authenticators: list[Authenticator] = list(parts.authenticators)
-    keys: KeyService | None = None
-    if parts.api_keys is not None:
-        authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
-        keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
     return EngineServices(
         store=parts.store,
         clock=parts.clock,

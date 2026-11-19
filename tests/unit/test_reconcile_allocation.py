@@ -47,7 +47,6 @@ def allot(ref: str) -> AllotRequest:
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
-        grant_id="grant_1",
     )
 
 
@@ -157,7 +156,7 @@ async def test_a_shared_allocation_of_the_removed_mode_still_reconciles_when_it_
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-2",))]
     await engine.jobs.run(bob, JobRequest(app=APP))
     one_eth = Money(amount=Decimal(1), currency="ETH")
-    shared = (await manager.create_key_for_grant("grant_1", "shared", one_eth, "shared")).allocation_id
+    shared = (await manager.create_key_for_grant("default", "shared", one_eth, "shared")).allocation_id
     async with store.engine.begin() as conn:  # the attempts as the old engine stored them
         await conn.execute(update(t.attempts).values(allocation_id=shared))
     usage.rows = [row("1", "0.2", shared, "m-1"), row("2", "0.3", shared, "m-2")]

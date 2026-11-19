@@ -24,6 +24,7 @@ from livepeer_builder.errors import (
     JobFailed,
     NotFound,
     NotImplementedInMilestone,
+    ProviderError,
     ProviderUnavailable,
     RunnerCallError,
 )
@@ -47,13 +48,12 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def allot(actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1") -> AllotRequest:
+def allot(actor_id: str = "alice", amount: str = "5") -> AllotRequest:
     return AllotRequest(
         operation_ref=f"allot:default:{actor_id}",
         tenant_id="default",
         actor_id=actor_id,
         amount=usd(amount),
-        grant_id=grant_id,
     )
 
 
@@ -103,7 +103,7 @@ async def test_allotting_again_after_revoke_is_a_new_operation(
     assert len(manager.allocations) == 2
 
 
-async def test_allotment_needs_a_provider_and_a_grant(
+async def test_allotment_needs_a_provider_and_the_tenants_grant(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     secret_key = generate_secret_key()
@@ -111,14 +111,16 @@ async def test_allotment_needs_a_provider_and_a_grant(
     with pytest.raises(ProviderUnavailable, match="management API"):
         await no_provider.payments.allot(admin, allot())
     no_grant = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock, allocation_manager=FakeAllocationManager(), grants_manager=FakeAllocationManager()))  # fmt: skip
-    with pytest.raises(InvalidRequest, match="choose a grant"):
-        await no_grant.payments.allot(admin, allot(grant_id=""))
+    with pytest.raises(NotFound, match="tenant 'default' has no grant"):  # the provider holds no such grant
+        await no_grant.payments.allot(admin, allot())
     with pytest.raises(ProviderUnavailable, match="management API"):
         await no_provider.payments.top_up_grant(
-            admin, TopUpRequest(amount=usd("1"), operation_ref="g", grant_id="grant_1")
+            admin, "default", TopUpRequest(amount=usd("1"), operation_ref="g")
         )
-    with pytest.raises(InvalidRequest, match="choose a grant"):
-        await no_grant.payments.top_up_grant(admin, TopUpRequest(amount=usd("1"), operation_ref="g"))
+    with pytest.raises(ProviderError, match="404"):
+        await no_grant.payments.top_up_grant(
+            admin, "default", TopUpRequest(amount=usd("1"), operation_ref="g")
+        )
 
 
 # -- costs ---------------------------------------------------------------------------------------------

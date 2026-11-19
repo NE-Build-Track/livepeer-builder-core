@@ -12,6 +12,7 @@ from pydantic import SecretStr
 from livepeer_builder.contracts import (
     Allowance,
     CallTimings,
+    Currency,
     GrantPage,
     GrantRecord,
     JobRequest,
@@ -21,10 +22,11 @@ from livepeer_builder.contracts import (
     Runner,
     RunnerReply,
     SecretRef,
+    TenantGrant,
     UsagePage,
     UsageRow,
 )
-from livepeer_builder.errors import CursorMismatch, NotFound, RunnerCallError
+from livepeer_builder.errors import CursorMismatch, NotFound, ProviderError, RunnerCallError
 from livepeer_builder.protocols import OnSigned
 
 
@@ -240,13 +242,29 @@ class _Allocation:
     currency: str
     granted: Decimal
     spent: Decimal = Decimal(0)
+    grant_id: str = ""
+
+
+@dataclass
+class _Grant:
+    record: GrantRecord
+    total: Decimal
+    unallocated: Decimal
 
 
 class FakeAllocationManager:
-    """Mimics Batteries management semantics, including idempotent replays.
+    """Mimics Batteries management semantics: idempotent replays, and a grant's unallocated balance.
 
-    ``fail_once(call, error)`` makes the next call of that method raise ``error`` before it does anything:
-    a provider that timed out or refused, for the crash-between-steps tests (D57).
+    A tenant's id is its grant's id (D83), so an allotment names a grant the fake must hold. ``add_grant``
+    gives it one under an id the test chooses (a tenant such as ``"default"``); ``create_grant``, which
+    onboarding a tenant calls, makes one under the next ``grant_<n>``. An unknown grant is refused as
+    Batteries refuses it (404), and so is an allocation or a top-up larger than the grant's unallocated
+    balance (409, "insufficient unallocated grant balance"). A revoke returns what the allocation had not
+    spent. A paused grant still takes allotments and top-ups, as at Batteries: pausing stops its payments.
+
+    ``calls`` lists every call in order. ``fail_once(call, error)`` makes the next call of that method
+    raise ``error`` before it does anything: a provider that timed out or refused, for the
+    crash-between-steps tests (D57).
     """
 
     def __init__(self) -> None:
@@ -259,33 +277,66 @@ class FakeAllocationManager:
         self.grant_page_size = 1000  # Batteries' largest page
         self.grant_page_delay_s = 0.0  # each page's latency, for a slow catalog (D57)
         self.last_grant_id = ""
+        self._held: dict[str, _Grant] = {}
+        self._created = 0
         self._failures: dict[str, Exception] = {}
 
     def fail_once(self, call: str, error: Exception) -> None:
         self._failures[call] = error
 
-    def _fail(self, call: str) -> None:
+    def add_grant(
+        self, grant_id: str, total: Decimal | int | str = 1000, currency: str = "USD", name: str = ""
+    ) -> GrantRecord:
+        """A grant the provider already holds, under ``grant_id``: a tenant onboarded before the test."""
+        amount = Decimal(total)
+        grant = GrantRecord(
+            id=grant_id, name=name or grant_id, status="active", currency=currency, total=format(amount, "f")
+        )
+        self.grants.append(grant)
+        self._held[grant_id] = _Grant(grant, amount, amount)
+        return grant
+
+    @property
+    def held(self) -> frozenset[str]:
+        """The ids of the grants the provider holds."""
+        return frozenset(self._held)
+
+    def unallocated(self, grant_id: str) -> Decimal:
+        return self._held[grant_id].unallocated
+
+    def _called(self, call: str) -> None:
+        self.calls.append(call)
         if call in self._failures:
             raise self._failures.pop(call)
+
+    def _grant(self, grant_id: str) -> _Grant:
+        if grant_id not in self._held:
+            raise ProviderError(404, "resource not found")
+        return self._held[grant_id]
+
+    def _take(self, grant_id: str, amount: Decimal) -> None:
+        grant = self._grant(grant_id)
+        if grant.unallocated < amount:
+            raise ProviderError(409, "insufficient unallocated grant balance")
+        grant.unallocated -= amount
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
-        self.calls.append("create_key_for_grant")
-        self._fail("create_key_for_grant")
+        self._called("create_key_for_grant")
         self.last_grant_id = grant_id
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
+        self._take(grant_id, amount.amount)
         allocation = f"alloc_{len(self.allocations) + 1}"
         status = "exhausted" if amount.amount == 0 else "active"
-        self.allocations[allocation] = _Allocation(status, amount.currency, amount.amount)
+        self.allocations[allocation] = _Allocation(status, amount.currency, amount.amount, grant_id=grant_id)
         key = self._mint(allocation)
         self.replays[idempotency_key] = key
         return key
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
-        self.calls.append("create_key")
-        self._fail("create_key")
+        self._called("create_key")
         if idempotency_key in self.replays:
             return self.replays[idempotency_key]  # type: ignore[return-value]
         key = self._mint(allocation_id)
@@ -295,12 +346,12 @@ class FakeAllocationManager:
     async def top_up_allocation(  # NOSONAR - async by protocol (AllocationManager); the fake awaits nothing
         self, allocation_id: str, amount: Money, idempotency_key: str
     ) -> None:
-        self.calls.append("top_up_allocation")
-        self._fail("top_up_allocation")
+        self._called("top_up_allocation")
         if idempotency_key in self.replays:
             return
-        self.replays[idempotency_key] = True
         allocation = self.allocations[allocation_id]
+        self._take(allocation.grant_id, amount.amount)
+        self.replays[idempotency_key] = True
         allocation.granted += amount.amount
         if allocation.status == "exhausted":
             allocation.status = "active"
@@ -308,29 +359,36 @@ class FakeAllocationManager:
     async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager); the fake awaits nothing
         self, grant_id: str, amount: Money, idempotency_key: str
     ) -> None:
-        self.calls.append("top_up_grant")
-        self._fail("top_up_grant")
+        self._called("top_up_grant")
         if idempotency_key in self.replays:
             return
+        grant = self._grant(grant_id)
         self.replays[idempotency_key] = True
+        grant.total += amount.amount
+        grant.unallocated += amount.amount
+        self._restate(grant)
         self.topped_up_grants.append((grant_id, amount, idempotency_key))
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
-        self._fail("set_allocation_status")
+        self._called("set_allocation_status")
         self.allocations[allocation_id].status = status
 
     async def revoke_allocation(self, allocation_id: str) -> None:
-        self._fail("revoke_allocation")
-        self.allocations[allocation_id].status = "revoked"
+        self._called("revoke_allocation")
+        allocation = self.allocations[allocation_id]
+        if allocation.status != "revoked":  # what was not spent returns to the grant, once
+            unspent = max(allocation.granted - allocation.spent, Decimal(0))
+            self._grant(allocation.grant_id).unallocated += unspent
+            allocation.granted -= unspent
+        allocation.status = "revoked"
 
     async def revoke_key(self, api_key_id: str) -> None:
-        self._fail("revoke_key")
+        self._called("revoke_key")
         allocation, secret, _ = self.keys[api_key_id]
         self.keys[api_key_id] = (allocation, secret, True)
 
     async def list_grants(self) -> list[GrantRecord]:
-        self.calls.append("list_grants")
-        self._fail("list_grants")
+        self._called("list_grants")
         grants: list[GrantRecord] = []
         cursor: str | None = None
         while True:
@@ -341,8 +399,7 @@ class FakeAllocationManager:
             cursor = page.next_cursor
 
     async def grant_page(self, cursor: str | None) -> GrantPage:
-        self.calls.append("grant_page")
-        self._fail("grant_page")
+        self._called("grant_page")
         return await self._page(cursor)
 
     async def _page(self, cursor: str | None) -> GrantPage:
@@ -355,10 +412,10 @@ class FakeAllocationManager:
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
     ) -> GrantRecord:
-        self.calls.append("create_grant")
-        self._fail("create_grant")
+        self._called("create_grant")
+        self._created += 1
         grant = GrantRecord(
-            id=f"grant_{len(self.grants) + 1}",
+            id=f"grant_{self._created}",
             name=name,
             status="active",
             currency=amount.currency,
@@ -366,9 +423,30 @@ class FakeAllocationManager:
             metadata=dict(metadata or {}),
         )
         self.grants.append(grant)
+        self._held[grant.id] = _Grant(grant, amount.amount, amount.amount)
         return grant
 
+    async def read_grant(self, grant_id: str) -> TenantGrant:
+        self._called("read_grant")
+        return _tenant_grant(self._grant(grant_id))
+
+    async def grant_balances(self) -> list[TenantGrant]:
+        self._called("grant_balances")
+        return [_tenant_grant(self._held[grant.id]) for grant in self.grants]
+
+    async def set_grant_status(self, grant_id: str, status: str) -> None:
+        self._called("set_grant_status")
+        grant = self._grant(grant_id)
+        grant.record = grant.record.model_copy(update={"status": status})
+        self._restate(grant)
+
+    def _restate(self, grant: _Grant) -> None:
+        """Keep the listed record as the grant is now: its total and its status."""
+        grant.record = grant.record.model_copy(update={"total": format(grant.total, "f")})
+        self.grants = [grant.record if listed.id == grant.record.id else listed for listed in self.grants]
+
     async def read_allocation(self, allocation_id: str) -> Allowance:
+        self._called("read_allocation")
         allocation = self.allocations[allocation_id]
         currency = "USD" if allocation.currency == "USD" else "ETH"
         return Allowance(
@@ -384,6 +462,17 @@ class FakeAllocationManager:
         secret = "lpg_" + secrets.token_hex(8)
         self.keys[key_id] = (allocation_id, secret, False)
         return NewAllocationKey(allocation_id=allocation_id, api_key_id=key_id, secret=SecretStr(secret))
+
+
+def _tenant_grant(grant: _Grant) -> TenantGrant:
+    currency: Currency = "USD" if grant.record.currency == "USD" else "ETH"
+    return TenantGrant(
+        tenant_id=grant.record.id,
+        name=grant.record.name,
+        status=grant.record.status,
+        total=Money(amount=grant.total, currency=currency),
+        unallocated=Money(amount=grant.unallocated, currency=currency),
+    )
 
 
 class FakeUsageSource:

@@ -90,7 +90,7 @@ async def test_job_round_trip_and_admin_boundary(
     assert forbidden.status_code == 403
     allotted = await client.post(
         "/v1/clearinghouse/tenants/default/actors/alice/allocation",
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=as_admin,
     )
     assert allotted.status_code == 201

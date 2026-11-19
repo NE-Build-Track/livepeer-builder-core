@@ -38,9 +38,11 @@ async def make_engine(
 
     Defaults: an in-memory store, a fresh ``LPB_SECRET_KEY`` for the actors' payment keys, a
     ``FixedClock``, the given runners (one ``runner()`` if none), a ``ScriptedStreamTransport``, one
-    ``FakeAllocationManager`` for allocations and the grant desk, and a ``FakeUsageSource``. ``supply``
-    replaces any of them; ``**settings`` override ``EngineSettings`` fields. The background loops are not
-    started, so tests stay deterministic.
+    ``FakeAllocationManager`` for allocations and the tenant desk, and a ``FakeUsageSource``. The manager
+    holds a grant for the tenant ``default`` (a tenant's id is its grant's id), so that tenant's actors
+    can be allotted; supply a manager of your own to add others (``add_grant``). ``supply`` replaces any
+    of them; ``**settings`` override ``EngineSettings`` fields. The background loops are not started, so
+    tests stay deterministic.
     """
     values: dict[str, Any] = {
         "database_url": MEMORY_URL,
@@ -50,6 +52,7 @@ async def make_engine(
         **settings,
     }
     manager = FakeAllocationManager()
+    manager.add_grant("default")  # the default tenant is onboarded: its actors can be allotted
     listed = tuple(runners) or (runner(),)
     install, client = serve(listed)
 

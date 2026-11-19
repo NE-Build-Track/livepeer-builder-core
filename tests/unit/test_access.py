@@ -252,7 +252,6 @@ async def test_no_secret_reaches_a_log_across_the_whole_credential_lifecycle(
             admin,
             AllotRequest(operation_ref="allot:default:alice",
                 tenant_id="default", actor_id="alice", amount=Money(amount=Decimal("1"), currency="USD"),
-                grant_id="g-1",
             ),
         )  # fmt: skip
         payment_keys = [(await engine.payments.credential(alice)).token]

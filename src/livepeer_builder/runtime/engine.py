@@ -107,7 +107,7 @@ class BuilderEngine:
                 "version": package_version(),
                 "api_keys": "on" if self.keys is not None else "off",
                 "own_authenticators": self._own_authenticators,
-                "grant_desk": "on" if self.payments.grants is not None else "off",
+                "tenant_desk": "on" if self.payments.tenants is not None else "off",
             },
         )
 

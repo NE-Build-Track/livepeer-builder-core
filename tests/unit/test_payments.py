@@ -22,6 +22,7 @@ from livepeer_builder.errors import (
     NotFound,
     NotProvisioned,
     OperationConflict,
+    ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import NewAllocationKey
@@ -39,7 +40,6 @@ def usd(amount: str) -> Money:
 def allot_request(
     actor_id: str = "alice",
     amount: str = "5",
-    grant_id: str = "grant_1",
     *,
     tenant_id: str = "default",
     label: str = "",
@@ -49,12 +49,11 @@ def allot_request(
         tenant_id=tenant_id,
         actor_id=actor_id,
         amount=usd(amount),
-        grant_id=grant_id,
         label=label,
     )
 
 
-@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "grant_id"])
+@pytest.mark.parametrize("field", ["tenant_id", "actor_id"])
 def test_an_id_longer_than_the_store_keeps_is_refused_before_any_call(field: str) -> None:
     """Every record keeps these ids in 200 characters (``store.schema.ID``), and allotment funds a
     provider key before it saves the actor. So a longer id is refused when the request is built, not by
@@ -76,15 +75,22 @@ async def test_allotment_is_explicit_and_admin_only(
     actor = await engine.payments.allot(admin, allot_request())
     assert actor.status == "active" and actor.currency == "USD"
     assert manager.calls == ["create_key_for_grant"]  # one atomic call: allocation + key + funding
-    assert manager.last_grant_id == "grant_1"
+    assert manager.last_grant_id == "default"  # the tenant's grant: one id (D83)
 
 
-async def test_allot_uses_the_grant_on_the_request(
+async def test_allot_draws_on_the_tenants_grant_and_no_request_names_another(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    """A tenant's id is its grant's id (D83, #165): the allocation is allotted from the grant the tenant
+    names, the record says so, and a request that names a grant is not a request."""
+    manager.add_grant("grant_chosen")
     engine = await make_engine()
-    await engine.payments.allot(admin, allot_request().model_copy(update={"grant_id": "grant_chosen"}))
-    assert manager.last_grant_id == "grant_chosen"
+    allotted = await engine.payments.allot(admin, allot_request(tenant_id="grant_chosen"))
+    assert manager.last_grant_id == "grant_chosen" and allotted.grant_id == "grant_chosen"
+    with pytest.raises(ValidationError, match="grant_id"):
+        AllotRequest(**(allot_request().model_dump() | {"grant_id": "grant_chosen"}))
+    with pytest.raises(ValidationError, match="grant_id"):
+        TopUpRequest(amount=usd("1"), operation_ref="t", grant_id="grant_chosen")  # type: ignore[call-arg]
 
 
 async def test_repeat_allotment_returns_the_original(
@@ -171,42 +177,45 @@ async def test_top_up_needs_an_operation_ref_and_applies_once(
         )
 
 
-async def test_operator_lists_and_creates_grants(
+async def test_a_clearinghouse_admin_onboards_and_lists_tenants(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    desk = engine.payments.grants
-    assert desk is not None  # a grants manager was supplied, so the grant desk exists
-    assert await desk.list_grants(admin) == []
+    desk = engine.payments.tenants
+    assert desk is not None  # a grants manager was supplied, so the tenant desk exists
+    assert [tenant.tenant_id for tenant in await desk.list_tenants(admin)] == ["default"]
     with pytest.raises(AccessDenied):
-        await desk.list_grants(alice)
+        await desk.list_tenants(alice)
     with pytest.raises(InvalidRequest, match="name"):
-        await desk.create_grant(admin, "  ", usd("1"), operation_ref="grant-1")
-    with pytest.raises(InvalidRequest, match="positive"):
-        await desk.create_grant(admin, "ops", usd("0"), operation_ref="grant-2")
-    with pytest.raises(InvalidRequest, match="positive"):
-        await desk.create_grant(
-            admin, "ops", Money(amount=Decimal("1"), currency="ETH"), operation_ref="grant-3"
-        )
-    created = await desk.create_grant(admin, " ops ", usd("5"), operation_ref="grant-4")
-    assert created == manager.grants[0]
-    assert created.name == "ops" and created.total == "5"
-    assert await desk.list_grants(admin) == [created]
+        await desk.onboard(admin, "  ", usd("1"), operation_ref="grant-1")
+    with pytest.raises(ValidationError, match="zero or more"):
+        await desk.onboard(admin, "ops", usd("-1"), operation_ref="grant-2")
+    with pytest.raises(InvalidRequest, match="USD"):
+        await desk.onboard(admin, "ops", Money(amount=Decimal("1"), currency="ETH"), operation_ref="grant-3")
+    assert manager.calls == ["grant_balances"]  # a refused onboarding never reached the provider
+    created = await desk.onboard(admin, " ops ", usd("5"), operation_ref="grant-4")
+    grant = manager.grants[-1]
+    assert (created.tenant_id, created.name) == (grant.id, "ops") and grant.total == "5"
+    listed = await desk.list_tenants(admin)
+    assert [(tenant.tenant_id, tenant.total, tenant.unallocated) for tenant in listed] == [
+        ("default", usd("1000"), usd("1000")),
+        (created.tenant_id, usd("5"), usd("5")),
+    ]
 
 
-async def test_an_auditor_never_sees_the_operators_grants(
+async def test_an_auditor_never_lists_the_tenants(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """Grants are the operator's money for every tenant and carry none, so an auditor bound to
-    one tenant cannot read them (John, #53 review). Admins still list them."""
+    """The tenant list is every tenant's grant, so an auditor bound to one tenant cannot read it
+    (John, #53 review). A clearinghouse admin lists them."""
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
-    await desk.create_grant(admin, "another tenant's pool", usd("5"), operation_ref="grant-5")
+    await desk.onboard(admin, "another tenant", usd("5"), operation_ref="grant-5")
     auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")
     with pytest.raises(AccessDenied):
-        await desk.list_grants(auditor)
-    assert len(await desk.list_grants(admin)) == 1
+        await desk.list_tenants(auditor)
+    assert len(await desk.list_tenants(admin)) == 2
 
 
 def test_a_allotment_label_is_capped_where_it_is_stored() -> None:
@@ -258,67 +267,80 @@ def test_a_allotment_amount_within_the_providers_format_is_kept(amount: str) -> 
 )
 def test_a_top_up_amount_the_provider_would_not_take_is_refused_when_built(amount: str, rule: str) -> None:
     with pytest.raises(ValidationError, match=rule):
-        TopUpRequest(amount=usd(amount), operation_ref="f", grant_id="g")
+        TopUpRequest(amount=usd(amount), operation_ref="f")
 
 
 async def test_a_grant_amount_the_provider_would_not_take_is_refused_before_the_ledger(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     for amount in [*TOO_PRECISE, *TOO_LARGE]:
         with pytest.raises(ValidationError):
-            await desk.create_grant(admin, "ops", usd(amount), operation_ref="grant-1")
+            await desk.onboard(admin, "ops", usd(amount), operation_ref="grant-1")
     assert manager.calls == []
-    created = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")  # the ref is free
-    assert created.total == "5"
+    created = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")  # the ref is free
+    assert (await desk.grant(admin, created.tenant_id)).total == usd("5")
 
 
-async def test_top_up_a_named_grant_applies_once(
+async def test_top_up_a_tenants_grant_applies_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    manager.add_grant("grant_chosen", total=0)
     engine = await make_engine()
-    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1", grant_id="grant_chosen")
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     with pytest.raises(AccessDenied):
-        await engine.payments.top_up_grant(alice, request)
-    await engine.payments.top_up_grant(admin, request)
-    await engine.payments.top_up_grant(admin, request)  # a retry
+        await engine.payments.top_up_grant(alice, "grant_chosen", request)
+    await engine.payments.top_up_grant(admin, "grant_chosen", request)
+    await engine.payments.top_up_grant(admin, "grant_chosen", request)  # a retry
     key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_chosen:topup-1", "fund")
     assert manager.topped_up_grants == [("grant_chosen", usd("10"), key)]
+    assert manager.unallocated("grant_chosen") == Decimal(10)
     assert 1 <= len(key) <= 256 and all(character.isalnum() or character in "_-" for character in key)
     with pytest.raises(InvalidRequest):
         await engine.payments.top_up_grant(
-            admin, TopUpRequest(amount=usd("0"), operation_ref="zero", grant_id="g")
+            admin, "grant_chosen", TopUpRequest(amount=usd("0"), operation_ref="zero")
         )
     with pytest.raises(InvalidRequest):
         await engine.payments.top_up_grant(
             admin,
-            TopUpRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth", grant_id="g"),
+            "grant_chosen",
+            TopUpRequest(amount=Money(amount=Decimal(1), currency="ETH"), operation_ref="eth"),
         )
 
 
-async def test_omitted_grant_uses_the_callers_allocation(
+async def test_the_grant_a_command_acts_on_is_the_tenants_and_never_the_callers(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    """Before #165 a request with no grant used the grant of the caller's own allocation. A tenant's id
+    is its grant's id now: the caller's allocation chooses nothing."""
+    manager.add_grant("grant_ops")
     engine = await make_engine()
-    await engine.payments.allot(admin, allot_request(actor_id="operator", grant_id="grant_ops"))
-    await engine.payments.allot(admin, allot_request(grant_id=""))
-    assert manager.last_grant_id == "grant_ops"
-    await engine.payments.top_up_grant(admin, TopUpRequest(amount=usd("3"), operation_ref="top"))
-    key = idempotency_key(engine.settings.engine_id, "fund-grant:grant_ops:top", "fund")
-    assert manager.topped_up_grants == [("grant_ops", usd("3"), key)]
+    await engine.payments.allot(admin, allot_request(actor_id="operator", tenant_id="grant_ops"))
+    await engine.payments.allot(admin, allot_request())  # the caller is allotted from grant_ops
+    assert manager.last_grant_id == "default"
+    await engine.payments.top_up_grant(admin, "default", TopUpRequest(amount=usd("3"), operation_ref="top"))
+    key = idempotency_key(engine.settings.engine_id, "fund-grant:default:top", "fund")
+    assert manager.topped_up_grants == [("default", usd("3"), key)]
 
 
-async def test_a_grant_is_required_when_the_caller_has_no_allocation(
-    make_engine: EngineFactory, admin: ActorContext
+async def test_a_tenant_with_no_grant_is_refused_and_nothing_is_allotted(
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    """A tenant that was never onboarded has no grant at the provider. The provider refuses, the engine
+    says which tenant, and the reference is free again."""
     engine = await make_engine()
-    missing = allot_request(grant_id="")
-    with pytest.raises(InvalidRequest, match="choose a grant"):
+    missing = allot_request(tenant_id="never-onboarded")
+    with pytest.raises(NotFound, match="tenant 'never-onboarded' has no grant"):
         await engine.payments.allot(admin, missing)
-    with pytest.raises(InvalidRequest, match="choose a grant"):
-        await engine.payments.top_up_grant(admin, TopUpRequest(amount=usd("1"), operation_ref="g"))
+    assert manager.allocations == {} and await engine.store.list_actors(None) == []
+    assert await engine.store.get_operation("default", "operator", missing.operation_ref) is None
+    with pytest.raises(ProviderError, match="404"):
+        await engine.payments.top_up_grant(
+            admin, "never-onboarded", TopUpRequest(amount=usd("1"), operation_ref="g")
+        )
+    assert manager.topped_up_grants == []
 
 
 async def test_revoke_forgets_the_key(
@@ -611,7 +633,7 @@ async def test_a_resumed_allotment_asks_the_store_again_before_another_provider_
     with pytest.raises(InvalidRequest, match="cannot store"):
         await engine.payments.allot(admin, allot_request())  # resumed: now a new provider operation
     assert list(manager.allocations) == [saved.allocation_id]  # no second allocation was funded
-    assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]
+    assert manager.calls == ["create_key_for_grant", "create_key_for_grant", "revoke_allocation"]
 
 
 async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_operation(
@@ -656,7 +678,7 @@ async def test_a_store_without_the_writable_check_is_not_asked(
     engine = await make_engine(supply=EngineSupply(secret_store=MemorySecretStore()))
     await engine.payments.allot(admin, allot_request())
     await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
-    assert manager.calls == ["create_key_for_grant", "create_key"]
+    assert manager.calls == ["create_key_for_grant", "create_key", "revoke_key"]  # the old key's revoke
 
 
 async def test_allowance_is_read_from_the_provider(
@@ -674,8 +696,9 @@ async def test_allowance_is_read_from_the_provider(
 
 
 async def test_allotment_stores_the_label_and_admins_list_the_actors(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    manager.add_grant("app-2")
     engine = await make_engine()
     opaque = "4f6c2a1e-9b3d-4c8e-a1f0-7d2e5b9c3a10"  # an identity provider's sub
     await engine.payments.allot(admin, allot_request(actor_id=opaque, label="Alice Smith"))
@@ -744,8 +767,9 @@ async def test_allotment_a_person_takes_their_name_as_the_label(
 
 
 async def test_an_auditor_lists_only_its_tenants_actors(
-    make_engine: EngineFactory, admin: ActorContext
+    make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    manager.add_grant("app-2")
     engine = await make_engine()
     await engine.payments.allot(admin, allot_request(actor_id="alice"))
     await engine.payments.allot(admin, allot_request(actor_id="bob", tenant_id="app-2"))

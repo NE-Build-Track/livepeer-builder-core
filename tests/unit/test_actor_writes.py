@@ -42,7 +42,6 @@ def allot_request(amount: str = "5") -> AllotRequest:
         tenant_id="default",
         actor_id="alice",
         amount=usd(amount),
-        grant_id="grant_1",
         operation_ref="allot:alice",
     )
 

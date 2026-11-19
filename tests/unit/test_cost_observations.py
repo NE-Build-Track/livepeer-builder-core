@@ -35,7 +35,7 @@ async def paid_job(
         admin,
         AllotRequest(
             operation_ref="allot:default:alice", tenant_id="default", actor_id="alice",
-            amount=Money(amount=Decimal(1), currency="ETH"), grant_id="grant_1",
+            amount=Money(amount=Decimal(1), currency="ETH"),
         ),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]

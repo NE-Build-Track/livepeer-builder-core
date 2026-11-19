@@ -21,7 +21,9 @@ OperationCommand = Literal[
     "allot",
     "top_up",
     "top_up_grant",
-    "create_grant",
+    "create_grant",  # no command writes it since #165: records made before it still read
+    "onboard_tenant",
+    "set_tenant_status",
     "rotate_payment_key",
     "issue_key",
     "rotate_access_key",

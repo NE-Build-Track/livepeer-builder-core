@@ -3,7 +3,8 @@
 The only module that knows the Batteries wire format. Baseline: livepeer/clearinghouse-batteries
 v0.0.3, ``03bc9fb`` (docs/references/upstream-baseline.md). Every route needs the least-privilege
 management credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant the engine
-names. It has no ``grants.*``.
+names. It has no ``grants.*``: creating, reading and pausing a grant use the grants credential
+(``LPB_BATTERIES_GRANTS_TOKEN``). Batteries' ``grant_id`` is the engine's ``tenant_id`` (D83).
 """
 
 import asyncio
@@ -26,6 +27,7 @@ from livepeer_builder.contracts import (
     NewAllocationKey,
     SetAsideReason,
     SetAsideUsage,
+    TenantGrant,
     UsagePage,
     UsageRow,
 )
@@ -112,28 +114,13 @@ class BatteriesClient:
         return allowance_from_body(await self._request("GET", f"/v1/allocations/{segment(allocation_id)}"))
 
     async def list_grants(self) -> list[GrantRecord]:
-        """Every grant, page by page. A page that answers the cursor it was asked with is an answer the
-        engine cannot read: asking again would never end."""
-        grants: list[GrantRecord] = []
-        cursor: str | None = None
-        while True:
-            page = await self.grant_page(cursor)
-            grants += page.grants
-            if page.next_cursor is None:
-                return grants
-            if page.next_cursor == cursor:
-                raise ProviderError(200, "Batteries answered a grant list whose cursor did not advance")
-            cursor = page.next_cursor
+        return [grant_from_item(item) for item in await self._pages("/v1/grants", {})]
 
     async def grant_page(self, cursor: str | None) -> GrantPage:
         """One page, oldest first: a resumed grant create looks for its tag page by page (D57)."""
-        params = {"limit": "1000"}  # Batteries' largest page
-        if cursor:
-            params["cursor"] = cursor
-        items, next_cursor = list_page(await self._request("GET", "/v1/grants", params=params))
-        return GrantPage(
-            grants=tuple(grant_from_item(item) for item in items), next_cursor=next_cursor or None
-        )
+        params = {"limit": "1000"} | ({"cursor": cursor} if cursor else {})  # Batteries' largest page
+        items, following = list_page(await self._request("GET", "/v1/grants", params=params))
+        return GrantPage(grants=tuple(grant_from_item(item) for item in items), next_cursor=following or None)
 
     async def create_grant(
         self, name: str, amount: Money, metadata: Mapping[str, str] | None = None
@@ -148,6 +135,43 @@ class BatteriesClient:
             return grant_from_item(await self._request("GET", f"/v1/grants/{segment(grant_id)}"))
         except ProviderError as exc:
             raise ProviderUnavailable(f"grant {grant_id} created but not read back: {exc}") from exc
+
+    async def read_grant(self, grant_id: str) -> TenantGrant:
+        """The grant, with what is left of it to allot (``tenant_grant``): two reads, the grant first."""
+        grant = await self._request("GET", f"/v1/grants/{segment(grant_id)}")
+        return tenant_grant(grant, (await self._allotted(grant_id)).get(grant_id, Decimal(0)))
+
+    async def grant_balances(self) -> list[TenantGrant]:
+        """Every grant with its unallocated balance, oldest first."""
+        grants = await self._pages("/v1/grants", {})
+        allotted = await self._allotted(None)
+        return [tenant_grant(grant, allotted.get(_required(grant, "id"), Decimal(0))) for grant in grants]
+
+    async def set_grant_status(self, grant_id: str, status: str) -> None:
+        await self._request("PATCH", f"/v1/grants/{segment(grant_id)}/status", json={"status": status})
+
+    async def _allotted(self, grant_id: str | None) -> dict[str, Decimal]:
+        """What the allocations of each grant hold, by grant; of one grant when it is named."""
+        held: dict[str, Decimal] = {}
+        for item in await self._pages("/v1/allocations", {"grant_id": grant_id} if grant_id else {}):
+            grant = _required(item, "grant_id")
+            held[grant] = held.get(grant, Decimal(0)) + _amount(item, "allocated")
+        return held
+
+    async def _pages(self, path: str, filters: dict[str, str]) -> list[dict[str, Any]]:
+        """Every item of a list. A page that answers the cursor it was asked with is an answer the
+        engine cannot read: asking again would never end."""
+        items: list[dict[str, Any]] = []
+        cursor = ""
+        while True:
+            params = {**filters, "limit": "1000"} | ({"cursor": cursor} if cursor else {})
+            page, following = list_page(await self._request("GET", path, params=params))
+            items += page
+            if following == cursor and cursor:
+                raise ProviderError(200, "Batteries answered a list whose cursor did not advance")
+            if not following:
+                return items
+            cursor = following
 
     async def _request(
         self,
@@ -353,6 +377,35 @@ def grant_from_item(item: dict[str, Any]) -> GrantRecord:
         total=_optional(item, total_key),
         metadata=_metadata(_optional(item, "metadata")),
     )
+
+
+def tenant_grant(item: dict[str, Any], allotted: Decimal) -> TenantGrant:
+    """A grant as Batteries serves it, as the tenant whose id it is. Batteries serves a grant's total and
+    no unallocated balance (v0.0.3, ``internal/store/manage.go``, ``listQuery``), so that is the total
+    less ``allotted``, what the grant's allocations hold: each one's ``allocated`` amount, which a revoke
+    lowers by what it returns. The grant is read first: an allotment made between the two reads is
+    counted and a top-up is not yet, so the difference is held at zero, below which the provider never
+    lets the balance go. A figure to show, never one the engine refuses by."""
+    currency: Currency = "USD" if _optional(item, "currency").lower() == "usd" else "ETH"
+    total = _amount(item, "total")
+    return TenantGrant(
+        tenant_id=_required(item, "id"),
+        name=_optional(item, "name"),
+        status=_optional(item, "status"),
+        total=Money(amount=total, currency=currency),
+        unallocated=Money(amount=max(total - allotted, Decimal(0)), currency=currency),
+    )
+
+
+def _amount(item: dict[str, Any], name: str) -> Decimal:
+    """``<name>_usd`` or ``<name>_eth``, by the item's currency: a decimal string, or an answer the
+    engine cannot read (#114, C21), never a zero."""
+    key = f"{name}_{_optional(item, 'currency').lower() or 'usd'}"
+    value = item.get(key)
+    amount = _decimal(value) if isinstance(value, str) else None
+    if amount is None or not amount.is_finite():
+        raise ProviderError(200, f"Batteries answered with no usable {key}")
+    return amount
 
 
 def _required(body: dict[str, Any], key: str) -> str:

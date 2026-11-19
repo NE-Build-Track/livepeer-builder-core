@@ -46,7 +46,6 @@ async def allotted(make_engine: EngineFactory, admin: ActorContext, *actors: str
             tenant_id="default",
             actor_id=actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
         )
         await engine.payments.allot(admin, request)
     return engine
@@ -650,7 +649,6 @@ async def test_a_repeat_after_a_failure_before_dispatch_runs_once_the_cause_is_f
         admin,
         AllotRequest(operation_ref="allot:default:bob",
             tenant_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
         ),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok()]

@@ -4,11 +4,16 @@ Each actor has its own allocation and key (``per_actor``, the only allocation mo
 by an explicit admin command. An actor with no allocation fails *before payment* with NotProvisioned. There
 is no shared key to fall back to and no automatic allotment.
 
+An allocation is allotted from its tenant's grant, and a tenant's id is its grant's id (D83, #165): no
+command takes a separate grant id. Every command names the tenant it acts on to the access policy, so a
+tenant admin is confined to its own tenant there, before any lookup or provider call.
+
 Every provider write that moves money carries an idempotency key derived from
 (engine_id, operation, step), so a retried command never applies twice.
 """
 
 import logging
+from typing import Any
 
 from pydantic import TypeAdapter
 
@@ -20,6 +25,7 @@ from livepeer_builder.contracts import (
     Allowance,
     Currency,
     KnownActor,
+    NewAllocationKey,
     Operation,
     PaymentKey,
     ResourceRef,
@@ -44,9 +50,10 @@ from livepeer_builder.protocols import (
     WritableSecretStore,
 )
 from livepeer_builder.services.actor_writes import ActorWrites
-from livepeer_builder.services.grants import GrantDesk, idempotency_key
+from livepeer_builder.services.grants import idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PaymentKeys
+from livepeer_builder.services.tenants import TenantDesk
 from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
@@ -66,7 +73,7 @@ class PaymentsService:
         engine_id: str,
         ledger: OperationLedger,
         manager: AllocationManager | None = None,
-        grants: AllocationManager | None = None,
+        tenants: TenantDesk | None = None,
         currency: Currency = "USD",
     ) -> None:
         self._store = store
@@ -78,9 +85,7 @@ class PaymentsService:
         self._engine_id = engine_id
         self._ledger = ledger
         self._manager = manager
-        self.grants: GrantDesk | None = (
-            GrantDesk(grants, policy, currency, ledger, engine_id) if grants is not None else None
-        )
+        self.tenants = tenants  # None: the tenant desk is off (no grants manager)
         self._currency = currency
 
     # -- CredentialResolver ---------------------------------------------------------------------
@@ -113,7 +118,9 @@ class PaymentsService:
         only where the actor is still as this command read it, so it never undoes a command that
         finished while it was at the provider (``PaymentKeys.overtaken``; #115, C4).
         """
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(
+            admin, Operation.ADMIN_ALLOCATIONS, _allocation(request.tenant_id, request.actor_id)
+        )
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
         manager = self._require_manager()  # refused before the ledger: nothing was sent
@@ -121,8 +128,20 @@ class PaymentsService:
         async def steps(run: RunningOperation) -> ActorAllocation:
             return await self._allot(run, admin, manager, request)
 
-        target = request.model_dump(exclude={"operation_ref"})
-        return await self._ledger.run(admin, "allot", request.operation_ref, target, steps, _ACTOR)
+        # The grant stays in what is hashed, as it was while a request named one (the fingerprint is a
+        # format: tests/unit/test_hashed_forms.py). It is the tenant's id.
+        target = request.model_dump(exclude={"operation_ref"}) | {"grant_id": request.tenant_id}
+
+        async def as_recorded() -> dict[str, Any]:
+            """The request as a release before #165 recorded it, when it named a grant: the grant the
+            actor's record names. The repeat of such an allotment still matches its record and is
+            answered from it; one that matches neither form is a conflict. Neither is sent anywhere."""
+            actor = await self._store.get_actor(request.tenant_id, request.actor_id)
+            return target | {"grant_id": request.tenant_id if actor is None else actor.grant_id}
+
+        return await self._ledger.run(
+            admin, "allot", request.operation_ref, target, steps, _ACTOR, earlier_request=as_recorded
+        )
 
     async def _allot(
         self,
@@ -140,9 +159,14 @@ class PaymentsService:
             if run.context.get("new_secret_key_id") != existing.api_key_id:
                 raise AlreadyAllotted(existing)
             return await self._keys.shared(existing, SecretRef(ref=run.context["new_secret_ref"]))
-        grant_id = await self._resolved_grant(admin, request.grant_id)
-        if not grant_id:
-            raise InvalidRequest("choose a grant")
+        if existing is not None and existing.grant_id != request.tenant_id:
+            # A record from before a tenant's id was its grant's id (#165). Its allocation was allotted
+            # from another grant, and a new one is never allotted from a grant the record does not name.
+            raise InvalidRequest(
+                f"actor {request.actor_id!r} was allotted from grant {existing.grant_id!r}, which is not "
+                f"tenant {request.tenant_id!r}'s: a tenant's id is its grant's id, and an allocation is "
+                "never moved to another grant"
+            )
         if not request.label:  # a person who signed in is labelled with their name (D48)
             seen = await self._store.get_sighting(request.tenant_id, request.actor_id)
             if seen is not None and seen.name:
@@ -155,18 +179,13 @@ class PaymentsService:
             operation += f":{existing.updated_at.isoformat()}"
         sent_as = idempotency_key(self._engine_id, operation, "api-key")
         await self._require_writable_secrets(run, sent_as)
-        key = await manager.create_key_for_grant(
-            grant_id,
-            request.label or f"{request.tenant_id}/{request.actor_id}",
-            request.amount,
-            sent_as,
-        )
+        key = await self._allotted_from_grant(manager, request, sent_as)
         ref = await self._keys.stored(run, request.tenant_id, request.actor_id, key, sent_as)
         now = self._clock.now()
         allotted = ActorAllocation(
             tenant_id=request.tenant_id,
             actor_id=request.actor_id,
-            grant_id=grant_id,
+            grant_id=request.tenant_id,
             allocation_id=key.allocation_id,
             api_key_id=key.api_key_id,
             secret_ref=ref,
@@ -180,6 +199,24 @@ class PaymentsService:
             current = await self._store.get_actor(request.tenant_id, request.actor_id)
             return await self._keys.overtaken(request.actor_id, current, key, ref)
         return allotted
+
+    @staticmethod
+    async def _allotted_from_grant(
+        manager: AllocationManager, request: AllotRequest, sent_as: str
+    ) -> NewAllocationKey:
+        """The allocation and its key, allotted from the tenant's grant: one id (D83). The provider's
+        refusal is passed on with its reason (an allocation larger than the grant's unallocated balance
+        is its 409); a grant it does not hold is said as the tenant that was never onboarded."""
+        name = request.label or f"{request.tenant_id}/{request.actor_id}"
+        try:
+            return await manager.create_key_for_grant(request.tenant_id, name, request.amount, sent_as)
+        except ProviderError as refused:
+            if refused.status_code != 404:
+                raise
+            raise NotFound(
+                f"tenant {request.tenant_id!r} has no grant at the payment provider: a tenant's id is its "
+                "grant's id, and a clearinghouse admin onboards a tenant before anything is allotted to it"
+            ) from refused
 
     # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------
 
@@ -222,7 +259,7 @@ class PaymentsService:
     async def top_up(
         self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
     ) -> ActorAllocation:
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS, _allocation(tenant_id, actor_id))
         actor = await self._require_actor(tenant_id, actor_id)
         if request.amount.currency != actor.currency or request.amount.amount <= 0:
             raise InvalidRequest(f"a top-up must be a positive amount in {actor.currency}")
@@ -241,30 +278,28 @@ class PaymentsService:
         target = {"tenant_id": tenant_id, "actor_id": actor_id, "amount": request.amount}
         return await self._ledger.run(admin, "top_up", request.operation_ref, target, steps, _ACTOR)
 
-    async def top_up_grant(self, admin: ActorContext, request: TopUpRequest) -> None:
-        """Add funds to the named grant, or to the grant of the caller's own allocation."""
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+    async def top_up_grant(self, admin: ActorContext, tenant_id: str, request: TopUpRequest) -> None:
+        """Add to a tenant's grant, whose id is the tenant's id. Only a clearinghouse admin enlarges a
+        grant (``admin.tenants``): a tenant admin divides its own."""
+        self._policy.check(admin, Operation.ADMIN_TENANTS, ResourceRef(kind="tenant", tenant_id=tenant_id))
         if request.amount.currency != self._currency or request.amount.amount <= 0:
             raise InvalidRequest(f"a top-up must be a positive amount in {self._currency}")
-        grant_id = await self._resolved_grant(admin, request.grant_id)
-        if not grant_id:
-            raise InvalidRequest("choose a grant")
         manager = self._require_manager()
 
         async def steps(_: RunningOperation) -> None:
             await manager.top_up_grant(
-                grant_id,
+                tenant_id,
                 request.amount,
-                idempotency_key(self._engine_id, f"fund-grant:{grant_id}:{request.operation_ref}", "fund"),
+                idempotency_key(self._engine_id, f"fund-grant:{tenant_id}:{request.operation_ref}", "fund"),
             )
 
-        target = {"grant_id": grant_id, "amount": request.amount}
+        target = {"grant_id": tenant_id, "amount": request.amount}  # hashed as before: the grant's id
         await self._ledger.run(admin, "top_up_grant", request.operation_ref, target, steps, _NOTHING)
 
     async def set_status(
         self, admin: ActorContext, tenant_id: str, actor_id: str, status: AllocationStatus
     ) -> ActorAllocation:
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS, _allocation(tenant_id, actor_id))
         if status not in ("active", "paused"):
             raise InvalidRequest("status must be active or paused; use revoke to revoke")
         actor = await self._require_actor(tenant_id, actor_id)
@@ -280,7 +315,7 @@ class PaymentsService:
         It takes no reference (D57): a repeat after it finished answers with the revoked actor and calls
         nothing, so a retry after a lost answer is not an error (D61). One cut short is still active here
         and runs again; Batteries' revoke is repeat-safe."""
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS, _allocation(tenant_id, actor_id))
         if (done := await self._store.get_actor(tenant_id, actor_id)) and done.status == "revoked":
             return done
         actor = await self._require_actor(tenant_id, actor_id)
@@ -308,7 +343,7 @@ class PaymentsService:
         still revokes the old one, a repeat never revokes the live key as "the old key" (B1), and a resume
         on an allocation allotted since is refused. The new key is written only over
         that old key: a rotation that another one overtook is refused (``PaymentKeys.rotated``; #115, C4)."""
-        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
+        self._policy.check(admin, Operation.ADMIN_ALLOCATIONS, _allocation(tenant_id, actor_id))
         actor = await self._require_actor(tenant_id, actor_id)
         previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
         previous[BEGAN_ON] = actor.allocation_id
@@ -365,16 +400,6 @@ class PaymentsService:
             raise NotFound(f"actor {actor_id!r} has no allocation")
         return actor
 
-    async def _resolved_grant(self, actor: ActorContext, requested: str) -> str:
-        """The grant on the request, or the grant of this caller's own allocation."""
-        chosen = requested.strip()
-        if chosen:
-            return chosen
-        allotted = await self._store.get_actor(actor.tenant_id, actor.actor_id)
-        if allotted is None or allotted.status == "revoked" or not allotted.grant_id:
-            return ""
-        return allotted.grant_id
-
     async def _require_writable_secrets(
         self, run: RunningOperation, sent_as: str, holder: ActorAllocation | None = None
     ) -> None:
@@ -420,6 +445,11 @@ class PaymentsService:
         if self._manager is None:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
+
+
+def _allocation(tenant_id: str, actor_id: str) -> ResourceRef:
+    """What an allocation command acts on, for the policy: a tenant admin is confined by it (#165)."""
+    return ResourceRef(kind="allocation", tenant_id=tenant_id, owner_actor_id=actor_id)
 
 
 def _known(key: tuple[str, str], allocation: ActorAllocation | None, seen: SeenActor | None) -> KnownActor:

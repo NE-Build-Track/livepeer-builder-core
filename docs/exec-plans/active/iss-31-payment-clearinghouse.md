@@ -11,7 +11,8 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P7 are built and in review. P8 follows.
+- **Progress:** P1 to P8 are built and in review. The three paid proofs of P8 are run from the
+  runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook).
 
 ## Goal
 
@@ -54,7 +55,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
 - [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`. Built and in
   review: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
-- [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
+- [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
+  review.
 
 Each pull request ticks its own line here in the same change.
 
@@ -113,4 +115,15 @@ Each pull request ticks its own line here in the same change.
   closed); an engine that uses a clearinghouse serves neither the signer's two paths nor a wallet
   report; an allocation an actor no longer holds still cannot be read through a clearinghouse (T40).
   Source: Mike (the two decisions, as dated notes on #168); the rest for his review.
-
+- **19 November 2026, P8.** The role is the one switch: `LPB_ROLE=work` selects the remote adapters,
+  and the three clearinghouse settings say which clearinghouse. So those settings without
+  `LPB_ROLE=work` are refused at startup, where #168 let them select the adapters by themselves; nothing
+  released used them. Built where the guide is silent: `GET /v1/offerings` and `/v1/keys` are work
+  routes, so a clearinghouse serves neither; `/livez` and `/readyz` are served in every role, and
+  `/readyz` names the role; an engine in its `clearinghouse` role also needs a signer, Batteries and the
+  grants credential, judged on the parts it runs with, and refuses to run a job for an embedding caller
+  too; an engine in its `work` role may still have a private listener; one committed schema documents
+  the three roles, each route tagged with its half. The two Compose projects publish the public
+  listener without the guide's proxy (T43), and the enterprise project allots through the embedded
+  API, because an engine server in its `work` role serves no route that allots (T41). Source: D84, D87
+  and the guide's table of roles; the rest for Mike's review.

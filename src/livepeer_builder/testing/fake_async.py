@@ -83,7 +83,9 @@ class FakeQueue:
     _waiting: dict[UUID, tuple[ActorContext, JobRequest]]
     _operations: dict[tuple[str, str, str], tuple[str, UUID]]
 
-    async def submit(self, actor: ActorContext, request: JobRequest) -> Job:
+    async def submit(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
+        self, actor: ActorContext, request: JobRequest
+    ) -> Job:
         """Queue the job, as the engine does: nothing is scripted to run until ``advance()``."""
         self.policy.check(actor, Operation.JOBS_RUN)  # first, as the engine's submit
         if request.mode != "async":
@@ -140,7 +142,7 @@ class FakeQueue:
         retrying = async_repeat(holder, same_request=fingerprint == request_fingerprint(request))
         return None if retrying else holder
 
-    async def advance(self) -> int:
+    async def advance(self) -> int:  # NOSONAR - awaited as the worker's run_once is; awaits nothing
         """Run every queued job, oldest first, to the end its script gives it; how many ran. The
         engine's worker does this by itself; a test of the engine steps it with ``run_once()``."""
         waiting, self._waiting = self._waiting, {}
@@ -157,7 +159,9 @@ class FakeQueue:
                 self.record(actor, request, "failed", failure, queued=job)
         return len(waiting)
 
-    async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
+    async def result(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
+        self, actor: ActorContext, job_id: UUID
+    ) -> JobResult:
         """The engine's rules (ISS-26): the stored bytes of a succeeded async job, and nothing else."""
         job = self.owned(actor, Operation.JOBS_READ, job_id)
         if job.state in ("queued", "running"):
@@ -171,7 +175,9 @@ class FakeQueue:
             job=job, status_code=200, content=kept.content, content_type=kept.content_type, data=kept.data
         )
 
-    async def cancel(self, actor: ActorContext, job_id: UUID) -> Job:
+    async def cancel(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
+        self, actor: ActorContext, job_id: UUID
+    ) -> Job:
         """Cancel a queued job; any other is ``JobNotQueued``, and a cancelled one is answered again."""
         job = self.owned(actor, Operation.JOBS_RUN, job_id)
         if job.state != "queued":

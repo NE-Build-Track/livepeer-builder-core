@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from livepeer_builder import BuilderEngine
 from livepeer_builder.adapters.runner_address import as_built, origin, runner_address
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money
 from livepeer_builder.errors import RunnerCallError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport
@@ -100,10 +100,8 @@ async def api(
     engine = await make_engine()
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-paths-1")
     amount = Money(amount=Decimal(5), currency="USD")
-    alice_allocation = {"application_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
-    await engine.payments.provision(
-        admin, ProvisionRequest(**alice_allocation, amount=amount, operation_ref="p1")
-    )
+    alice_allocation = {"tenant_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
+    await engine.payments.allot(admin, AllotRequest(**alice_allocation, amount=amount, operation_ref="p1"))
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield client, engine, alice.token

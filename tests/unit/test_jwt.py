@@ -22,6 +22,7 @@ from livepeer_builder.errors import NotAuthenticated, ProviderUnavailable
 
 ISSUER = "https://idp.example.com/"
 AUDIENCE = "https://engine.example.com"
+TENANT = "default"  # every token's tenant when no claim names one
 DISCOVERY = "https://idp.example.com/.well-known/openid-configuration"
 JWKS_URL = "https://idp.example.com/keys"
 JWKS_URL_2 = "https://idp.example.com/keys-v2"
@@ -114,7 +115,8 @@ Make = Callable[..., JwtBearerAuthenticator]
 def make(provider: Provider, clock: Clock) -> Make:
     def build(**overrides: Any) -> JwtBearerAuthenticator:
         jwks_url = overrides.pop("jwks_url", None)
-        settings = JwtSettings(issuer=ISSUER, audience=AUDIENCE, **overrides)
+        tenant = {} if "tenant_claim" in overrides else {"tenant_id": TENANT}  # exactly one (#163 review)
+        settings = JwtSettings(issuer=ISSUER, audience=AUDIENCE, **tenant, **overrides)
         client = httpx.AsyncClient(transport=httpx.MockTransport(provider.handler))
         return JwtBearerAuthenticator(settings, JwksCache(client, ISSUER, jwks_url, monotonic=clock))
 
@@ -141,7 +143,7 @@ def bearer(token: str) -> AuthRequest:
 async def test_a_valid_token_becomes_an_actor(make: Make, provider: Provider) -> None:
     actor = await make().authenticate(bearer(provider.token()))
     assert actor is not None
-    assert (actor.actor_id, actor.application_id, actor.credential_kind) == ("alice", "default", "actor")
+    assert (actor.actor_id, actor.tenant_id, actor.credential_kind) == ("alice", "default", "actor")
     assert actor.permissions == frozenset({"jobs.run", "jobs.read"})
     assert actor.auth == AuthProvenance(method="jwt", issuer=ISSUER, credential_id="t-1")
     assert provider.requests == [DISCOVERY, JWKS_URL]  # found through the issuer's discovery document
@@ -149,7 +151,7 @@ async def test_a_valid_token_becomes_an_actor(make: Make, provider: Provider) ->
 
 async def test_claims_are_mapped_as_configured(make: Make, provider: Provider) -> None:
     authenticator = make(
-        actor_claim="email", application_claim="tenant", scope_claim="scp", scope_prefix="api://engine/"
+        actor_claim="email", tenant_claim="tenant", scope_claim="scp", scope_prefix="api://engine/"
     )
     token = provider.token(
         email="alice@example.com",
@@ -158,14 +160,14 @@ async def test_claims_are_mapped_as_configured(make: Make, provider: Provider) -
     )
     actor = await authenticator.authenticate(bearer(token))
     assert actor is not None
-    assert (actor.actor_id, actor.application_id) == ("alice@example.com", "acme")
+    assert (actor.actor_id, actor.tenant_id) == ("alice@example.com", "acme")
     assert actor.permissions == frozenset({"costs.read", "discover"})
 
 
 async def test_only_the_admin_scope_makes_an_admin(make: Make, provider: Provider) -> None:
     authenticator = make(admin_scope="livepeer:admin")
     admin = await authenticator.authenticate(bearer(provider.token(scope="livepeer:admin")))
-    assert admin is not None and admin.credential_kind == "admin"
+    assert admin is not None and admin.credential_kind == "clearinghouse_admin"
     actor = await authenticator.authenticate(bearer(provider.token(scope="admin.keys admin.allocations")))
     assert actor is not None and actor.credential_kind == "actor"  # admin is a kind, never a scope string
 
@@ -357,7 +359,9 @@ async def test_a_provider_that_publishes_nothing_usable_is_unavailable(
         return httpx.Response(200, json=discovery if str(request.url) == DISCOVERY else jwks)
 
     keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER)
-    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    authenticator = JwtBearerAuthenticator(
+        JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+    )
     with pytest.raises(ProviderUnavailable, match=FIXED):
         await authenticator.authenticate(bearer(provider.token()))
     assert complaint in unavailable_reason(caplog)
@@ -495,7 +499,7 @@ async def test_the_admin_read_scope_makes_an_auditor_and_admin_wins(make: Make, 
     reader = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read")))
     assert reader is not None and reader.credential_kind == "auditor"
     both = await authenticator.authenticate(bearer(provider.token(scope="livepeer:read livepeer:admin")))
-    assert both is not None and both.credential_kind == "admin"
+    assert both is not None and both.credential_kind == "clearinghouse_admin"
 
 
 # -- PR #50, John's review (D47) ---------------------------------------------------------------------------
@@ -590,7 +594,7 @@ async def test_an_http_key_url_needs_the_dev_override(
     def build(**options: Any) -> JwtBearerAuthenticator:
         client = httpx.AsyncClient(transport=httpx.MockTransport(provider.handler))
         keys = JwksCache(client, ISSUER, monotonic=clock, **options)
-        return JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+        return JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys)
 
     with pytest.raises(ProviderUnavailable):
         await build().authenticate(bearer(provider.token()))
@@ -614,7 +618,9 @@ async def test_an_rfc_8414_issuer_with_a_path_is_discovered(clock: Clock) -> Non
         return httpx.Response(404)  # no OpenID configuration
 
     keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), issuer, monotonic=clock)
-    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=issuer, audience=AUDIENCE), keys)
+    authenticator = JwtBearerAuthenticator(
+        JwtSettings(issuer=issuer, audience=AUDIENCE, tenant_id=TENANT), keys
+    )
     now = int(time.time())
     claims = {
         "iss": issuer,
@@ -675,9 +681,9 @@ async def test_rfc_8414_is_tried_only_when_the_openid_document_cannot_be_fetched
 
     keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
     with pytest.raises(ProviderUnavailable):
-        await JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys).authenticate(
-            bearer(provider.token())
-        )
+        await JwtBearerAuthenticator(
+            JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+        ).authenticate(bearer(provider.token()))
     assert provider.requests == [DISCOVERY]
 
 
@@ -720,7 +726,9 @@ async def test_closing_cancels_a_refresh_the_provider_never_answers(provider: Pr
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     keys = JwksCache(client, ISSUER, monotonic=clock)
-    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    authenticator = JwtBearerAuthenticator(
+        JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+    )
     assert await authenticator.authenticate(bearer(provider.token())) is not None
     hang.set()
     clock.now += 601
@@ -752,10 +760,10 @@ async def test_the_name_claim_becomes_the_display_name(make: Make, provider: Pro
 async def test_an_identity_longer_than_the_engine_stores_is_a_401(
     make: Make, provider: Provider, claim: str
 ) -> None:
-    """Actor and application ids are stored in 200 characters on every record. A longer subject or
-    application claim is refused when the token is checked, not on each write: cutting it would merge
+    """Actor and tenant ids are stored in 200 characters on every record. A longer subject or
+    tenant claim is refused when the token is checked, not on each write: cutting it would merge
     two people (John, #53 review)."""
-    authenticator = make(application_claim="tenant")
+    authenticator = make(tenant_claim="tenant")
     with pytest.raises(NotAuthenticated, match=f"{claim} claim is longer than 200"):
         await authenticator.authenticate(bearer(provider.token(**{"tenant": "acme", claim: "x" * 201})))
     fits = await authenticator.authenticate(bearer(provider.token(**{"tenant": "acme", claim: "x" * 200})))
@@ -794,7 +802,9 @@ async def test_the_pause_starts_when_a_slow_fetch_fails_not_before_it(clock: Clo
         return httpx.Response(503)
 
     keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
-    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    authenticator = JwtBearerAuthenticator(
+        JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+    )
     provider = Provider()
     with pytest.raises(ProviderUnavailable):
         await authenticator.authenticate(bearer(provider.token()))
@@ -859,9 +869,9 @@ async def test_a_document_that_trickles_is_cut_off_at_the_deadline(
     )
     started = time.monotonic()
     with pytest.raises(ProviderUnavailable):
-        await JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys).authenticate(
-            bearer(provider.token())
-        )
+        await JwtBearerAuthenticator(
+            JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+        ).authenticate(bearer(provider.token()))
     assert time.monotonic() - started < 2  # two documents (OpenID, RFC 8414), 0.3 s each
     assert "TimeoutError" in unavailable_reason(caplog)
 
@@ -890,7 +900,9 @@ async def test_any_unexpected_failure_reading_keys_is_a_503_and_a_pause(
         raise RuntimeError("the transport broke")
 
     keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
-    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    authenticator = JwtBearerAuthenticator(
+        JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+    )
     with pytest.raises(ProviderUnavailable):
         await authenticator.authenticate(bearer(provider.token()))
     assert "RuntimeError" in unavailable_reason(caplog)
@@ -951,7 +963,9 @@ async def test_unknown_kids_during_an_outage_leave_the_provider_alone(
         return provider.handler(request)
 
     keys = JwksCache(httpx.AsyncClient(transport=httpx.MockTransport(handler)), ISSUER, monotonic=clock)
-    authenticator = JwtBearerAuthenticator(JwtSettings(issuer=ISSUER, audience=AUDIENCE), keys)
+    authenticator = JwtBearerAuthenticator(
+        JwtSettings(issuer=ISSUER, audience=AUDIENCE, tenant_id=TENANT), keys
+    )
     assert await authenticator.authenticate(bearer(provider.token())) is not None  # k1 cached
     for kid in ("random-1", "random-2", "random-3"):
         provider.add_key(kid, publish=False)  # signed with a key the provider never publishes

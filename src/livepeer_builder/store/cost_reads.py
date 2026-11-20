@@ -57,9 +57,9 @@ class SqlCostSnapshot:
         return job, await get_projection(self._conn, job_id, fresh=True)
 
     async def projections_and_unprojected(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
+        self, tenant_id: str, actor_id: str | None, start: datetime, end: datetime
     ) -> tuple[list[tuple[str, JobCost]], list[Job]]:
-        window = in_window(application_id, actor_id, start, end)
+        window = in_window(tenant_id, actor_id, start, end)
         stored = (
             select(t.cost_projections, t.jobs.c.app)
             .join(t.jobs, t.jobs.c.id == t.cost_projections.c.job_id)
@@ -75,9 +75,9 @@ class SqlCostSnapshot:
         return projections, await load_jobs(self._conn, list((await self._conn.execute(query)).mappings()))
 
     async def recent_with_projections(
-        self, application_id: str, actor_id: str | None, limit: int
+        self, tenant_id: str, actor_id: str | None, limit: int
     ) -> list[tuple[Job, JobCost | None]]:
-        query = select(t.jobs).where(t.jobs.c.application_id == application_id)
+        query = select(t.jobs).where(t.jobs.c.tenant_id == tenant_id)
         if actor_id is not None:
             query = query.where(t.jobs.c.actor_id == actor_id)
         query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
@@ -94,16 +94,14 @@ class SqlCostSnapshot:
                 costs[cost.job_id] = cost
         return [(job, costs.get(job.id)) for job in jobs]
 
-    async def attempt_allocations(
-        self, application_id: str, actor_id: str | None
-    ) -> dict[tuple[UUID, int], str]:
-        """The allocation that paid each attempt of the actor's jobs (the application's with no actor), for
+    async def attempt_allocations(self, tenant_id: str, actor_id: str | None) -> dict[tuple[UUID, int], str]:
+        """The allocation that paid each attempt of the actor's jobs (the tenant's with no actor), for
         the attempts that record one (#115, C9)."""
         attempts = t.attempts.c
         query = (
             select(attempts.job_id, attempts.number, attempts.allocation_id)
             .join(t.jobs, t.jobs.c.id == attempts.job_id)
-            .where(t.jobs.c.application_id == application_id, attempts.allocation_id.is_not(None))
+            .where(t.jobs.c.tenant_id == tenant_id, attempts.allocation_id.is_not(None))
         )
         if actor_id is not None:
             query = query.where(t.jobs.c.actor_id == actor_id)

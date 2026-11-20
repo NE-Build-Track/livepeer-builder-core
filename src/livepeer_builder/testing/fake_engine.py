@@ -131,7 +131,7 @@ class FakeJobs:
     def _check_operation(self, actor: ActorContext, request: JobRequest) -> None:
         if request.operation_ref is None:
             return
-        found = self._operations.get((actor.application_id, actor.actor_id, request.operation_ref))
+        found = self._operations.get((actor.tenant_id, actor.actor_id, request.operation_ref))
         if found is None:
             return
         fingerprint, job_id = found
@@ -150,7 +150,7 @@ class FakeJobs:
     ) -> Job:
         """Store a job with one attempt on the first runner for the app, as the engine would record it.
 
-        A failure before dispatch (no offering, no capacity, not provisioned) has no attempt. A succeeded
+        A failure before dispatch (no offering, no capacity, no allocation) has no attempt. A succeeded
         ``reply`` sets the attempt's status and the job's ``ResultRef``.
         """
         now = datetime.now(UTC)
@@ -193,7 +193,7 @@ class FakeJobs:
         job = Job(
             id=job_id,
             actor_id=actor.actor_id,
-            application_id=actor.application_id,
+            tenant_id=actor.tenant_id,
             operation_ref=request.operation_ref,
             mode="immediate",
             app=request.app,
@@ -209,7 +209,7 @@ class FakeJobs:
         )
         self._jobs[job.id] = job
         if request.operation_ref is not None:
-            key = (actor.application_id, actor.actor_id, request.operation_ref)
+            key = (actor.tenant_id, actor.actor_id, request.operation_ref)
             self._operations[key] = (request_fingerprint(request), job.id)
         return job
 
@@ -295,21 +295,19 @@ class FakeJobs:
         self.policy.check(
             actor,
             Operation.JOBS_READ,
-            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+            ResourceRef(kind="job", tenant_id=actor.tenant_id, owner_actor_id=target),
         )
         mine = [
-            job
-            for job in self.in_scope(actor.application_id, target)
-            if before is None or job.created_at < before
+            job for job in self.in_scope(actor.tenant_id, target) if before is None or job.created_at < before
         ]
         return sorted(mine, key=lambda job: job.created_at, reverse=True)[:limit]
 
-    def in_scope(self, application_id: str, actor_id: str | None) -> list[Job]:
-        """The jobs of one application, and of one actor when given: what an admin or an actor sees."""
+    def in_scope(self, tenant_id: str, actor_id: str | None) -> list[Job]:
+        """The jobs of one tenant, and of one actor when given: what an admin or an actor sees."""
         return [
             job
             for job in self._jobs.values()
-            if job.application_id == application_id and actor_id in (None, job.actor_id)
+            if job.tenant_id == tenant_id and actor_id in (None, job.actor_id)
         ]
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
@@ -362,12 +360,12 @@ class FakeCosts:
         actor_id: str | None = None,
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
-        owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
+        owner = ResourceRef(kind="costs", tenant_id=actor.tenant_id, owner_actor_id=target)
         self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._summary is not None:
             return self._summary
         start, end = summary_window(datetime.now(UTC), start, end)  # the fake's jobs use the wall clock
-        ran = self._jobs.in_scope(actor.application_id, target)
+        ran = self._jobs.in_scope(actor.tenant_id, target)
         since, until = utc(start), utc(end)  # as the store: a time with no offset is UTC (T25)
         return summarize(
             start, end, [(job.app, classify(job, ())) for job in ran if since <= utc(job.created_at) < until]
@@ -399,7 +397,7 @@ class FakeAllowance:
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
         target = actor_id or actor.actor_id
-        owner = ResourceRef(kind="allocation", application_id=actor.application_id, owner_actor_id=target)
+        owner = ResourceRef(kind="allocation", tenant_id=actor.tenant_id, owner_actor_id=target)
         self._policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._allowance is None:
             raise NotProvisioned("no allowance scripted")

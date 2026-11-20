@@ -31,8 +31,8 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | The same over REST | `tests/unit/test_http_routes.py::test_a_missing_permission_is_403_and_another_actors_job_404_over_rest` | H | fixture | ISS-23 |
 | `FakeEngine` answers the same | `tests/unit/test_fake_engine_contract.py::test_another_actors_job_is_not_found` | U | fixture | ISS-23 |
 | The policy refuses another actor's or application's resource | `tests/unit/test_access.py::test_policy_needs_permission_and_ownership` | U | fixture | ISS-23 |
-| An admin sees every actor's jobs in its application; an auditor reads them and changes nothing | `tests/unit/test_ownership.py::test_an_admin_lists_every_actors_jobs_in_its_application`, `tests/unit/test_ownership.py::test_an_auditor_reads_every_actor_in_its_application_and_changes_nothing` | U | fixture | ISS-23 |
-| An auditor sees only its own application's keys, actors and grants | `tests/unit/test_access.py::test_an_auditor_reads_only_its_own_applications_keys`, `tests/unit/test_payments.py::test_an_auditor_lists_only_its_applications_actors`, `tests/unit/test_payments.py::test_an_auditor_never_sees_the_operators_grants` | U | fixture | ISS-23 |
+| An admin sees every actor's jobs in its application; an auditor reads them and changes nothing | `tests/unit/test_ownership.py::test_an_admin_lists_every_actors_jobs_in_its_tenant`, `tests/unit/test_ownership.py::test_an_auditor_reads_every_actor_in_its_tenant_and_changes_nothing` | U | fixture | ISS-23 |
+| An auditor sees only its own application's keys, actors and grants | `tests/unit/test_access.py::test_an_auditor_reads_only_its_own_tenants_keys`, `tests/unit/test_payments.py::test_an_auditor_lists_only_its_tenants_actors`, `tests/unit/test_payments.py::test_an_auditor_never_sees_the_operators_grants` | U | fixture | ISS-23 |
 | An `operation_ref` is scoped to its actor | `tests/store/test_contract.py::test_operation_ref_is_unique_per_actor` | S | fixture | ISS-23 |
 | Bob reusing Alice's `operation_ref` runs his own job; Alice's job never appears | `tests/unit/test_verification_access.py::test_another_actors_operation_ref_runs_their_own_job_and_never_shows_the_first` | U | fixture | ISS-23 |
 | The same over REST | `tests/unit/test_verification_access.py::test_another_actors_operation_ref_over_rest_never_shows_the_first_job` | H | fixture | ISS-23 |
@@ -54,7 +54,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | Revoking an allocation forgets its payment key; rotation revokes the old key | `tests/unit/test_payments.py::test_revoke_forgets_the_key`, `tests/unit/test_payments.py::test_rotation_replaces_the_key_and_revokes_the_old_one` | U | fixture | ISS-23 |
 | A job after revoke-allocation fails `not_provisioned` with no runner call | `tests/unit/test_verification_access.py::test_a_job_after_the_allocation_is_revoked_fails_not_provisioned_without_a_runner_call` | U | fixture | ISS-23 |
 | `not_provisioned` stays 402 with no reason | `tests/unit/test_payment_failures_http.py::test_not_provisioned_stays_402_and_has_no_reason` | H | fixture | ISS-12 |
-| Re-provisioning after a revoke is a new operation | `tests/unit/test_service_edges.py::test_reprovisioning_after_revoke_is_a_new_operation` | U | fixture | ISS-11/14 |
+| Re-provisioning after a revoke is a new operation | `tests/unit/test_service_edges.py::test_allotting_again_after_revoke_is_a_new_operation` | U | fixture | ISS-11/14 |
 | On a live stack: a revoked actor key answers 401 | `scripts/live_probe.py` (revocation checks) | L | live | ISS-23 |
 | On a live stack: a revoked auditor key is 401 on admin reads | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run B | L | live | ISS-23 |
 | On a live stack: a job after revoke-allocation fails `not_provisioned` (402) with no reason | [M3 live suite](../references/evidence/2026-10-30-m3-live-suite.md), run A | L | live | ISS-23 |
@@ -81,10 +81,10 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 
 | Behavior | Check | Level | Evidence | Ticket |
 | --- | --- | --- | --- | --- |
-| A repeated fund is answered from the ledger without calling the provider again | `tests/unit/test_admin_repeats.py::test_funding_repeated_with_one_ref_is_answered_without_calling_the_provider_again` | U | fixture | ISS-11/14 |
-| The same reference with another amount, or on another command, is a conflict | `tests/unit/test_admin_repeats.py::test_funding_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call`, `tests/unit/test_admin_repeats.py::test_one_ref_used_for_another_command_is_a_conflict` | U | fixture | ISS-11/14 |
+| A repeated fund is answered from the ledger without calling the provider again | `tests/unit/test_admin_repeats.py::test_top_up_repeated_with_one_ref_is_answered_without_calling_the_provider_again` | U | fixture | ISS-11/14 |
+| The same reference with another amount, or on another command, is a conflict | `tests/unit/test_admin_repeats.py::test_top_up_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call`, `tests/unit/test_admin_repeats.py::test_one_ref_used_for_another_command_is_a_conflict` | U | fixture | ISS-11/14 |
 | A repeat while the first may still run is in progress; after it went stale, a resume applies once | `tests/unit/test_admin_repeats.py::test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress`, `tests/unit/test_admin_repeats.py::test_a_repeat_after_the_first_run_went_stale_resumes_it_and_applies_once` | U | fixture | ISS-11/14 |
-| Two concurrent provisions with one reference create one allocation | `tests/unit/test_admin_repeats.py::test_two_concurrent_provisions_with_one_ref_create_one_allocation` | U | fixture | ISS-11/14 |
+| Two concurrent provisions with one reference create one allocation | `tests/unit/test_admin_repeats.py::test_two_concurrent_allots_with_one_ref_create_one_allocation` | U | fixture | ISS-11/14 |
 | A repeated payment-key rotation keeps the new key live (B1) | `tests/unit/test_payments.py::test_repeating_a_rotation_with_the_same_ref_keeps_the_new_key_live` | U | fixture | ISS-11/14 |
 | Issuing or rotating an access key twice with one reference does it once; the replay has no token (B4) | `tests/unit/test_admin_repeats.py::test_issuing_a_key_twice_with_one_ref_issues_one_key_and_the_replay_has_no_token`, `tests/unit/test_admin_repeats.py::test_rotating_a_key_repeated_after_success_rotates_once_and_the_replay_has_no_token` | U | fixture | ISS-11/14 |
 | One key per reference, even when two issues race | `tests/store/test_operation_ledger.py::test_two_concurrent_issues_under_one_reference_store_one_key` | S | fixture | ISS-11/14 |
@@ -101,7 +101,7 @@ failures, D58). Funded paid-job proof is ISS-25; broader recovery is ISS-35.
 | --- | --- | --- | --- | --- |
 | Every `/v1/admin/*` route answers 401 with no credential and 403 to an actor key; every admin write answers 403 to an auditor key; nothing changes | `tests/unit/test_admin_route_sweep.py::test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a_credential` | H | fixture | ISS-23 |
 | Admin operations need an admin credential; only admins issue keys | `tests/unit/test_access.py::test_admin_operations_need_an_admin_credential`, `tests/unit/test_access.py::test_only_admins_issue_keys` | U | fixture | ISS-23 |
-| An auditor reads, in its application only | `tests/unit/test_access.py::test_an_auditor_reads_every_actor_in_its_application` | U | fixture | ISS-23 |
+| An auditor reads, in its application only | `tests/unit/test_access.py::test_an_auditor_reads_every_actor_in_its_tenant` | U | fixture | ISS-23 |
 | A missing permission is 403 before any lookup, on every job and cost route | `tests/unit/test_ownership.py::test_a_missing_permission_is_403_before_any_lookup`, `tests/unit/test_ownership.py::test_a_missing_permission_is_403_on_the_list_routes` | U | fixture | ISS-23 |
 | A usage report needs `jobs.run`, not `jobs.read` | `tests/unit/test_ownership.py::test_a_usage_report_needs_jobs_run_and_not_jobs_read` | U | fixture | ISS-23 |
 | Unknown credentials fall through; invalid ones stop; request fields never establish identity | `tests/unit/test_access.py::test_unrecognized_credentials_fall_through_but_invalid_ones_stop`, `tests/unit/test_access.py::test_request_fields_cannot_establish_identity` | U | fixture | ISS-23 |

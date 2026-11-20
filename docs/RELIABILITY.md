@@ -4,7 +4,9 @@
 
 Settings come from `LPB_<FIELD>` environment variables (`EngineSettings.from_env`). Defaults favor
 safety: a durable SQLite file and admission limits on. Payments are always `per_actor`: no setting
-chooses an allocation mode or holds a payment key (D82).
+chooses an allocation mode or holds a payment key (D82). Three variables were renamed on 18 November
+2026 (#163), and an old one is ignored, not read as the new one: rename them before starting the new
+release ([what changes](contracts/index.md#upgrading-to-the-domain-language-names)).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -13,9 +15,9 @@ chooses an allocation mode or holds a payment key (D82).
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
 | `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused), with no userinfo, query or fragment. Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record the reader cannot use is skipped (`discovery.inventory_skipped`); an answer with records and no readable runner is a failed poll (#114, C28) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
-| `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
+| `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
-| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#provisioning)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
+| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |
@@ -37,7 +39,7 @@ chooses an allocation mode or holds a payment key (D82).
 | `LPB_JWT_TOKEN_TYPES` | `at+jwt,application/at+jwt` | Accepted `typ` headers (RFC 9068). Adding `jwt` accepts plain JWTs and drops the `client_id` and `jti` requirements: weaker |
 | `LPB_JWT_MAX_LIFETIME_S` | `3600` | A token whose `exp - iat` is longer is refused |
 | `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms, asymmetric only |
-| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_APPLICATION_CLAIM`, `LPB_JWT_APPLICATION_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `application_id` |
+| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_TENANT_CLAIM`, `LPB_JWT_TENANT_ID` | `sub`, unset, unset | Which claims become `actor_id` and `tenant_id`. With `jwt` in `LPB_AUTH`, set exactly one of `LPB_JWT_TENANT_CLAIM` (the claim that names each token's tenant) and `LPB_JWT_TENANT_ID` (the one tenant every token is in): neither has a default, and with neither or both the engine refuses to start (#163 review) |
 | `LPB_JWT_SCOPE_CLAIM`, `LPB_JWT_SCOPE_PREFIX`, `LPB_JWT_ADMIN_SCOPE` | `scope`, empty, unset | Scopes named after operations become permissions; the admin scope makes an engine-wide admin credential, so it may not be an operation or a standard OpenID scope |
 | `LPB_JWT_NAME_CLAIM` | `preferred_username` | The person's display name, recorded on first sign-in for the operator's actor list (D48); empty turns it off |
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
@@ -85,7 +87,7 @@ The codes are a closed set in the contract (`SourceFailureCode` for `discovery_e
 adapters decide the code where they read the answer; a supplied source's failure is read by its
 exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
 
-`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
+`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated top-up
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
 `LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).
 
@@ -109,7 +111,7 @@ exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is 
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Batteries answers a 2xx the engine cannot read | Not a JSON object, a list page whose `items` is not a list of objects or whose `next_cursor` is not a string, a list page whose `next_cursor` is the cursor it was asked with, or a grant, a key or an allocation with no `id` or with a field that is not text: a provider error. An admin command answers 502 and its `operation_ref` stays held (an unknown outcome, resumed after `LPB_OPERATION_STALE_S`); cost sync fails that pass with `cost_sync_error` `invalid_answer` and asks for the page again. Never read as an empty answer (#114, C21). A redirect (3xx) is the same provider error whatever its body, and never the call's answer; as `cost_sync_error` it is `unavailable` |
 | Batteries delivers a usage row the engine cannot read or store | The row is set aside and the sync goes on: an unknown status, no id or timestamp, a fee that is not a finite number, or a text the store's column cannot keep (too long, a NUL, a lone surrogate). Its id, the reason and its fees are one row of `lpb_usage_set_aside`; a WARNING `costs.usage_set_aside` carries its content, once. `cost_sync_set_aside` in `/readyz` counts the rows left out in all, and `rows_set_aside` in the sync report the new ones. No job's cost includes the row, so reconciliation may not balance until it is accounted for (#114, C13; [payments.md](contracts/payments.md#cost-classification)) |
-| Two cost syncs run at once (the background loop and `POST /v1/admin/costs/sync`) | Both end. Each usage row is stored once and each set-aside row recorded once, by whichever sync writes it first; the row is not new to the other, which counts and logs nothing for it. Before, the slower sync failed on the row's primary key and its pass ended before its cursor moved (review of #144) |
+| Two cost syncs run at once (the background loop and `POST /v1/clearinghouse/costs/sync`) | Both end. Each usage row is stored once and each set-aside row recorded once, by whichever sync writes it first; the row is not new to the other, which counts and logs nothing for it. Before, the slower sync failed on the row's primary key and its pass ended before its cursor moved (review of #144) |
 | An orchestrator's payment challenge has a manifest id the store cannot keep | Refused before signing (`payment_refused`): nothing stored or paid, and the job fails over (#114, C13) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set to a code; it goes stale after three intervals |

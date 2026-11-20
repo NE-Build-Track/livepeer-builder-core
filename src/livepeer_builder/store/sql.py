@@ -17,13 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from sqlalchemy.pool import StaticPool
 
 from livepeer_builder.contracts import (
+    ActorAllocation,
     Attempt,
     Failure,
     Job,
     JobCost,
     JobState,
     MeasuredUsage,
-    ProvisionedActor,
     ResultRef,
     SeenActor,
     SetAsideUsage,
@@ -86,29 +86,29 @@ class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
 
     # -- actors -------------------------------------------------------------------------------------
 
-    async def get_actor(self, application_id: str, actor_id: str) -> ProvisionedActor | None:
+    async def get_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation | None:
         async with self.engine.connect() as conn:
-            return await actors.get_actor(conn, application_id, actor_id)
+            return await actors.get_actor(conn, tenant_id, actor_id)
 
-    async def save_actor(self, actor: ProvisionedActor) -> None:
+    async def save_actor(self, actor: ActorAllocation) -> None:
         async with self.engine.begin() as conn:
             await actors.save_actor(conn, actor)
 
-    async def list_actors(self, application_id: str | None = None) -> list[ProvisionedActor]:
+    async def list_actors(self, tenant_id: str | None = None) -> list[ActorAllocation]:
         async with self.engine.connect() as conn:
-            return await actors.list_actors(conn, application_id)
+            return await actors.list_actors(conn, tenant_id)
 
     async def save_sighting(self, seen: SeenActor) -> None:
         async with self.engine.begin() as conn:
             await actors.save_sighting(conn, seen)
 
-    async def get_sighting(self, application_id: str, actor_id: str) -> SeenActor | None:
+    async def get_sighting(self, tenant_id: str, actor_id: str) -> SeenActor | None:
         async with self.engine.connect() as conn:
-            return await actors.get_sighting(conn, application_id, actor_id)
+            return await actors.get_sighting(conn, tenant_id, actor_id)
 
-    async def list_sightings(self, application_id: str | None = None) -> list[SeenActor]:
+    async def list_sightings(self, tenant_id: str | None = None) -> list[SeenActor]:
         async with self.engine.connect() as conn:
-            return await actors.list_sightings(conn, application_id)
+            return await actors.list_sightings(conn, tenant_id)
 
     # -- jobs and attempts --------------------------------------------------------------------------
 
@@ -130,7 +130,7 @@ class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
         except (IntegrityError, refs.Superseded):
             if job.operation_ref is None:
                 raise
-            found = await self.job_by_operation_ref(job.application_id, job.actor_id, job.operation_ref)
+            found = await self.job_by_operation_ref(job.tenant_id, job.actor_id, job.operation_ref)
             if found is None:
                 if retry_of is not None:  # the failed job is gone (retention): the reference is free
                     return await self.create_job(job, fingerprint)
@@ -138,13 +138,11 @@ class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
             raise refs.taken(*found, fingerprint) from None
 
     async def job_by_operation_ref(
-        self, application_id: str, actor_id: str, operation_ref: str
+        self, tenant_id: str, actor_id: str, operation_ref: str
     ) -> tuple[Job, str | None] | None:
         """The job holding the reference: the one no retry superseded (D57)."""
         async with self.engine.connect() as conn:
-            row = (
-                (await conn.execute(refs.holder(application_id, actor_id, operation_ref))).mappings().first()
-            )
+            row = (await conn.execute(refs.holder(tenant_id, actor_id, operation_ref))).mappings().first()
             if row is None:
                 return None
             return (await load_jobs(conn, [row]))[0], row["request_fingerprint"]
@@ -155,9 +153,9 @@ class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
             return (await load_jobs(conn, [row]))[0] if row else None
 
     async def list_jobs(
-        self, application_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
+        self, tenant_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
     ) -> list[Job]:
-        query = select(t.jobs).where(t.jobs.c.application_id == application_id)
+        query = select(t.jobs).where(t.jobs.c.tenant_id == tenant_id)
         if actor_id is not None:
             query = query.where(t.jobs.c.actor_id == actor_id)
         if before is not None:
@@ -437,7 +435,7 @@ async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
 def _job_values(job: Job) -> dict[str, Any]:
     return {
         "id": str(job.id),
-        "application_id": job.application_id,
+        "tenant_id": job.tenant_id,
         "actor_id": job.actor_id,
         "operation_ref": job.operation_ref,
         "mode": job.mode,

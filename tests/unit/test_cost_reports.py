@@ -10,11 +10,11 @@ import pytest
 
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     CostSummary,
     Fees,
     JobRequest,
     Money,
-    ProvisionRequest,
     UsagePage,
     UsageRow,
     add_fees,
@@ -36,15 +36,15 @@ from tests.conftest import EngineFactory
 APP = "example/echo"
 
 
-async def provision(engine: BuilderEngine, admin: ActorContext, actor_id: str = "alice") -> str:
-    request = ProvisionRequest(
-        operation_ref=f"provision:default:{actor_id}",
-        application_id="default",
+async def allot(engine: BuilderEngine, admin: ActorContext, actor_id: str = "alice") -> str:
+    request = AllotRequest(
+        operation_ref=f"allot:default:{actor_id}",
+        tenant_id="default",
         actor_id=actor_id,
         amount=Money(amount=Decimal(1), currency="ETH"),
         grant_id="grant_1",
     )
-    return (await engine.payments.provision(admin, request)).allocation_id
+    return (await engine.payments.allot(admin, request)).allocation_id
 
 
 async def test_batteries_down_leaves_a_succeeded_job_succeeded_with_its_cost_pending(
@@ -52,7 +52,7 @@ async def test_batteries_down_leaves_a_succeeded_job_succeeded_with_its_cost_pen
     usage: FakeUsageSource,
 ) -> None:  # fmt: skip  # the starter: reporting failures preserve execution state
     engine = await make_engine(default_currency="ETH")
-    await provision(engine, admin)
+    await allot(engine, admin)
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     stop = asyncio.Event()
@@ -75,7 +75,7 @@ async def test_a_refused_usage_report_leaves_the_job_and_its_usage_unchanged(
     transport: ScriptedTransport,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    await provision(engine, admin)
+    await allot(engine, admin)
     transport.steps = [
         ScriptedTransport.ok(manifest_ids=("m-ok",)),
         RunnerCallError("http", "bad input", payment_sent=True, manifest_ids=("m-bad",), status_code=400),
@@ -121,7 +121,7 @@ async def every_class(
 ) -> None:  # fmt: skip
     """Three jobs for ``actor``: on APP, one that failed over (0.2 failed after payment, then 0.1
     delivered) and one paid whose usage has not arrived (pending); on OTHER, one left uncertain (0.4)."""
-    allocation = await provision(engine, admin, actor.actor_id)
+    allocation = await allot(engine, admin, actor.actor_id)
     tag = actor.actor_id
     transport.steps = [
         RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=(f"{tag}-a",), status_code=503),
@@ -170,7 +170,7 @@ async def test_the_summary_totals_every_class_with_a_failover_job(
     assert (summary.jobs_with_cost, summary.jobs_pending) == (2, 1)
 
 
-async def test_the_summary_scope_is_the_actor_or_for_an_admin_the_application_or_one_actor(
+async def test_the_summary_scope_is_the_actor_or_for_an_admin_the_tenant_or_one_actor(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport, usage: FakeUsageSource,
 ) -> None:  # fmt: skip
@@ -233,7 +233,7 @@ async def test_a_summary_with_no_window_covers_the_30_days_to_the_engine_clock(
     clock: FixedClock,
 ) -> None:  # fmt: skip  # the default window reads the injected Clock, never the wall clock
     engine = await make_engine(default_currency="ETH")
-    await provision(engine, admin)
+    await allot(engine, admin)
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
     await engine.jobs.run(alice, JobRequest(app=APP))
     clock.advance(1)  # [start, end): a job created at the end instant is not in the window

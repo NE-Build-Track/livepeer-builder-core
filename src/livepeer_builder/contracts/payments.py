@@ -1,4 +1,4 @@
-"""Payment contracts: explicit provisioning, allowance, and whether an advertised price can be paid
+"""Payment contracts: explicit allotment, allowance, and whether an advertised price can be paid
 (docs/contracts/payments.md)."""
 
 from datetime import datetime
@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import Field, SecretStr, computed_field, field_validator
 
 from livepeer_builder.contracts.common import (
+    AllotAmount,
     Contract,
     Currency,
-    FundingAmount,
     GrantId,
     Money,
-    ProvisionAmount,
     StoredText,
+    TopUpAmount,
 )
 from livepeer_builder.contracts.operations import OperationRef
 
@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
 
 
-class PaymentCredential(Contract):
-    """The signer bearer for one call, and the allocation that bearer spends."""
+class PaymentKey(Contract):
+    """The key that pays for one actor's call, sent as the signer's bearer, and the allocation it spends."""
 
     token: str | None
     allocation_id: str | None
@@ -37,23 +37,23 @@ class SecretRef(Contract):
     ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
 
-class ProvisionRequest(Contract):
-    """Explicit, admin-authorized provisioning. There is no automatic provisioning."""
+class AllotRequest(Contract):
+    """Explicit, admin-authorized allotment. There is no automatic allotment."""
 
-    # ``StoredText``: provisioning funds a provider key before it saves the actor, so an id or a label
+    # ``StoredText``: allotment funds a provider key before it saves the actor, so an id or a label
     # the store could not keep is refused here, before any provider call.
-    application_id: StoredText
+    tenant_id: StoredText
     actor_id: StoredText
-    # may be zero: identity without money; fund later with an explicit command. Never negative, and within
+    # may be zero: identity without money; top up later with an explicit command. Never negative, and within
     # the provider's format and the engine's bound (#112, C11)
-    amount: ProvisionAmount
+    amount: AllotAmount
     label: StoredText = ""
     grant_id: GrantId = ""  # empty uses the grant of the caller's own allocation; one path segment (C10)
     operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
 
 
 class GrantRecord(Contract):
-    """A Batteries grant the operator can fund actors from."""
+    """A Batteries grant the operator can allot allocations from."""
 
     id: str
     name: str
@@ -72,8 +72,8 @@ class GrantPage(Contract):
     next_cursor: str | None = None
 
 
-class ProvisionedActor(Contract):
-    application_id: str
+class ActorAllocation(Contract):
+    tenant_id: str
     actor_id: str
     grant_id: str
     allocation_id: str
@@ -93,7 +93,7 @@ class SeenActor(Contract):
     immutable ``sub``, so a renamed person keeps their actor and a reused name never inherits one.
     """
 
-    application_id: str
+    tenant_id: str
     actor_id: str
     name: str = Field(default="", max_length=200)
     first_seen_at: datetime
@@ -101,26 +101,27 @@ class SeenActor(Contract):
 
 
 class KnownActor(Contract):
-    """One row of the operator's actor list (D46, D48): provisioned, signed in, or both."""
+    """One row of the operator's actor list (D46, D48): allotted, signed in, or both."""
 
-    application_id: str
+    tenant_id: str
     actor_id: str
     label: str  # the operator's label, else the name the provider gave, else ""
     name: str | None  # the provider's latest name; None until the person signs in with a token
-    allocation: ProvisionedActor | None  # None until an operator provisions the actor
+    allocation: ActorAllocation | None  # None until an operator allots one
     first_seen_at: datetime | None
     last_seen_at: datetime | None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def provisioned(self) -> bool:
+    def allotted(self) -> bool:
         return self.allocation is not None
 
 
-class FundRequest(Contract):
-    amount: FundingAmount  # the provider's format and the engine's bound (#112, C11)
-    operation_ref: OperationRef  # required: makes a retried fund safe
-    grant_id: GrantId = ""  # grant funding only; allocation funding ignores it. One path segment (#113, C10)
+class TopUpRequest(Contract):
+    amount: TopUpAmount  # the provider's format and the engine's bound (#112, C11)
+    operation_ref: OperationRef  # required: makes a retried top-up safe
+    # a grant top-up only; an allocation top-up ignores it. One path segment (#113, C10)
+    grant_id: GrantId = ""
 
 
 class Allowance(Contract):

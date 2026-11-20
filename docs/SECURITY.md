@@ -8,7 +8,7 @@
 | Engine API keys (`lpk_`) | Only their SHA-256 hash is stored; the token is shown once | DB plaintext, list/inspect responses |
 | `LPB_SECRET_KEY` (Fernet KEK) | The deployment's secret manager | The database, backups |
 | `LPB_BATTERIES_TOKEN` | The deployment's secret manager | Clients, responses |
-| `LPB_BATTERIES_OPERATOR_TOKEN` (optional, the grant desk) | The deployment's secret manager | Clients, responses |
+| `LPB_BATTERIES_GRANTS_TOKEN` (optional, the grant desk) | The deployment's secret manager | Clients, responses |
 
 Settings use `SecretStr`, so secrets don't print in reprs. `tests/unit/test_payments.py` checks that
 no plaintext payment key is stored, and `tests/unit/test_http.py` checks that none is returned.
@@ -42,7 +42,7 @@ See [contracts/access.md](contracts/access.md#boundaries).
   is written, and the transport sends the
   address as built and refuses one that no longer begins with the runner's (#113, C3,
   [engine.md](contracts/engine.md#jobs-and-attempts)).
-- **Management API:** the engine uses a least-privilege Batteries credential. It may `grants.fund` and has no `grants.*`. Batteries applies `grants.fund` to every grant on the instance. An engine admin may fund any grant it names (`POST /v1/admin/grant/fund`); an actor key cannot. Listing and creating grants uses `LPB_BATTERIES_OPERATOR_TOKEN` (`grants.read` and `grants.create`); it is optional, and without it the grant desk and its routes are absent.
+- **Management API:** the engine uses a least-privilege Batteries credential. It may `grants.fund` and has no `grants.*`. Batteries applies `grants.fund` to every grant on the instance. An engine admin may top up any grant it names (`POST /v1/clearinghouse/grant/top-up`); an actor key cannot. Listing and creating grants uses `LPB_BATTERIES_GRANTS_TOKEN` (`grants.read` and `grants.create`); it is optional, and without it the grant desk and its routes are absent.
   Batteries keeps replayed API-key secrets in its idempotency table, so protect Batteries backups like
   a vault.
 

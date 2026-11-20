@@ -1,6 +1,6 @@
 """#115 C4: one admin command never undoes another on the same actor.
 
-``fund``, ``set_status``, ``revoke`` and ``rotate_key`` each read the actor, called the provider, then
+``fund``, ``set_status``, ``revoke`` and ``rotate_payment_key`` each read the actor, called the provider, then
 saved the whole row from that read. A command that finished in between was overwritten: a rotation's new
 key by a pause, a pause by a rotation, a revoke by anything. Each command now writes only its own columns,
 under a condition in the SQL.
@@ -16,9 +16,9 @@ from typing import Any
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, FundRequest, Money, ProvisionedActor, ProvisionRequest
+from livepeer_builder.contracts import ActorAllocation, ActorContext, AllotRequest, Money, TopUpRequest
 from livepeer_builder.errors import (
-    AlreadyProvisioned,
+    AlreadyAllotted,
     InvalidRequest,
     NotFound,
     NotProvisioned,
@@ -37,13 +37,13 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def provision_request(amount: str = "5") -> ProvisionRequest:
-    return ProvisionRequest(
-        application_id="default",
+def allot_request(amount: str = "5") -> AllotRequest:
+    return AllotRequest(
+        tenant_id="default",
         actor_id="alice",
         amount=usd(amount),
         grant_id="grant_1",
-        operation_ref="provision:alice",
+        operation_ref="allot:alice",
     )
 
 
@@ -67,27 +67,27 @@ class Desk:
     def __init__(self, engine: BuilderEngine, admin: ActorContext) -> None:
         self.payments, self.admin = engine.payments, admin
 
-    async def pause(self) -> ProvisionedActor:
+    async def pause(self) -> ActorAllocation:
         return await self.payments.set_status(self.admin, "default", "alice", "paused")
 
-    async def activate(self) -> ProvisionedActor:
+    async def activate(self) -> ActorAllocation:
         return await self.payments.set_status(self.admin, "default", "alice", "active")
 
-    async def fund(self) -> ProvisionedActor:
-        request = FundRequest(amount=usd("1"), operation_ref="fund-1")
-        return await self.payments.fund(self.admin, "default", "alice", request)
+    async def top_up(self) -> ActorAllocation:
+        request = TopUpRequest(amount=usd("1"), operation_ref="fund-1")
+        return await self.payments.top_up(self.admin, "default", "alice", request)
 
-    async def revoke(self) -> ProvisionedActor:
+    async def revoke(self) -> ActorAllocation:
         return await self.payments.revoke(self.admin, "default", "alice")
 
-    async def rotate(self) -> ProvisionedActor:
-        return await self.payments.rotate_key(self.admin, "default", "alice", "rotate-1")
+    async def rotate(self) -> ActorAllocation:
+        return await self.payments.rotate_payment_key(self.admin, "default", "alice", "rotate-1")
 
 
 PROVIDER_CALL = {
     "pause": "set_allocation_status",
     "activate": "set_allocation_status",
-    "fund": "fund_allocation",
+    "top_up": "top_up_allocation",
     "revoke": "revoke_allocation",
     "rotate": "create_key",
 }
@@ -104,13 +104,13 @@ async def desk(make_engine: EngineFactory, admin: ActorContext, vault: MemorySec
     return Desk(engine, admin)
 
 
-@pytest.mark.parametrize("command", ["pause", "fund"])
+@pytest.mark.parametrize("command", ["pause", "top_up"])
 async def test_a_status_command_does_not_undo_a_key_rotation_that_finished_meanwhile(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, command: str
 ) -> None:
     """Before, the command saved the row it read: the old key, which the rotation had just revoked, and
     the reference of a secret the rotation had just deleted. The actor could not pay again."""
-    before = await desk.payments.provision(desk.admin, provision_request())
+    before = await desk.payments.allot(desk.admin, allot_request())
     during(manager, PROVIDER_CALL[command], desk.rotate)
     answer = await getattr(desk, command)()
 
@@ -125,7 +125,7 @@ async def test_a_status_command_does_not_undo_a_key_rotation_that_finished_meanw
 async def test_a_revoke_keeps_a_rotations_columns_and_forgets_its_key_too(
     desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore
 ) -> None:
-    before = await desk.payments.provision(desk.admin, provision_request())
+    before = await desk.payments.allot(desk.admin, allot_request())
     during(manager, "revoke_allocation", desk.rotate)
     revoked = await desk.revoke()
 
@@ -140,7 +140,7 @@ async def test_a_key_rotation_does_not_undo_a_pause_that_finished_meanwhile(
 ) -> None:
     """Before, the rotation saved the row it read, status ``active`` included: the pause was lost here
     while the provider kept the allocation paused."""
-    before = await desk.payments.provision(desk.admin, provision_request())
+    before = await desk.payments.allot(desk.admin, allot_request())
     during(manager, "create_key", desk.pause)
     rotated = await desk.rotate()
 
@@ -149,19 +149,19 @@ async def test_a_key_rotation_does_not_undo_a_pause_that_finished_meanwhile(
     assert rotated == stored
 
 
-@pytest.mark.parametrize("command", ["pause", "activate", "fund", "rotate"])
+@pytest.mark.parametrize("command", ["pause", "activate", "top_up", "rotate"])
 async def test_no_command_moves_an_actor_out_of_revoked(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, command: str
 ) -> None:
     """A revoke finishes while another command is at the provider. Before, that command then saved its
     stale row: the actor was ``active`` or ``paused`` again here, on an allocation the provider had
     revoked, with a secret reference the revoke had deleted."""
-    await desk.payments.provision(desk.admin, provision_request("0" if command == "fund" else "5"))
+    await desk.payments.allot(desk.admin, allot_request("0" if command == "top_up" else "5"))
     during(manager, PROVIDER_CALL[command], desk.revoke)
-    if command == "fund":  # the funds were sent: the answer is the actor as it is stored
-        assert (await desk.fund()).status == "revoked"
+    if command == "top_up":  # the funds were sent: the answer is the actor as it is stored
+        assert (await desk.top_up()).status == "revoked"
     else:
-        with pytest.raises(NotFound, match="is not provisioned"):
+        with pytest.raises(NotFound, match="has no allocation"):
             await getattr(desk, command)()
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
@@ -173,8 +173,8 @@ async def test_no_command_moves_an_actor_out_of_revoked(
 
 async def test_two_revokes_at_once_answer_alike(desk: Desk, manager: FakeAllocationManager) -> None:
     """The slower revoke finds the actor already revoked: it writes nothing and answers as a repeat does."""
-    await desk.payments.provision(desk.admin, provision_request())
-    answers: list[ProvisionedActor] = []
+    await desk.payments.allot(desk.admin, allot_request())
+    answers: list[ActorAllocation] = []
 
     async def faster() -> None:
         answers.append(await desk.revoke())
@@ -185,21 +185,21 @@ async def test_two_revokes_at_once_answer_alike(desk: Desk, manager: FakeAllocat
     assert await desk.payments.get_actor(desk.admin, "default", "alice") == answers[0]
 
 
-async def test_a_revoke_overtaken_by_a_revoke_and_a_new_provisioning_answers_for_its_own_allocation(
+async def test_a_revoke_overtaken_by_a_revoke_and_a_new_allotment_answers_for_its_own_allocation(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
 ) -> None:
     """Review of #148: while a revoke was at the provider the actor was revoked by another and
-    provisioned again. Its write is refused, as the row is another allocation's, and it then answered
+    allotted again. Its write is refused, as the row is another allocation's, and it then answered
     with the actor as stored: ``active``, as the result of a revoke. It answers for the allocation it
-    revoked, and the new provisioning is as it was."""
-    first = await desk.payments.provision(desk.admin, provision_request())
+    revoked, and the new allotment is as it was."""
+    first = await desk.payments.allot(desk.admin, allot_request())
 
-    async def revoked_and_provisioned_again() -> None:
+    async def revoked_and_allotted_again() -> None:
         await desk.revoke()
-        again = provision_request().model_copy(update={"operation_ref": "provision-again"})
-        await desk.payments.provision(desk.admin, again)
+        again = allot_request().model_copy(update={"operation_ref": "allot-again"})
+        await desk.payments.allot(desk.admin, again)
 
-    during(manager, "revoke_allocation", revoked_and_provisioned_again)
+    during(manager, "revoke_allocation", revoked_and_allotted_again)
     answer = await desk.revoke()
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
@@ -210,40 +210,40 @@ async def test_a_revoke_overtaken_by_a_revoke_and_a_new_provisioning_answers_for
     assert list(vault.values) == [stored.secret_ref.ref]
 
 
-async def test_a_fund_moves_exhausted_to_active(desk: Desk) -> None:
-    provisioned = await desk.payments.provision(desk.admin, provision_request("0"))
-    assert provisioned.status == "exhausted"
-    funded = await desk.fund()
+async def test_a_top_up_moves_exhausted_to_active(desk: Desk) -> None:
+    allotted = await desk.payments.allot(desk.admin, allot_request("0"))
+    assert allotted.status == "exhausted"
+    funded = await desk.top_up()
     assert funded.status == "active"
     assert (await desk.payments.get_actor(desk.admin, "default", "alice")).status == "active"
 
 
 @pytest.mark.parametrize("amount", ["5", "0"], ids=["active", "exhausted"])
-async def test_a_fund_does_not_undo_a_pause_that_finished_meanwhile(
+async def test_a_top_up_does_not_undo_a_pause_that_finished_meanwhile(
     desk: Desk, manager: FakeAllocationManager, amount: str
 ) -> None:
     """A fund moves ``exhausted`` to ``active`` and nothing else. Before, it wrote the status it had read
     (``active``), or ``active`` for the ``exhausted`` it had read, over the pause."""
-    await desk.payments.provision(desk.admin, provision_request(amount))
-    during(manager, "fund_allocation", desk.pause)
-    funded = await desk.fund()
+    await desk.payments.allot(desk.admin, allot_request(amount))
+    during(manager, "top_up_allocation", desk.pause)
+    funded = await desk.top_up()
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
     assert stored.status == "paused" and funded == stored
 
 
-async def test_a_fund_that_changes_no_status_writes_nothing(desk: Desk, clock: FixedClock) -> None:
-    provisioned = await desk.payments.provision(desk.admin, provision_request())
+async def test_a_top_up_that_changes_no_status_writes_nothing(desk: Desk, clock: FixedClock) -> None:
+    allotted = await desk.payments.allot(desk.admin, allot_request())
     clock.advance(60)
-    assert await desk.fund() == provisioned  # ``updated_at`` included
-    assert await desk.payments.get_actor(desk.admin, "default", "alice") == provisioned
+    assert await desk.top_up() == allotted  # ``updated_at`` included
+    assert await desk.payments.get_actor(desk.admin, "default", "alice") == allotted
 
 
 async def test_a_status_command_writes_the_status_and_the_time_only(desk: Desk, clock: FixedClock) -> None:
-    provisioned = await desk.payments.provision(desk.admin, provision_request())
+    allotted = await desk.payments.allot(desk.admin, allot_request())
     clock.advance(60)
     paused = await desk.pause()
-    assert paused == provisioned.model_copy(update={"status": "paused", "updated_at": clock.now()})
+    assert paused == allotted.model_copy(update={"status": "paused", "updated_at": clock.now()})
     assert await desk.payments.get_actor(desk.admin, "default", "alice") == paused
 
 
@@ -259,13 +259,13 @@ def live_keys(manager: FakeAllocationManager) -> list[str]:
     ]
 
 
-async def rotate_2(desk: Desk) -> ProvisionedActor:
-    return await desk.payments.rotate_key(desk.admin, "default", "alice", "rotate-2")
+async def rotate_2(desk: Desk) -> ActorAllocation:
+    return await desk.payments.rotate_payment_key(desk.admin, "default", "alice", "rotate-2")
 
 
 async def holds_only_the_key_of(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
-) -> ProvisionedActor:
+) -> ActorAllocation:
     """The actor as stored, after checking that its key is the only live one and its secret the only one
     stored: no rotation left a key live, or a secret stored, that nothing references."""
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
@@ -281,8 +281,8 @@ async def test_a_key_rotation_does_not_undo_a_rotation_that_finished_meanwhile(
     """Before, the key write asked only for the same allocation and an actor not revoked, so the slower
     rotation wrote its key over the finished one: that one had answered with a key the actor no longer
     held, and its key stayed live with its secret stored and nothing pointing at it."""
-    await desk.payments.provision(desk.admin, provision_request())
-    finished: list[ProvisionedActor] = []
+    await desk.payments.allot(desk.admin, allot_request())
+    finished: list[ActorAllocation] = []
 
     async def other() -> None:
         finished.append(await rotate_2(desk))
@@ -304,7 +304,7 @@ async def test_a_rotation_resumed_after_a_newer_one_finished_does_not_put_its_ow
     revoked it and deleted its secret. Before, the resume of rotate-1 found the actor without its key and
     wrote it again: a revoked key and the reference of a deleted secret, so the actor could not pay. Now
     it leaves the actor alone and still revokes the key it began from, which nothing else would."""
-    before = await desk.payments.provision(desk.admin, provision_request())
+    before = await desk.payments.allot(desk.admin, allot_request())
     manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
         await desk.rotate()
@@ -321,13 +321,13 @@ async def test_a_rotation_that_lost_keeps_its_reference_and_answers_the_same_aga
 ) -> None:
     """The reference is never freed: the provider replays the revoked key to any rotation under it. The
     record notes what happened, so a repeat is refused in the same words before any provider call."""
-    await desk.payments.provision(desk.admin, provision_request())
+    await desk.payments.allot(desk.admin, allot_request())
     during(manager, "create_key", lambda: rotate_2(desk))
     with pytest.raises(InvalidRequest, match="another key rotation") as lost:
         await desk.rotate()
     with pytest.raises(OperationInProgress):  # the record is still held
         await desk.rotate()
-    third = await desk.payments.rotate_key(desk.admin, "default", "alice", "rotate-3")
+    third = await desk.payments.rotate_payment_key(desk.admin, "default", "alice", "rotate-3")
     calls = list(manager.calls)
     clock.advance(120)
     with pytest.raises(InvalidRequest) as again:
@@ -345,7 +345,7 @@ async def test_a_rotation_that_lost_and_could_not_revoke_its_own_key_finishes_on
 ) -> None:
     """The losing rotation revokes its own key before it deletes that key's secret. When the revoke does
     not get through, the key is still live, so its secret is still stored and the record still open."""
-    await desk.payments.provision(desk.admin, provision_request())
+    await desk.payments.allot(desk.admin, allot_request())
 
     async def other() -> None:
         await rotate_2(desk)
@@ -361,29 +361,29 @@ async def test_a_rotation_that_lost_and_could_not_revoke_its_own_key_finishes_on
     await holds_only_the_key_of(desk, alice, manager, vault)
 
 
-async def provisioned_again(desk: Desk) -> ProvisionedActor:
-    """Revoked, then provisioned again under another reference: the actor holds a new allocation."""
+async def allotted_again(desk: Desk) -> ActorAllocation:
+    """Revoked, then allotted again under another reference: the actor holds a new allocation."""
     await desk.revoke()
-    again = provision_request().model_copy(update={"operation_ref": "provision-again"})
-    return await desk.payments.provision(desk.admin, again)
+    again = allot_request().model_copy(update={"operation_ref": "allot-again"})
+    return await desk.payments.allot(desk.admin, again)
 
 
-async def test_a_rotation_resumed_after_a_revoke_and_a_new_provisioning_is_refused(
+async def test_a_rotation_resumed_after_a_revoke_and_a_new_allotment_is_refused(
     desk: Desk,
     alice: ActorContext,
     manager: FakeAllocationManager,
     vault: MemorySecretStore,
     clock: FixedClock,
 ) -> None:
-    """rotate-1 timed out at the provider, then the actor was revoked and provisioned again. Before, the
+    """rotate-1 timed out at the provider, then the actor was revoked and allotted again. Before, the
     resume minted a key on the new allocation and revoked "the old key" its record named, a key of the
     first allocation: it answered with the new key while the key the new allocation had before stayed
     live, with its secret stored. A rotation belongs to the allocation it began on."""
-    first = await desk.payments.provision(desk.admin, provision_request())
+    first = await desk.payments.allot(desk.admin, allot_request())
     manager.fail_once("create_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
         await desk.rotate()
-    second = await provisioned_again(desk)
+    second = await allotted_again(desk)
     calls = list(manager.calls)
     clock.advance(120)
     with pytest.raises(NotFound, match=f"began on allocation '{first.allocation_id}'") as refused:
@@ -405,7 +405,7 @@ async def test_such_a_rotation_drops_the_secret_it_had_stored_for_the_revoked_al
     clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    await desk.payments.provision(desk.admin, provision_request())
+    await desk.payments.allot(desk.admin, allot_request())
 
     async def lost(*_: object, **__: object) -> None:
         raise ConnectionError("the database went away")
@@ -416,7 +416,7 @@ async def test_such_a_rotation_drops_the_secret_it_had_stored_for_the_revoked_al
             ConnectionError
         ):  # the new key's secret is stored and noted; the actor is not written
             await desk.rotate()
-    second = await provisioned_again(desk)
+    second = await allotted_again(desk)
     assert len(vault.values) == 2  # the new allocation's, and the one the rotation stored
     clock.advance(120)
     with pytest.raises(NotFound, match="began on allocation"):
@@ -424,21 +424,21 @@ async def test_such_a_rotation_drops_the_secret_it_had_stored_for_the_revoked_al
     assert await holds_only_the_key_of(desk, alice, manager, vault) == second
 
 
-# -- a provisioning that another command overtook --------------------------------------------------------
+# -- an allotment that another command overtook --------------------------------------------------------
 
 
-def provision_b() -> ProvisionRequest:
+def allot_b() -> AllotRequest:
     """The same actor under another reference: the provider call is the same one (its idempotency key is
     derived from the actor), so both references get one allocation and one key."""
-    return provision_request().model_copy(update={"operation_ref": "provision-b"})
+    return allot_request().model_copy(update={"operation_ref": "allot-b"})
 
 
-async def overtaken_provisioning(desk: Desk, manager: FakeAllocationManager, *then: str) -> None:
-    """provision-b has read the actor and is at the provider while the other reference provisions the
+async def overtaken_allotment(desk: Desk, manager: FakeAllocationManager, *then: str) -> None:
+    """allot-b has read the actor and is at the provider while the other reference allots the
     actor and the commands ``then`` run to their end."""
 
     async def other() -> None:
-        await desk.payments.provision(desk.admin, provision_request())
+        await desk.payments.allot(desk.admin, allot_request())
         for command in then:
             await getattr(desk, command)()
 
@@ -447,22 +447,22 @@ async def overtaken_provisioning(desk: Desk, manager: FakeAllocationManager, *th
 
 @pytest.fixture(params=["new", "revoked"])
 async def start(request: pytest.FixtureRequest, desk: Desk) -> str:
-    """Provisioning inserts the row of a new actor and replaces the row of a revoked one."""
+    """Allotment inserts the row of a new actor and replaces the row of a revoked one."""
     if request.param == "revoked":
-        first = provision_request().model_copy(update={"operation_ref": "provision-0"})
-        await desk.payments.provision(desk.admin, first)
+        first = allot_request().model_copy(update={"operation_ref": "allot-0"})
+        await desk.payments.allot(desk.admin, first)
         await desk.revoke()
     return str(request.param)
 
 
-async def test_a_provisioning_does_not_move_an_actor_out_of_revoked(
+async def test_a_allotment_does_not_move_an_actor_out_of_revoked(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, start: str
 ) -> None:
-    """Before, provisioning saved the whole row it had built from its first read: ``active``, on an
-    allocation the provider had revoked meanwhile. Now the actor stays revoked, and the provisioning,
+    """Before, allotment saved the whole row it had built from its first read: ``active``, on an
+    allocation the provider had revoked meanwhile. Now the actor stays revoked, and the allotment,
     whose allocation was funded and then revoked, answers with the actor as stored, as a fund does."""
-    await overtaken_provisioning(desk, manager, "revoke")
-    answer = await desk.payments.provision(desk.admin, provision_b())
+    await overtaken_allotment(desk, manager, "revoke")
+    answer = await desk.payments.allot(desk.admin, allot_b())
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
     assert stored.status == "revoked" and answer == stored
@@ -473,49 +473,49 @@ async def test_a_provisioning_does_not_move_an_actor_out_of_revoked(
     assert vault.values == {}  # this run's copy of the secret is deleted too
 
 
-async def test_a_provisioning_does_not_undo_a_pause_that_finished_meanwhile(
+async def test_a_allotment_does_not_undo_a_pause_that_finished_meanwhile(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, start: str
 ) -> None:
     """Before, the actor was stored ``active`` while the provider kept the allocation paused, and the
-    secret the first provisioning stored was left with nothing pointing at it."""
-    await overtaken_provisioning(desk, manager, "pause")
-    answer = await desk.payments.provision(desk.admin, provision_b())
+    secret the first allotment stored was left with nothing pointing at it."""
+    await overtaken_allotment(desk, manager, "pause")
+    answer = await desk.payments.allot(desk.admin, allot_b())
 
     stored = await holds_only_the_key_of(desk, alice, manager, vault)
     assert stored.status == "paused" and answer == stored  # the same allocation and key: its result too
     assert manager.allocations[stored.allocation_id].status == "paused"
 
 
-async def test_a_provisioning_does_not_undo_a_key_rotation_that_finished_meanwhile(
+async def test_a_allotment_does_not_undo_a_key_rotation_that_finished_meanwhile(
     desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore, start: str
 ) -> None:
     """Before, the actor was pointed back at the key the rotation had just revoked. The actor no longer
-    holds the key this provisioning got, so it is refused as any provisioning of a provisioned actor."""
-    await overtaken_provisioning(desk, manager, "rotate")
-    with pytest.raises(AlreadyProvisioned) as refused:
-        await desk.payments.provision(desk.admin, provision_b())
+    holds the key this allotment got, so it is refused as any allotment of an allotted actor."""
+    await overtaken_allotment(desk, manager, "rotate")
+    with pytest.raises(AlreadyAllotted) as refused:
+        await desk.payments.allot(desk.admin, allot_b())
 
     stored = await holds_only_the_key_of(desk, alice, manager, vault)
     assert refused.value.actor == stored and stored.status == "active"
 
 
 @pytest.mark.parametrize("revoked_again", [False, True])
-async def test_a_provisioning_whose_allocation_was_revoked_and_replaced_meanwhile_is_refused(
+async def test_a_allotment_whose_allocation_was_revoked_and_replaced_meanwhile_is_refused(
     desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, revoked_again: bool
 ) -> None:
-    """The actor was provisioned, revoked and provisioned again while provision-b was at the provider: the
+    """The actor was allotted, revoked and allotted again while allot-b was at the provider: the
     row is another allocation's. Nothing is written or funded, and this run's copy of the secret of its
     revoked allocation's key is deleted. The actor is another reference's now, or revoked again."""
 
     async def again() -> None:
-        third = provision_request().model_copy(update={"operation_ref": "provision-c"})
-        await desk.payments.provision(desk.admin, third)
+        third = allot_request().model_copy(update={"operation_ref": "allot-c"})
+        await desk.payments.allot(desk.admin, third)
 
     desk.again = again  # type: ignore[attr-defined]
-    await overtaken_provisioning(desk, manager, "revoke", "again", *(["revoke"] if revoked_again else []))
-    refusal = pytest.raises(NotFound, match="revoked while this provisioning")
-    with refusal if revoked_again else pytest.raises(AlreadyProvisioned):
-        await desk.payments.provision(desk.admin, provision_b())
+    await overtaken_allotment(desk, manager, "revoke", "again", *(["revoke"] if revoked_again else []))
+    refusal = pytest.raises(NotFound, match="revoked while this allotment")
+    with refusal if revoked_again else pytest.raises(AlreadyAllotted):
+        await desk.payments.allot(desk.admin, allot_b())
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
     assert stored.status == ("revoked" if revoked_again else "active")
@@ -533,7 +533,7 @@ class _WholeRowStore:
         self._inner = inner
 
     def __getattr__(self, name: str) -> Any:
-        if name in ("set_actor_status", "set_actor_key", "provision_actor"):
+        if name in ("set_actor_status", "set_actor_key", "allot_actor"):
             raise AttributeError(name)
         return getattr(self._inner, name)
 
@@ -558,16 +558,16 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
     """The conditional writes are optional for a store (``ActorCommandRepo``). Without them the engine
     reads the actor again, checks the same rules itself and saves the whole row with ``save_actor``."""
     desk = whole_row_desk
-    provisioned = await desk.payments.provision(desk.admin, provision_request("0"))
+    allotted = await desk.payments.allot(desk.admin, allot_request("0"))
     clock.advance(60)
-    funded = await desk.fund()
-    assert funded == provisioned.model_copy(update={"status": "active", "updated_at": clock.now()})
+    funded = await desk.top_up()
+    assert funded == allotted.model_copy(update={"status": "active", "updated_at": clock.now()})
     assert (await desk.pause()).status == "paused"
     assert (await desk.activate()).status == "active"
 
     rotated = await desk.rotate()
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
-    assert rotated == stored and stored.api_key_id != provisioned.api_key_id
+    assert rotated == stored and stored.api_key_id != allotted.api_key_id
     assert (await desk.payments.credential(alice)).token == manager.keys[stored.api_key_id][1]
     assert list(vault.values) == [stored.secret_ref.ref]
 
@@ -578,7 +578,7 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
         await desk.pause()
 
 
-@pytest.mark.parametrize("command", ["pause", "fund", "rotate"])
+@pytest.mark.parametrize("command", ["pause", "top_up", "rotate"])
 async def test_a_store_without_the_column_writes_gets_the_rules_from_the_engines_own_check(
     whole_row_desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, command: str
 ) -> None:
@@ -586,32 +586,32 @@ async def test_a_store_without_the_column_writes_gets_the_rules_from_the_engines
     was at the provider is seen. What stays open for such a store is the moment between that read and the
     save, which only a condition in the store's own write can close."""
     desk = whole_row_desk
-    await desk.payments.provision(desk.admin, provision_request("0" if command == "fund" else "5"))
+    await desk.payments.allot(desk.admin, allot_request("0" if command == "top_up" else "5"))
     during(manager, PROVIDER_CALL[command], desk.revoke)
-    if command == "fund":
-        assert (await desk.fund()).status == "revoked"
+    if command == "top_up":
+        assert (await desk.top_up()).status == "revoked"
     else:
-        with pytest.raises(NotFound, match="is not provisioned"):
+        with pytest.raises(NotFound, match="has no allocation"):
             await getattr(desk, command)()
     assert (await desk.payments.get_actor(desk.admin, "default", "alice")).status == "revoked"
     assert vault.values == {}
 
 
-async def test_a_store_without_the_column_writes_keeps_a_pause_through_a_fund(
+async def test_a_store_without_the_column_writes_keeps_a_pause_through_a_top_up(
     whole_row_desk: Desk, manager: FakeAllocationManager
 ) -> None:
     desk = whole_row_desk
-    await desk.payments.provision(desk.admin, provision_request("0"))
-    during(manager, "fund_allocation", desk.pause)
-    assert (await desk.fund()).status == "paused"
+    await desk.payments.allot(desk.admin, allot_request("0"))
+    during(manager, "top_up_allocation", desk.pause)
+    assert (await desk.top_up()).status == "paused"
 
 
 async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_meanwhile(
     whole_row_desk: Desk, alice: ActorContext, manager: FakeAllocationManager, vault: MemorySecretStore
 ) -> None:
     desk = whole_row_desk
-    await desk.payments.provision(desk.admin, provision_request())
-    finished: list[ProvisionedActor] = []
+    await desk.payments.allot(desk.admin, allot_request())
+    finished: list[ActorAllocation] = []
 
     async def other() -> None:
         finished.append(await rotate_2(desk))
@@ -623,12 +623,12 @@ async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_
 
 
 @pytest.mark.parametrize("then", ["revoke", "pause"])
-async def test_a_store_without_the_column_writes_keeps_what_finished_during_a_provisioning(
+async def test_a_store_without_the_column_writes_keeps_what_finished_during_a_allotment(
     whole_row_desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, then: str
 ) -> None:
     desk = whole_row_desk
-    await overtaken_provisioning(desk, manager, then)
-    answer = await desk.payments.provision(desk.admin, provision_b())
+    await overtaken_allotment(desk, manager, then)
+    answer = await desk.payments.allot(desk.admin, allot_b())
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
     assert stored.status == ("revoked" if then == "revoke" else "paused") and answer == stored

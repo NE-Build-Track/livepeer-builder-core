@@ -47,8 +47,9 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | --- | --- | --- |
 | Self-hosted payments | Done in M3: the console's stack runs the engine, Batteries and the signer on one host | console `docs/references/m3-environment.md` (ISS-13) |
 | Allocation modes | `per_actor` is the only mode since P1 (#162). At `719378f` `per_application` was built too: it took one allocation and one key from settings for the whole engine | `services/payments.py`. The settings `allocation_mode`, `shared_payment_key` and `shared_allocation_id` are gone from `config.py` |
-| Admin authority | `DefaultPolicy.check` returns at once for kind `admin`, before any application check | `services/policy.py:32` |
-| Writes and the policy | Provision, fund, status, revoke and key rotation call the policy with no resource, so the path or body chooses the application | `services/payments.py`, `services/keys.py` |
+| Names | Since P2 (#163) routes, classes, settings and records use the domain language: `tenant_id`, the kind `clearinghouse_admin`, `allot`, `top_up`, `PaymentKey`, `LPB_BATTERIES_GRANTS_TOKEN`, and the `/v1/clearinghouse` prefix. At `719378f` they said `application_id`, `admin`, `provision`, `fund`, `PaymentCredential`, `LPB_BATTERIES_OPERATOR_TOKEN` and `/v1/admin` | `contracts/`, `http/app.py`, `config.py`, migration 0014 |
+| Admin authority | `DefaultPolicy.check` returns at once for kind `clearinghouse_admin`, before any tenant check | `services/policy.py:32` |
+| Writes and the policy | Allot, top up, status, revoke and payment key rotation call the policy with no resource, so the path or body chooses the tenant | `services/payments.py`, `services/keys.py` |
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
 | Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`) |
 | Listener | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | `http/server.py`, `http/app.py` |
@@ -243,6 +244,10 @@ P1 (#162) changed `payments.md` (the allocation modes, and "Mode B" as a short "
 section; the tenant rules and the routes follow with their tickets) and the configuration table of
 `RELIABILITY.md`, and closed T5.
 
+P2 (#163) renamed what `payments.md`, `access.md`, the other contracts, the guides, `RELIABILITY.md`,
+`SECURITY.md`, the glossary and the dev stack's files call things. The old and the new names are in
+[the contracts index](../../contracts/index.md#upgrading-to-the-domain-language-names).
+
 ## Code areas
 
 | File | Change |
@@ -373,7 +378,13 @@ One builder-core issue each, all sub-issues of ISS-31.
 
 1. **P1 (#162).** Make `per_actor` the only allocation mode. Built: the three settings and the code
    that read them are removed, with `SettingsSecretStore` and `allocation_mode` in `GET /readyz`.
-2. **P2 (#163).** Rename routes, classes and settings to the domain language.
+2. **P2 (#163).** Rename routes, classes and settings to the domain language. Built
+   ([#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177)): tenant for
+   application, `clearinghouse_admin` for the kind `admin`, allot for provision, top up for fund, the
+   payment key, the grants token and the `/v1/clearinghouse` prefix, with migration 0014 for the records.
+   A route whose final shape needs more than a rename kept its shape under the new prefix, for P3 and
+   P4: the key routes, the actor list, the grant list and creation, the grant top-up, reconciliation
+   and cost sync.
 3. **P3 (#164).** Separate the work routes from the clearinghouse routes.
 4. **P4 (#165).** Tenants at the clearinghouse.
 5. **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.

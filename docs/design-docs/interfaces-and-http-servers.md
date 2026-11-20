@@ -6,7 +6,7 @@ The discovery inventory is not served by a package in this repository
 ([contract](../contracts/discovery.md)).
 
 This document is for reviewing the shapes. Other documents cover the rest:
-- the flows between components (authentication, provisioning, a paid job with failover, cost sync,
+- the flows between components (authentication, allotment, a paid job with failover, cost sync,
   reconciliation, recovery): [architecture-diagrams.md](architecture-diagrams.md);
 - every interface's full method list, generated from the code: [generated/interfaces.md](../generated/interfaces.md);
 - how to replace a default, with runnable examples: [extending-the-engine.md](extending-the-engine.md).
@@ -134,7 +134,7 @@ classDiagram
     class CostsAdminApi {
         <<interface>>
         +async recent(actor, limit) JobCost[]
-        +async reconcile(admin, application_id, actor_id, allocation_id) Reconciliation
+        +async reconcile(admin, tenant_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
     }
     class AllowanceApi {
@@ -143,12 +143,12 @@ classDiagram
     }
     class PaymentsAdminApi {
         <<interface>>
-        +async provision(admin, request) ProvisionedActor
-        +async fund(admin, application_id, actor_id, request) ProvisionedActor
-        +async set_status(admin, application_id, actor_id, status) ProvisionedActor
-        +async rotate_key(admin, application_id, actor_id, operation_ref) ProvisionedActor
-        +async revoke(admin, application_id, actor_id) ProvisionedActor
-        +async fund_grant(admin, request) None
+        +async allot(admin, request) ActorAllocation
+        +async top_up(admin, tenant_id, actor_id, request) ActorAllocation
+        +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
+        +async rotate_payment_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
+        +async revoke(admin, tenant_id, actor_id) ActorAllocation
+        +async top_up_grant(admin, request) None
         +grants GrantsApi?
     }
     class GrantsApi {
@@ -158,8 +158,8 @@ classDiagram
     }
     class KeysApi {
         <<interface>>
-        +async issue(admin, kind, actor_id, application_id, permissions, label, operation_ref) IssuedKey
-        +async list_keys(admin, application_id) AccessKey[]
+        +async issue(admin, kind, actor_id, tenant_id, permissions, label, operation_ref) IssuedKey
+        +async list_keys(admin, tenant_id) AccessKey[]
         +async revoke(admin, key_id) None
         +async bootstrap_admin(label) IssuedKey
     }
@@ -210,7 +210,7 @@ classDiagram
         +async insert_access_key(key, token_hash, operation) bool
         +async access_key_by_hash(token_hash) AccessKey?
         +async revoke_access_key(key_id, revoked_at) bool
-        +async list_access_keys(application_id) AccessKey[]
+        +async list_access_keys(tenant_id) AccessKey[]
         +async count_active_admin_keys() int
     }
     class AuthenticatorChain {
@@ -224,12 +224,12 @@ classDiagram
         -realm str
     }
     class DefaultPolicy {
-        admin kind passes
+        clearinghouse_admin kind passes
         else permission and ownership
     }
     class KeyService {
         +async issue(admin, ...) IssuedKey
-        +async list_keys(admin, application_id) AccessKey[]
+        +async list_keys(admin, tenant_id) AccessKey[]
         +async revoke(admin, key_id) None
         +async bootstrap_admin(label) IssuedKey
     }
@@ -340,19 +340,19 @@ classDiagram
     direction LR
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) PaymentCredential
+        +async credential(actor) PaymentKey
     }
     class AllowanceReader {
         <<interface>>
-        +async allocation_for(application_id, actor_id) str?
+        +async allocation_for(tenant_id, actor_id) str?
         +async read_allowance(allocation_id) Allowance
     }
     class AllocationManager {
         <<interface>>
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
-        +async fund_allocation(allocation_id, amount, idempotency_key) None
-        +async fund_grant(grant_id, amount, idempotency_key) None
+        +async top_up_allocation(allocation_id, amount, idempotency_key) None
+        +async top_up_grant(grant_id, amount, idempotency_key) None
         +async set_allocation_status(allocation_id, status) None
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None
@@ -385,7 +385,7 @@ classDiagram
         -worker CostSyncWorker?
         -allowances AllowanceReader
         +async for_job(actor, job_id) JobCost
-        +async reconcile(admin, application_id, actor_id, allocation_id) Reconciliation
+        +async reconcile(admin, tenant_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
         +async run(stop) None
     }
@@ -395,7 +395,7 @@ classDiagram
         +async sync_once() SyncReport
     }
     class BatteriesClient {
-        engine token, or operator token for the grant desk
+        engine token, or grants token for the grant desk
     }
     class BatteriesUsageSource {
         GET /v1/usage
@@ -716,7 +716,7 @@ classDiagram
         starlette
     }
     class RequestBodies {
-        IssueKeyBody, ProvisionBody, GrantBody
+        IssueKeyBody, AllotBody, GrantBody
         StatusBody, RotateBody, UsageBody
     }
     class FastAPI
@@ -764,13 +764,13 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
-| `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
-| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (provisioned, signed in, or both: D46, D48), `ProvisionedActor` |
-| `POST /v1/admin/applications/{app}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
-| `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
-| `POST /v1/admin/grant/fund` | `payments.fund_grant` | `204` |
-| `GET /v1/admin/reconciliation` | `costs.reconcile` | `Reconciliation` |
-| `POST /v1/admin/costs/sync` | `costs.sync_now` | `SyncReport` |
+| `POST, GET /v1/clearinghouse/keys`, `GET /v1/clearinghouse/keys/{id}`, `POST /v1/clearinghouse/keys/{id}/rotate`, `POST /v1/clearinghouse/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
+| `GET /v1/clearinghouse/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
+| `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation` |
+| `GET, POST /v1/clearinghouse/grants` | `payments.grants.*` | only when `payments.grants` is set |
+| `POST /v1/clearinghouse/grant/top-up` | `payments.top_up_grant` | `204` |
+| `GET /v1/clearinghouse/reconciliation` | `costs.reconcile` | `Reconciliation` |
+| `POST /v1/clearinghouse/costs/sync` | `costs.sync_now` | `SyncReport` |
 
 The generated schema is [generated/openapi.json](../generated/openapi.json); CI fails when it drifts.
 
@@ -798,9 +798,9 @@ classDiagram
     class NotProvisioned {
         402
     }
-    class AlreadyProvisioned {
+    class AlreadyAllotted {
         409 + actor
-        code already_provisioned
+        code already_allotted
     }
     class OperationExists {
         409 + Livepeer-Job-Id + job
@@ -838,7 +838,7 @@ classDiagram
     EngineError <|-- NotFound
     EngineError <|-- InvalidRequest
     EngineError <|-- NotProvisioned
-    EngineError <|-- AlreadyProvisioned
+    EngineError <|-- AlreadyAllotted
     EngineError <|-- OperationExists
     OperationExists <|-- OperationInProgress
     EngineError <|-- OperationConflict
@@ -1013,7 +1013,7 @@ Points worth deciding, noticed while drawing these:
    document that, or move readiness to a policy-checked call?
 2. **`ProviderError` passes some provider statuses through.** A Batteries `400`, `404`, `409` or `422`
    becomes the engine's own status, so a client cannot tell a provider rejection from an engine one.
-3. **Route naming.** Grants are `/v1/admin/grants` but funding one is `/v1/admin/grant/fund`, with no
+3. **Route naming.** Grants are `/v1/clearinghouse/grants` but topping one up is `/v1/clearinghouse/grant/top-up`, with no
    grant id in the path.
 4. **Reserved members.** `EngineApi.events`, `sessions` and `jobs.result` are on the facade and answer
    `501` until M4. Keep them visible so the contract is fixed early, or add them when they work?

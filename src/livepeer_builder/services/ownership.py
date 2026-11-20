@@ -2,7 +2,7 @@
 
 A route checks the operation's permission first, before any lookup, so a missing permission is
 ``AccessDenied`` (403) and says nothing about any record. Ownership comes second: another actor's or
-application's record reads exactly like a missing one, ``NotFound`` (404).
+tenant's record reads exactly like a missing one, ``NotFound`` (404).
 """
 
 from livepeer_builder.contracts import ActorContext, Job, Operation, ResourceRef
@@ -21,11 +21,9 @@ def check_owner(
 
 
 def sees_every_actor(actor: ActorContext) -> bool:
-    """An admin or an auditor reads every actor's records (in an auditor's case, of its application)."""
-    return actor.credential_kind in ("admin", "auditor")
+    """An admin or an auditor reads every actor's records (in an auditor's case, of its tenant)."""
+    return actor.credential_kind in ("clearinghouse_admin", "auditor")
 
 
 def job_resource(job: Job) -> ResourceRef:
-    return ResourceRef(
-        kind="job", application_id=job.application_id, owner_actor_id=job.actor_id, id=str(job.id)
-    )
+    return ResourceRef(kind="job", tenant_id=job.tenant_id, owner_actor_id=job.actor_id, id=str(job.id))

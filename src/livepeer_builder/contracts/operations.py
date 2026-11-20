@@ -3,7 +3,7 @@
 See docs/contracts/payments.md#repeat-safe-commands.
 
 An admin command that moves money or creates a credential is identified by a caller-chosen
-``operation_ref``, scoped to the caller ``(application_id, actor_id)``. The ledger stores it with the
+``operation_ref``, scoped to the caller ``(tenant_id, actor_id)``. The ledger stores it with the
 command's fingerprint before the first provider call (``started``) and the public result after the
 last step (``done``). A repeat is answered from this record. It never holds a secret: ``context`` holds
 what a resume needs (key ids, secret references), ``result`` what the caller was answered, without a token.
@@ -18,9 +18,9 @@ from pydantic import Field
 from livepeer_builder.contracts.common import Contract, StoredText
 
 OperationCommand = Literal[
-    "provision",
-    "fund",
-    "fund_grant",
+    "allot",
+    "top_up",
+    "top_up_grant",
     "create_grant",
     "rotate_payment_key",
     "issue_key",
@@ -31,7 +31,7 @@ OperationRef = Annotated[StoredText, Field(min_length=1)]  # required on every a
 
 
 class OperationRecord(Contract):
-    application_id: str  # the caller's scope, with actor_id and operation_ref: unique together
+    tenant_id: str  # the caller's scope, with actor_id and operation_ref: unique together
     actor_id: str
     operation_ref: OperationRef
     command: OperationCommand

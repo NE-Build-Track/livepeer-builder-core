@@ -58,6 +58,11 @@ REFUSED_IN_CODE = [
         ("extra_forbidden", ("batteries_tokn",), EXTRA),
         id="a credential setting's name mistyped",
     ),
+    pytest.param(  # the grants token's name before #163; no setting keeps an old name
+        {"batteries_operator_token": f"tok-{CREDENTIAL}"},
+        ("extra_forbidden", ("batteries_operator_token",), EXTRA),
+        id="a renamed credential setting",
+    ),
     pytest.param(
         {"batteries_token": {"token": f"tok-{CREDENTIAL}"}},
         ("string_type", ("batteries_token",), "Input should be a valid string"),
@@ -77,6 +82,17 @@ REFUSED_IN_CODE = [
         {"auth": "jwt"},
         ("value_error", (), "Value error, LPB_JWT_ISSUER is required when LPB_AUTH includes jwt"),
         id="the rule on JWT settings",
+    ),
+    pytest.param(  # #163 review: neither tenant source has a default
+        {"auth": "jwt", "jwt_issuer": "https://idp.invalid/", "jwt_audience": "engine"},
+        (
+            "value_error",
+            (),
+            "Value error, LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and "
+            "LPB_JWT_TENANT_ID must be set: the claim that names each token's tenant, or the one tenant "
+            "every token is in; neither is set",
+        ),
+        id="the rule on a JWT's tenant",
     ),
     pytest.param(
         {"discovery_url": ABSENT},
@@ -273,6 +289,24 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
                 "jwt_admin_read_scope is a scope ordinary tokens carry (an operation's name or a "
                 "standard scope, as written or after LPB_JWT_SCOPE_PREFIX), or the admin scope, so it "
                 "would not mark a read-only admin",
+            ),
+        ),
+    ],
+    "_jwt_names_one_tenant_source": [  # #163 review
+        Refused(
+            "a JWT's tenant named twice",
+            {
+                "auth": "jwt",
+                "jwt_issuer": "https://idp.invalid/",
+                "jwt_audience": "engine",
+                "jwt_tenant_claim": f"claim-{CREDENTIAL}",
+                "jwt_tenant_id": f"tenant-{CREDENTIAL}",
+            },
+            value_error(
+                None,
+                "LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID must be "
+                "set: the claim that names each token's tenant, or the one tenant every token is in; both "
+                "are set",
             ),
         ),
     ],

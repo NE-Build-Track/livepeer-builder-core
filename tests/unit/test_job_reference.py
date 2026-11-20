@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest, SessionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money, SessionRequest
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport
 from tests.conftest import EngineFactory
@@ -46,9 +46,9 @@ async def api(
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine, dict[str, str]]]:
     engine = await make_engine()
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-ref-1")
-    allocation = {"application_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
+    allocation = {"tenant_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
     amount = Money(amount=Decimal(5), currency="USD")
-    await engine.payments.provision(admin, ProvisionRequest(**allocation, amount=amount, operation_ref="p1"))
+    await engine.payments.allot(admin, AllotRequest(**allocation, amount=amount, operation_ref="p1"))
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield client, engine, {"Authorization": f"Bearer {alice.token}"}

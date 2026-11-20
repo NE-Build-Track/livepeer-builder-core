@@ -7,7 +7,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import Money
-from livepeer_builder.contracts.common import FundingAmount, StoredText
+from livepeer_builder.contracts.common import StoredText, TopUpAmount
 from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.services.arguments import checked
 
@@ -23,12 +23,12 @@ def refusal(adapter: TypeAdapter[object], value: object, field: str) -> InvalidR
 
 def test_a_value_the_rule_takes_is_returned_as_the_rule_reads_it() -> None:
     amount = Money(amount=Decimal("5"), currency="USD")
-    assert checked(TypeAdapter(FundingAmount), amount, "amount") == amount
+    assert checked(TypeAdapter(TopUpAmount), amount, "amount") == amount
 
 
 def test_a_validators_own_words_are_kept_without_pydantics_prefix() -> None:
     amount = Money(amount=Decimal(10**10), currency="USD")
-    refused = refusal(TypeAdapter(FundingAmount), amount, "amount")
+    refused = refusal(TypeAdapter(TopUpAmount), amount, "amount")
     assert str(refused) == "amount: amount must be at most 1000000000"
 
 

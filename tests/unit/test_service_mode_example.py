@@ -40,7 +40,7 @@ def corp_routes(app: FastAPI, engine: EngineApi) -> None:
 
     @router.get("/v1/corp/whoami")
     async def whoami(actor: Actor) -> dict[str, str]:
-        return {"actor_id": actor.actor_id, "application_id": actor.application_id}
+        return {"actor_id": actor.actor_id, "tenant_id": actor.tenant_id}
 
     app.include_router(router)
 

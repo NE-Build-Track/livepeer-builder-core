@@ -1,6 +1,6 @@
 """ISS-23: authorization denial across the whole admin surface, read from the FastAPI route table.
 
-Every ``/v1/admin/*`` route answers 403 to an actor key and 401 with no credential, and every admin write
+Every ``/v1/clearinghouse/*`` route answers 403 to an actor key and 401 with no credential, and every admin write
 answers 403 to an auditor key (a read-only admin, D46). The routes come from ``app.routes``, so an admin
 route added later is swept without editing this test; one whose body has no sample fails here and says so.
 """
@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
@@ -24,10 +24,10 @@ WRITES = {"POST", "PUT", "PATCH", "DELETE"}
 USD = {"amount": "0.01", "currency": "USD"}
 # A valid body for each admin body model, so a denial is the policy's answer and never a 422.
 SAMPLE_BODIES: dict[str, dict[str, Any]] = {
-    "IssueKeyBody": {"actor_id": "mallory", "operation_ref": "sweep"},
+    "IssueKeyBody": {"actor_id": "mallory", "tenant_id": "default", "operation_ref": "sweep"},
     "RotateKeyBody": {"operation_ref": "sweep"},
-    "ProvisionBody": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
-    "FundRequest": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
+    "AllotBody": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
+    "TopUpRequest": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
     "GrantBody": {"name": "sweep", "amount": USD, "operation_ref": "sweep"},
     "StatusBody": {"status": "paused"},
     "RotateBody": {"operation_ref": "sweep"},
@@ -39,7 +39,7 @@ def admin_routes(app: FastAPI) -> list[tuple[str, str, APIRoute]]:
     return [
         (method, route.path, route)
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/v1/admin/")
+        if isinstance(route, APIRoute) and route.path.startswith("/v1/clearinghouse/")
         for method in sorted(route.methods)
     ]
 
@@ -57,17 +57,17 @@ def body_for(route: APIRoute) -> dict[str, Any] | None:
 async def surface(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient, BuilderEngine, dict[str, str]]]:
-    """An engine with keys and the grant desk on, alice provisioned, and real ids for every path."""
+    """An engine with keys and the grant desk on, alice allotted, and real ids for every path."""
     engine = await make_engine()
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice", application_id="default", actor_id="alice",
+        AllotRequest(
+            operation_ref="allot:default:alice", tenant_id="default", actor_id="alice",
             amount=Money.model_validate(USD), grant_id="grant_1",
         ),
     )  # fmt: skip
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="sweep-alice")
-    params = {"key_id": alice.key.key_id, "application_id": "default", "actor_id": "alice"}
+    params = {"key_id": alice.key.key_id, "tenant_id": "default", "actor_id": "alice"}
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield app, client, engine, params
@@ -75,6 +75,15 @@ async def surface(
 
 def filled(path: str, params: dict[str, str]) -> str:
     return re.sub(r"\{(\w+)\}", lambda match: params[match.group(1)], path)
+
+
+def query_for(route: APIRoute, params: dict[str, str]) -> dict[str, str]:
+    """Each query parameter the route requires, from the same real ids, so a denial is never a 422."""
+    return {
+        field.alias: params[field.alias]
+        for field in route.dependant.query_params
+        if field.field_info.is_required()
+    }
 
 
 async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a_credential(
@@ -99,7 +108,8 @@ async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a
         if method in WRITES:
             callers.append(("auditor", as_auditor, 403))
         for who, headers, expected in callers:
-            answer = await client.request(method, url, json=body, headers=headers)
+            query = query_for(route, params)
+            answer = await client.request(method, url, params=query, json=body, headers=headers)
             if answer.status_code != expected:
                 wrong.append(f"{method} {path} as {who}: {answer.status_code}, expected {expected}")
     assert not wrong, "an admin route answered a caller it must refuse:\n" + "\n".join(wrong)

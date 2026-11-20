@@ -275,7 +275,7 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
     assert await built_in.get(ref) == "lpg_alice"
     with pytest.raises(InvalidRequest, match="LPB_SECRET_KEY"):
         await RoutingSecretStore(None).put("x", "y")
-    # #112 C2: the optional check provisioning asks before the provider is called
+    # #112 C2: the optional check allotment asks before the provider is called
     assert await built_in.writable() and not await RoutingSecretStore(None).writable()
 
 

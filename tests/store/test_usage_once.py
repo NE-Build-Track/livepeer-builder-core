@@ -57,7 +57,7 @@ async def test_a_job_row_written_with_no_usage_column_takes_its_first_report(
     job = make_job(clock)
     async with sql.engine.begin() as conn:
         await conn.execute(insert(t.jobs).values(
-            id=str(job.id), application_id="default", actor_id="alice", mode="immediate", app="a/b",
+            id=str(job.id), tenant_id="default", actor_id="alice", mode="immediate", app="a/b",
             state="succeeded", created_at=clock.now(), completed_at=clock.now(),
         ))  # fmt: skip
         held = await conn.execute(text("SELECT usage IS NULL FROM lpb_jobs"))

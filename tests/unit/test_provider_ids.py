@@ -1,6 +1,6 @@
 """#113 C10: ids in the payment provider's URLs.
 
-``FundRequest.grant_id`` went unescaped into ``POST /v1/grants/{grant_id}/fund``, and httpx removes dot
+``TopUpRequest.grant_id`` went unescaped into ``POST /v1/grants/{grant_id}/fund``, and httpx removes dot
 segments: ``../allocations/a1`` funded allocation ``a1`` instead of a grant. Every id the Batteries adapter
 places in a path is now percent-encoded by one helper, whatever its source, and ``grant_id`` is an id type
 that refuses ``/``, ``\\``, ``?``, ``#``, ``%``, control characters and the values ``.`` and ``..``, within
@@ -16,9 +16,9 @@ import pytest
 from pydantic import ValidationError
 
 from livepeer_builder.adapters.batteries import BatteriesClient
-from livepeer_builder.contracts import FundRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import AllotRequest, Money, TopUpRequest
 from livepeer_builder.http import create_app
-from livepeer_builder.http.bodies import ProvisionBody
+from livepeer_builder.http.bodies import AllotBody
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
 
@@ -60,34 +60,28 @@ ALLOWED = ["", "grant_1", "550e8400-e29b-41d4-a716-446655440000", "grant.v2", ".
 @pytest.mark.parametrize("grant_id", REFUSED)
 def test_a_grant_id_a_provider_path_cannot_hold_is_refused(grant_id: str) -> None:
     with pytest.raises(ValidationError, match="grant_id"):
-        FundRequest(amount=USD, operation_ref="f1", grant_id=grant_id)
+        TopUpRequest(amount=USD, operation_ref="f1", grant_id=grant_id)
     with pytest.raises(ValidationError, match="grant_id"):
-        ProvisionRequest(
-            application_id="default", actor_id="alice", amount=USD, grant_id=grant_id, operation_ref="p1"
-        )
+        AllotRequest(tenant_id="default", actor_id="alice", amount=USD, grant_id=grant_id, operation_ref="p1")
     with pytest.raises(ValidationError, match="grant_id"):
-        ProvisionBody(amount=USD, grant_id=grant_id, operation_ref="p1")
+        AllotBody(amount=USD, grant_id=grant_id, operation_ref="p1")
 
 
 @pytest.mark.parametrize("grant_id", ALLOWED)
 def test_any_other_grant_id_is_kept_as_written(grant_id: str) -> None:
     """No pattern such as a UUID: the provider chooses its ids."""
-    assert FundRequest(amount=USD, operation_ref="f1", grant_id=grant_id).grant_id == grant_id
-    request = ProvisionRequest(
-        application_id="d", actor_id="a", amount=USD, grant_id=grant_id, operation_ref="p1"
-    )
+    assert TopUpRequest(amount=USD, operation_ref="f1", grant_id=grant_id).grant_id == grant_id
+    request = AllotRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=grant_id, operation_ref="p1")
     assert request.grant_id == grant_id
 
 
 @pytest.mark.parametrize(("written", "used"), PADDED)
 def test_whitespace_around_a_grant_id_is_removed_where_the_request_is_read(written: str, used: str) -> None:
     """The value checked is the value the engine uses: it stripped the id only after the check."""
-    assert FundRequest(amount=USD, operation_ref="f1", grant_id=written).grant_id == used
-    request = ProvisionRequest(
-        application_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1"
-    )
+    assert TopUpRequest(amount=USD, operation_ref="f1", grant_id=written).grant_id == used
+    request = AllotRequest(tenant_id="d", actor_id="a", amount=USD, grant_id=written, operation_ref="p1")
     assert request.grant_id == used
-    assert ProvisionBody(amount=USD, grant_id=written, operation_ref="p1").grant_id == used
+    assert AllotBody(amount=USD, grant_id=written, operation_ref="p1").grant_id == used
 
 
 @pytest.fixture
@@ -99,7 +93,7 @@ async def admin_client(make_engine: EngineFactory) -> AsyncIterator[tuple[httpx.
         yield client, {"Authorization": f"Bearer {admin.token}"}
 
 
-ALLOCATION = "/v1/admin/applications/default/actors/alice/allocation"
+ALLOCATION = "/v1/clearinghouse/tenants/default/actors/alice/allocation"
 AMOUNT = {"amount": "5", "currency": "USD"}
 
 
@@ -110,9 +104,9 @@ async def test_rest_refuses_such_a_grant_id_with_422_before_the_ledger_and_the_p
     """Each reference is still free afterwards: the ledger recorded nothing."""
     client, admin = admin_client
     commands = [
-        ("/v1/admin/grant/fund", {"operation_ref": "g1", "amount": AMOUNT}, 204),
+        ("/v1/clearinghouse/grant/top-up", {"operation_ref": "g1", "amount": AMOUNT}, 204),
         (ALLOCATION, {"operation_ref": "p1", "amount": AMOUNT}, 201),
-        (ALLOCATION + "/fund", {"operation_ref": "f1", "amount": AMOUNT}, 200),
+        (ALLOCATION + "/top-up", {"operation_ref": "f1", "amount": AMOUNT}, 200),
     ]
     for path, body, accepted in commands:
         calls = list(manager.calls)
@@ -130,15 +124,15 @@ async def test_rest_uses_a_padded_grant_id_without_its_padding(
 ) -> None:
     client, admin = admin_client
     body = {"operation_ref": "g1", "amount": AMOUNT, "grant_id": " grant_1\n"}
-    funded = await client.post("/v1/admin/grant/fund", json=body, headers=admin)
+    funded = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
     assert funded.status_code == 204, funded.text
-    assert [grant for grant, _, _ in manager.funded_grants] == ["grant_1"]
-    provisioned = await client.post(
+    assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_1"]
+    allotted = await client.post(
         ALLOCATION,
         json={"operation_ref": "p1", "amount": AMOUNT, "grant_id": "\u00a0grant_1 "},
         headers=admin,
     )
-    assert (provisioned.status_code, provisioned.json()["grant_id"]) == (201, "grant_1")
+    assert (allotted.status_code, allotted.json()["grant_id"]) == (201, "grant_1")
 
 
 # -- the adapter -------------------------------------------------------------------------------------------
@@ -162,8 +156,8 @@ def batteries() -> tuple[BatteriesClient, list[str]]:
 
 Call = Callable[[BatteriesClient, str], Awaitable[Any]]
 CALLS: list[tuple[str, Call]] = [
-    ("/v1/grants/{}/fund", lambda c, i: c.fund_grant(i, USD, "k")),
-    ("/v1/allocations/{}/fund", lambda c, i: c.fund_allocation(i, USD, "k")),
+    ("/v1/grants/{}/fund", lambda c, i: c.top_up_grant(i, USD, "k")),
+    ("/v1/allocations/{}/fund", lambda c, i: c.top_up_allocation(i, USD, "k")),
     ("/v1/allocations/{}/status", lambda c, i: c.set_allocation_status(i, "paused")),
     ("/v1/allocations/{}/revoke", lambda c, i: c.revoke_allocation(i)),
     ("/v1/api-keys/{}/revoke", lambda c, i: c.revoke_key(i)),

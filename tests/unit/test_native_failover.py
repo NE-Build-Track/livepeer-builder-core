@@ -16,9 +16,9 @@ from livepeer_builder.testing import (
     make_engine,
     runner,
 )
-from tests.conftest import provision
+from tests.conftest import allot
 
-ACTOR = ActorContext(actor_id="a", application_id="app", permissions=frozenset({"jobs.run", "jobs.read"}))
+ACTOR = ActorContext(actor_id="a", tenant_id="app", permissions=frozenset({"jobs.run", "jobs.read"}))
 RUNNERS = [
     runner("chat", "https://runner-a.example", orchestrator_url="https://orch-a.example"),
     runner("chat", "https://runner-b.example", orchestrator_url="https://orch-b.example"),
@@ -39,7 +39,7 @@ async def returned(
 ) -> tuple[JobStream, bytes]:
     """The stream the caller gets, read to its end."""
     async with make_engine(runners=runners, supply=EngineSupply(transport=transport), **settings) as engine:
-        await provision(engine, ACTOR)
+        await allot(engine, ACTOR)
         streaming = engine.jobs.streaming
         assert streaming is not None
         request = REQUEST.model_copy(update={"max_attempts": max_attempts})
@@ -127,7 +127,7 @@ async def test_the_fake_engine_ends_a_returned_error_as_the_engine_does(status: 
     """One runner: nothing to fail over to, so both return the answer and end the job alike."""
     transport = ScriptedStreamTransport(opens=[answer(status, b"error")])
     async with make_engine(runners=RUNNERS[:1], supply=EngineSupply(transport=transport)) as engine:
-        await provision(engine, ACTOR)
+        await allot(engine, ACTOR)
         assert engine.jobs.streaming is not None
         real = await engine.jobs.streaming.stream(ACTOR, REQUEST)
         async with real:

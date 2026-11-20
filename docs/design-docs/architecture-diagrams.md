@@ -44,7 +44,7 @@ flowchart LR
     Core -->|"sign (SDK)"| Signer
     Core -->|"LPB_DISCOVERY_URL: GET /discovery"| DiscSvc
     DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
-    Core -->|"provision, fund, /v1/usage"| Bat
+    Core -->|"allot, top up, /v1/usage"| Bat
     Core -->|"paid call (adapters/runner_call.py)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat
     Signer -->|"events (durable outbox)"| Kafka --> Bat
@@ -61,7 +61,7 @@ Every layer uses the frozen models in `contracts/`.
 ```mermaid
 flowchart TB
     subgraph UI["http/ — REST service ([server] extra)"]
-        Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/admin/*"]
+        Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/clearinghouse/*"]
     end
     subgraph Wiring["runtime/ — app wiring"]
         BE["BuilderEngine.create · start · stop · health"]
@@ -138,7 +138,7 @@ sequenceDiagram
     else not an lpk_ token
         K-->>Chain: None (try the next authenticator)
     else valid
-        K-->>Chain: ActorContext(actor, application, permissions, kind)
+        K-->>Chain: ActorContext(actor, tenant, permissions, kind)
     end
     H->>Svc: get(actor, job_id)
     Svc->>P: check(actor, JOBS_READ, ResourceRef(owner))
@@ -149,7 +149,7 @@ sequenceDiagram
     end
 ```
 
-## 5. Explicit provisioning (per_actor)
+## 5. Explicit allotment (per_actor)
 
 Money moves only on an admin command, with an idempotency key. The key goes straight into the
 `SecretStore`; the database stores only a `SecretRef`.
@@ -158,18 +158,18 @@ Money moves only on an admin command, with an idempotency key. The key goes stra
 sequenceDiagram
     autonumber
     actor Op as Operator (admin key)
-    participant H as REST /v1/admin/.../allocation
+    participant H as REST /v1/clearinghouse/.../allocation
     participant Pay as PaymentsService
     participant B as BatteriesClient
     participant Bat as Batteries management API
     participant Sec as EncryptedDbSecretStore
     participant DB as SqlStore (lpb_actors)
     Op->>H: POST {amount: {amount: "1", currency: "USD"}, grant_id: "g_…"}
-    H->>Pay: provision(admin, ProvisionRequest)
+    H->>Pay: allot(admin, AllotRequest)
     Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
     Pay->>DB: get_actor(app, actor)
-    alt already provisioned (under another reference)
-        Pay-->>Op: 409 already_provisioned, the actor (nothing applied: fund it instead)
+    alt already allotted (under another reference)
+        Pay-->>Op: 409 already_allotted, the actor (nothing applied: top it up instead)
     else new
         Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
         Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)
@@ -179,7 +179,7 @@ sequenceDiagram
         Pay->>Sec: put(name, lpg_…) → Fernet ciphertext in lpb_secrets
         Sec-->>Pay: SecretRef("db:…")
         Pay->>DB: save_actor(allocation_id, api_key_id, secret_ref)
-        Pay-->>Op: ProvisionedActor (never the key)
+        Pay-->>Op: ActorAllocation (never the key)
     end
 ```
 
@@ -204,7 +204,7 @@ sequenceDiagram
     J->>DB: job_by_operation_ref → 409 if already used
     J->>Adm: admit(app) → NoCapacity 503 if full (before payment)
     J->>DB: create_job(state=running, fingerprint)
-    J->>Pay: credential(actor) → PaymentCredential(token, allocation_id), or JobFailed(not_provisioned) before any attempt
+    J->>Pay: credential(actor) → PaymentKey(token, allocation_id), or JobFailed(not_provisioned) before any attempt
     loop each candidate (SelectionPolicy order, max_attempts)
         J->>DB: start_attempt(outcome=in_flight)
         J->>T: call(runner, request, credential)
@@ -276,7 +276,7 @@ sequenceDiagram
     participant Pay as PaymentsService (AllowanceReader)
     participant DB as SqlStore
     participant Bat as Batteries
-    Op->>C: GET /v1/admin/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
+    Op->>C: GET /v1/clearinghouse/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
     C->>Pay: allocation_for(app, actor) → the current allocation
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
     C->>DB: attempt_allocations(app, actor) → which allocation paid each attempt (#115, C9)
@@ -342,7 +342,7 @@ stateDiagram-v2
     [*] --> running: run (immediate)
     queued --> running: worker picks it up (M4)
     running --> succeeded: runner 2xx
-    running --> failed: refused everywhere, not provisioned, runner 4xx/5xx, signer refusal
+    running --> failed: refused everywhere, no allocation, runner 4xx/5xx, signer refusal
     running --> uncertain: paid, then timeout or unreachable
     running --> uncertain: restart with an in_flight or paid attempt
     running --> failed: restart, nothing could have paid

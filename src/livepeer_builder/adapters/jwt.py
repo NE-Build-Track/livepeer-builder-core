@@ -46,8 +46,8 @@ class JwtSettings:
     audience: str
     algorithms: tuple[str, ...] = ("RS256", "ES256")
     actor_claim: str = "sub"
-    application_claim: str | None = None  # None: every token is in application_id
-    application_id: str = "default"  # at most 200 characters, like a claim (``_identity``)
+    tenant_claim: str | None = None  # exactly one of these (#163 review): the claim naming the tenant,
+    tenant_id: str | None = None  # or the one tenant of every token, at most 200 characters like a claim
     scope_claim: str = "scope"
     scope_prefix: str = ""
     admin_scope: str | None = None  # None: no token is an admin credential
@@ -59,8 +59,17 @@ class JwtSettings:
     name_claim: str | None = "preferred_username"  # the display name for the operator's actor list (D48)
 
     def __post_init__(self) -> None:
-        if len(self.application_id) > 200:  # every record stores it in 200 characters (store.schema.ID)
-            raise ValueError("the JWT application id is longer than 200 characters")
+        if (self.tenant_claim is None) == (self.tenant_id is None):  # neither has a default
+            raise ValueError("set exactly one of tenant_claim and tenant_id: where each token's tenant is")
+        if self.tenant_id is not None and len(self.tenant_id) > 200:  # every record stores 200 (schema.ID)
+            raise ValueError("the JWT tenant id is longer than 200 characters")
+
+    def tenant(self, claims: dict[str, Any]) -> str:
+        """The token's tenant: its claim's value, or the one tenant every token is in."""
+        if self.tenant_claim is not None:
+            return _identity(claims, self.tenant_claim)
+        assert self.tenant_id is not None  # __post_init__: exactly one is set
+        return self.tenant_id
 
     @property
     def strict(self) -> bool:
@@ -393,11 +402,7 @@ class JwtBearerAuthenticator:
     def _actor(self, claims: dict[str, Any]) -> ActorContext:
         settings = self._settings
         actor_id = _identity(claims, settings.actor_claim)
-        application_id = (
-            _identity(claims, settings.application_claim)
-            if settings.application_claim
-            else settings.application_id
-        )
+        tenant_id = settings.tenant(claims)
         scopes = _scopes(claims.get(settings.scope_claim))
         named = {
             scope.removeprefix(settings.scope_prefix)
@@ -410,9 +415,9 @@ class JwtBearerAuthenticator:
         name = claims.get(settings.name_claim) if settings.name_claim else None
         return ActorContext(
             actor_id=actor_id,
-            application_id=application_id,
+            tenant_id=tenant_id,
             permissions=frozenset(operation.value for operation in GRANTABLE if operation.value in named),
-            credential_kind="admin" if admin else "auditor" if auditor else "actor",
+            credential_kind="clearinghouse_admin" if admin else "auditor" if auditor else "actor",
             auth=AuthProvenance(
                 method="jwt", issuer=settings.issuer, credential_id=jti if isinstance(jti, str) else None
             ),
@@ -431,8 +436,8 @@ def jwt_authenticator(settings: EngineSettings, *, timeout_s: float = 3.0) -> Jw
         audience=settings.jwt_audience,
         algorithms=settings.jwt_algorithms,
         actor_claim=settings.jwt_actor_claim,
-        application_claim=settings.jwt_application_claim,
-        application_id=settings.jwt_application_id,
+        tenant_claim=settings.jwt_tenant_claim,
+        tenant_id=settings.jwt_tenant_id,
         scope_claim=settings.jwt_scope_claim,
         scope_prefix=settings.jwt_scope_prefix,
         admin_scope=settings.jwt_admin_scope,
@@ -477,7 +482,7 @@ def _text(claims: dict[str, Any], name: str) -> str:
 
 
 def _identity(claims: dict[str, Any], name: str) -> str:
-    """An actor or application id, which every record stores in 200 characters (``store.schema.ID``).
+    """An actor or tenant id, which every record stores in 200 characters (``store.schema.ID``).
     A longer one is refused here, not cut: cutting could merge two people (John, #53 review)."""
     value = _text(claims, name)
     if len(value) > 200:

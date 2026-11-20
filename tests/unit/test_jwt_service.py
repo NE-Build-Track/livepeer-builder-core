@@ -67,8 +67,17 @@ async def idp() -> AsyncIterator[IdentityProvider]:
 
 
 def jwt_settings(idp: IdentityProvider, auth: str = "jwt", **extra: str) -> dict[str, Any]:
-    # the local identity provider is plain http, which needs the dev override (D47)
-    return {"auth": auth, "jwt_issuer": idp.issuer, "jwt_audience": AUDIENCE, "jwt_allow_http": True, **extra}
+    # the local identity provider is plain http, which needs the dev override (D47); and every token is in
+    # one tenant unless a claim names it (exactly one, #163 review)
+    tenant = {} if "jwt_tenant_claim" in extra else {"jwt_tenant_id": "default"}
+    return {
+        "auth": auth,
+        "jwt_issuer": idp.issuer,
+        "jwt_audience": AUDIENCE,
+        "jwt_allow_http": True,
+        **tenant,
+        **extra,
+    }
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -89,6 +98,7 @@ def test_jwt_settings_come_from_the_environment() -> None:
             "LPB_AUTH": "jwt, api_keys",
             "LPB_JWT_ISSUER": "https://idp.example.com/",
             "LPB_JWT_AUDIENCE": AUDIENCE,
+            "LPB_JWT_TENANT_CLAIM": "org",
             "LPB_JWT_ALGORITHMS": "RS256,PS256",
             "LPB_JWT_ADMIN_SCOPE": "livepeer:admin",
             "LPB_JWT_ADMIN_READ_SCOPE": "livepeer:read",
@@ -125,9 +135,9 @@ def test_jwt_settings_come_from_the_environment() -> None:
                 "auth": "jwt",
                 "jwt_issuer": "https://idp/",
                 "jwt_audience": "a",
-                "jwt_application_id": "a" * 201,
+                "jwt_tenant_id": "a" * 201,
             },
-            "jwt_application_id",
+            "jwt_tenant_id",
         ),
     ],
     ids=["no issuer", "no audience", "unknown mode", "repeated mode", "empty", "hmac", "none", "long app id"],
@@ -137,11 +147,59 @@ def test_bad_auth_settings_fail_at_startup(values: dict[str, Any], complaint: st
         EngineSettings.model_validate({"discovery_url": "http://127.0.0.1:9/discovery", **values})
 
 
-def test_an_embedder_s_application_id_longer_than_the_store_keeps_is_refused() -> None:
+JWT = {
+    "discovery_url": "http://127.0.0.1:9/discovery",
+    "auth": "jwt",
+    "jwt_issuer": "https://idp.example/",
+    "jwt_audience": AUDIENCE,
+}
+ONE_TENANT_SOURCE = "exactly one of LPB_JWT_TENANT_CLAIM"
+
+
+@pytest.mark.parametrize(
+    ("tenant", "said"),
+    [({}, "neither is set"), ({"jwt_tenant_claim": "org", "jwt_tenant_id": "acme"}, "both are set")],
+    ids=["neither", "both"],
+)
+def test_jwt_needs_exactly_one_source_of_a_tokens_tenant(tenant: dict[str, str], said: str) -> None:
+    """#163 review: neither setting has a default, so an engine that names no tenant source refuses to
+    start rather than put every token in one tenant; and one that names both is ambiguous."""
+    with pytest.raises(ValidationError) as refused:
+        EngineSettings.model_validate(JWT | tenant)
+    message = str(refused.value)
+    assert ONE_TENANT_SOURCE in message and "LPB_JWT_TENANT_ID" in message and said in message
+
+
+@pytest.mark.parametrize(
+    "tenant", [{"jwt_tenant_claim": "org"}, {"jwt_tenant_id": "acme"}], ids=["claim", "id"]
+)
+def test_either_source_alone_starts(tenant: dict[str, str]) -> None:
+    settings = EngineSettings.model_validate(JWT | tenant)
+    assert (settings.jwt_tenant_claim, settings.jwt_tenant_id) == (
+        tenant.get("jwt_tenant_claim"),
+        tenant.get("jwt_tenant_id"),
+    )
+
+
+def test_without_jwt_neither_tenant_source_is_needed_and_neither_has_a_default() -> None:
+    settings = EngineSettings(discovery_url="http://127.0.0.1:9/discovery")
+    assert (settings.jwt_tenant_claim, settings.jwt_tenant_id) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "tenant", [{}, {"tenant_claim": "org", "tenant_id": "acme"}], ids=["neither", "both"]
+)
+def test_the_authenticator_needs_exactly_one_source_of_a_tokens_tenant(tenant: dict[str, str]) -> None:
+    """An embedder that builds the authenticator itself gets no implicit tenant either."""
+    with pytest.raises(ValueError, match="exactly one of tenant_claim and tenant_id"):
+        JwtSettings(issuer="https://idp/", audience="a", **tenant)
+
+
+def test_an_embedder_s_tenant_id_longer_than_the_store_keeps_is_refused() -> None:
     """Every token takes this id when no claim names one, and every record stores it in 200 characters."""
-    assert JwtSettings(issuer="https://idp/", audience="a", application_id="a" * 200)
+    assert JwtSettings(issuer="https://idp/", audience="a", tenant_id="a" * 200)
     with pytest.raises(ValueError, match="200 characters"):
-        JwtSettings(issuer="https://idp/", audience="a", application_id="a" * 201)
+        JwtSettings(issuer="https://idp/", audience="a", tenant_id="a" * 201)
 
 
 # -- the engine -------------------------------------------------------------------------------------
@@ -162,7 +220,7 @@ async def test_both_modes_accept_tokens_and_keys(idp: IdentityProvider) -> None:
     async with make_engine(**jwt_settings(idp, auth="jwt,api_keys")) as engine:
         assert engine.keys is not None
         issued = await engine.keys.issue(
-            ActorContext(actor_id="op", credential_kind="admin"),
+            ActorContext(actor_id="op", credential_kind="clearinghouse_admin"),
             kind="actor",
             actor_id="bob",
             operation_ref="issue-jwt_service-145",
@@ -214,12 +272,19 @@ async def test_the_rest_service_accepts_the_providers_tokens(idp: IdentityProvid
             ).status_code == 403
             admin = bearer(idp.token(scope="livepeer:admin"))
             assert (
-                await client.get("/v1/admin/reconciliation?actor_id=alice", headers=admin)
+                await client.get(
+                    "/v1/clearinghouse/reconciliation?tenant_id=default&actor_id=alice", headers=admin
+                )
             ).status_code in (200, 404)
             assert (
-                await client.get("/v1/admin/reconciliation", headers=bearer(idp.token()))
+                await client.get(
+                    "/v1/clearinghouse/reconciliation?tenant_id=default", headers=bearer(idp.token())
+                )
             ).status_code == 403
-            assert (await client.post("/v1/admin/keys", json={}, headers=admin)).status_code in (404, 405)
+            assert (await client.post("/v1/clearinghouse/keys", json={}, headers=admin)).status_code in (
+                404,
+                405,
+            )
             schemes = app.openapi()["components"]["securitySchemes"]
             assert [(s["scheme"], s.get("bearerFormat")) for s in schemes.values()] == [("bearer", "JWT")]
 
@@ -244,6 +309,7 @@ def test_review_defaults_are_strict() -> None:
         auth=("jwt",),
         jwt_issuer="https://idp/",
         jwt_audience="a",
+        jwt_tenant_id="default",
     )
     assert settings.jwt_token_types == ("at+jwt", "application/at+jwt")
     assert (settings.jwt_max_lifetime_s, settings.jwt_allow_http) == (3600, False)
@@ -285,6 +351,7 @@ def test_risky_jwt_settings_fail_at_startup(values: dict[str, Any], complaint: s
         "auth": "jwt",
         "jwt_issuer": "https://idp/",
         "jwt_audience": "a",
+        "jwt_tenant_id": "default",
     }
     with pytest.raises(ValidationError, match=complaint):
         EngineSettings.model_validate(base | values)
@@ -296,6 +363,7 @@ def test_token_types_are_read_as_a_lower_case_list() -> None:
         "auth": "jwt",
         "jwt_issuer": "https://idp/",
         "jwt_audience": "a",
+        "jwt_tenant_id": "default",
     }
     settings = EngineSettings.model_validate(base | {"jwt_token_types": "AT+JWT, jwt"})
     assert settings.jwt_token_types == ("at+jwt", "jwt")
@@ -307,13 +375,14 @@ def test_the_dev_override_allows_an_http_issuer() -> None:
         auth=("jwt",),
         jwt_issuer="http://keycloak:8080/",
         jwt_audience="a",
+        jwt_tenant_id="default",
         jwt_allow_http=True,
     )
     assert settings.jwt_issuer == "http://keycloak:8080/"
 
 
 async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: IdentityProvider) -> None:
-    """Registration on first sign-in (#52, D48): the operator sees alice by name before provisioning her."""
+    """Registration on first sign-in (#52, D48): the operator sees alice by name before allotment her."""
     async with make_engine(**jwt_settings(idp, jwt_admin_scope="livepeer:admin")) as engine:
         app = create_app(engine, manage_lifecycle=False)
         async with httpx.AsyncClient(
@@ -324,8 +393,8 @@ async def test_a_builders_first_sign_in_puts_them_on_the_operators_list(idp: Ide
             operator = bearer(
                 idp.token(sub="b715dc36", scope="livepeer:admin", preferred_username="operator")
             )
-            listed = (await client.get("/v1/admin/actors", headers=operator)).json()
-            assert [(a["actor_id"], a["label"], a["provisioned"]) for a in listed] == [
+            listed = (await client.get("/v1/clearinghouse/actors", headers=operator)).json()
+            assert [(a["actor_id"], a["label"], a["allotted"]) for a in listed] == [
                 ("3c446b40-7123", "alice", False)
             ]  # the operator signing in is not an actor, so is not listed
 

@@ -1,7 +1,7 @@
 """Grants: the idempotency keys the engine sends Batteries, and the grant desk (D57).
 
-Split from ``payments.py`` by responsibility: grants fund every application and are an optional
-capability, while ``PaymentsService`` provisions and funds one actor's allocation.
+Split from ``payments.py`` by responsibility: grants fund every tenant and are an optional
+capability, while ``PaymentsService`` allots and tops up one actor's allocation.
 """
 
 import base64
@@ -10,14 +10,14 @@ import hashlib
 from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import ActorContext, Currency, GrantRecord, Money, Operation
-from livepeer_builder.contracts.common import FundingAmount
+from livepeer_builder.contracts.common import TopUpAmount
 from livepeer_builder.errors import InvalidRequest, ProviderError
 from livepeer_builder.protocols import AccessPolicy, AllocationManager
 from livepeer_builder.services.arguments import checked
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 
 _GRANT = TypeAdapter(GrantRecord)
-_AMOUNT = TypeAdapter(FundingAmount)
+_AMOUNT = TypeAdapter(TopUpAmount)
 GRANT_TAG = "lpb_operation"  # the metadata key that tags a grant the engine created (D57, Q5)
 
 
@@ -30,8 +30,8 @@ def idempotency_key(engine_id: str, operation: str, step: str) -> str:
 class GrantDesk:
     """Listing and creating grants: an optional capability (decision 7 in the DI refactor plan).
 
-    Present only when a grants manager exists (``LPB_BATTERIES_OPERATOR_TOKEN``, or one supplied).
-    The engine's own token can fund grants but not list or create them, so without the operator
+    Present only when a grants manager exists (``LPB_BATTERIES_GRANTS_TOKEN``, or one supplied).
+    The engine's own token can top up grants but not list or create them, so without the grants
     credential the desk is absent rather than failing at first use.
     """
 
@@ -50,8 +50,8 @@ class GrantDesk:
         self._ledger = ledger
 
     async def list_grants(self, admin: ActorContext) -> list[GrantRecord]:
-        # The provisioning catalog: grants fund every application and carry none, so an auditor bound to
-        # one application never reads them (John, #53 review).
+        # The allotment catalog: grants fund every tenant and carry none, so an auditor bound to
+        # one tenant never reads them (John, #53 review).
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
         return await self._manager.list_grants()
 
@@ -68,7 +68,7 @@ class GrantDesk:
 
         # Batteries has no idempotency key on grant creation (Q5): the tag finds an earlier run's grant
         tag = idempotency_key(
-            self._engine_id, f"create-grant:{admin.application_id}:{admin.actor_id}:{operation_ref}", "grant"
+            self._engine_id, f"create-grant:{admin.tenant_id}:{admin.actor_id}:{operation_ref}", "grant"
         )
 
         async def steps(run: RunningOperation) -> GrantRecord:

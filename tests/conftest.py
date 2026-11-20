@@ -10,7 +10,7 @@ import pytest
 from livepeer_gateway.remote_signer import get_signer_info
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest, Runner
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money, Runner
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import (
     FakeAllocationManager,
@@ -77,7 +77,7 @@ def usage() -> FakeUsageSource:
 
 @pytest.fixture
 def admin() -> ActorContext:
-    return ActorContext(actor_id="operator", credential_kind="admin")
+    return ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
 
 @pytest.fixture
@@ -97,19 +97,19 @@ def bob() -> ActorContext:
 EngineFactory = Callable[..., Awaitable[BuilderEngine]]
 
 
-async def provision(engine: BuilderEngine, *actors: ActorContext) -> None:
+async def allot(engine: BuilderEngine, *actors: ActorContext) -> None:
     """Give each actor an allocation of 5 USD, as an admin does. A job needs one: an actor with no
     allocation fails ``not_provisioned`` before any payment, and there is no shared key."""
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     for actor in actors:
-        request = ProvisionRequest(
-            operation_ref=f"provision:{actor.application_id}:{actor.actor_id}",
-            application_id=actor.application_id,
+        request = AllotRequest(
+            operation_ref=f"allot:{actor.tenant_id}:{actor.actor_id}",
+            tenant_id=actor.tenant_id,
             actor_id=actor.actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
             grant_id="grant_1",
         )
-        await engine.payments.provision(operator, request)
+        await engine.payments.allot(operator, request)
 
 
 @pytest.fixture

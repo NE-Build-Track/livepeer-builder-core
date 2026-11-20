@@ -47,7 +47,7 @@ class HeaderAuthenticator:
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
         user = request.header("x-user")
         return (
-            ActorContext(actor_id=user, application_id="corp", permissions=frozenset({"jobs.read"}))
+            ActorContext(actor_id=user, tenant_id="corp", permissions=frozenset({"jobs.read"}))
             if user
             else None
         )
@@ -110,7 +110,7 @@ PROVIDER_SETTINGS = {"batteries_url": "http://127.0.0.1:9", "batteries_token": "
 async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret_key(
     store: SqlStore, clock: FixedClock, configured: str
 ) -> None:
-    """#112 C2: provisioning would fund the allocation, then fail to keep its key. So the engine does not
+    """#112 C2: allotment would fund the allocation, then fail to keep its key. So the engine does not
     start, and the error names the setting."""
     supply = EngineSupply(store=store, clock=clock)
     values: dict[str, object] = {}
@@ -126,7 +126,7 @@ async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret
     ("values", "supplied"),
     [
         ({**PROVIDER_SETTINGS, "secret_key": generate_secret_key()}, {}),  # the key is set
-        ({}, {}),  # no provider: provisioning is refused before any call
+        ({}, {}),  # no provider: allotment is refused before any call
         (PROVIDER_SETTINGS, {"secret_store": MemorySecretStore()}),  # a plug-in store: asked per request
     ],
     ids=["key", "no-provider", "plug-in-store"],
@@ -252,7 +252,7 @@ async def test_keys_off_removes_key_issuance_and_acceptance(
     assert engine.keys is None
     spec = (await client.get("/openapi.json")).json()
     paths = spec["paths"]
-    assert not [path for path in paths if path.startswith("/v1/admin/keys")]
+    assert not [path for path in paths if path.startswith("/v1/clearinghouse/keys")]
     # no lpk_ bearer is advertised: Swagger would offer a credential this deployment rejects
     assert "securitySchemes" not in spec.get("components", {})
     assert not [(p, m) for p, ops in paths.items() for m, op in ops.items() if "security" in op]
@@ -274,8 +274,8 @@ async def test_without_a_grants_manager_the_grant_desk_routes_do_not_exist(store
         assert with_desk.payments.grants is not None and without.payments.grants is None
         on = create_app(with_desk, manage_lifecycle=False).openapi()["paths"]
         off = create_app(without, manage_lifecycle=False).openapi()["paths"]
-        assert "/v1/admin/grants" in on and "/v1/admin/grants" not in off
-        assert "/v1/admin/grant/fund" in off  # funding uses the engine token and stays
+        assert "/v1/clearinghouse/grants" in on and "/v1/clearinghouse/grants" not in off
+        assert "/v1/clearinghouse/grant/top-up" in off  # funding uses the engine token and stays
     finally:
         await with_desk.stop()
         await without.stop()

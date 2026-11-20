@@ -15,7 +15,7 @@ PACKAGE = "src/livepeer_builder/"
 
 # Layer -> minimum branch coverage (%). Layers not listed are held only by the total floor.
 FLOORS: dict[str, float] = {
-    "services": 95.0,  # business rules: failover, idempotency, provisioning, cost classification
+    "services": 95.0,  # business rules: failover, idempotency, allotment, cost classification
     "store": 95.0,  # persistence, migrations, backup, retention
     "contracts": 95.0,  # the public data contracts
     "adapters": 90.0,  # SDK, Batteries, auth, secrets

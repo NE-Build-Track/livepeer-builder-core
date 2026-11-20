@@ -82,7 +82,7 @@ Everything else is reached through the engine object.
 ```python
 actor = ActorContext(
     actor_id="customer-42",
-    application_id="default",
+    tenant_id="default",
     permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"}),
 )
 ```
@@ -92,9 +92,9 @@ That is the only identity the engine understands.
 | Your app | `ActorContext` |
 | --- | --- |
 | Logged-in customer id | `actor_id` |
-| Tenant / org | `application_id` |
+| Tenant / org | `tenant_id` |
 | What this user may do | `permissions` (`discover`, `jobs.run`, `jobs.read`, `costs.read`) |
-| Operator / admin desk | `credential_kind="admin"` |
+| Operator / admin desk | `credential_kind="clearinghouse_admin"` |
 
 You do **not** call `engine.authenticator`. Imported mode needs no authenticator
 ([access.md](../contracts/access.md#protocols)). `DefaultPolicy` still runs on every service call,
@@ -104,25 +104,25 @@ The authenticator is still on the engine if you want it. You can issue `lpk_` ke
 and later call `engine.authenticator.authenticate(AuthRequest(...))` yourself. That is optional.
 This path skips it.
 
-## 3. Provision before paid work
+## 3. Allot before paid work
 
-Jobs that hit the network spend from an allocation. A job for an unprovisioned actor fails with
-`JobFailed` (`job.failure.kind == "not_provisioned"`; HTTP 402 in service mode). Provisioning is an admin operation. There is no automatic provisioning
+Jobs that hit the network spend from an allocation. A job for an actor with no allocation fails with
+`JobFailed` (`job.failure.kind == "not_provisioned"`; HTTP 402 in service mode). Allotment is an admin operation. There is no automatic allotment
 ([payments.md](../contracts/payments.md)).
 
 ```python
-from livepeer_builder import ActorContext, Money, ProvisionRequest
+from livepeer_builder import ActorContext, AllotRequest, Money
 
-admin = ActorContext(actor_id="operator", credential_kind="admin")
+admin = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
-await engine.payments.provision(
+await engine.payments.allot(
     admin,
-    ProvisionRequest(
-        application_id="default",
+    AllotRequest(
+        tenant_id="default",
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
         grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
-        operation_ref="provision-customer-42",  # required: a repeat is answered, never applied twice
+        operation_ref="allot-customer-42",  # required: a repeat is answered, never applied twice
     ),
 )
 ```
@@ -201,7 +201,7 @@ Your process is the process that holds the engine. There is no separate `lpb ser
 
 - Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it),
   `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
-  `EngineSettings`. `LPB_BATTERIES_OPERATOR_TOKEN` only turns on the grant desk
+  `EngineSettings`. `LPB_BATTERIES_GRANTS_TOKEN` only turns on the grant desk
   (`engine.payments.grants`); an application that never lists or creates grants leaves it unset.
 - Run `lpb migrate`, or leave `LPB_AUTO_MIGRATE=true`.
 - Run `lpb bootstrap-admin` only if you will use engine-issued admin keys. Embed can pass an
@@ -224,7 +224,7 @@ Health is `engine.health()`, not `GET /readyz`.
 - **D12.** Two small protocols: `Authenticator` and `AccessPolicy`. Imported mode builds
   `ActorContext` itself. The policy still applies.
 - **Identity stops at your app.** No request field establishes identity in the engine. You map your
-  session or token onto `actor_id` / `application_id` / `permissions`.
+  session or token onto `actor_id` / `tenant_id` / `permissions`.
 - **Payment keys never ride on records.** `lpg_` lives in a `SecretStore`; the database holds a
   `SecretRef`. Your handlers must not log or return it.
 - **Replace adapters, not services.** Supply or decorate discovery, policy, secrets, or transport
@@ -238,7 +238,7 @@ Health is `engine.health()`, not `GET /readyz`.
 3. Run `lpb migrate` (or rely on `auto_migrate`).
 4. Construct `BuilderEngine.create(settings)`, then `await engine.start()` once per process.
 5. Map each authenticated user to an `ActorContext` with the permissions they need.
-6. Provision that actor with an admin `ActorContext` before the first paid job.
+6. Allot an allocation to that actor with an admin `ActorContext` before the first paid job.
 7. Call `engine.discovery`, `engine.jobs`, `engine.costs`, `engine.payments` in your request
    handlers. Catch `EngineError` subclasses and map them to your own API.
 8. Call `await engine.stop()` on shutdown. Back up the database and `LPB_SECRET_KEY` separately.

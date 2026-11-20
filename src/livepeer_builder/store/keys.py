@@ -35,7 +35,7 @@ class SqlKeys:
     async def _held(self, operation: OperationRecord) -> bool:
         async with self.engine.connect() as conn:
             found = await read_operation(
-                conn, operation.application_id, operation.actor_id, operation.operation_ref
+                conn, operation.tenant_id, operation.actor_id, operation.operation_ref
             )
         return found is not None
 
@@ -90,16 +90,16 @@ class SqlKeys:
             return False
         return True
 
-    async def list_access_keys(self, application_id: str | None = None) -> list[AccessKey]:
+    async def list_access_keys(self, tenant_id: str | None = None) -> list[AccessKey]:
         query = select(t.access_keys).order_by(t.access_keys.c.created_at)
-        if application_id is not None:
-            query = query.where(t.access_keys.c.application_id == application_id)
+        if tenant_id is not None:
+            query = query.where(t.access_keys.c.tenant_id == tenant_id)
         async with self.engine.connect() as conn:
             return [_access_key(row) for row in (await conn.execute(query)).mappings()]
 
     async def count_active_admin_keys(self) -> int:
         query = select(func.count()).where(
-            t.access_keys.c.kind == "admin", t.access_keys.c.revoked_at.is_(None)
+            t.access_keys.c.kind == "clearinghouse_admin", t.access_keys.c.revoked_at.is_(None)
         )
         async with self.engine.connect() as conn:
             return int((await conn.execute(query)).scalar_one())

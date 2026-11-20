@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 is built and in review. P2 to P8 follow in order.
+- **Progress:** P1 and P2 are built and in review. P3 to P8 follow in order.
 
 ## Goal
 
@@ -42,7 +42,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
 - [x] **18 November 2026.** The open points are settled (D87).
 - [ ] **P1 (#162).** `per_actor` is the only allocation mode. Built and in review:
   [#174](https://github.com/NE-Build-Track/livepeer-builder-core/pull/174).
-- [ ] **P2 (#163).** Rename routes, classes and settings to the domain language.
+- [ ] **P2 (#163).** Rename routes, classes and settings to the domain language. Built and in review:
+  [#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177).
 - [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes.
 - [ ] **P4 (#165).** Tenants at the clearinghouse.
 - [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.

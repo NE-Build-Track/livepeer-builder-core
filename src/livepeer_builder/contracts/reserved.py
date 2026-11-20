@@ -23,7 +23,7 @@ class EngineEvent(Contract):
     type: EventType
     schema_version: int
     occurred_at: datetime
-    application_id: str
+    tenant_id: str
     actor_id: str
     job_id: UUID
     operation_ref: str | None
@@ -50,7 +50,7 @@ class Session(Contract):
 
     id: UUID
     job_id: UUID
-    application_id: str
+    tenant_id: str
     actor_id: str
     app: str
     state: SessionState

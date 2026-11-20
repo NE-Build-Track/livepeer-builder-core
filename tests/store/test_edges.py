@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from livepeer_builder.contracts import AccessKey, ProvisionedActor, SecretRef, SyncCheckpoint, UsageRow
+from livepeer_builder.contracts import AccessKey, ActorAllocation, SecretRef, SyncCheckpoint, UsageRow
 from livepeer_builder.errors import InvalidRequest, UnsupportedForBackend
 from livepeer_builder.store import SqlStore, backup, create_engine, purge, verify
 from livepeer_builder.testing import FixedClock
@@ -60,15 +60,15 @@ async def test_filtered_listings_and_duplicate_ids(database_url: str, clock: Fix
     store = await SqlStore.connect(database_url)
     for app, actor in (("app-1", "alice"), ("app-2", "bob")):
         await store.save_actor(
-            ProvisionedActor(
-                application_id=app, actor_id=actor, grant_id="g", allocation_id=f"alloc-{actor}", api_key_id="k",
+            ActorAllocation(
+                tenant_id=app, actor_id=actor, grant_id="g", allocation_id=f"alloc-{actor}", api_key_id="k",
                 secret_ref=SecretRef(ref="db:x"), currency="USD", status="active", created_at=clock.now(),
                 updated_at=clock.now(),
             )
         )  # fmt: skip
         await store.insert_access_key(
             AccessKey(
-                key_id=f"k-{actor}", kind="actor", actor_id=actor, application_id=app, permissions=(), label="",
+                key_id=f"k-{actor}", kind="actor", actor_id=actor, tenant_id=app, permissions=(), label="",
                 created_at=clock.now(), revoked_at=None,
             ),
             f"hash-{actor}",

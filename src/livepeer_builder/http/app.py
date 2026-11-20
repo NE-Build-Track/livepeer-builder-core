@@ -19,32 +19,32 @@ from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import (
     OPERATION_REPLAYED,
     AccessKey,
+    ActorAllocation,
     ActorContext,
     AllocationStatus,
+    AllotRequest,
     Allowance,
     AuthRequest,
     CostSummary,
     EngineHealth,
     EventPage,
-    FundRequest,
     GrantRecord,
     IssuedKey,
     Job,
     JobCost,
     KnownActor,
     Offering,
-    ProvisionedActor,
-    ProvisionRequest,
     Reconciliation,
     Runner,
     Session,
     SessionRequest,
     SyncReport,
+    TopUpRequest,
 )
 from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.errors import (
     AccessDenied,
-    AlreadyProvisioned,
+    AlreadyAllotted,
     EngineError,
     InvalidRequest,
     JobFailed,
@@ -60,10 +60,10 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.http.bodies import (
+    AllotBody,
     GrantBody,
     IssueKeyBody,
     JobRequest,
-    ProvisionBody,
     RotateBody,
     RotateKeyBody,
     StatusBody,
@@ -268,133 +268,133 @@ def create_app(
     async def open_session(actor: Actor, body: SessionRequest) -> Session:
         return await engine.sessions.open(actor, body)
 
-    # -- admin (admin credential) -------------------------------------------------------------------
+    # -- clearinghouse (admin credential) -----------------------------------------------------------
 
     if engine.keys is not None:  # API keys off: the key routes do not exist (decision 2)
         keys = engine.keys
 
-        @app.post("/v1/admin/keys", response_model=IssuedKey, status_code=201)
+        @app.post("/v1/clearinghouse/keys", response_model=IssuedKey, status_code=201)
         async def issue_key(actor: Actor, body: IssueKeyBody, response: Response) -> IssuedKey:
             issued = await keys.issue(
                 actor,
                 kind=body.kind,
                 actor_id=body.actor_id,
-                application_id=body.application_id,
+                tenant_id=body.tenant_id,
                 permissions=body.permissions,
                 label=body.label,
                 operation_ref=body.operation_ref,
             )
             return _replay(response, issued)
 
-        @app.get("/v1/admin/keys", response_model=list[AccessKey])
-        async def list_keys(actor: Actor, application_id: QueryId = None) -> list[AccessKey]:
-            return await keys.list_keys(actor, application_id)
+        @app.get("/v1/clearinghouse/keys", response_model=list[AccessKey])
+        async def list_keys(actor: Actor, tenant_id: QueryId = None) -> list[AccessKey]:
+            return await keys.list_keys(actor, tenant_id)
 
-        @app.get("/v1/admin/keys/{key_id}", response_model=AccessKey)
+        @app.get("/v1/clearinghouse/keys/{key_id}", response_model=AccessKey)
         async def get_key(actor: Actor, key_id: PathId) -> AccessKey:
             return await keys.get(actor, key_id)
 
-        @app.post("/v1/admin/keys/{key_id}/rotate", response_model=IssuedKey, status_code=201)
-        async def rotate_key(
+        @app.post("/v1/clearinghouse/keys/{key_id}/rotate", response_model=IssuedKey, status_code=201)
+        async def rotate_access_key(
             actor: Actor, key_id: PathId, body: RotateKeyBody, response: Response
         ) -> IssuedKey:
             rotated = await keys.rotate(actor, key_id, label=body.label, operation_ref=body.operation_ref)
             return _replay(response, rotated)
 
-        @app.post("/v1/admin/keys/{key_id}/revoke", status_code=204)
+        @app.post("/v1/clearinghouse/keys/{key_id}/revoke", status_code=204)
         async def revoke_key(actor: Actor, key_id: PathId) -> Response:
             await keys.revoke(actor, key_id)
             return Response(status_code=204)
 
-    @app.get("/v1/admin/actors", response_model=list[KnownActor])
+    @app.get("/v1/clearinghouse/actors", response_model=list[KnownActor])
     async def list_actors(
         actor: Actor,
-        application_id: QueryId = None,
+        tenant_id: QueryId = None,
         status: AllocationStatus | None = None,
-        provisioned: bool | None = None,
+        allotted: bool | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 500,
     ) -> list[KnownActor]:
-        """Provisioned actors and people an identity provider signed in (D46, D48)."""
+        """Allotted actors and people an identity provider signed in (D46, D48)."""
         return await engine.payments.list_actors(
-            actor, application_id=application_id, status=status, provisioned=provisioned, limit=limit
+            actor, tenant_id=tenant_id, status=status, allotted=allotted, limit=limit
         )
 
-    base = "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation"
+    base = "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation"
 
-    @app.get(base, response_model=ProvisionedActor)
-    async def get_actor(actor: Actor, application_id: PathId, actor_id: PathId) -> ProvisionedActor:
-        return await engine.payments.get_actor(actor, application_id, actor_id)
+    @app.get(base, response_model=ActorAllocation)
+    async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
+        return await engine.payments.get_actor(actor, tenant_id, actor_id)
 
-    @app.post(base, response_model=ProvisionedActor, status_code=201)
-    async def provision(
+    @app.post(base, response_model=ActorAllocation, status_code=201)
+    async def allot(
         actor: Actor,
-        application_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
+        tenant_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
         actor_id: Annotated[StoredText, Path()],
-        body: ProvisionBody,
+        body: AllotBody,
         response: Response,
-    ) -> ProvisionedActor:
-        request = ProvisionRequest(
-            application_id=application_id,
+    ) -> ActorAllocation:
+        request = AllotRequest(
+            tenant_id=tenant_id,
             actor_id=actor_id,
             amount=body.amount,
             label=body.label,
             grant_id=body.grant_id,
             operation_ref=body.operation_ref,
         )
-        return _replay(response, await engine.payments.provision(actor, request))
+        return _replay(response, await engine.payments.allot(actor, request))
 
-    @app.post(base + "/fund", response_model=ProvisionedActor)
-    async def fund(
-        actor: Actor, application_id: PathId, actor_id: PathId, body: FundRequest, response: Response
-    ) -> ProvisionedActor:
-        return _replay(response, await engine.payments.fund(actor, application_id, actor_id, body))
+    @app.post(base + "/top-up", response_model=ActorAllocation)
+    async def top_up(
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: TopUpRequest, response: Response
+    ) -> ActorAllocation:
+        return _replay(response, await engine.payments.top_up(actor, tenant_id, actor_id, body))
 
     if engine.payments.grants is not None:  # the grant desk is off: no list or create routes (decision 7)
         desk = engine.payments.grants
 
-        @app.get("/v1/admin/grants", response_model=list[GrantRecord])
+        @app.get("/v1/clearinghouse/grants", response_model=list[GrantRecord])
         async def list_grants(actor: Actor) -> list[GrantRecord]:
             return await desk.list_grants(actor)
 
-        @app.post("/v1/admin/grants", response_model=GrantRecord, status_code=201)
+        @app.post("/v1/clearinghouse/grants", response_model=GrantRecord, status_code=201)
         async def create_grant(actor: Actor, body: GrantBody, response: Response) -> GrantRecord:
             created = await desk.create_grant(actor, body.name, body.amount, operation_ref=body.operation_ref)
             return _replay(response, created)
 
-    @app.post("/v1/admin/grant/fund", status_code=204)
-    async def fund_grant(actor: Actor, body: FundRequest) -> Response:
-        await engine.payments.fund_grant(actor, body)
+    @app.post("/v1/clearinghouse/grant/top-up", status_code=204)
+    async def top_up_grant(actor: Actor, body: TopUpRequest) -> Response:
+        await engine.payments.top_up_grant(actor, body)
         response = Response(status_code=204)
         return _replay(response, response)
 
-    @app.post(base + "/status", response_model=ProvisionedActor)
+    @app.post(base + "/status", response_model=ActorAllocation)
     async def set_status(
-        actor: Actor, application_id: PathId, actor_id: PathId, body: StatusBody
-    ) -> ProvisionedActor:
-        return await engine.payments.set_status(actor, application_id, actor_id, body.status)
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: StatusBody
+    ) -> ActorAllocation:
+        return await engine.payments.set_status(actor, tenant_id, actor_id, body.status)
 
-    @app.post(base + "/revoke", response_model=ProvisionedActor)
-    async def revoke(actor: Actor, application_id: PathId, actor_id: PathId) -> ProvisionedActor:
-        return await engine.payments.revoke(actor, application_id, actor_id)
+    @app.post(base + "/revoke", response_model=ActorAllocation)
+    async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
+        return await engine.payments.revoke(actor, tenant_id, actor_id)
 
-    @app.post(base + "/rotate-key", response_model=ProvisionedActor)
-    async def rotate(
-        actor: Actor, application_id: PathId, actor_id: PathId, body: RotateBody, response: Response
-    ) -> ProvisionedActor:
-        rotated = await engine.payments.rotate_key(actor, application_id, actor_id, body.operation_ref)
+    @app.post(base + "/rotate-payment-key", response_model=ActorAllocation)
+    async def rotate_payment_key(
+        actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
+    ) -> ActorAllocation:
+        rotated = await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, body.operation_ref)
         return _replay(response, rotated)
 
-    @app.get("/v1/admin/reconciliation", response_model=Reconciliation)
+    @app.get("/v1/clearinghouse/reconciliation", response_model=Reconciliation)
     async def reconcile(
         actor: Actor,
-        application_id: Annotated[StoredText, Query()] = "default",
+        tenant_id: Annotated[StoredText, Query()],  # required (#163 review): never a tenant unnamed
         actor_id: QueryId = None,
         # an earlier allocation of the actor; absent: the current one, and empty is a 422, not "absent"
         allocation_id: Annotated[StoredText | None, Query(min_length=1)] = None,
     ) -> Reconciliation:
-        return await engine.costs.reconcile(actor, application_id, actor_id, allocation_id)
+        return await engine.costs.reconcile(actor, tenant_id, actor_id, allocation_id)
 
-    @app.post("/v1/admin/costs/sync", response_model=SyncReport)
+    @app.post("/v1/clearinghouse/costs/sync", response_model=SyncReport)
     async def sync_costs(actor: Actor) -> SyncReport:
         return await engine.costs.sync_now(actor)
 
@@ -446,9 +446,9 @@ def _install_error_handlers(app: FastAPI, engine: EngineApi) -> None:
         held.pop("job", None)
         return problem(409, str(exc), headers, code="operation_conflict", **held)
 
-    @app.exception_handler(AlreadyProvisioned)
-    async def _provisioned(_: Request, exc: AlreadyProvisioned) -> Response:
-        return problem(409, str(exc), code="already_provisioned", actor=exc.actor.model_dump(mode="json"))
+    @app.exception_handler(AlreadyAllotted)
+    async def _allotted(_: Request, exc: AlreadyAllotted) -> Response:
+        return problem(409, str(exc), code="already_allotted", actor=exc.actor.model_dump(mode="json"))
 
     @app.exception_handler(NoCapacity)
     async def _capacity(_: Request, exc: NoCapacity) -> Response:

@@ -57,7 +57,7 @@ def render_db_schema() -> str:
 
 # Relationships the schema expresses by convention rather than foreign keys (joined in queries).
 _LOGICAL_LINKS = (
-    ('lpb_actors ||--o{ lpb_jobs : "owns (application_id, actor_id)"'),
+    ('lpb_actors ||--o{ lpb_jobs : "owns (tenant_id, actor_id)"'),
     ('lpb_actors ||--o| lpb_secrets : "secret_ref"'),
     ('lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"'),
     ('lpb_actors ||--o{ lpb_usage_rows : "allocation_id"'),

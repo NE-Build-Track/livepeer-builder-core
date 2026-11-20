@@ -6,8 +6,8 @@ command sends and under which idempotency key; ``PaymentKeys`` keeps the key tha
 what a command does when another command wrote the actor first (#115, C4).
 """
 
-from livepeer_builder.contracts import NewAllocationKey, ProvisionedActor, SecretRef
-from livepeer_builder.errors import AlreadyProvisioned, InvalidRequest, NotFound
+from livepeer_builder.contracts import ActorAllocation, NewAllocationKey, SecretRef
+from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound
 from livepeer_builder.protocols import AllocationManager, SecretStore
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
@@ -22,15 +22,15 @@ class PaymentKeys:
         self._writes = writes
 
     async def stored(
-        self, run: RunningOperation, application_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
+        self, run: RunningOperation, tenant_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
     ) -> SecretRef:
         """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
         key it belongs to and the provider operation that returned it (``sent_as``, its idempotency key),
         before the actor points at it, so a resume reuses that copy instead of leaving it orphaned. A resume
-        that got another key (a re-provision after a revoke) stores that key's secret."""
+        that got another key (a second allotment after a revoke) stores that key's secret."""
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             return SecretRef(ref=run.context["new_secret_ref"])
-        ref = await self._secrets.put(_secret_name(application_id, actor_id), key.secret.get_secret_value())
+        ref = await self._secrets.put(_secret_name(tenant_id, actor_id), key.secret.get_secret_value())
         try:
             await run.remember(
                 new_secret_ref=ref.ref, new_secret_key_id=key.api_key_id, new_secret_sent_as=sent_as
@@ -40,19 +40,19 @@ class PaymentKeys:
             raise
         return ref
 
-    async def shared(self, actor: ProvisionedActor, own: SecretRef) -> ProvisionedActor:
-        """The actor holding the key this provisioning got. Another reference may have saved it with its
+    async def shared(self, actor: ActorAllocation, own: SecretRef) -> ActorAllocation:
+        """The actor holding the key this allotment got. Another reference may have saved it with its
         own copy of the secret; this command's copy is then dropped."""
         if own != actor.secret_ref:
             await self._secrets.delete(own)
         return actor
 
     async def overtaken(
-        self, actor_id: str, current: ProvisionedActor | None, key: NewAllocationKey, ref: SecretRef
-    ) -> ProvisionedActor:
-        """The answer of a provisioning that did not write its row, because another command wrote the
+        self, actor_id: str, current: ActorAllocation | None, key: NewAllocationKey, ref: SecretRef
+    ) -> ActorAllocation:
+        """The answer of an allotment that did not write its row, because another command wrote the
         actor while it was at the provider: its row would undo a pause, a rotation or a revoke that
-        finished meanwhile. The command that wrote first was a provisioning that had read what this one
+        finished meanwhile. The command that wrote first was an allotment that had read what this one
         read, so it sent the same actor-derived provider operation and got this same allocation and key:
         nothing this one minted is unrecorded, and only its own copy of the secret (``ref``) is extra.
         The answer comes from ``current``, the actor as stored now, by the rule a resumed run follows:
@@ -60,13 +60,14 @@ class PaymentKeys:
         if current is not None and current.status != "revoked" and current.api_key_id == key.api_key_id:
             return await self.shared(current, ref)
         await self._secrets.delete(ref)  # the actor holds another key or is revoked: nothing points at it
-        if current is not None and current.status != "revoked":  # rotated, or revoked and provisioned again
-            raise AlreadyProvisioned(current)
+        if current is not None and current.status != "revoked":  # rotated, or revoked and allotted again
+            raise AlreadyAllotted(current)
         if current is not None and current.allocation_id == key.allocation_id:
-            return current  # funded, then revoked: it stays revoked, and that is the answer, as for a fund
+            return (
+                current  # allotted, then revoked: it stays revoked, and that is the answer, as for a top-up
+            )
         raise NotFound(
-            f"actor {actor_id!r} was revoked while this provisioning was at the provider; "
-            "it is not provisioned"
+            f"actor {actor_id!r} was revoked while this allotment was at the provider; it has no allocation"
         )
 
     def refuse_lost(self, run: RunningOperation, actor_id: str) -> None:
@@ -74,9 +75,9 @@ class PaymentKeys:
         if _LOST_TO in run.context:
             raise _lost_rotation(actor_id, run.context[_LOST_TO])
 
-    async def began_on(self, run: RunningOperation, actor: ProvisionedActor) -> ProvisionedActor:
+    async def began_on(self, run: RunningOperation, actor: ActorAllocation) -> ActorAllocation:
         """``actor``, when it still holds the allocation the rotation began on. An actor revoked and
-        provisioned again holds another: the old key the record names is not that allocation's, so a
+        allotted again holds another: the old key the record names is not that allocation's, so a
         rotation resumed there would mint a key on it and leave the key it had live. It is refused
         before any provider call, and a secret it stored for the revoked allocation's key is dropped. A
         record written before the allocation was noted is not checked."""
@@ -87,7 +88,7 @@ class PaymentKeys:
             await self._secrets.delete(SecretRef(ref=run.context["new_secret_ref"]))
         raise NotFound(
             f"this rotation began on allocation {began_on!r}, which actor {actor.actor_id!r} no longer "
-            f"holds: it was revoked and provisioned again (allocation {actor.allocation_id!r}). Rotate "
+            f"holds: it was revoked and allotted again (allocation {actor.allocation_id!r}). Rotate "
             "that allocation's key under a new reference"
         )
 
@@ -95,17 +96,17 @@ class PaymentKeys:
         self,
         run: RunningOperation,
         manager: AllocationManager,
-        actor: ProvisionedActor,
+        actor: ActorAllocation,
         key: NewAllocationKey,
         sent_as: str,
-    ) -> ProvisionedActor:
+    ) -> ActorAllocation:
         """Store the rotation's key (``key``, which the provider replays on a resume), point ``actor`` at
         it and retire the key the rotation began from, which the record noted. The new key is written
         only over that old key: when another rotation gave the actor a key meanwhile, this one writes
         nothing, revokes its own key and is refused, ``InvalidRequest``."""
         previous_key = run.context["previous_api_key_id"]
         if actor.api_key_id != key.api_key_id:  # not stored yet
-            ref = await self.stored(run, actor.application_id, actor.actor_id, key, sent_as)
+            ref = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
             actor = await self._pointed_at(actor, key.api_key_id, ref, previous_key)
             if actor.api_key_id != key.api_key_id:
                 # Another rotation's key: this one wrote nothing, so its own key must not stay live. The
@@ -127,8 +128,8 @@ class PaymentKeys:
         return actor
 
     async def _pointed_at(
-        self, actor: ProvisionedActor, api_key_id: str, ref: SecretRef, previous_key: str
-    ) -> ProvisionedActor:
+        self, actor: ActorAllocation, api_key_id: str, ref: SecretRef, previous_key: str
+    ) -> ActorAllocation:
         """The actor after the rotation's key write: only those columns are written, so a status another
         command set meanwhile stays (#115, C4). An actor revoked meanwhile stays revoked: the new key is on
         a revoked allocation, so its secret is dropped. The write applies only over ``previous_key``, the
@@ -137,7 +138,7 @@ class PaymentKeys:
         current = await self._writes.key(actor, api_key_id, ref, only_from=previous_key)
         if current is None:
             await self._secrets.delete(ref)
-            raise NotFound(f"actor {actor.actor_id!r} is not provisioned")
+            raise NotFound(f"actor {actor.actor_id!r} has no allocation")
         return current
 
 
@@ -149,5 +150,5 @@ def _lost_rotation(actor_id: str, held: str) -> InvalidRequest:
     )
 
 
-def _secret_name(application_id: str, actor_id: str) -> str:
-    return f"lpg/{application_id}/{actor_id}"
+def _secret_name(tenant_id: str, actor_id: str) -> str:
+    return f"lpg/{tenant_id}/{actor_id}"

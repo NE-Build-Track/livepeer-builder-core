@@ -60,21 +60,21 @@ classDiagram
     }
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) PaymentCredential
+        +async credential(actor) PaymentKey
     }
     class AllocationManager {
         <<interface>>
         +async create_grant(name, amount, metadata) GrantRecord
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
-        +async fund_allocation(allocation_id, amount, idempotency_key) None
-        +async fund_grant(grant_id, amount, idempotency_key) None
         +async grant_page(cursor) GrantPage
         +async list_grants() GrantRecord[]
         +async read_allocation(allocation_id) Allowance
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None
         +async set_allocation_status(allocation_id, status) None
+        +async top_up_allocation(allocation_id, amount, idempotency_key) None
+        +async top_up_grant(grant_id, amount, idempotency_key) None
     }
     class UsageSource {
         <<interface>>
@@ -82,7 +82,7 @@ classDiagram
     }
     class AllowanceReader {
         <<interface>>
-        +async allocation_for(application_id, actor_id) str?
+        +async allocation_for(tenant_id, actor_id) str?
         +async read_allowance(allocation_id) Allowance
     }
     class EngineStore {
@@ -98,9 +98,9 @@ classDiagram
     }
     class ActorCommandRepo {
         <<interface>>
-        +async provision_actor(actor, replacing) bool
-        +async set_actor_key(application_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ProvisionedActor?
-        +async set_actor_status(application_id, actor_id, allocation_id, status, updated_at, only_from) ProvisionedActor?
+        +async allot_actor(actor, replacing) bool
+        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ActorAllocation?
+        +async set_actor_status(tenant_id, actor_id, allocation_id, status, updated_at, only_from) ActorAllocation?
     }
     class UsageOnceRepo {
         <<interface>>
@@ -114,17 +114,17 @@ classDiagram
     class CostSnapshot {
         <<interface>>
         +async job_with_projection(job_id) tuple~Job JobCost?~?
-        +async projections_and_unprojected(application_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
-        +async recent_with_projections(application_id, actor_id, limit) tuple~Job JobCost?~[]
+        +async projections_and_unprojected(tenant_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
+        +async recent_with_projections(tenant_id, actor_id, limit) tuple~Job JobCost?~[]
         +async unattributed_usage(allocation_id) UsageRow[]
         +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
     }
     class AllocationCostSnapshot {
         <<interface>>
-        +async attempt_allocations(application_id, actor_id) map
+        +async attempt_allocations(tenant_id, actor_id) map
         +async job_with_projection(job_id) tuple~Job JobCost?~?
-        +async projections_and_unprojected(application_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
-        +async recent_with_projections(application_id, actor_id, limit) tuple~Job JobCost?~[]
+        +async projections_and_unprojected(tenant_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
+        +async recent_with_projections(tenant_id, actor_id, limit) tuple~Job JobCost?~[]
         +async unattributed_usage(allocation_id) UsageRow[]
         +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
     }

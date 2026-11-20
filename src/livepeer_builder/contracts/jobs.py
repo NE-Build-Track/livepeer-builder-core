@@ -223,7 +223,7 @@ class MeasuredUsage(Contract):
 class Job(Contract):
     id: UUID
     actor_id: str
-    application_id: str
+    tenant_id: str
     operation_ref: str | None
     mode: ExecutionMode
     app: str

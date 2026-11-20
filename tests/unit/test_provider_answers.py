@@ -59,8 +59,8 @@ NOT_AN_OBJECT = {
 CALLS: dict[str, Callable[[BatteriesClient], Awaitable[object]]] = {
     "create_key_for_grant": lambda client: client.create_key_for_grant("g1", "alice", USD, "idem-1"),
     "create_key": lambda client: client.create_key("a1", "rotated", "idem-2"),
-    "fund_allocation": lambda client: client.fund_allocation("a1", USD, "idem-3"),
-    "fund_grant": lambda client: client.fund_grant("g1", USD, "idem-4"),
+    "top_up_allocation": lambda client: client.top_up_allocation("a1", USD, "idem-3"),
+    "top_up_grant": lambda client: client.top_up_grant("g1", USD, "idem-4"),
     "set_allocation_status": lambda client: client.set_allocation_status("a1", "paused"),
     "revoke_allocation": lambda client: client.revoke_allocation("a1"),
     "revoke_key": lambda client: client.revoke_key("k1"),
@@ -99,7 +99,7 @@ async def test_an_error_status_whose_body_cannot_be_decoded_is_still_that_provid
     provider's refusal or outage."""
     client = BatteriesClient(BASE, "t", client=answering(NO_ERROR_TEXT[body], status=status))
     with pytest.raises(ProviderError) as refused:
-        await client.fund_grant("g1", USD, "idem-4")
+        await client.top_up_grant("g1", USD, "idem-4")
     assert refused.value.status_code == status
     source = BatteriesUsageSource(BASE, "t", client=answering(NO_ERROR_TEXT[body], status=status))
     with pytest.raises(ProviderError) as failed:
@@ -234,9 +234,9 @@ async def test_the_rest_service_answers_a_malformed_provider_answer_with_502(
     )
     headers = {"Authorization": f"Bearer {key.token}"}
     async with httpx.AsyncClient(transport=transport, base_url="http://engine", headers=headers) as client:
-        listed = await client.get("/v1/admin/grants")
+        listed = await client.get("/v1/clearinghouse/grants")
         created = await client.post(
-            "/v1/admin/grants",
+            "/v1/clearinghouse/grants",
             json={"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"},
         )
     assert (listed.status_code, created.status_code) == (502, 502)
@@ -428,8 +428,8 @@ async def test_a_grant_read_back_the_engine_cannot_read_is_an_unknown_outcome_no
     key = await engine.keys.bootstrap_admin()
     body = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"}
     async with rest(engine, key.token) as http:
-        created = await http.post("/v1/admin/grants", json=body)
-        again = await http.post("/v1/admin/grants", json=body)
+        created = await http.post("/v1/clearinghouse/grants", json=body)
+        again = await http.post("/v1/clearinghouse/grants", json=body)
     assert (created.status_code, again.status_code) == (503, 409)  # the grant exists: unknown, and held
     assert "overloaded" not in created.text
     assert await ledger(store) == [("grant-1", "started")]
@@ -458,19 +458,19 @@ async def test_a_key_answer_without_its_required_values_is_a_provider_error(call
 
 
 @pytest.mark.parametrize("answer", UNUSABLE_KEYS)
-async def test_provisioning_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_not_a_done_command(
+async def test_allotment_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_not_a_done_command(
     make_engine: EngineFactory, store: SqlStore, answer: str
 ) -> None:
     """``POST /v1/api-keys`` answered 201 with null, empty or object values. They were turned into text:
-    provisioning answered 201 with ``allocation_id: "None"`` and the ledger recorded it done. An answer
+    allotment answered 201 with ``allocation_id: "None"`` and the ledger recorded it done. An answer
     that lacked a key raised ``KeyError`` and answered 500."""
     manager = BatteriesClient(BASE, "t", client=answering(UNUSABLE_KEYS[answer], status=201))
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     key = await engine.keys.bootstrap_admin()
     body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "g1", "operation_ref": "p-1"}
     async with rest(engine, key.token) as http:
-        created = await http.post("/v1/admin/applications/default/actors/alice/allocation", json=body)
-        again = await http.post("/v1/admin/applications/default/actors/alice/allocation", json=body)
+        created = await http.post("/v1/clearinghouse/tenants/default/actors/alice/allocation", json=body)
+        again = await http.post("/v1/clearinghouse/tenants/default/actors/alice/allocation", json=body)
     assert (created.status_code, again.status_code) == (502, 409)  # the key may exist: unknown, and held
     assert await ledger(store) == [("p-1", "started")]
 
@@ -559,15 +559,15 @@ async def test_a_usage_feed_whose_cursor_does_not_advance_fails_the_sync_as_an_i
 async def test_the_rest_service_answers_a_list_that_never_advances_with_502(
     make_engine: EngineFactory,
 ) -> None:
-    """``GET /v1/admin/grants`` and ``POST /v1/admin/costs/sync`` asked for the same page without end and
+    """``GET /v1/clearinghouse/grants`` and ``POST /v1/clearinghouse/costs/sync`` asked for the same page without end and
     never answered."""
     desk = BatteriesClient(BASE, "t", client=stuck(GRANT, []))
     usage = BatteriesUsageSource(BASE, "t", client=stuck(USAGE_ITEM, []))
     engine = await make_engine(supply=EngineSupply(grants_manager=desk, usage_source=usage))
     key = await engine.keys.bootstrap_admin()
     async with rest(engine, key.token) as http:
-        listed = await http.get("/v1/admin/grants")
-        synced = await http.post("/v1/admin/costs/sync")
+        listed = await http.get("/v1/clearinghouse/grants")
+        synced = await http.post("/v1/clearinghouse/costs/sync")
     assert (listed.status_code, synced.status_code) == (502, 502)
 
 

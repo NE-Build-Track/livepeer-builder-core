@@ -1,8 +1,8 @@
 """Reconcile one allocation at a time (#115, C9).
 
-The provider reports ``spent`` per allocation, and an actor revoked and provisioned again has a new one.
+The provider reports ``spent`` per allocation, and an actor revoked and allotted again has a new one.
 Reconciliation used to compare the current allocation's ``spent`` with every charge of every job the actor
-ever ran, so after a re-provision it never balanced again. The engine side now counts only the attempts
+ever ran, so after a second allotment it never balanced again. The engine side now counts only the attempts
 the reconciled allocation paid: each attempt records its allocation when it starts.
 
 The default is the actor's current allocation. An earlier one is named by the caller, and must be one the
@@ -22,12 +22,10 @@ from livepeer_builder.errors import NotFound
 from livepeer_builder.protocols import AllocationCostSnapshot, AllowanceReader, CostSnapshot
 
 
-async def current_allocation(
-    allowances: AllowanceReader, application_id: str, actor_id: str | None
-) -> str | None:
+async def current_allocation(allowances: AllowanceReader, tenant_id: str, actor_id: str | None) -> str | None:
     """The actor's current allocation. An allocation is an actor's, so a reconciliation over a whole
-    application (no ``actor_id``) has no current one: the caller names the allocation to reconcile."""
-    return None if actor_id is None else await allowances.allocation_for(application_id, actor_id)
+    tenant (no ``actor_id``) has no current one: the caller names the allocation to reconcile."""
+    return None if actor_id is None else await allowances.allocation_for(tenant_id, actor_id)
 
 
 class PaidAttempts:
@@ -38,9 +36,9 @@ class PaidAttempts:
         self._by_attempt = by_attempt
 
     @classmethod
-    async def read(cls, reads: CostSnapshot, application_id: str, actor_id: str | None) -> "PaidAttempts":
+    async def read(cls, reads: CostSnapshot, tenant_id: str, actor_id: str | None) -> "PaidAttempts":
         if isinstance(reads, AllocationCostSnapshot):
-            return cls(await reads.attempt_allocations(application_id, actor_id))
+            return cls(await reads.attempt_allocations(tenant_id, actor_id))
         return cls(None)
 
     def _known(self, current: str | None) -> set[str]:
@@ -54,9 +52,9 @@ class PaidAttempts:
         name is one of those, not a request for the current allocation."""
         chosen = requested if requested is not None else current
         if chosen is None:
-            raise NotFound("no allocation pays for that actor or application")
+            raise NotFound("no allocation pays for that actor or tenant")
         if chosen not in self._known(current):
-            raise NotFound(f"allocation {chosen!r} never paid for that actor or application")
+            raise NotFound(f"allocation {chosen!r} never paid for that actor or tenant")
         return chosen
 
     def others(self, current: str | None, reconciled: str) -> tuple[str, ...]:

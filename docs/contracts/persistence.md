@@ -29,10 +29,10 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   | `UsageSetAsideRepo` (#114, C13) | the record of usage rows cost sync left out | the row is left out and logged once per process ([payments.md](payments.md#cost-classification)) |
   | `AllocationCostSnapshot` (#115, C9), on the cost snapshot | `attempt_allocations`: which allocation paid each attempt, so reconciliation counts one allocation at a time | reconciliation counts every attempt of the actor against the current allocation, as before, and knows no earlier allocation ([payments.md](payments.md#cost-classification)) |
   | `UsageOnceRepo` (#115, C20) | `set_usage_once`: a job's usage is written only where it has none and is `succeeded`, in one statement | the engine checks the job it read and calls `set_usage` (unconditional); two usage reports at the same moment can still both succeed ([engine.md](engine.md#measured-usage)) |
-  | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`: each admin command writes only its own actor columns, with its condition in the statement | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#provisioning)) |
+  | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`: each admin command writes only its own actor columns, with its condition in the statement | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#allotment)) |
 
-  `ActorCommandRepo` has a third write, `provision_actor`, and its key write takes the key the rotation
-  began from (`only_from`). A rotation writes only over that key, and provisioning writes its row only
+  `ActorCommandRepo` has a third write, `allot_actor`, and its key write takes the key the rotation
+  began from (`only_from`). A rotation writes only over that key, and allotment writes its row only
   where the actor has none or still has the revoked row it read. A store has all three writes or is
   treated as having none.
 
@@ -60,6 +60,14 @@ like a source checkout. Version table: `lpb_alembic_version`.
   commit rolls back to the old revision and leaves that empty copy behind. 0013 drops a leftover copy
   when it starts, up or down, and only while `lpb_actors` itself exists, so the next `lpb migrate`
   goes through. Before, it failed with "table _alembic_tmp_lpb_actors already exists" (#115).
+- **0014, the domain-language names (#163):** it renames the tenant column to `tenant_id` in the
+  five tables that have it, in place; the kind of every stored admin key, to `clearinghouse_admin`,
+  with `lpb_access_keys.kind` grown to 32 characters to hold it; three of the ledger's commands; and
+  the same names inside the result each ledger record holds. The names are listed under
+  [Upgrading to the domain-language names](index.md#upgrading-to-the-domain-language-names). Every row
+  is kept, and a downgrade puts the old names back. The run is one transaction on SQLite and on
+  PostgreSQL: one that dies before its commit changes nothing
+  (`tests/store/test_domain_language_names.py`).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

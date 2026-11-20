@@ -53,8 +53,9 @@ async def engine_on(
     """An engine on ``database_url``, not started. Leaving the block stops it, as a process ends."""
     supply = settings.pop("supply", EngineSupply())
     supply = EngineSupply(**{**vars(supply), "clock": clock, "transport": transport})
+    settings.setdefault("async_poll_s", 0.01)
     async with make_engine(
-        database_url=database_url, secret_key=SECRET_KEY, supply=supply, async_poll_s=0.01, **settings
+        database_url=database_url, secret_key=SECRET_KEY, supply=supply, **settings
     ) as engine:
         yield engine
 

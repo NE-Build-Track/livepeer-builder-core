@@ -126,7 +126,9 @@ freshness and errors, the last cost sync, its error and the count of usage rows 
 (`cost_sync_set_aside`), running jobs, the async jobs waiting (`queued_jobs`) and how long the oldest
 has waited in seconds (`oldest_queued_s`, `null` when none waits; ISS-26), and the version. Alert on
 `oldest_queued_s`, not on the depth of the queue: a deep queue that drains is healthy, and one old
-job means nothing is being claimed. An engine in its `clearinghouse` role syncs no
+job means nothing is being claimed. Both numbers are the worker's last count, read without a database
+call: a count under way when a job is queued is not kept, so for a moment they may say more than the
+queue holds, and never less. An engine in its `clearinghouse` role syncs no
 cost, so its `cost_sync_at` stays `null`. It no longer reports an `allocation_mode`: `per_actor` is the only one
 (D82). Logs are JSON lines; every line has an `event` field (for example `jobs.recovered` or
 `costs.sync_failed`).

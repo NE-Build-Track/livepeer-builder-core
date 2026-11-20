@@ -659,8 +659,12 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   again, and no job is left `running` with nobody running it.
 - **Oldest first**, leaving out a runner app at its per-app limit, so one busy runner app does not hold
   up the others.
-- **When.** A submit wakes the worker at once. While jobs wait it also looks every `LPB_ASYNC_POLL_S`,
-  and whenever a job of its own ends. An engine with nothing queued makes no query for the queue.
+- **When.** A submit wakes the worker at once, and so does the end of a job of its own: a woken worker
+  looks at the queue once, whatever it last counted. While jobs wait it also looks every
+  `LPB_ASYNC_POLL_S`. An engine nobody submits to makes no query for the queue. The worker's count of
+  the queue is a memory, and the queue is in the database: a count that was being read while a job was
+  queued never takes that job back out of what the worker knows, so `queued_jobs` does not say the
+  queue is empty with a job in it.
 - **`timeout_s` counts from the claim**, which `Job.started_at` records. `started_at` is `null` while
   the job is queued, and for an immediate job, which starts when it is created.
 - **The queue's time limit.** A job still `queued` `LPB_ASYNC_QUEUE_TTL_S` after it was submitted ends

@@ -86,6 +86,7 @@ class AsyncJobWorker:
         self._draining = False
         self._loop: asyncio.Task[object] | None = None  # the task running ``run``, for ``drain``
         self._queued: tuple[int, datetime | None] = (0, None)  # as last counted, for health
+        self._news = 0  # raised by every count's start and every job queued: a count is kept if none is newer
 
     # -- what health reports ------------------------------------------------------------------------
 
@@ -100,15 +101,26 @@ class AsyncJobWorker:
         return None if oldest is None else max((self._clock.now() - oldest).total_seconds(), 0.0)
 
     async def count_queue(self) -> int:
-        """Count the queue again, after anything that changed it. Health is read without a database call."""
-        self._queued = await self._store.queued_stats()
-        return self._queued[0]
+        """Count the queue again, after anything that changed it, and return what was read. Health is
+        read without a database call.
+
+        The read takes time, and its answer is kept only if nothing newer is known when it arrives: a job
+        queued meanwhile may not be in it, and a count that began later read later. So a count never
+        takes back a job ``queued`` has noted (#184 review). What stays may then say too much for a
+        moment, never too little: the loop is awake, and its step counts again."""
+        self._news += 1
+        mine = self._news
+        stats = await self._store.queued_stats()
+        if mine == self._news:
+            self._queued = stats
+        return stats[0]
 
     def queued(self, job: Job) -> None:
-        """``job`` was just queued, after a count: note it, and have the loop look now, not at its next
-        poll. No database call, so it cannot fail after the job was stored."""
+        """``job`` was just queued: note it, and have the loop look now, not at its next poll. No
+        database call, so it cannot fail after the job was stored."""
         count, oldest = self._queued
         self._queued = (count + 1, oldest or job.created_at)
+        self._news += 1
         self._wake.set()
 
     # -- the loop, one step of it, and its end --------------------------------------------------------
@@ -117,16 +129,19 @@ class AsyncJobWorker:
         """Claim and start queued jobs until the engine stops. A step that fails is logged and the next
         poll tries again: the queue is in the database, so nothing is lost.
 
-        The loop reads the database only while jobs wait: for as long as the last count was not zero.
-        ``BuilderEngine.start()`` counts the queue before it starts the loop (a restart may have left
-        jobs in it), and a submit raises the count in this process, which is the only one that writes the
-        queue (one engine process per database). So an engine nobody submits to adds no query, not even
-        beside the caller's own first writes at start, and a waiting job is looked at every ``poll_s``
-        and whenever a job is queued or a worker comes free."""
+        The loop reads the database only while jobs wait, for as long as the last count was not zero,
+        and once each time it is woken: by a submit, or by a job's end. ``BuilderEngine.start()`` counts
+        the queue before it starts the loop (a restart may have left jobs in it), and a submit raises the
+        count in this process, which is the only one that writes the queue (one engine process per
+        database). So an engine nobody submits to adds no query, not even beside the caller's own first
+        writes at start, and a waiting job is looked at every ``poll_s`` and whenever a job is queued or a
+        worker comes free. The wake counts by itself, whatever the count says: the count is a memory, the
+        queue is in the database, and a job is never left waiting on the memory alone (#184 review)."""
         self._loop, retry = asyncio.current_task(), False
         while not stop.is_set() and not self._draining:
+            woken = self._wake.is_set()
             self._wake.clear()
-            if retry or self._queued[0]:
+            if retry or woken or self._queued[0]:
                 retry = await self._step_logged()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), timeout=self.limits.poll_s)

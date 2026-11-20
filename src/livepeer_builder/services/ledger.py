@@ -13,7 +13,7 @@ import json
 import math
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import TypeAdapter
 
@@ -145,8 +145,10 @@ class OperationLedger:
         """Run ``steps`` once per ``operation_ref``; a repeat gets the first run's result back.
 
         ``earlier_request`` is the request as an earlier release recorded it, for a command whose request
-        lost a field since. It is asked only when a held record does not match ``request``: a record
-        that matches the earlier form is this command's too, and is replayed or resumed as its own."""
+        lost a field since. It is asked only when a held record does not match ``request``: a finished
+        record that matches the earlier form is this command's too, and is replayed as its own. One
+        still ``started`` is a conflict however old, and is never resumed: the earlier release's run is
+        not one this release can finish (docs/contracts/index.md, the upgrade notes of #165)."""
         OPERATION_REPLAYED.set(False)
         record = OperationRecord(
             tenant_id=caller.tenant_id,
@@ -160,7 +162,8 @@ class OperationLedger:
         )
         held = await self._repo.begin_operation(record)
         if held is not None:
-            if not await _same_command(held, record, earlier_request):
+            form = await _form_held(held, record, earlier_request)
+            if form is None or (form == "earlier" and held.state != "done"):
                 raise OperationConflict(held)  # before any provider call
             if held.state == "done":
                 return _replayed(held, answer)
@@ -222,18 +225,20 @@ class OperationLedger:
         return await self._repo.resume_operation(held, now)
 
 
-async def _same_command(
+async def _form_held(
     held: OperationRecord,
     record: OperationRecord,
     earlier_request: Callable[[], Awaitable[Mapping[str, Any]]] | None,
-) -> bool:
-    """Whether the record holding a reference is this command's: it has the command's fingerprint, or
-    the fingerprint of the request as an earlier release recorded it."""
+) -> Literal["current", "earlier"] | None:
+    """Which form of this command the record holding a reference is: it has the command's fingerprint
+    (``current``), or only the fingerprint of the request as an earlier release recorded it
+    (``earlier``). ``None`` when it is another command's."""
     if held.fingerprint == record.fingerprint:
-        return True
+        return "current"
     if earlier_request is None:
-        return False
-    return held.fingerprint == fingerprint(record.command, await earlier_request())
+        return None
+    earlier = fingerprint(record.command, await earlier_request())
+    return "earlier" if held.fingerprint == earlier else None
 
 
 def _replayed[T](held: OperationRecord, answer: TypeAdapter[T]) -> T:

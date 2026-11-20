@@ -1,6 +1,6 @@
 """A request is read by the names it sends, or refused (#163 review).
 
-After the rename, ``POST /v1/clearinghouse/keys`` ignored a field it did not know and put a key in the
+After the rename, the key route (``POST /v1/keys`` since #164) ignored a field it did not know and put a key in the
 tenant ``default`` when the body named none: a client still sending ``application_id: "acme"`` got a key
 for another tenant, with a 201. So every request body refuses a field it does not know, and no body or
 query parameter puts a request in a tenant the request did not name. A ``tenant_id`` filter that is

@@ -559,7 +559,7 @@ async def test_a_usage_feed_whose_cursor_does_not_advance_fails_the_sync_as_an_i
 async def test_the_rest_service_answers_a_list_that_never_advances_with_502(
     make_engine: EngineFactory,
 ) -> None:
-    """``GET /v1/clearinghouse/grants`` and ``POST /v1/clearinghouse/costs/sync`` asked for the same page without end and
+    """``GET /v1/clearinghouse/grants`` and ``POST /v1/costs/sync`` asked for the same page without end and
     never answered."""
     desk = BatteriesClient(BASE, "t", client=stuck(GRANT, []))
     usage = BatteriesUsageSource(BASE, "t", client=stuck(USAGE_ITEM, []))
@@ -567,7 +567,7 @@ async def test_the_rest_service_answers_a_list_that_never_advances_with_502(
     key = await engine.keys.bootstrap_admin()
     async with rest(engine, key.token) as http:
         listed = await http.get("/v1/clearinghouse/grants")
-        synced = await http.post("/v1/clearinghouse/costs/sync")
+        synced = await http.post("/v1/costs/sync")
     assert (listed.status_code, synced.status_code) == (502, 502)
 
 

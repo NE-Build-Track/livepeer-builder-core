@@ -182,7 +182,7 @@ async def test_the_rest_route_takes_the_allocation_as_a_typed_query_id(
     key = await engine.keys.bootstrap_admin()
     app = create_app(engine, manage_lifecycle=False)
     headers = {"Authorization": f"Bearer {key.token}"}
-    route = "/v1/clearinghouse/reconciliation"
+    route = "/v1/costs/reconciliation"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         current = await client.get(
             route, params={"tenant_id": "default", "actor_id": "alice"}, headers=headers
@@ -225,7 +225,7 @@ async def test_an_empty_allocation_id_is_refused_not_read_as_the_current_allocat
     headers = {"Authorization": f"Bearer {key.token}"}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         empty = await client.get(
-            "/v1/clearinghouse/reconciliation",
+            "/v1/costs/reconciliation",
             params={"tenant_id": "default", "actor_id": "alice", "allocation_id": ""},
             headers=headers,
         )

@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 and P2 are built and in review. P3 to P8 follow in order.
+- **Progress:** P1, P2 and P3 are built and in review. P4 to P8 follow in order.
 
 ## Goal
 
@@ -44,7 +44,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#174](https://github.com/NE-Build-Track/livepeer-builder-core/pull/174).
 - [ ] **P2 (#163).** Rename routes, classes and settings to the domain language. Built and in review:
   [#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177).
-- [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes.
+- [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes. Built and in review:
+  [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
 - [ ] **P4 (#165).** Tenants at the clearinghouse.
 - [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
 - [ ] **P6 (#167).** A public and a private listener.

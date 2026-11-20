@@ -343,7 +343,7 @@ async def test_the_count_of_set_aside_rows_is_served_in_health_and_the_sync_repo
     app = create_app(engine, manage_lifecycle=False)
     headers = {"Authorization": f"Bearer {key.token}"}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
-        report = await client.post("/v1/clearinghouse/costs/sync", headers=headers)
+        report = await client.post("/v1/costs/sync", headers=headers)
         health = await client.get("/readyz")
     assert report.json() == {
         "pages": 1,

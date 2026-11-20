@@ -54,7 +54,7 @@ src/livepeer_builder/
   contracts/   types layer: pydantic models that cross the boundary (imports nothing internal)
   errors.py    engine errors, one HTTP status each
   protocols/   providers: every extension interface (Authenticator, AccessPolicy, SecretStore, ...)
-  api.py       facade Protocols: ActorApi, AdminApi, EngineApi (what the engine offers its callers)
+  api.py       facade Protocols: ActorApi, WorkApi, ClearinghouseApi, EngineApi (what the engine offers its callers)
   config.py    EngineSettings from LPB_* environment variables
   services/    business rules: policy, keys, discovery, jobs, payments, costs, reserved features
   store/       SQLAlchemy Core + packaged Alembic migrations, backup, retention

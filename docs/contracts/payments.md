@@ -343,7 +343,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,
-  and `GET /v1/clearinghouse/grants` and `POST /v1/clearinghouse/costs/sync` never answered. A longer cycle (a cursor that
+  and `GET /v1/clearinghouse/grants` and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
   comes back after other pages) is not detected. A grant, in a list or read alone,
   must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
@@ -566,7 +566,7 @@ delivered, while its allocation was debited for both (D52). Both are final once 
 `observed` or `corrected`.
 
 **Reconciliation:** provider `spent` = `delivered` + `failed_after_payment` + `uncertain` +
-`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/clearinghouse/reconciliation?tenant_id=...` returns each class and `balanced`; the tenant is required (#163 review). Each
+`pending` (fees matched to jobs still running) + `unattributed`. `GET /v1/costs/reconciliation?tenant_id=...` returns each class and `balanced`; the tenant is required (#163 review). Each
 actor has its own allocation, so it balances exactly per user.
 
 **One allocation at a time (#115, C9).** The provider reports `spent` per allocation, and an actor
@@ -618,7 +618,7 @@ since its projection was stored, from its matched usage rows. A paid job therefo
 meanwhile can never make it count a usage row twice or nowhere.
 
 Sync commits usage rows, then session matches, then projections, one transaction each, and two syncs
-can run at once (the loop and `POST /v1/clearinghouse/costs/sync`). Each job has an evidence version: a new
+can run at once (the loop and `POST /v1/costs/sync`). Each job has an evidence version: a new
 usage row on a matched session, a changed match or a late session report increments it in the same
 transaction. A projection records the version it was computed from, read before the job's evidence,
 and stands for the job only while that version is current; a save never replaces a projection computed
@@ -680,6 +680,14 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)). The tenant rules and the
 clearinghouse routes are added to this contract as they are built.
+
+The engine's routes are two sets (D84, #164). The **clearinghouse routes**, all under
+`/v1/clearinghouse`, are the allocation routes, the actor list, the grant desk and the grant top-up. The
+**work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
+(`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
+engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The
+old paths of the routes that moved are under
+[Upgrading to the work routes and the clearinghouse routes](index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
 
 ### Mode B
 

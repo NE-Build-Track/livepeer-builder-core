@@ -35,7 +35,7 @@ from typing import Any
 import httpx
 
 TENANT = "default"  # the fund actor's tenant; the allowance is read in the admin key's
-SYNC = "/v1/clearinghouse/costs/sync"  # a harmless admin write: if a key were wrongly allowed, nothing moves
+SYNC = "/v1/costs/sync"  # a harmless admin write: if a key were wrongly allowed, nothing moves
 
 
 def probe_app(run: str) -> str:
@@ -97,7 +97,7 @@ class Probe:
     async def issue(self, kind: str, actor_id: str) -> tuple[str, str] | None:
         """A new key's (token, key id), or ``None`` when the engine did not issue one."""
         body = {"kind": kind, "actor_id": actor_id, "tenant_id": TENANT, "operation_ref": f"{actor_id}-key"}
-        answer = await self.call("POST", "/v1/clearinghouse/keys", self.admin_key, json=body)
+        answer = await self.call("POST", "/v1/keys", self.admin_key, json=body)
         token = answer.json().get("token") if answer.status_code == 201 else None
         key_id = _issued_key_id(answer)  # never the previous key's id: a 201 without one is a failure
         if isinstance(token, str) and key_id is not None:
@@ -110,29 +110,27 @@ class Probe:
 
 async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_amount: str | None) -> None:
     admin = probe.admin_key
-    if not probe.expect(
-        "the admin key is accepted", await probe.call("GET", "/v1/clearinghouse/keys", admin), 200
-    ):
+    if not probe.expect("the admin key is accepted", await probe.call("GET", "/v1/keys", admin), 200):
         return
     first, second = await probe.issue("actor", f"{probe.run}-a"), await probe.issue("actor", f"{probe.run}-b")
     third = await probe.issue("auditor", f"{probe.run}-auditor")
     if not (first and second and third):
         return
     (a, a_key), (b, _), (auditor, _) = first, second, third
-    for method, path in (("GET", "/v1/jobs"), ("GET", "/v1/clearinghouse/keys"), ("POST", SYNC)):
+    for method, path in (("GET", "/v1/jobs"), ("GET", "/v1/keys"), ("POST", SYNC)):
         probe.expect(f"no credential: {method} {path}", await probe.call(method, path, None), 401)
     for method, path in (
-        ("GET", "/v1/clearinghouse/keys"),
+        ("GET", "/v1/keys"),
         ("GET", "/v1/clearinghouse/actors"),
         ("POST", SYNC),
     ):
         probe.expect(f"actor key: {method} {path}", await probe.call(method, path, a), 403)
-    reads = await probe.call("GET", "/v1/clearinghouse/keys", auditor)
-    probe.expect("auditor key reads: GET /v1/clearinghouse/keys", reads, 200)
+    reads = await probe.call("GET", "/v1/keys", auditor)
+    probe.expect("auditor key reads: GET /v1/keys", reads, 200)
     probe.expect(f"auditor key: POST {SYNC}", await probe.call("POST", SYNC, auditor), 403)
     issue = {"actor_id": f"{probe.run}-x", "tenant_id": TENANT, "operation_ref": f"{probe.run}-auditor-issue"}
-    issued = await probe.call("POST", "/v1/clearinghouse/keys", auditor, json=issue)
-    probe.expect("auditor key: POST /v1/clearinghouse/keys", issued, 403)
+    issued = await probe.call("POST", "/v1/keys", auditor, json=issue)
+    probe.expect("auditor key: POST /v1/keys", issued, 403)
     await cross_actor(probe, a, b)
     await repeated_fund(probe, spend=spend, actor=fund_actor, amount=fund_amount)
     await revoked(probe, a, a_key)
@@ -231,7 +229,7 @@ def fund_amount(currency: str, configured: str | None) -> Decimal | None:
 
 
 async def revoked(probe: Probe, token: str, key_id: str) -> None:
-    answer = await probe.call("POST", f"/v1/clearinghouse/keys/{key_id}/revoke", probe.admin_key)
+    answer = await probe.call("POST", f"/v1/keys/{key_id}/revoke", probe.admin_key)
     if probe.expect("revoke the actor key", answer, 204):
         probe.issued.remove(key_id)
     probe.expect("a revoked key: GET /v1/jobs", await probe.call("GET", "/v1/jobs", token), 401)
@@ -242,7 +240,7 @@ async def cleanup(probe: Probe) -> None:
     left = []
     for key in list(probe.issued):
         try:
-            answer = await probe.call("POST", f"/v1/clearinghouse/keys/{key}/revoke", probe.admin_key)
+            answer = await probe.call("POST", f"/v1/keys/{key}/revoke", probe.admin_key)
         except httpx.HTTPError:
             answer = None
         if answer is None or answer.status_code != 204:
@@ -284,7 +282,7 @@ async def probe(
 
 
 def _issued_key_id(answer: httpx.Response) -> str | None:
-    issued = answer.request.method == "POST" and answer.url.path.endswith("/v1/clearinghouse/keys")
+    issued = answer.request.method == "POST" and answer.url.path.endswith("/v1/keys")
     if not issued or answer.status_code != 201:
         return None
     key = answer.json().get("key")

@@ -21,7 +21,7 @@ The engine has two sets of interfaces, and they point in opposite directions:
 
 | Set | Module | Who implements it | Who calls it |
 | --- | --- | --- | --- |
-| What the engine **offers** | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
+| What the engine **offers** | `api.py` (`ActorApi`, `WorkApi`, `ClearinghouseApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
 | What the engine **needs** | `protocols/` (ports) | adapters, the store, or the enterprise | services only |
 
 ```mermaid
@@ -64,8 +64,10 @@ classDiagram
 
 ## What the engine offers: the facade
 
-`api.py` splits the engine by role. An application that only runs jobs types against `ActorApi`;
-`http/` types against `EngineApi`. Optional capabilities are `X?` members decided once at construction:
+`api.py` splits the engine into its two halves (D84). An application that only runs jobs types against
+`ActorApi`. `WorkApi` is the work half: the actor API, and the engine's own access keys, reconciliation
+and cost sync. `ClearinghouseApi` is the clearinghouse half: allotment, top-ups and the grant desk. In
+`http/` each set of routes is typed against its half, and `create_app` against `EngineApi`, which is both. Optional capabilities are `X?` members decided once at construction:
 `jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.grants`
 (the grant desk is on). Callers check for `None`; nothing probes with `hasattr`.
 
@@ -82,19 +84,26 @@ classDiagram
         +async start() None
         +async stop() None
     }
-    class AdminApi {
+    class WorkApi {
+        <<interface>>
+        +costs EngineCostsApi
+        +keys KeysApi?
+        +authenticator Authenticator
+        +events EventFeed
+        +sessions SessionManager
+    }
+    class ClearinghouseApi {
         <<interface>>
         +payments PaymentsAdminApi
         +keys KeysApi?
-        +costs CostsAdminApi
+        +authenticator Authenticator
+        +health() EngineHealth
+        +async start() None
+        +async stop() None
     }
     class EngineApi {
         <<interface>>
         +payments PaymentsApi
-        +costs EngineCostsApi
-        +authenticator Authenticator
-        +events EventFeed
-        +sessions SessionManager
     }
     class JobsApi {
         <<interface>>
@@ -165,17 +174,19 @@ classDiagram
     }
     class BuilderEngine
     class FakeEngine
-    ActorApi <|-- EngineApi
-    AdminApi <|-- EngineApi
+    ActorApi <|-- WorkApi
+    WorkApi <|-- EngineApi
+    ClearinghouseApi <|-- EngineApi
     ActorApi --> JobsApi
     ActorApi --> CostsApi
     ActorApi --> DiscoveryApi
     ActorApi --> AllowanceApi
     JobsApi --> StreamingApi
     StreamingApi ..> JobStreamApi : returns
-    AdminApi --> PaymentsAdminApi
-    AdminApi --> KeysApi
-    AdminApi --> CostsAdminApi
+    WorkApi --> KeysApi
+    WorkApi --> CostsAdminApi
+    ClearinghouseApi --> PaymentsAdminApi
+    ClearinghouseApi --> KeysApi
     PaymentsAdminApi --> GrantsApi
     BuilderEngine ..|> EngineApi
     FakeEngine ..|> ActorApi
@@ -699,10 +710,21 @@ classDiagram
     class app_py {
         <<module>>
         +create_app(engine, manage_lifecycle) FastAPI
+        +shared_app(engine, manage_lifecycle) FastAPI
+        -_install_error_handlers(app, engine) None
+    }
+    class work_py {
+        <<module>>
+        +mount_work_routes(app, engine) None
+    }
+    class clearinghouse_py {
+        <<module>>
+        +mount_clearinghouse_routes(app, engine) None
+    }
+    class auth_py {
+        <<module>>
         +actor_dependency(engine) Dependency
         -_authenticated(engine, request) ActorContext
-        -_install_error_handlers(app, engine) None
-        +JOB_ID_HEADER Livepeer-Job-Id
     }
     class streaming_py {
         <<module>>
@@ -723,6 +745,12 @@ classDiagram
     class EngineApi {
         <<interface>>
     }
+    class WorkApi {
+        <<interface>>
+    }
+    class ClearinghouseApi {
+        <<interface>>
+    }
     class BuilderEngine
     class HTTPBearer {
         declares the lpk_ scheme in OpenAPI only
@@ -731,23 +759,36 @@ classDiagram
     server_py ..> app_py : create_app
     server_py ..> Extend : calls extend(app, engine)
     app_py ..> FastAPI : builds
-    app_py ..> EngineApi : one call per route
-    app_py ..> HTTPBearer : when engine.keys is set
-    app_py ..> RequestBodies
-    app_py ..> streaming_py : streamed jobs
+    app_py ..> work_py : mounts
+    app_py ..> clearinghouse_py : mounts
+    work_py ..> WorkApi : one call per route
+    clearinghouse_py ..> ClearinghouseApi : one call per route
+    WorkApi <|-- EngineApi
+    ClearinghouseApi <|-- EngineApi
+    work_py ..> auth_py
+    clearinghouse_py ..> auth_py
+    auth_py ..> HTTPBearer : when engine.keys is set
+    work_py ..> RequestBodies
+    clearinghouse_py ..> RequestBodies
+    work_py ..> streaming_py : streamed jobs
     streaming_py ..> AbortableStreamingResponse
     StreamingResponse <|-- AbortableStreamingResponse
     BuilderEngine ..|> EngineApi
 ```
 
-`create_app` registers every route as a closure over `engine`: nothing is looked up from a global or
-from `app.state`. `actor_dependency(engine)` is the authentication dependency, and routes you add with
-`extend` use the same one.
+The routes are two sets (D84). `mount_work_routes` adds the work half's routes to an app and
+`mount_clearinghouse_routes` the clearinghouse half's, each typed against its half of the facade.
+`shared_app` builds the app both need: the lifecycle, the error answers, the request limit and health.
+`create_app` mounts both sets on it. Every route is a closure over `engine`: nothing is looked up from a
+global or from `app.state`. `actor_dependency(engine)` is the authentication dependency, and routes you
+add with `extend` use the same one.
 
 ### Routes
 
 Each route authenticates, then makes one engine call. Authorization happens in the services. Health and
-`GET /v1/offerings` are public (D51, proposed).
+`GET /v1/offerings` are public (D51, proposed). Health belongs to the app both halves share. The rows
+from `/v1/offerings` to `/v1/keys` are the work set, and the rows under `/v1/clearinghouse` are the
+clearinghouse set.
 
 | Route | Engine call | Answer |
 | --- | --- | --- |
@@ -762,15 +803,15 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `POST /v1/jobs/{id}/usage` | `jobs.report_usage` | `Job` |
 | `GET /v1/jobs/{id}/cost` | `costs.for_job` | `JobCost` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
+| `GET /v1/costs/reconciliation` | `costs.reconcile` | `Reconciliation` |
+| `POST /v1/costs/sync` | `costs.sync_now` | `SyncReport` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
-| `POST, GET /v1/clearinghouse/keys`, `GET /v1/clearinghouse/keys/{id}`, `POST /v1/clearinghouse/keys/{id}/rotate`, `POST /v1/clearinghouse/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
+| `POST, GET /v1/keys`, `GET /v1/keys/{id}`, `POST /v1/keys/{id}/rotate`, `POST /v1/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `GET /v1/clearinghouse/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
 | `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation` |
 | `GET, POST /v1/clearinghouse/grants` | `payments.grants.*` | only when `payments.grants` is set |
 | `POST /v1/clearinghouse/grant/top-up` | `payments.top_up_grant` | `204` |
-| `GET /v1/clearinghouse/reconciliation` | `costs.reconcile` | `Reconciliation` |
-| `POST /v1/clearinghouse/costs/sync` | `costs.sync_now` | `SyncReport` |
 
 The generated schema is [generated/openapi.json](../generated/openapi.json); CI fails when it drifts.
 

@@ -24,10 +24,10 @@ ROUTES = [
     ("GET", "/v1/runners", "app", None),
     ("GET", "/v1/costs/summary", "actor_id", None),
     ("GET", "/v1/allowance", "actor_id", None),
-    ("GET", "/v1/clearinghouse/keys", "tenant_id", None),
-    ("GET", "/v1/clearinghouse/keys/{id}", None, None),
-    ("POST", "/v1/clearinghouse/keys/{id}/rotate", None, REF),
-    ("POST", "/v1/clearinghouse/keys/{id}/revoke", None, None),
+    ("GET", "/v1/keys", "tenant_id", None),
+    ("GET", "/v1/keys/{id}", None, None),
+    ("POST", "/v1/keys/{id}/rotate", None, REF),
+    ("POST", "/v1/keys/{id}/revoke", None, None),
     ("GET", "/v1/clearinghouse/actors", "tenant_id", None),
     ("GET", ALLOCATION.format(tenant="{id}", actor="alice"), None, None),
     ("GET", ALLOCATION.format(tenant="default", actor="{id}"), None, None),
@@ -36,14 +36,14 @@ ROUTES = [
     ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/status", None, {"status": "paused"}),
     ("POST", ALLOCATION.format(tenant="default", actor="{id}") + "/revoke", None, None),
     ("POST", ALLOCATION.format(tenant="{id}", actor="alice") + "/rotate-payment-key", None, REF),
-    ("GET", "/v1/clearinghouse/reconciliation", "tenant_id", None),
-    ("GET", "/v1/clearinghouse/reconciliation", "actor_id", None),
-    ("GET", "/v1/clearinghouse/reconciliation", "allocation_id", None),
+    ("GET", "/v1/costs/reconciliation", "tenant_id", None),
+    ("GET", "/v1/costs/reconciliation", "actor_id", None),
+    ("GET", "/v1/costs/reconciliation", "allocation_id", None),
 ]  # fmt: skip
 
 
 # A query parameter a route requires, so the bad one is the only one refused (#163 review: no tenant default)
-REQUIRED = {"/v1/clearinghouse/reconciliation": {"tenant_id": "default"}}
+REQUIRED = {"/v1/costs/reconciliation": {"tenant_id": "default"}}
 
 
 @pytest.fixture

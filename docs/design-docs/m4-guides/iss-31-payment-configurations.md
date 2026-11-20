@@ -51,7 +51,8 @@ livepeer/node `eee09c4` (v1.0.7); the gateway SDK at `7dc2a07`; console `main` a
 | Admin authority | `DefaultPolicy.check` returns at once for kind `clearinghouse_admin`, before any tenant check | `services/policy.py:32` |
 | Writes and the policy | Allot, top up, status, revoke and payment key rotation call the policy with no resource, so the path or body chooses the tenant | `services/payments.py`, `services/keys.py` |
 | Signer address | One setting, `LPB_SIGNER_URL` | `config.py` |
-| Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`) |
+| Payment ports | Five: signing inside `RunnerTransport`, `CredentialResolver`, `AllocationManager`, `AllowanceReader`, `UsageSource`. A caller can swap each one. Since P3 (#164) a structure test fails when the work half reaches payments another way | `protocols/__init__.py`, `runtime/assembly.py` (`EngineSupply`), `tests/structure/test_two_halves.py` |
+| Route sets | Since P3 (#164) the routes are a work set and a clearinghouse set, each mounted by itself. One app mounts both, always: no role setting yet. Reconciliation, cost sync and an engine's own access keys are work routes, at `/v1/costs/reconciliation`, `/v1/costs/sync` and `/v1/keys`. At `719378f` every route was in one function | `http/work.py`, `http/clearinghouse.py`, `http/app.py` (`shared_app`, `create_app`); `api.py` (`WorkApi`, `ClearinghouseApi`) |
 | Listener | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | `http/server.py`, `http/app.py` |
 | Consumer apps | ChatLPT and the inference gateway embed the engine in `per_application`. The inference gateway refuses any other mode | their `deploy/.env.example`; inference-gateway `runtime.py:121` |
 
@@ -248,6 +249,11 @@ P2 (#163) renamed what `payments.md`, `access.md`, the other contracts, the guid
 `SECURITY.md`, the glossary and the dev stack's files call things. The old and the new names are in
 [the contracts index](../../contracts/index.md#upgrading-to-the-domain-language-names).
 
+P3 (#164) moved three groups of routes in `access.md`, `payments.md`, `RELIABILITY.md`, the
+architecture documents and the dev stack's README, and added the two halves to `ARCHITECTURE.md`. The
+old and the new paths are in
+[the contracts index](../../contracts/index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
+
 ## Code areas
 
 | File | Change |
@@ -385,7 +391,15 @@ One builder-core issue each, all sub-issues of ISS-31.
    A route whose final shape needs more than a rename kept its shape under the new prefix, for P3 and
    P4: the key routes, the actor list, the grant list and creation, the grant top-up, reconciliation
    and cost sync.
-3. **P3 (#164).** Separate the work routes from the clearinghouse routes.
+3. **P3 (#164).** Separate the work routes from the clearinghouse routes. Built
+   ([#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178)): the routes are two sets,
+   each mounted by itself (`http/work.py`, `http/clearinghouse.py`), and one app still mounts both.
+   Reconciliation, cost sync and an engine's own access keys moved to the work set, at
+   `GET /v1/costs/reconciliation`, `POST /v1/costs/sync` and `/v1/keys`, with no alias at the old
+   paths. The facade follows the halves: `WorkApi` and `ClearinghouseApi` replace `AdminApi`. A
+   structure test (`tests/structure/test_two_halves.py`) holds the work half to the five payment
+   ports. The routes that P4 nests under a tenant stay where P2 left them: the actor list, the grant
+   list and creation, and the grant top-up.
 4. **P4 (#165).** Tenants at the clearinghouse.
 5. **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery.
 6. **P6 (#167).** A public and a private listener.

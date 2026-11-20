@@ -1,8 +1,10 @@
 """ISS-23: authorization denial across the whole admin surface, read from the FastAPI route table.
 
-Every ``/v1/clearinghouse/*`` route answers 403 to an actor key and 401 with no credential, and every admin write
-answers 403 to an auditor key (a read-only admin, D46). The routes come from ``app.routes``, so an admin
-route added later is swept without editing this test; one whose body has no sample fails here and says so.
+Every admin route answers 403 to an actor key and 401 with no credential, and every admin write answers
+403 to an auditor key (a read-only admin, D46). The admin surface is every ``/v1/clearinghouse/*`` route
+and, in the work half since #164, an engine's own access keys (``/v1/keys``), reconciliation and cost
+sync. The routes come from ``app.routes``, so an admin route added later under one of those paths is swept
+without editing this test; one whose body has no sample fails here and says so.
 """
 
 import re
@@ -21,6 +23,8 @@ from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
 
 WRITES = {"POST", "PUT", "PATCH", "DELETE"}
+# Where the admin routes are: the clearinghouse set, and the work set's admin routes.
+ADMIN_PATHS = ("/v1/clearinghouse/", "/v1/keys", "/v1/costs/reconciliation", "/v1/costs/sync")
 USD = {"amount": "0.01", "currency": "USD"}
 # A valid body for each admin body model, so a denial is the policy's answer and never a 422.
 SAMPLE_BODIES: dict[str, dict[str, Any]] = {
@@ -39,7 +43,7 @@ def admin_routes(app: FastAPI) -> list[tuple[str, str, APIRoute]]:
     return [
         (method, route.path, route)
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/v1/clearinghouse/")
+        if isinstance(route, APIRoute) and route.path.startswith(ADMIN_PATHS)
         for method in sorted(route.methods)
     ]
 
@@ -101,6 +105,8 @@ async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a
     routes = admin_routes(app)
     writes = [(method, path) for method, path, _ in routes if method in WRITES]
     assert len(writes) >= 11, f"the sweep found too few admin writes to be meaningful: {writes}"
+    swept = {path for _, path, _ in routes}
+    assert all(any(path.startswith(prefix) for path in swept) for prefix in ADMIN_PATHS), swept
     wrong: list[str] = []
     for method, path, route in routes:
         url, body = filled(path, params), body_for(route)

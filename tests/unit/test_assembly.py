@@ -252,7 +252,7 @@ async def test_keys_off_removes_key_issuance_and_acceptance(
     assert engine.keys is None
     spec = (await client.get("/openapi.json")).json()
     paths = spec["paths"]
-    assert not [path for path in paths if path.startswith("/v1/clearinghouse/keys")]
+    assert not [path for path in paths if path.startswith("/v1/keys")]
     # no lpk_ bearer is advertised: Swagger would offer a credential this deployment rejects
     assert "securitySchemes" not in spec.get("components", {})
     assert not [(p, m) for p, ops in paths.items() for m, op in ops.items() if "security" in op]

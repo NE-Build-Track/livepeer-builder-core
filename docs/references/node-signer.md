@@ -35,6 +35,12 @@ Baseline livepeer/node `eee09c4` (v1.0.7; was `f45d83f`, 10 commits after v1.0.6
   clearinghouse sends the Batteries key and no header of its caller's, and `docs/signer.md` asks a proxy
   to overwrite `Signer-` headers. A webhook decision of 400 to 599 is the signer's status, which is how
   an empty allocation is its 402 and a paused one its 403.
+- **Readiness, as the engine can ask it (#167):** the wallet report asks the signer with
+  `POST /sign-orchestrator-info` on its main port, the call the SDK begins every payment with. At the
+  pin it takes no credential (`signer/service.go`, `signInfo`): it answers the wallet's address and a
+  signature over it, so an answer says the signer is reachable and holds the key. The signer's own
+  `/readyz` (payer funds, the price policy and the event producer) is on its metrics listener,
+  `127.0.0.1:8938` by default (`signer/app.go`), which the engine is given no address for (T34).
 - **Discovery:** the engine does not use the signer for discovery, and the signer contacts no
   orchestrator (D63; T12 is resolved). It only signs.
 - **Event fields:** `auth_id`, `manifest_id`, `session_id` (state ID), `sequence_number`,

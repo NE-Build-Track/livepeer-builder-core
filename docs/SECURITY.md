@@ -66,6 +66,21 @@ See [contracts/access.md](contracts/access.md#boundaries).
   tenant's grant and cannot enlarge it, issue an admin key, or act through `/v1/keys` on another
   tenant's key ([access.md](contracts/access.md#defaultpolicy)). No Batteries credential leaves the
   engine.
+- **The private listener (D84, #167):** a clearinghouse admin key can onboard tenants and top up grants,
+  so a leaked one could spend the wallet. A deployment that sets `LPB_HTTP_PRIVATE_PORT` serves what
+  only a clearinghouse admin does (onboarding, the tenant list, a grant's top-up, a tenant's status and
+  the wallet report) on a private listener, which binds loopback unless told otherwise. On the public
+  listener those routes are 404, as any unknown path, and a clearinghouse admin credential is 403 on
+  every route that takes an access credential, so a leaked clearinghouse admin key does nothing where
+  the engine is published. The private listener takes a clearinghouse admin credential only. Reaching
+  it is not enough: it still asks for the credential. The signer's two paths (#166) are on both
+  listeners and take a payment key on both; an access key of any kind is 401 there. With
+  one listener, the default, there is no such boundary: keep the engine off the public network, or put
+  the admin routes behind your own proxy ([access.md](contracts/access.md#listeners)).
+- **The wallet report (#167):** it states the wallet's deposit and reserve, the unspent grants and
+  whether the signer answers. It holds no key material, no keystore path and no RPC address; the
+  wallet's public address is in it because Batteries reports it. The engine reads no chain and holds no
+  RPC address ([payments.md](contracts/payments.md#the-wallet-report)).
 - **A tenant's usage (#166):** the usage route reads Batteries with its `grant_id` filter set to the
   tenant in the path, after the policy check, and a Batteries cursor is bound to that filter, so one
   tenant's admin reads no row of another's ([payments.md](contracts/payments.md#a-tenants-usage)). The
@@ -75,8 +90,9 @@ See [contracts/access.md](contracts/access.md#boundaries).
   no `grants.*`. Batteries applies `grants.fund` to every grant on the instance, so only a clearinghouse
   admin may top up a grant (`POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up`); a tenant admin
   and an actor key cannot. Onboarding a tenant, the tenant list, a grant's read and a tenant's status use
-  `LPB_BATTERIES_GRANTS_TOKEN` (`grants.read`, `grants.create`, `grants.fund`, `grants.status` and
-  `allocations.read`); it is optional, and without it the tenant desk and its routes are absent.
+  `LPB_BATTERIES_GRANTS_TOKEN` (`grants.read`, `grants.create`, `grants.fund`, `grants.status`,
+  `allocations.read` and, for the wallet report, `escrow.read`); it is optional, and without it the
+  tenant desk and its routes are absent.
   Batteries keeps replayed API-key secrets in its idempotency table, so protect Batteries backups like
   a vault.
 

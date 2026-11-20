@@ -50,7 +50,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179).
 - [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery. Built and in
   review: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180).
-- [ ] **P6 (#167).** A public and a private listener.
+- [ ] **P6 (#167).** A public and a private listener. Built and in review:
+  [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
 - [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`.
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
 
@@ -83,3 +84,11 @@ Each pull request ticks its own line here in the same change.
   clearinghouse's public listener, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each
   called with a payment key. The gateway SDK drops any path in a signer address, so
   `POST /v1/clearinghouse/payments` could not be reached by it unmodified. Source: Mike.
+- **19 November 2026, P6.** Two listeners are a deployment's choice until the role setting (#169): with
+  `LPB_HTTP_PRIVATE_PORT` unset one listener serves everything, so self-hosted payments is unchanged.
+  The private listener takes a clearinghouse admin credential only, as the guide's routes say ("for a
+  `clearinghouse_admin` only"): a tenant's admin is refused there. The wallet report converts nothing
+  and computes no margin. "Unspent" is each grant's total less what its allocations spent, summed for
+  each currency over every grant; the deposit and reserve are Batteries' own on-chain listener's, which
+  a deployment must turn on; "ready" is the signer's identity call. Source: D82, D84 and the guide; where
+  they are silent the stricter or the plainer reading was built, for Mike's review.

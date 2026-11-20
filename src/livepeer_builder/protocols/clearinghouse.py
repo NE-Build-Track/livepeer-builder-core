@@ -8,7 +8,14 @@ on each. They are re-exported from ``livepeer_builder.protocols``.
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from livepeer_builder.contracts import ActorAllocation, SignerAnswer, SignerCall, UsagePage
+from livepeer_builder.contracts import (
+    ActorAllocation,
+    EscrowAccount,
+    SignerAnswer,
+    SignerCall,
+    SignerReadiness,
+    UsagePage,
+)
 
 
 @runtime_checkable
@@ -71,6 +78,30 @@ class DiscoveryDocumentSource(Protocol):
     the engine serves no runner list: the discovery route is absent."""
 
     def document(self) -> bytes | None: ...
+
+
+@runtime_checkable
+class EscrowSource(Protocol):
+    """Optional for a grants manager: the deposit and reserve of the clearinghouse's wallet, as the
+    payment provider's own on-chain listener has confirmed them (#167). ``BatteriesClient`` has it, from
+    Batteries' escrow report, which the grants credential reads with ``escrow.read``.
+
+    One account for each sender the provider follows, and none when it follows none (Batteries'
+    listener is off unless the deployment turns it on). The engine reads no chain and holds no RPC
+    address. Without it (a supplied grants manager that reports no escrow) the engine serves no wallet
+    report: the wallet route is absent."""
+
+    async def escrow_accounts(self) -> tuple[EscrowAccount, ...]: ...
+
+
+@runtime_checkable
+class SignerProbe(Protocol):
+    """Optional for a runner transport: whether the signer it pays through answers its identity call now
+    (#167). ``SdkRunnerTransport`` has it. The call is the one every payment begins with; it needs no
+    credential and signs no payment. Without it (a supplied transport that cannot ask) the engine serves
+    no wallet report: the wallet route is absent."""
+
+    async def signer_readiness(self) -> SignerReadiness: ...
 
 
 @runtime_checkable

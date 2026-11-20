@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import NotFound, ProviderError, RunnerCallError
 from livepeer_builder.protocols import OnSigned
+from livepeer_builder.testing.wallet import FakeEscrow, FakeSignerProbe
 
 
 class FixedClock:
@@ -75,7 +76,7 @@ async def report_signed(on_signed: OnSigned | None, manifest_ids: Sequence[str],
 
 
 @dataclass
-class ScriptedTransport:
+class ScriptedTransport(FakeSignerProbe):
     """Returns or raises the scripted steps in order and records every call."""
 
     steps: list[Step] = field(default_factory=list)
@@ -250,7 +251,7 @@ class _Grant:
     unallocated: Decimal
 
 
-class FakeAllocationManager:
+class FakeAllocationManager(FakeEscrow):
     """Mimics Batteries management semantics: idempotent replays, and a grant's unallocated balance.
 
     A tenant's id is its grant's id (D83), so an allotment names a grant the fake must hold. ``add_grant``

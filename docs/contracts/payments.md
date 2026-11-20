@@ -122,6 +122,7 @@ clearinghouse has one for each enterprise app.
 | `GET /v1/clearinghouse/tenants` | A clearinghouse admin | Every tenant with its grant and what it spent: `TenantGrant[]` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
+| `GET /v1/clearinghouse/wallet` | A clearinghouse admin | The wallet's deposit and reserve, the total of unspent grants and the signer's readiness ([the wallet report](#the-wallet-report)) |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
 | `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment) |
@@ -130,13 +131,18 @@ clearinghouse has one for each enterprise app.
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
 | `POST /sign-orchestrator-info`, `POST /generate-live-payment` | A payment key | The signer's two paths, at the root: who the signer is, and one signed payment against that actor's allocation ([signing through a clearinghouse](#signing-through-a-clearinghouse)) |
 
-A clearinghouse admin may call every route, for any tenant. The first four are what only a clearinghouse
-admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`), which
-#167 serves on a private listener. Today one listener serves everything.
+A clearinghouse admin may call every route but the last, for any tenant: the signer's two paths take a
+payment key and nothing else. The first five are what only a clearinghouse admin does; they are one
+group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A deployment with a private
+listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the public listener those
+five are 404, and a clearinghouse admin credential is 403 on every route that takes an access
+credential. The signer's two paths are served on both listeners, to a payment key
+([access.md](access.md#listeners)). With one listener, which is the default and what self-hosted
+payments runs, every route is served there and nothing is refused.
 
 **The tenant desk.** Onboarding, the tenant list, the grant read and the tenant's status use the grants
-credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`
-and `allocations.read`). The token is optional. Without it the desk is off: `engine.payments.tenants` is
+credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`,
+`allocations.read` and, for [the wallet report](#the-wallet-report), `escrow.read`). The token is optional. Without it the desk is off: `engine.payments.tenants` is
 `None` and those four routes are absent. A grant's top-up uses `LPB_BATTERIES_TOKEN` (`grants.fund`) and
 stays.
 
@@ -210,6 +216,87 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
 - **Optional.** The route is present with a usage source that reads one tenant's records
   (`TenantUsageSource` in `protocols`, which `BatteriesUsageSource` has), and absent without one:
   `engine.payments.usage` is then `None`.
+
+### The wallet report
+
+Each clearinghouse has one wallet. Its deposit stays above the total of unspent grants, with a margin
+for the ETH price, and the clearinghouse admin watches it and funds it by hand (D82). The report
+(`GET /v1/clearinghouse/wallet`, `engine.payments.wallet.report`, #167) states the three things that
+sentence needs. It converts nothing between ETH and a grant's currency, computes no margin, refuses
+nothing by these figures and sends no alert: a person judges.
+
+Only a clearinghouse admin reads it (`admin.tenants`): a tenant admin, an auditor and an actor are 403.
+It is in the private listener's group, so a deployment with two listeners serves it on the private one
+only ([access.md](access.md#listeners)).
+
+```json
+{
+  "escrow": [
+    {
+      "chain_id": "42161",
+      "contract_address": "0xc0c0…",
+      "sender": "0x5e5e…",
+      "deposit": {"amount": "1.5", "currency": "ETH"},
+      "reserve": {"amount": "0.25", "currency": "ETH"},
+      "confirmed_through_block": 412
+    }
+  ],
+  "unspent_grants": [
+    {"unspent": {"amount": "1077", "currency": "USD"}, "grants": 3}
+  ],
+  "signer": {"ready": true, "reason": null}
+}
+```
+
+| Field | Unit | Source | What it says |
+| --- | --- | --- | --- |
+| `escrow[]` | | Batteries, `GET /v1/escrow/report` (`escrow.read`, with the grants credential) | One account for each chain, TicketBroker contract and sender that Batteries' on-chain listener follows. A clearinghouse has one wallet, so one account |
+| `escrow[].chain_id`, `contract_address`, `sender` | | The same | The chain, the TicketBroker contract and the wallet's public address, as Batteries reports them |
+| `escrow[].deposit`, `reserve` | ETH, exact to the wei | The same | The wallet's TicketBroker deposit and reserve, as Batteries' listener has confirmed them from the chain's events |
+| `escrow[].confirmed_through_block` | A block number | The same | How far the listener has read. The amounts are as of that block, not the chain's head: Batteries waits for confirmations (64 blocks by default) and polls (every 5 s by default). `-1` is a first snapshot from before the chain's first block. There is no timestamp |
+| `unspent_grants[]` | | Batteries, the grants and their allocations (`grants.read`, `allocations.read`), as the tenant list reads them | One entry for each currency a grant is in, by currency |
+| `unspent_grants[].unspent` | The grants' currency (`USD` or `ETH`) | The same | The sum, over every grant Batteries holds in that currency, of the grant's `total` less its `spent` ([tenants](#tenants)) |
+| `unspent_grants[].grants` | A count | The same | How many grants were summed |
+| `signer.ready` | | The signer, `POST /sign-orchestrator-info` at the root of `LPB_SIGNER_URL` | Whether the signer answered its identity call just now |
+| `signer.reason` | | The same | `null` when ready. `not_configured`: the engine has no `LPB_SIGNER_URL`. `unavailable`: the signer could not be reached, timed out or answered a 5xx. `no_identity`: something answered, but not with a signer's address and a signature |
+
+**What "unspent" sums.** A grant's unspent amount is its total less what its allocations have spent:
+what is allotted and not yet spent, and what is not yet allotted. Both are the tenant's to spend, so the
+wallet may still have to pay for both. Every grant counts, whatever its status: a paused grant can be
+resumed. Batteries charges after it authorizes, so an allocation can spend more than it held; a grant
+whose allocations spent more than its total counts as zero, and its overdraft does not hide another
+grant's unspent amount. The figure is read as the tenant list is (T31): the grants, then every
+allocation, so a command that lands between the reads can put it off by its amount.
+
+**The deposit and reserve need Batteries' on-chain listener.** Batteries records escrow only with
+`--enable-onchain-listener`, its own RPC address and the signer's address, and the listener is off by
+default. With it off, Batteries reports no account and `escrow` is `[]`: never a deposit of zero. The
+engine reads no chain, holds no RPC address and gains no setting for one.
+
+**What "ready" proves.** The identity call is the one every paid job begins with. It needs no
+credential, signs no payment and costs nothing, and `ready` says the signer is reachable where the engine
+calls it and signed with the wallet's key. It does not say the wallet is funded, that the signer's
+price feed or event stream is up, or that the signer can reach Batteries: those are the signer's own
+`/readyz`, which livepeer/node serves on a separate metrics listener the engine is not given (T34). The
+payment SDK remembers a signer's identity for the life of the process; the report asks the signer each
+time and not that memory.
+
+**Failures.** The three are read one after another and are not one moment. A Batteries that fails a
+read fails the report (503 when it cannot be reached, 502 for an answer the engine cannot read): no
+part is served as if the rest were known, and an amount the engine cannot read is never a zero. A deposit
+or a reserve below zero is such an amount, and is never served as a balance. A grants
+credential without `escrow.read` (Batteries' 403) is a 502 whose message names the permission. A grants
+token Batteries does not know or has revoked (its 401) is a 502 in Batteries' own words, with no
+permission named: none would mend it. A signer that does not answer is an answer, `ready: false`, not an
+error.
+
+**What is never in it.** No key material, no keystore path and no RPC address. The wallet's public
+address is there because Batteries reports it.
+
+**When the route is absent.** It needs a grants manager that reports the escrow (`EscrowSource`, which
+`BatteriesClient` has) and a runner transport that can ask the signer (`SignerProbe`, which
+`SdkRunnerTransport` has). Without the grants credential, or with a supplied part that has neither, the
+engine serves no wallet report: `engine.payments.wallet` is `None` and the route is 404.
 
 ### Records from before a tenant's id was its grant's id
 
@@ -481,7 +568,9 @@ signer's two paths, which the clearinghouse serves
 ## Signing through a clearinghouse
 
 A payment clearinghouse serves the signer's two paths at the root of its listener, each called with a
-payment key (D87 point 3, as Mike amended it on 19 November 2026; #166):
+payment key (D87 point 3, as Mike amended it on 19 November 2026; #166). With a public and a private
+listener (#167) they are at the root of both, and take a payment key on both
+([access.md](access.md#listeners)):
 
 | Route | What it does |
 | --- | --- |

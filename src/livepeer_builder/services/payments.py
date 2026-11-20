@@ -60,6 +60,7 @@ from livepeer_builder.services.payment_keys import BEGAN_ON, PaymentKeys
 from livepeer_builder.services.payment_signing import PaymentSigning
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
+from livepeer_builder.services.wallet import Wallet
 from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ class PaymentsService:
         manager: AllocationManager | None = None,
         tenants: TenantDesk | None = None,
         usage: TenantUsage | None = None,
+        wallet: Wallet | None = None,
         forwarder: SignerForwarder | None = None,
         currency: Currency = "USD",
     ) -> None:
@@ -96,6 +98,7 @@ class PaymentsService:
         self._manager = manager
         self.tenants = tenants  # None: the tenant desk is off (no grants manager)
         self.usage = usage  # None: no source reads one tenant's usage (#166)
+        self.wallet = wallet  # None: a part cannot report the escrow or probe the signer (#167)
         # None: nothing forwards a signer call, so the signer's two paths are not served (#166)
         self.signing = (
             None if forwarder is None else PaymentSigning(self.resolve_payment_key, secrets, forwarder)

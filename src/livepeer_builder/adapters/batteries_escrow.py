@@ -45,10 +45,11 @@ def _text(item: dict[str, Any], key: str) -> str:
 
 def _eth(item: dict[str, Any], key: str) -> Decimal:
     """A decimal string of ETH. A number, ``""`` and ``[error]`` (what Batteries serves for an amount it
-    could not convert) are not amounts."""
+    could not convert) are not amounts, and neither is one below zero: a deposit or a reserve is never
+    negative, so the report says nothing the engine can pass on as a balance."""
     value = item.get(key)
     amount = decimal_or_none(value) if isinstance(value, str) else None
-    if amount is None or not amount.is_finite():
+    if amount is None or not amount.is_finite() or amount < 0:
         raise ProviderError(200, f"Batteries answered an escrow account with no usable {key}")
     return amount
 

@@ -102,6 +102,8 @@ async def test_a_batteries_whose_on_chain_listener_is_off_reports_no_account() -
         [row(reserve="")],
         [row(deposit="1e3x")],
         [row(deposit="NaN")],
+        [row(deposit="-1")],  # a balance is never below zero: not an amount the engine reports
+        [row(reserve="-0.000000000000000001")],
         [row(deposit=1.5)],  # a number, never read as money
         [{key: value for key, value in row().items() if key != "reserve_balance_eth"}],
         [row(sender="")],

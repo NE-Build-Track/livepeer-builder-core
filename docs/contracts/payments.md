@@ -283,7 +283,8 @@ time and not that memory.
 
 **Failures.** The three are read one after another and are not one moment. A Batteries that fails a
 read fails the report (503 when it cannot be reached, 502 for an answer the engine cannot read): no
-part is served as if the rest were known, and an amount the engine cannot read is never a zero. A grants
+part is served as if the rest were known, and an amount the engine cannot read is never a zero. A deposit
+or a reserve below zero is such an amount, and is never served as a balance. A grants
 credential without `escrow.read` is a 502 whose message names the permission. A signer that does not
 answer is an answer, `ready: false`, not an error.
 

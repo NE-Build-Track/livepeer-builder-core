@@ -6,7 +6,7 @@ store protocols, which the engine asks for with ``isinstance``, are in ``conditi
 because that module is at its size limit.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
@@ -15,10 +15,12 @@ from uuid import UUID
 from livepeer_builder.contracts import (
     AccessKey,
     ActorAllocation,
+    ActorContext,
     Attempt,
     Failure,
     Job,
     JobCost,
+    JobRequest,
     JobState,
     MeasuredUsage,
     OperationRecord,
@@ -127,11 +129,75 @@ class JobRepo(Protocol):
         failure: Failure | None,
         result: ResultRef | None,
         completed_at: datetime,
-    ) -> None: ...
+    ) -> bool:
+        """End a ``running`` job, and only a running one (ISS-26): ``False``, and nothing written, for a
+        job that already ended or is still queued, so a late writer never reopens a job. The same
+        transaction deletes the request stored for an async job."""
+        ...
 
     async def set_usage(self, job_id: UUID, usage: MeasuredUsage) -> None: ...
 
     async def jobs_in_state(self, state: JobState) -> list[Job]: ...
+
+    # -- the queue of async jobs (D69, ISS-26) --------------------------------------------------------
+
+    async def enqueue_job(
+        self,
+        job: Job,
+        fingerprint: str | None,
+        request: JobRequest,
+        actor: ActorContext,
+        *,
+        retry_of: UUID | None = None,
+    ) -> None:
+        """Insert a ``queued`` job with what it will run with, in one transaction: its request, and of the
+        actor it was authorized for the id, the tenant, the permissions, the credential kind and the
+        attributes (never ``auth`` or ``display_name``). A reference already held, and ``retry_of``, are
+        answered as ``create_job`` answers them."""
+        ...
+
+    async def queued_jobs(self, limit: int, skip_apps: Collection[str] = ()) -> list[tuple[UUID, str]]:
+        """The id and the runner app of ``queued`` jobs, oldest first, leaving out the apps named."""
+        ...
+
+    async def claim_job(
+        self, job_id: UUID, started_at: datetime
+    ) -> tuple[Job, JobRequest, ActorContext] | None:
+        """Compare-and-set: a ``queued`` job becomes ``running``, with ``started_at`` and one more claim.
+        The job, its request and its actor; ``None`` when it is no longer queued (another claim, a cancel
+        or the queue's time limit moved it first)."""
+        ...
+
+    async def requeue_unstarted(self, job_id: UUID, max_claims: int) -> bool:
+        """Put a ``running`` job back in the queue when nothing went out for it: it has no attempt row,
+        its request is still stored, and it was claimed fewer than ``max_claims`` times. One statement."""
+        ...
+
+    async def cancel_queued(self, job_id: UUID, failure: Failure, completed_at: datetime) -> bool:
+        """One conditional write: a ``queued`` job ends ``failed`` with ``failure`` and its stored request
+        is deleted. ``False``, and nothing written, when it is not queued."""
+        ...
+
+    async def expire_queued(self, created_before: datetime, failure: Failure, completed_at: datetime) -> int:
+        """End, as ``cancel_queued`` does, every job still ``queued`` that was created before the time
+        given. How many it ended."""
+        ...
+
+    async def finish_job_with_result(
+        self, job_id: UUID, result: ResultRef, content: bytes, completed_at: datetime
+    ) -> bool:
+        """End a ``running`` job ``succeeded`` and keep its result, in one transaction: the state and the
+        ``ResultRef``, the bytes (until ``result.expires_at``), and the deletion of the stored request.
+        Nothing is written unless all of it is, so no job is ``succeeded`` without its bytes."""
+        ...
+
+    async def read_result(self, job_id: UUID, now: datetime) -> bytes | None:
+        """The stored bytes of a job's result; ``None`` when none is stored or it expired before ``now``."""
+        ...
+
+    async def queued_stats(self) -> tuple[int, datetime | None]:
+        """How many jobs are ``queued``, and when the oldest of them was created."""
+        ...
 
 
 class OperationRepo(Protocol):

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Coroutine
 from datetime import UTC, datetime
 from typing import Any
@@ -14,6 +15,19 @@ BODY_LIMIT = 4096  # how much of a runner's or signer's response body an error k
 def token_hash(token: str) -> str:
     """SHA-256 of an engine-issued token. Only the hash is ever stored."""
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def json_body(content: bytes, content_type: str) -> dict[str, Any] | None:
+    """The body as a JSON object, when its content type says JSON and it is one; else ``None``. What a
+    runner's reply carries as ``data``, worked out again for a stored result (ISS-26)."""
+    mime = content_type.split(";", 1)[0].strip().lower()
+    if not mime.endswith(("/json", "+json")):
+        return None
+    try:
+        data = json.loads(content)
+    except (ValueError, RecursionError):  # not JSON, not text, or nested past what the decoder reads
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def utc(value: datetime) -> datetime:

@@ -45,7 +45,9 @@ async def supersede(conn: AsyncConnection, failed_id: UUID, retry: Job) -> None:
         raise Superseded
 
 
-def taken(found: Job, found_fingerprint: str | None, fingerprint: str | None) -> Exception:
+def taken(
+    found: Job, found_fingerprint: str | None, fingerprint: str | None
+) -> OperationConflict | OperationExists:
     """The answer when the reference is held: a conflict for a different request (B2), else a repeat."""
     if found_fingerprint is not None and found_fingerprint != fingerprint:
         return OperationConflict(found)

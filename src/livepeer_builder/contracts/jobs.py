@@ -11,7 +11,9 @@ from livepeer_builder.contracts.common import Contract, StoredText
 from livepeer_builder.contracts.http import request_headers, request_path
 from livepeer_builder.contracts.operations import OperationRef
 
-ExecutionMode = Literal["immediate", "async"]  # "async" is defined in M2, implemented in M4 (ISS-26)
+# "immediate": the caller waits for the runner's answer (jobs.run). "async": the job is queued and a worker
+# runs it; the caller reads its end back by id (jobs.submit, ISS-26).
+ExecutionMode = Literal["immediate", "async"]
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 SessionMatch = Literal["unmatched", "matched", "ambiguous"]
@@ -168,6 +170,9 @@ FailureKind = Literal[
     "runner_error",
     "interrupted",
     "abandoned",
+    # The runner answered an async job and the reply was larger than the engine stores, so no result is
+    # kept (D69, ISS-26). The attempt keeps its outcome and its payment; the job is failed.
+    "result_not_stored",
 ]
 
 
@@ -177,11 +182,18 @@ FailureKind = Literal[
 # reached, or failed, before anything was signed. "signer_unknown": it was asked and gave no answer, so
 # it may have charged.
 PaymentReason = Literal["not_authorized", "allowance_exhausted", "signer_unavailable", "signer_unknown"]
+# Why a job failed, where its kind alone does not say: a payment reason, or "cancelled", the caller's
+# cancel of a job that was still queued (D69, ISS-26). Nothing ran and nothing was paid.
+FailureReason = Literal[
+    "not_authorized", "allowance_exhausted", "signer_unavailable", "signer_unknown", "cancelled"
+]
+_REASON_KINDS: dict[str, FailureKind] = {"signer_unknown": "payment_unknown", "cancelled": "abandoned"}
 
 
-def reason_fits(kind: FailureKind, reason: PaymentReason) -> bool:
-    """``signer_unknown`` belongs to ``payment_unknown``, every other reason to ``payment`` (D58)."""
-    return kind == ("payment_unknown" if reason == "signer_unknown" else "payment")
+def reason_fits(kind: FailureKind, reason: FailureReason) -> bool:
+    """``signer_unknown`` belongs to ``payment_unknown`` and ``cancelled`` to ``abandoned`` (the caller
+    gave the job up); every other reason belongs to ``payment`` (D58)."""
+    return kind == _REASON_KINDS.get(reason, "payment")
 
 
 class Failure(Contract):
@@ -190,7 +202,7 @@ class Failure(Contract):
     status_code: int | None = None  # the runner's own status, or the signer's for a payment failure
     body: str | None = None  # the runner's own words, bounded; never the signer's (D58)
     payment_sent: bool = False
-    reason: PaymentReason | None = None  # payment failures only (D58)
+    reason: FailureReason | None = None  # payment failures (D58) and a cancelled job (D69)
 
     @model_validator(mode="after")
     def _reason_fits_kind(self) -> "Failure":
@@ -199,17 +211,22 @@ class Failure(Contract):
         return self
 
 
-JobState = Literal["queued", "running", "succeeded", "failed", "uncertain"]  # "queued" is reserved (async)
+# "queued": an async job waiting for a worker (ISS-26); nothing was dispatched or paid yet.
+JobState = Literal["queued", "running", "succeeded", "failed", "uncertain"]
 
 
 class ResultRef(Contract):
-    """Where a result lives. M2 keeps immediate results inline (not retained) and records their shape."""
+    """Where a result lives, and its shape. An immediate result is ``inline``: returned once and not
+    retained. An async job's is ``stored`` (ISS-26): the engine keeps the bytes until ``expires_at`` and
+    serves them at ``location``. A stored reference with no location names a result the engine could
+    not keep (the job failed ``result_not_stored``): its size and hash are all that is left."""
 
-    storage: Literal["inline", "stored"]  # "stored" is reserved for async results (ISS-26)
+    storage: Literal["inline", "stored"]
     content_type: str
     size_bytes: int
     sha256: str
-    location: str | None = None
+    location: str | None = None  # the REST path that serves a stored result
+    expires_at: datetime | None = None  # when the stored bytes go; None: with the job, or never stored
 
 
 class MeasuredUsage(Contract):
@@ -236,6 +253,9 @@ class Job(Contract):
     usage: MeasuredUsage | None
     created_at: datetime
     completed_at: datetime | None
+    # When a worker claimed an async job (ISS-26): its timeout_s counts from here. None while it is queued,
+    # and for an immediate job, which starts when it is created.
+    started_at: datetime | None = None
 
 
 class RunnerReply(Contract):
@@ -248,6 +268,10 @@ class RunnerReply(Contract):
     manifest_ids: tuple[str, ...]  # one per signed session, in signing order
     payment_sent: bool
     timings: CallTimings | None = None
+    # Set by ``BoundedRunnerTransport.call_bounded`` (ISS-26): the size and SHA-256 of the runner's
+    # whole reply. ``content`` is then all of it, or empty when it was longer than the caller keeps.
+    size_bytes: int | None = Field(default=None, ge=0)
+    sha256: str | None = None
 
 
 class JobResult(Contract):

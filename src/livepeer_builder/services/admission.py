@@ -29,11 +29,7 @@ class AdmissionLimiter:
 
     @asynccontextmanager
     async def admit(self, app: str) -> AsyncIterator[None]:
-        if not self._runs_jobs:
-            raise InvalidRequest(
-                "this engine is in its clearinghouse role (LPB_ROLE) and runs no jobs: a job runs in "
-                "the enterprise's own engine, which pays through this one"
-            )
+        self.check_runs_jobs()
         if self._max_concurrent is not None and self._running >= self._max_concurrent:
             raise NoCapacity("engine is at its concurrent job limit")
         if self._max_per_app is not None and self._per_app.get(app, 0) >= self._max_per_app:
@@ -48,6 +44,26 @@ class AdmissionLimiter:
             if self._per_app[app] == 0:
                 del self._per_app[app]
 
+    def check_runs_jobs(self) -> None:
+        """Refuse a job on an engine that runs none: where a job is admitted, and where an async job is
+        submitted, which takes no slot (ISS-26)."""
+        if not self._runs_jobs:
+            raise InvalidRequest(
+                "this engine is in its clearinghouse role (LPB_ROLE) and runs no jobs: a job runs in "
+                "the enterprise's own engine, which pays through this one"
+            )
+
     @property
     def running(self) -> int:
         return self._running
+
+    @property
+    def has_room(self) -> bool:
+        """Whether the engine is under its concurrent job limit: what the async worker asks before it
+        looks at the queue (ISS-26). ``admit`` is still what admits."""
+        return self._max_concurrent is None or self._running < self._max_concurrent
+
+    def full_apps(self) -> frozenset[str]:
+        """The runner apps at their concurrent job limit: the worker leaves their queued jobs waiting."""
+        cap = self._max_per_app
+        return frozenset() if cap is None else frozenset(a for a, n in self._per_app.items() if n >= cap)

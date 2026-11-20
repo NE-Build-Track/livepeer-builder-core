@@ -150,7 +150,7 @@ Each third-party package is confined to one module so a dependency change has on
 | --- | --- | --- |
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
 | Discovery | `services/discovery.py`; `services/runner_list.py` (the list a clearinghouse serves) | [engine](docs/contracts/engine.md#discovery), [discovery](docs/contracts/discovery.md#the-clearinghouses-runner-list) |
-| Jobs | `services/jobs.py`, `services/admission.py` | [engine](docs/contracts/engine.md) |
+| Jobs | `services/jobs.py`, `services/dispatch.py` (the paid call), `services/async_jobs.py` (the worker that runs queued async jobs), `services/admission.py`; `store/job_queue.py` (the queue, a queued job's request and a stored result); `http/job_handles.py` (an async job's submit answer, result and cancel) | [engine](docs/contracts/engine.md), [async jobs](docs/contracts/engine.md#async-jobs) |
 | Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/issued_payment_keys.py` (the payment keys a clearinghouse issues), `services/payment_signing.py` (the key swap behind the signer's two paths), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/tenant_usage.py` (a tenant's payment records), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |

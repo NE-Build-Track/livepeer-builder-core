@@ -20,6 +20,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -86,6 +87,9 @@ jobs = Table(
     # 0009 (D57): a job re-dispatched under its reference after it never reached a runner
     Column("retry_of", String(36), nullable=True),  # the failed job this one retries
     Column("superseded_by", String(36), nullable=True),  # the job that retried this one
+    # 0016 (ISS-26): an async job's claim by a worker
+    Column("started_at", UTCDateTime, nullable=True),  # when it was claimed; None while it is queued
+    Column("claims", Integer, nullable=False, server_default=text("0")),  # times a worker claimed it
 )
 Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
@@ -99,10 +103,12 @@ Index(  # the job holding a reference is the one not superseded; superseded ones
 Index("lpb_jobs_owner_created", jobs.c.tenant_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
 
+JOB_ID = "lpb_jobs.id"  # what every table of a job's own rows points at, and goes with
+
 attempts = Table(
     "lpb_attempts",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("number", Integer, primary_key=True),
     Column("runner_url", Text, nullable=True),
     Column("orchestrator_url", Text, nullable=True),
@@ -203,7 +209,7 @@ cost_cursor = Table(
 cost_projections = Table(
     "lpb_cost_projections",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("status", String(16), nullable=False),
     Column("fee_eth", String(AMOUNT), nullable=False),
     Column("fee_usd", String(AMOUNT), nullable=True),
@@ -263,5 +269,32 @@ payment_keys = Table(
     Column("token_hash", String(64), nullable=False, unique=True),
     Column("created_at", UTCDateTime, nullable=False),
 )
+
+# -- 0016: async jobs (D69, ISS-26) -----------------------------------------------------------------------
+
+# What a queued job runs with: its request, and the actor it was authorized for at submit. Kept only
+# while the job waits or runs: the transaction that ends the job deletes the row. Not encrypted.
+job_requests = Table(
+    "lpb_job_requests",
+    metadata,
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
+    Column("request", JSON, nullable=False),  # the JobRequest without its raw body
+    Column("raw_body", LargeBinary, nullable=True),
+    Column("actor", JSON, nullable=False),  # who it runs as: never a credential, never a display name
+)
+
+# The bytes a succeeded async job returned, written in the transaction that ends the job. They expire
+# before the job does (LPB_RETENTION_RESULTS_DAYS); the job keeps its ResultRef. Not encrypted.
+job_results = Table(
+    "lpb_job_results",
+    metadata,
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
+    Column("content", LargeBinary, nullable=False),
+    Column("content_type", Text, nullable=False),
+    Column("size_bytes", Integer, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("expires_at", UTCDateTime, nullable=True),  # None: kept until the job is purged
+)
+Index("lpb_job_results_expires", job_results.c.expires_at)
 
 VERSION_TABLE = "lpb_alembic_version"

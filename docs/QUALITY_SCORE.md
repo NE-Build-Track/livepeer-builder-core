@@ -10,7 +10,8 @@ Update this file in the same change that moves a grade.
 | Discovery | B | `test_adapters.py`, unit jobs tests | Capability resolution (T3) |
 | Jobs (immediate) | A | `test_jobs.py`: failover, uncertain, write ordering, recovery, admission, idempotency | |
 | Jobs (streaming) | B | `test_streaming.py`, `test_stream_lifecycle.py`, `test_stream_deadlines.py`, `test_stream_http.py`; the `FakeEngine` contract (`test_fake_engine_contract.py`) | |
-| Jobs (async), sessions | C | Contracts and 501 tests | M4 |
+| Jobs (async) | B | `test_async_jobs.py`, `test_async_results.py`, `test_async_repeats.py`, `test_async_http.py`, `test_async_paying.py`, `test_async_roles.py`, `test_async_retention.py`, `test_async_client_gone.py`, `test_async_settings.py`; store tests `test_job_queue.py`, `test_async_restart.py`, `test_async_migration.py` on SQLite and PostgreSQL; the `FakeEngine` (`test_fake_engine_async.py`) | No worker lease (T44); the queue limit is checked before the insert (T45); results live in the database (T46); no events feed yet (ISS-46) |
+| Jobs (persistent sessions) | C | Contracts and 501 tests | M4 (ISS-27) |
 | Payments | A | `test_payments.py`: explicit allotment, idempotency, custody, rotation | Mode B (M4) |
 | Costs | A | `test_costs.py`: classification, corrected, reconciliation, cursor | — |
 | Events | C | Contract and 501 test | Held in M3 (D60) |

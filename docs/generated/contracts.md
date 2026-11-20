@@ -67,6 +67,7 @@ classDiagram
         +MeasuredUsage? usage
         +datetime created_at
         +datetime? completed_at
+        +datetime? started_at
     }
     class Attempt {
         +UUID job_id
@@ -96,6 +97,7 @@ classDiagram
         +int size_bytes
         +str sha256
         +str? location
+        +datetime? expires_at
     }
     class MeasuredUsage {
         +map quantities

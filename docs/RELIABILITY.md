@@ -25,6 +25,12 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
 | `LPB_MAX_PAID_ATTEMPTS` | `2` | Paid attempts a job may fail over from (1 to 10; `1` turns paid failover off). The operator pays for them, so the caller's `max_attempts` cannot raise it (D55) |
+| `LPB_ASYNC_WORKERS` | `4` | Async jobs dispatched at once (at least 1), inside the admission limits above, which immediate jobs and streams share ([async jobs](contracts/engine.md#async-jobs), D69) |
+| `LPB_ASYNC_MAX_QUEUED` | `1000` | Async jobs that may wait at once. A submit beyond it is 503 + `Retry-After`, with nothing stored. The stored requests of a full queue are at most this many times the request limit: about 16 GiB at the defaults (1000 jobs, 16 MiB) |
+| `LPB_ASYNC_QUEUE_TTL_S` | `3600` (1 h) | An async job still queued this long after its submit ends `failed`, `no_capacity`, with nothing paid |
+| `LPB_ASYNC_RESULT_MAX_BYTES` | `16777216` (16 MiB) | The largest answer the engine stores for an async job. A larger answer is not stored: the job ends `failed`, `result_not_stored`, and its payment is `failed_after_payment`. It also bounds the memory one answer takes in a worker: the answer is read in pieces, and one that grows past the limit is measured to its end and not kept ([engine.md](contracts/engine.md#results-of-an-async-job)). The answers the workers hold are then bounded by `LPB_ASYNC_WORKERS` times this, and twice that while kept answers are being stored |
+| `LPB_ASYNC_POLL_S` | `1` | How often the async worker looks at the queue while jobs wait. A submit wakes it at once, and an engine with nothing queued does not look |
+| `LPB_ASYNC_DRAIN_TIMEOUT_S` | `30` | On stop, how long running async jobs may take to end before they are cancelled: one stopped before its first attempt goes back to the queue, and any other ends `uncertain` when it may have paid |
 | `LPB_DISCOVERY_INTERVAL_S`, `LPB_COST_SYNC_INTERVAL_S` | `15`, `30` | Background loops |
 | `LPB_RATE_MAX_AGE_S` | `600` | An orchestrator-stamped rate older than this makes its offering `stale` ([engine.md](contracts/engine.md#rates-iss-10)). Catalog policy (D62 (3)). The default is two of livepeer/node `livepeer-discovery`'s default 5-minute refreshes |
 | `LPB_STREAM_FINALIZE_TIMEOUT_S` | `10` | The most a stream's closing writes may take; the slot is released regardless (D34) |
@@ -32,7 +38,8 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_STREAM_SETTLE_S` | `1` | After a disconnect or cancel, how long the runner may take to end the stream and count as succeeded; `0` turns it off (D38) |
 | `LPB_STREAM_OPEN_GRACE_S` | `5` | How far past its first-byte deadline a transport's open may run before the engine stops it |
 | `LPB_RETENTION_JOBS_DAYS`, `LPB_RETENTION_USAGE_DAYS` | unset | See [contracts/persistence.md](contracts/persistence.md#retention) |
-| `LPB_RETENTION_INTERVAL_S` | `21600` (6 h) | How often the retention purge runs when a retention setting is on |
+| `LPB_RETENTION_RESULTS_DAYS` | `7` | How long an async job's stored result is kept after the job ended (at least 1). In code, `EngineSettings(retention_results_days=None)` keeps it as long as its job. The job keeps its record ([persistence.md](contracts/persistence.md#retention)) |
+| `LPB_RETENTION_INTERVAL_S` | `21600` (6 h) | How often the retention purge runs when a retention setting is on. Results retention is on by default: alone, its first purge runs one interval after start |
 | `LPB_AUTH` | `api_keys` | `api_keys`, `jwt`, or `jwt,api_keys`: which credentials the REST service accepts ([access.md](contracts/access.md#jwt-bearer)). `jwt` alone turns engine API keys off |
 | `LPB_JWT_ISSUER`, `LPB_JWT_AUDIENCE` | unset | Required with `jwt`: the exact `iss` (`https`), and the value `aud` must contain |
 | `LPB_JWT_JWKS_URL` | unset | The issuer's keys (`https`); unset, found through the issuer's OpenID or RFC 8414 metadata |
@@ -64,8 +71,8 @@ One program covers three deployments (D84, #169). `LPB_ROLE` says which one this
 | Listeners | One, or two with `LPB_HTTP_PRIVATE_PORT` | One, or two with `LPB_HTTP_PRIVATE_PORT` | Two, always |
 | Needs | Nothing new | `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` and `LPB_SECRET_KEY` | `LPB_HTTP_PRIVATE_PORT`, `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` and `LPB_SECRET_KEY` |
 | Refuses | The `LPB_CLEARINGHOUSE_*` settings | Any Batteries or signer setting | The `LPB_CLEARINGHOUSE_*` settings: a clearinghouse is no tenant of another |
-| Starts | Resolving interrupted jobs, discovery, cost sync, retention | The same | Discovery alone, for the runner list it publishes. It holds no job: nothing is resolved, synced or purged, and `LPB_COST_SYNC_INTERVAL_S` and the retention settings do nothing |
-| Runs jobs | Yes | Yes | No. `jobs.run` and `jobs.streaming.stream` refuse an embedding caller too (`InvalidRequest`), before anything is recorded |
+| Starts | Resolving interrupted jobs, discovery, cost sync, retention, the async worker | The same | Discovery alone, for the runner list it publishes. It holds no job: nothing is resolved, synced, purged or queued, and `LPB_COST_SYNC_INTERVAL_S`, the retention settings and the `LPB_ASYNC_*` settings do nothing |
+| Runs jobs | Yes | Yes | No. `jobs.run`, `jobs.streaming.stream` and `jobs.submit` refuse an embedding caller too (`InvalidRequest`), before anything is recorded, and so does a step of the async worker |
 | Serves the signer's two paths, the wallet report and the runner list | Yes, with a signer and Batteries | No: it is nobody's clearinghouse, and it issues no payment key | Yes |
 
 - **What a `clearinghouse` engine needs is judged on the parts it will run with.** A signer is a runner
@@ -116,7 +123,12 @@ either. The log line `http.listeners_bound` names both addresses.
 
 Health is reported by `GET /readyz` (and `engine.health()`): the engine's role (#169), discovery
 freshness and errors, the last cost sync, its error and the count of usage rows it has set aside
-(`cost_sync_set_aside`), running jobs and the version. An engine in its `clearinghouse` role syncs no
+(`cost_sync_set_aside`), running jobs, the async jobs waiting (`queued_jobs`) and how long the oldest
+has waited in seconds (`oldest_queued_s`, `null` when none waits; ISS-26), and the version. Alert on
+`oldest_queued_s`, not on the depth of the queue: a deep queue that drains is healthy, and one old
+job means nothing is being claimed. Both numbers are the worker's last count, read without a database
+call: a count under way when a job is queued is not kept, so for a moment they may say more than the
+queue holds, and never less. An engine in its `clearinghouse` role syncs no
 cost, so its `cost_sync_at` stays `null`. It no longer reports an `allocation_mode`: `per_actor` is the only one
 (D82). Logs are JSON lines; every line has an `event` field (for example `jobs.recovered` or
 `costs.sync_failed`).
@@ -154,13 +166,17 @@ exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is 
 
 | Situation | Behavior |
 | --- | --- |
-| The engine dies mid-job | On start, `running` jobs become `uncertain` (may have paid) or `failed`. Never re-run |
+| The engine dies mid-job | On start, `running` jobs become `uncertain` (may have paid) or `failed`. Never re-run. An async job is the exception before its first attempt: nothing went out, so it goes back to the queue, three claims at most, then `failed`, `interrupted`. A `queued` one stays queued ([restart and stop](contracts/engine.md#restart-and-stop)) |
+| The async queue is full (`LPB_ASYNC_MAX_QUEUED`) | A submit is 503 + `Retry-After`; nothing is stored. Jobs already queued run as workers come free |
+| An async job waits past `LPB_ASYNC_QUEUE_TTL_S` | `failed`, `no_capacity`, nothing paid, cost `none`. `oldest_queued_s` in `/readyz` shows a queue that is not being drained |
+| A paid async answer is larger than `LPB_ASYNC_RESULT_MAX_BYTES`, or the write of a job's end fails | No bytes are stored and the job is never `succeeded`: `result_not_stored` (`failed_after_payment`), or `runner_error`, `uncertain` when paid |
 | The signer or runner times out after payment | Job `uncertain`; cost classified `uncertain` |
 | Batteries unreachable | Cost sync records `cost_sync_error` (`unavailable`); costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
 | Batteries answers a 2xx the engine cannot read | Not a JSON object, a list page whose `items` is not a list of objects or whose `next_cursor` is not a string, a list page whose `next_cursor` is the cursor it was asked with, or a grant, a key or an allocation with no `id` or with a field that is not text: a provider error. An admin command answers 502 and its `operation_ref` stays held (an unknown outcome, resumed after `LPB_OPERATION_STALE_S`); cost sync fails that pass with `cost_sync_error` `invalid_answer` and asks for the page again. Never read as an empty answer (#114, C21). A redirect (3xx) is the same provider error whatever its body, and never the call's answer; as `cost_sync_error` it is `unavailable` |
 | Batteries delivers a usage row the engine cannot read or store | The row is set aside and the sync goes on: an unknown status, no id or timestamp, a fee that is not a finite number, or a text the store's column cannot keep (too long, a NUL, a lone surrogate). Its id, the reason and its fees are one row of `lpb_usage_set_aside`; a WARNING `costs.usage_set_aside` carries its content, once. `cost_sync_set_aside` in `/readyz` counts the rows left out in all, and `rows_set_aside` in the sync report the new ones. No job's cost includes the row, so reconciliation may not balance until it is accounted for (#114, C13; [payments.md](contracts/payments.md#cost-classification)) |
 | Two cost syncs run at once (the background loop and `POST /v1/costs/sync`) | Both end. Each usage row is stored once and each set-aside row recorded once, by whichever sync writes it first; the row is not new to the other, which counts and logs nothing for it. Before, the slower sync failed on the row's primary key and its pass ended before its cursor moved (review of #144) |
+| A runner answers an error, or a 402 payment challenge, with a very long body | The engine reads 16 KiB of an error and keeps its first 4096 characters, as before. It reads a challenge up to 64 KiB; a longer one is refused unsigned (`http`, 402), as a malformed one is. The rest of the body is not read and the connection is closed ([failures](contracts/engine.md#failures)) |
 | An orchestrator's payment challenge has a manifest id the store cannot keep | Refused before signing (`payment_refused`): nothing stored or paid, and the job fails over (#114, C13) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
 | Discovery fails | The last good snapshot is kept; `discovery_error` is set to a code; it goes stale after three intervals |
@@ -173,6 +189,8 @@ exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is 
 | `start()` fails (a store error, or a cancellation) | The engine stops itself and closes what `create` opened before the error reaches the caller; create a new engine |
 | `start()` again on a running engine | Refused with `RuntimeError`; the running engine and its one set of background loops carry on (#113, C27). The REST app's lifespan (`create_app(engine)`) on a running engine is refused the same way and does not stop it |
 | The engine stops with open streams | They get `LPB_STREAM_DRAIN_TIMEOUT_S` to finish, then end `abandoned`; `stop()` returns only after every end is written |
+| The engine stops with async jobs running | It claims no more, gives them `LPB_ASYNC_DRAIN_TIMEOUT_S` to end, then cancels the rest: one with no attempt goes back to the queue, any other ends as a cancelled immediate job does. `stop()` returns only after every end is written |
+| A client goes away after an async submit | Nothing changes: the job belongs to the worker, and its owner reads it back by id |
 
 There is no HA, exactly-once or SLA. See
 [contracts/engine.md](contracts/engine.md#deployment-performance-and-recovery-assumptions).

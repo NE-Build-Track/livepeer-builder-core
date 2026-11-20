@@ -53,8 +53,10 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.runtime.payment_defaults import payment_defaults
 from livepeer_builder.services.admission import AdmissionLimiter
+from livepeer_builder.services.async_jobs import AsyncJobWorker, AsyncLimits
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.discovery import DiscoveryService, MostCapacityFirst
+from livepeer_builder.services.dispatch import Dispatcher
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.ledger import OperationLedger
@@ -323,29 +325,46 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     admission = AdmissionLimiter(
         settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app, runs_jobs=runs_jobs
     )
-    jobs = JobService(
+    stream_limits = StreamLimits(
+        finalize_timeout_s=settings.stream_finalize_timeout_s,
+        drain_timeout_s=settings.stream_drain_timeout_s,
+        settle_s=settings.stream_settle_s,
+        open_grace_s=settings.stream_open_grace_s,
+    )
+    dispatcher = Dispatcher(  # the paid call, one for every way a job runs
         parts.store,
         discovery,
         parts.transport,
         parts.selection,
         parts.credentials or payments,
-        parts.policy,
+        parts.clock,
+        stream_limits,
+        max_paid_attempts=settings.max_paid_attempts,
+    )
+    worker = AsyncJobWorker(  # one, built here: the job service queues for it and the engine starts it
+        parts.store,
+        dispatcher,
         admission,
         parts.clock,
-        StreamLimits(
-            finalize_timeout_s=settings.stream_finalize_timeout_s,
-            drain_timeout_s=settings.stream_drain_timeout_s,
-            settle_s=settings.stream_settle_s,
-            open_grace_s=settings.stream_open_grace_s,
+        AsyncLimits(
+            workers=settings.async_workers,
+            max_queued=settings.async_max_queued,
+            queue_ttl_s=settings.async_queue_ttl_s,
+            result_max_bytes=settings.async_result_max_bytes,
+            results_days=settings.retention_results_days,
+            poll_s=settings.async_poll_s,
+            drain_timeout_s=settings.async_drain_timeout_s,
         ),
-        max_paid_attempts=settings.max_paid_attempts,
+    )
+    jobs = JobService(
+        parts.store, dispatcher, parts.transport, parts.policy, admission, parts.clock, stream_limits, worker
     )
     # Cost sync attributes the provider's usage to this engine's jobs: an engine that runs none has no
     # worker. A tenant's usage route reads the provider itself (TenantUsage, above).
     source = parts.usage_source if runs_jobs else None
-    worker = CostSyncWorker(source, parts.store) if source is not None else None
+    cost_sync = CostSyncWorker(source, parts.store) if source is not None else None
     costs = CostService(
-        parts.store, parts.policy, parts.clock, worker, payments, settings.cost_sync_interval_s
+        parts.store, parts.policy, parts.clock, cost_sync, payments, settings.cost_sync_interval_s
     )
     return EngineServices(
         store=parts.store,

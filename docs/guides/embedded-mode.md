@@ -165,6 +165,20 @@ allowance = await engine.payments.allowance(actor)
 
 `offerings` is public and takes no actor; `runners` still requires the `discover` permission. Retail
 pricing stays in your app.
+
+A job you do not wait for is an async job (ISS-26, [engine.md](../contracts/engine.md#async-jobs)).
+`jobs.submit` queues it and returns it `queued`; the engine's worker runs it once `start()` has
+run, and its stored result is read back by id:
+
+```python
+job = await engine.jobs.submit(
+    actor,
+    JobRequest(app="livepeer-example/echo", path="/echo", payload={"x": 1}, mode="async"),
+)
+job = await engine.jobs.get(actor, job.id)  # poll: queued, running, then its end
+result = await engine.jobs.result(actor, job.id)  # JobNotFinished until it has ended
+await engine.jobs.cancel(actor, job.id)  # only while it is queued
+```
 `cost` is wholesale network cost, and stays `pending` until Batteries reports the charge.
 
 Failures are Python exceptions, not HTTP statuses:
@@ -173,7 +187,8 @@ Failures are Python exceptions, not HTTP statuses:
 | --- | --- |
 | `AccessDenied` | The actor lacks the operation, or the resource belongs to someone else |
 | `JobFailed` | The job finished without a runner result; `job.failure.kind` names why (`not_provisioned`, `no_offering`, `refused`, `timeout`, …) |
-| `NoCapacity` | The engine or the app is at its concurrent-job limit (before any payment) |
+| `NoCapacity` | The engine or the app is at its concurrent-job limit (before any payment), or the async queue is full |
+| `JobNotFinished` / `ResultExpired` / `JobNotQueued` | An async job's result was asked for before the job ended, or after the engine stopped holding it (an immediate job's is never held); a cancel came after a worker claimed the job |
 | `OperationExists` / `OperationConflict` | The caller's `operation_ref` was used before: by a job that ran (read `exc.job`), or with another request. `OperationInProgress`, an `OperationExists`, means that job still runs: ask again shortly. A job that failed before any runner accepted the work is dispatched again instead ([rules](../contracts/engine.md#idempotency)) |
 
 ## Type against the role you use, and test without a network
@@ -208,6 +223,14 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   or `complete()`: `succeeded`; `aclose()`, `break`, `return` or an error: `abandoned`; a cancellation:
   the runner's settle window, as on the engine), and rejects a repeated
   `operation_ref` and a path with no leading `/`. It does not model admission, failover or payment.
+  `jobs.submit` queues an async job, and the test's own `await fake.jobs.advance()` runs what is queued
+  by its script; `result` and `cancel` answer by the engine's rules (ISS-26). Until ISS-26 the fake ran
+  `mode="async"` as an immediate job and served an immediate job's result: a test that relied on
+  either needs the change.
+- **`make_engine(...)`** queues async jobs and starts no loop: step the worker with
+  `await engine.jobs.worker.run_once()`, which claims what is queued, oldest first, and returns when
+  those jobs have ended. It runs one at a time (`async_workers=1`), because the in-memory store is one
+  connection.
 - **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
   fakes (`async with make_engine(runners=[...]) as engine:`). Its `FakeAllocationManager` holds a grant
   for the tenant `default`, so that tenant's actors can be allotted. For another tenant, supply a manager

@@ -41,12 +41,13 @@ from tests.unit.test_listeners import body_for, refused
 from tests.unit.test_tenant_from_credential import NAMED as TENANT
 from tests.unit.test_tenant_from_credential import SHORT_PATHS
 
-LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention"}
+LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention", "lpb-async-jobs"}  # the last: ISS-26
 JOBS = {
     ("POST", "/v1/jobs"),
     ("GET", "/v1/jobs"),
     ("GET", "/v1/jobs/{job_id}"),
     ("GET", "/v1/jobs/{job_id}/result"),
+    ("POST", "/v1/jobs/{job_id}/cancel"),
     ("POST", "/v1/jobs/{job_id}/usage"),
     ("GET", "/v1/jobs/{job_id}/cost"),
 }

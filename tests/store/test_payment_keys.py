@@ -102,7 +102,7 @@ async def test_the_migration_adds_the_table_and_every_existing_row_survives_it_a
         recorded = await store.get_operation("default", "operator", "allot-alice")
 
         await upgrade(engine)
-        assert await current_revision(engine) == head_revision() == "0015"
+        assert await current_revision(engine) == head_revision() == "0016"
         assert TABLE in await tables(engine)
         assert await rows(engine) == []  # an allocation allotted before has no payment key
         assert await store.get_actor("default", "alice") == alice

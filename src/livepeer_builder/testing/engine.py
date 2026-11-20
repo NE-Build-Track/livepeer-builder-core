@@ -43,12 +43,19 @@ async def make_engine(
     can be allotted; supply a manager of your own to add others (``add_grant``). ``supply`` replaces any
     of them; ``**settings`` override ``EngineSettings`` fields. The background loops are not started, so
     tests stay deterministic.
+
+    An async job (``jobs.submit``) therefore stays ``queued`` until the test steps the worker:
+    ``await engine.jobs.worker.run_once()`` claims queued jobs, oldest first, and returns when they have
+    ended. Here it runs one job a step (``async_workers=1``, where the engine's default is 4), because
+    the in-memory store is one connection and two jobs writing at once would share a transaction. To
+    run several at once, pass ``async_workers`` and a ``database_url`` that names a file.
     """
     values: dict[str, Any] = {
         "database_url": MEMORY_URL,
         "secret_key": generate_secret_key(),
         "log_json": False,
         "discovery_url": FAKE_DISCOVERY_URL,
+        "async_workers": 1,
         **settings,
     }
     manager = FakeAllocationManager()

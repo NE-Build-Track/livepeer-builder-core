@@ -69,6 +69,20 @@ erDiagram
         datetime updated_at
         integer evidence_version
     }
+    lpb_job_requests {
+        string job_id PK
+        json request
+        largebinary raw_body
+        json actor
+    }
+    lpb_job_results {
+        string job_id PK
+        largebinary content
+        text content_type
+        integer size_bytes
+        string sha256
+        datetime expires_at
+    }
     lpb_jobs {
         string id PK
         string tenant_id
@@ -88,6 +102,8 @@ erDiagram
         integer evidence_version
         string retry_of
         string superseded_by
+        datetime started_at
+        integer claims
     }
     lpb_operations {
         string tenant_id PK
@@ -148,6 +164,8 @@ erDiagram
     lpb_attempts ||--o{ lpb_payment_sessions : "attempt_number, job_id"
     lpb_jobs ||--o{ lpb_attempts : "job_id"
     lpb_jobs ||--o| lpb_cost_projections : "job_id"
+    lpb_jobs ||--o| lpb_job_requests : "job_id"
+    lpb_jobs ||--o| lpb_job_results : "job_id"
     lpb_actors ||--o{ lpb_jobs : "owns (tenant_id, actor_id)"
     lpb_actors ||--o| lpb_secrets : "secret_ref"
     lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"
@@ -237,6 +255,30 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `updated_at` | DATETIME | no |  |
 | `evidence_version` | INTEGER | no |  |
 
+## `lpb_job_requests`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `job_id` | VARCHAR(36) | no | PK |
+| `request` | JSON | no |  |
+| `raw_body` | BLOB | yes |  |
+| `actor` | JSON | no |  |
+
+## `lpb_job_results`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `job_id` | VARCHAR(36) | no | PK |
+| `content` | BLOB | no |  |
+| `content_type` | TEXT | no |  |
+| `size_bytes` | INTEGER | no |  |
+| `sha256` | VARCHAR(64) | no |  |
+| `expires_at` | DATETIME | yes |  |
+
+Indexes:
+
+- `lpb_job_results_expires` (expires_at)
+
 ## `lpb_jobs`
 
 | Column | Type | Null | Key |
@@ -259,6 +301,8 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `evidence_version` | INTEGER | no |  |
 | `retry_of` | VARCHAR(36) | yes |  |
 | `superseded_by` | VARCHAR(36) | yes |  |
+| `started_at` | DATETIME | yes |  |
+| `claims` | INTEGER | no |  |
 
 Indexes:
 

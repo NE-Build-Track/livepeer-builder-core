@@ -135,10 +135,11 @@ same test fails when a route declares a plain `datetime` query parameter.
 
 | Route | Permission |
 | --- | --- |
-| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
+| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read`. The result is an async job's stored answer ([engine.md](engine.md#results-of-an-async-job)) |
 | `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its tenant. Newest first, paged with `before` ([job history](engine.md#job-history)) |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
-| `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
+| `POST /v1/jobs/{id}/cancel` | `jobs.run` (not `jobs.read`): the job's owner cancels a queued async job ([engine.md](engine.md#cancel), ISS-26) |
+| `POST /v1/jobs` (including `mode=async`, which queues the job: [async jobs](engine.md#async-jobs)) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
 | `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor of the tenant (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `status` (allocations only), `allotted` and `limit`. A tenant admin or an auditor lists its own tenant; a clearinghouse admin lists any. The single read returns the allocation with its amounts (`AllocationRead`: the record, and `allowance` as the provider reports it, #168). In embedded mode `payments.list_actors` still takes `tenant_id=None`, which is every tenant for a clearinghouse admin and its own for anyone else |
@@ -160,8 +161,9 @@ from the app, so a route added later that names a tenant is held to the third ro
 2026 the third row was "another tenant's id in the path", the policy's refusal; a tenant credential
 can no longer name a tenant in a path at all.
 
-`GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
-come first.
+`GET /v1/jobs/{id}/result` and `POST /v1/jobs/{id}/cancel` say what they say of a job (409 while it
+has not ended, 410 for a result the engine does not hold) only to the job's owner: the two checks
+come first (ISS-26). Until then the result route answered 501.
 
 Enterprises replace the policy for teams, organization admins or RBAC by implementing `AccessPolicy`.
 

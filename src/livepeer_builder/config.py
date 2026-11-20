@@ -42,6 +42,13 @@ ASYMMETRIC_ALGORITHMS = frozenset(
 )
 
 
+# What a refused admin scope is, in the refusal's words. No refusal repeats the value it was given.
+_ORDINARY_SCOPE = (
+    "a scope ordinary tokens carry (an operation's name or a standard scope, as written or after "
+    "LPB_JWT_SCOPE_PREFIX)"
+)
+
+
 def _reserved(scope: str, prefix: str) -> bool:
     """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
     with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
@@ -63,7 +70,9 @@ def _runner_list_by_default(values: dict[str, Any]) -> dict[str, Any]:
 
 class EngineSettings(Contract):
     # A refused value is never echoed: several settings are secrets, or may carry one (signer_url). This
-    # hides it from str(error); _a_refusal_holds_no_value, below every rule, from every other form.
+    # hides it from str(error); _a_refusal_holds_no_value, below every rule, from every other form. That
+    # keeps each rule's words, so no rule's words quote a value given: they name the setting and say what
+    # it needs (tests/unit/test_settings_refusals.py tries every refusal with a value of its own).
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
@@ -251,8 +260,8 @@ class EngineSettings(Contract):
             valid = False
         if not valid:
             raise ValueError(
-                f"LPB_DISCOVERY_URL must be an http:// or https:// URL with a host, such as "
-                f"http://discovery:8939/discovery; got {value!r}"
+                "LPB_DISCOVERY_URL must be an http:// or https:// URL with a host and no whitespace, such "
+                "as http://discovery:8939/discovery"
             )
         return value
 
@@ -268,9 +277,11 @@ class EngineSettings(Contract):
     @field_validator("jwt_algorithms")
     @classmethod
     def _asymmetric(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        refused = sorted(set(value) - ASYMMETRIC_ALGORITHMS)
-        if not value or refused:
-            raise ValueError(f"jwt_algorithms takes asymmetric algorithms only; refused {refused}")
+        if not value or set(value) - ASYMMETRIC_ALGORITHMS:
+            raise ValueError(
+                "jwt_algorithms takes asymmetric algorithms only, at least one of: "
+                + ", ".join(sorted(ASYMMETRIC_ALGORITHMS, key=str.lower))
+            )
         return value
 
     @field_validator("jwt_token_types")
@@ -290,10 +301,7 @@ class EngineSettings(Contract):
         # A process paused longer than that (a frozen VM) is the lease's limit: only a provider idempotency
         # key would close it.
         if self.operation_stale_s < 4 * self.batteries_timeout_s:
-            raise ValueError(
-                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
-                f"LPB_BATTERIES_TIMEOUT_S ({self.batteries_timeout_s:g})"
-            )
+            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_BATTERIES_TIMEOUT_S")
         return self
 
     @model_validator(mode="after")
@@ -316,10 +324,7 @@ class EngineSettings(Contract):
                 "or credential of theirs"
             )
         if self.operation_stale_s < 4 * self.clearinghouse_timeout_s:  # as for Batteries, just above
-            raise ValueError(
-                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
-                f"LPB_CLEARINGHOUSE_TIMEOUT_S ({self.clearinghouse_timeout_s:g})"
-            )
+            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
         return self
 
     @model_validator(mode="after")
@@ -340,8 +345,8 @@ class EngineSettings(Contract):
                 else "a payment clearinghouse is not a tenant of another one"
             )
             raise ValueError(
-                f"{', '.join(named)} cannot be set with LPB_ROLE={self.role}: {why}. Set LPB_ROLE=work "
-                "to use a payment clearinghouse, or remove them"
+                f"{', '.join(named)} cannot be set unless LPB_ROLE=work: {why}. Set LPB_ROLE=work to use "
+                "a payment clearinghouse, or remove them"
             )
         if not self.runs_jobs and self.http_private_port is None:
             raise ValueError(
@@ -386,8 +391,8 @@ class EngineSettings(Contract):
     def _two_listeners_have_two_addresses(self) -> "EngineSettings":
         if (self.http_private_host, self.http_private_port) == (self.http_host, self.http_port):
             raise ValueError(
-                f"LPB_HTTP_PRIVATE_PORT ({self.http_private_port}) is the public listener's port on the "
-                "same host: the private listener needs an address of its own"
+                "LPB_HTTP_PRIVATE_PORT is the public listener's port (LPB_HTTP_PORT) on the same host: the "
+                "private listener needs an address of its own"
             )
         return self
 
@@ -405,15 +410,12 @@ class EngineSettings(Contract):
                         f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
                     )
         if self.jwt_admin_scope is not None and _reserved(self.jwt_admin_scope, self.jwt_scope_prefix):
-            raise ValueError(
-                f"jwt_admin_scope {self.jwt_admin_scope!r} is a scope ordinary tokens carry, "
-                "so every user would be an admin"
-            )
+            raise ValueError(f"jwt_admin_scope is {_ORDINARY_SCOPE}, so every user would be an admin")
         read = self.jwt_admin_read_scope
         if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
             raise ValueError(
-                f"jwt_admin_read_scope {read!r} is a scope ordinary tokens carry, or the admin scope, "
-                "so it would not mark a read-only admin"
+                f"jwt_admin_read_scope is {_ORDINARY_SCOPE}, or the admin scope, so it would not mark a "
+                "read-only admin"
             )
         return self
 
@@ -442,7 +444,8 @@ class EngineSettings(Contract):
         """A refusal names each setting, with its type and its words, and holds no value given (#162
         review). ``hide_input_in_errors`` hides values from ``str(error)`` only: ``errors()`` and
         ``json()`` keep them, and a whole-settings rule's or a missing setting's is every setting given,
-        credentials too. A rule's exception is kept as its words: its traceback holds the settings."""
+        credentials too. A rule's exception is kept as its words: its traceback holds the settings. The
+        words are the rule's own, so a rule that quoted what it refused would put the value back."""
         try:
             return handler(values)
         except ValidationError as refused:

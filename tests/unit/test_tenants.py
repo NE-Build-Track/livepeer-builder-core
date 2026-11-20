@@ -448,6 +448,30 @@ async def test_a_tenant_admin_changes_no_admin_key_and_manages_its_tenants_other
     assert (await client.post(one.path("/keys"), json=named, headers=house.admin)).status_code == 422
 
 
+async def test_a_key_rotation_repeated_under_another_tenants_path_is_400_and_shows_no_key(
+    house: House, store: SqlStore
+) -> None:
+    """The repeat of a rotation is answered from its record. Under another tenant's path it reads as
+    missing, as the first run there would have (#165 review): a clearinghouse admin may name any tenant,
+    so only the key's own tenant stops it."""
+    client, one, two = house.client, house.one, house.two
+    issued = await client.post(
+        one.path("/keys"), json={"actor_id": "dashboard", "operation_ref": "aud"}, headers=one.admin
+    )
+    auditor = issued.json()["key"]["key_id"]
+    rotate = {"operation_ref": "rotate-aud"}
+    first = await client.post(one.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    assert first.status_code == 201 and first.json()["token"]
+    elsewhere = await client.post(two.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    assert elsewhere.status_code == 400 and first.json()["key"]["key_id"] not in elsewhere.text
+    again = await client.post(one.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    assert again.headers["Idempotent-Replayed"] == "true"
+    assert (again.json()["key"], again.json()["token"]) == (first.json()["key"], None)
+    assert (
+        len(await store.list_access_keys(one.id)) == 3
+    )  # its admin key, the auditor key and its replacement
+
+
 # -- the work set -------------------------------------------------------------------------------------------
 
 

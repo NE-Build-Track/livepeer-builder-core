@@ -149,12 +149,13 @@ class BatteriesClient:
 
     async def escrow_accounts(self) -> tuple[EscrowAccount, ...]:
         """The wallet's deposit and reserve (``EscrowSource``, #167): Batteries' escrow report, which
-        needs ``escrow.read``. A credential without it is told so: the grants credential had no use for
-        that permission before."""
+        needs ``escrow.read``. A credential without it (403) is told so: the grants credential had no
+        use for that permission before. A token Batteries does not know (401) is not: no permission
+        mends it, and its failure passes through as it is."""
         try:
             response = await self._send("GET", "/v1/escrow/report")
         except ProviderError as exc:
-            if exc.status_code not in (401, 403):
+            if exc.status_code != 403:
                 raise
             needed = f"{exc.message}: the grants credential needs the permission escrow.read"
             raise ProviderError(exc.status_code, needed) from exc

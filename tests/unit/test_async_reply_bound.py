@@ -75,24 +75,25 @@ async def test_a_bounded_call_never_asks_for_the_whole_reply_at_once(
     net: Net, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``ClientResponse.read()`` holds the whole body, whatever its length: the bounded call reads the
-    body piece by piece and never calls it for the runner's answer."""
+    body piece by piece and never calls it, for the runner's answer or for the 402 challenge before it
+    (tests/unit/test_runner_error_body.py). An immediate call reads its answer at once, and only that."""
     read = aiohttp.ClientResponse.read
-    whole: list[str] = []
+    whole: list[tuple[str, int]] = []
 
     async def noted(response: aiohttp.ClientResponse) -> bytes:
-        whole.append(response.url.path)
+        whole.append((response.url.path, response.status))
         return await read(response)
 
     monkeypatch.setattr(aiohttp.ClientResponse, "read", noted)
     net.replies = [Reply(chunks=PIECES), Reply(chunks=PIECES)]
     assert (await bounded(net, 10)).size_bytes == 100
-    assert "/app/run" in whole  # the 402 challenge of that path: an error's body, read as before
     answers = [entry for entry in net.log if entry.startswith("request ")]
-    assert len(answers) == 1 and len([path for path in whole if path == "/app/run"]) == 1
+    assert len(answers) == 1 and "challenge m-1" in net.log
+    assert [entry for entry in whole if entry[0] == "/app/run"] == []  # neither the 402 nor the answer
 
     request = JobRequest(app=APP, path="/run", payload={"a": 1})
     reply = await SdkRunnerTransport(net.url).call(net.runner(), request, "lpg_k")
-    assert len([path for path in whole if path == "/app/run"]) == 3  # an immediate call: read at once
+    assert [entry for entry in whole if entry[0] == "/app/run"] == [("/app/run", 200)]  # read at once
     assert (reply.content, reply.size_bytes, reply.sha256) == (WHOLE, None, None)  # and as it always was
 
 

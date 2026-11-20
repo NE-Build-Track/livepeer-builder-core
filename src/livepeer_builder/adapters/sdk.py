@@ -17,13 +17,9 @@ from livepeer_gateway.remote_signer import get_signer_info
 from pydantic import SecretStr
 
 from livepeer_builder.adapters.discovery_inventory import read_inventory
+from livepeer_builder.adapters.reply_body import json_object
 from livepeer_builder.adapters.runner_address import runner_address
-from livepeer_builder.adapters.runner_call import (
-    PaidRequest,
-    PaymentEvents,
-    SdkRunnerStream,
-    json_object,
-)
+from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents, SdkRunnerStream
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
 from livepeer_builder.adapters.signer_forward import HttpSignerForwarder
 from livepeer_builder.contracts import (

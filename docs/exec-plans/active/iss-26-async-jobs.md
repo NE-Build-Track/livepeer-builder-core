@@ -51,7 +51,9 @@ From ISS-26, as amended on 13 November 2026.
   empty queue over that job. A woken loop looks at the queue once whatever the count says: a submit and
   the end of a job are each a reason by themselves. A step cancelled while its claim was being written
   resolves that job at once (back to the queue, or `failed` after its third claim) instead of leaving it
-  `running` until a restart; the admission slot was never lost there.
+  `running` until a restart; the admission slot was never lost there. A runner's error answer and its
+  402 challenge are no longer read whole: 16 KiB of an error (its first 4096 characters are kept, as
+  before) and 64 KiB of a challenge, on the call path immediate jobs and streams share.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log

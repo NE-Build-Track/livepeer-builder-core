@@ -363,6 +363,12 @@ allowance exhausted (HTTP 402)") and `status_code` is the signer's status, when 
 signer's URL and its own text go to the engine log only, and `body` is never the signer's
 ([payments.md](payments.md#who-answers-what)).
 
+`body` is the first 4096 characters of a runner's error answer. The engine reads no more of an error
+answer than the 16 KiB that hold them, for immediate jobs, async jobs and streams alike, so a runner
+cannot make a call hold a long error. A runner's 402 payment challenge is read whole up to 64 KiB, many
+times the size of a real one (about 1 KiB). A longer 402 is not parsed and nothing is signed: the attempt
+fails `http` (402), unpaid, as a challenge the engine cannot read does.
+
 A job's `failure` is its **last** attempt's. A job that failed over keeps every attempt, and whether
 the same `operation_ref` runs again depends on all of them ([the closed list](#idempotency)), not on
 the last kind alone.

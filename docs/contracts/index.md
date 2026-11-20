@@ -390,8 +390,9 @@ were. There is no migration.
 ISS-26 built async jobs (D69): a job queued in the engine's own database, run by a worker in the
 engine's process, and read back by id with its stored result ([engine.md](engine.md#async-jobs)). The
 database migrates to revision 0016 ([persistence.md](persistence.md#migrations)). An engine that is sent
-no async job runs as before, with two exceptions: results retention is on by default, and the result
-route of an immediate job answers 410, not 501.
+no async job runs as before, with three exceptions: results retention is on by default, the result
+route of an immediate job answers 410, not 501, and a runner's very long error answer or 402 is no
+longer read to its end (the last row but one).
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -413,6 +414,7 @@ route of an immediate job answers 410, not 501.
 | `make_engine` (testing) | | `async_workers=1`; step the worker with `await engine.jobs.worker.run_once()` |
 | `lpb purge`, `BuilderEngine.purge()` | `jobs_deleted`, `usage_rows_deleted` | and `results_deleted` |
 | Background loops | | `lpb-async-jobs`, in the `both` and `work` roles |
+| A runner's error answer or 402 payment challenge, for every kind of job | Read whole, whatever its length | An error answer is read for 16 KiB: `failure.body` is its first 4096 characters, as before, and an error still arriving at the job's deadline now fails with the runner's status, not `timeout`. A 402 is read up to 64 KiB; a longer one is refused unsigned, `http` (402) ([engine.md](engine.md#failures)) |
 | The log | | `jobs.async_step_failed`, `jobs.async_failed`, `jobs.async_unclaim_failed`, `jobs.async_drained`, `jobs.queue_expired`, `jobs.finish_missed`; `jobs.recovered` gains `requeued` |
 
 **Before you start the new release:**

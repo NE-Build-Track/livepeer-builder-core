@@ -47,7 +47,7 @@ from livepeer_gateway.remote_signer import (
 )
 
 from livepeer_builder.adapters.call_timer import CallTimer
-from livepeer_builder.adapters.reply_body import ReplyBody, read_reply
+from livepeer_builder.adapters.reply_body import CHALLENGE_LIMIT, ReplyBody, answer_text, read_reply
 from livepeer_builder.adapters.runner_address import as_built, origin
 from livepeer_builder.adapters.runner_content_type import content_type_as_sent, headers_as_sent
 from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
@@ -272,8 +272,7 @@ class PaidRequest:
             if response.status < 300 or (self._return_http_errors and response.status != 402):
                 return response, funding
             await stop_funding(funding)
-            text = (await response.read()).decode(errors="replace")
-            response.release()
+            text, whole = await answer_text(response)
             if response.status != 402:
                 kind: AttemptOutcome = "refused" if response.status == 503 else "http"
                 message = f"HTTP {response.status} from {self.url}"
@@ -292,7 +291,7 @@ class PaidRequest:
                     f"{self.url} asks for payment but advertised {no_ceiling(self._rate)}",
                     status_code=402,
                 )
-            challenge = self._challenge(text)
+            challenge = self._challenge(text, whole)
         raise self._events.error("http", f"{self.url} kept asking for payment", status_code=402)
 
     async def _signer_identity(self, signer_url: str) -> SignerMaterial:
@@ -380,7 +379,10 @@ class PaidRequest:
             max_price=self._max_price,
         )
 
-    def _challenge(self, body: str) -> LivePaymentChallenge:
+    def _challenge(self, body: str, whole: bool = True) -> LivePaymentChallenge:
+        if not whole:  # only its start was read: it is not parsed, and nothing is signed
+            message = f"payment challenge from {self.url} is over {CHALLENGE_LIMIT} bytes"
+            raise self._events.error("http", message, status_code=402)
         with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(body)
             if isinstance(data, dict):
@@ -486,14 +488,3 @@ async def stop_funding(task: asyncio.Task[Any] | None) -> None:
     await asyncio.wait([task])
     if not task.cancelled():
         task.exception()  # retrieved, so asyncio does not warn about it
-
-
-def json_object(body: bytes, content_type: str) -> dict[str, Any] | None:
-    mime = content_type.split(";", 1)[0].strip().lower()
-    if not (mime.endswith("/json") or mime.endswith("+json")):
-        return None
-    try:
-        data = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None

@@ -238,3 +238,30 @@ async def test_a_cut_claim_that_cannot_be_resolved_is_logged_and_the_step_report
 
     assert engine.admission.running == 0
     assert "jobs.async_unclaim_failed" in [getattr(record, "event", None) for record in caplog.records]
+
+
+async def test_a_job_put_back_by_a_cut_claim_wakes_the_loop(
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The queue is also driven by hand here, beside the loop. The loop sleeps on a count of zero and
+    polls once an hour, so only a wake makes it look: a cut claim that puts its job back is one, as the
+    end of a job is."""
+    engine = await make_engine(async_poll_s=3600)
+    await allot(engine, alice)
+    with monkeypatch.context() as untold:
+        untold.setattr(engine.jobs.worker, "queued", lambda job: None)  # the loop knows of no waiting job
+        job = await engine.jobs.submit(alice, queued())
+    loop = asyncio.create_task(engine.jobs.worker.run(asyncio.Event()))
+    transport.steps = [echo]
+    try:
+        await claim_cut_short(engine, monkeypatch)
+
+        await calls(transport, 1)  # the loop found the job that was put back
+        await until(lambda: engine.admission.running == 0, "the job ended")
+        assert (await engine.jobs.get(alice, job.id)).state == "succeeded"
+    finally:
+        await engine.jobs.worker.drain()
+        await loop

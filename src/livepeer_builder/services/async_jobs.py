@@ -252,7 +252,8 @@ class AsyncJobWorker:
         it: it is resolved as a job stopped before its first attempt is (``_stopped``), back to the queue
         while it has claims left. A job this worker holds was claimed by another step and is left alone:
         it is running. A failure here is logged, not raised: what stopped the claim is what the step
-        reports, and a restart resolves a job this could not reach."""
+        reports, and a restart resolves a job this could not reach. The loop is woken at the end, as it
+        is when a job ends: the job may be waiting again, whatever the count says."""
         try:
             job = None if job_id in self._claimed else await self._store.get_job(job_id)
             if job is not None and job.state == "running":
@@ -264,6 +265,7 @@ class AsyncJobWorker:
             )
         finally:
             await slot.aclose()
+            self._wake.set()  # the job may wait again, and a slot is free: the loop looks
 
     def _start(self, claim: "Claimed") -> asyncio.Task[None]:
         task = asyncio.create_task(self._work(claim), name="lpb-async-job")

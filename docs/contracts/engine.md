@@ -771,8 +771,9 @@ written.
 A claim is committed before the worker has its answer. A step that is cancelled in between, or whose
 claim fails after its commit, does not leave the job `running` with nobody running it: nothing went out
 for it, so it is resolved at once as a job stopped before its first attempt is, back to `queued` while it
-was claimed fewer than 3 times, then `failed`. If that write fails too it is logged
-(`jobs.async_unclaim_failed`), and the next start resolves the job as the table says.
+was claimed fewer than 3 times, then `failed`. The worker is woken, so a job put back is looked at
+again at once. If that write fails too it is logged (`jobs.async_unclaim_failed`), and the next start
+resolves the job as the table says.
 
 ### Polling
 

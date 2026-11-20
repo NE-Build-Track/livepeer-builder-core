@@ -22,7 +22,7 @@ from livepeer_builder.adapters.batteries import (
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_call import network_kind
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.errors import (
@@ -421,25 +421,19 @@ def test_network_errors_are_classified_through_their_causes() -> None:
 
 
 async def test_secret_store_edges(store: SqlStore, clock: FixedClock) -> None:
-    configured = SettingsSecretStore({"k": "v"})
-    with pytest.raises(NotFound):
-        configured.ref("missing")
-    with pytest.raises(NotFound):
-        await configured.get(SecretRef(ref="db:other"))
-    await configured.delete(configured.ref("k"))  # configuration owns it: a no-op
-    assert await configured.get(configured.ref("k")) == "v"
-
     database = EncryptedDbSecretStore(store, generate_secret_key(), clock)
     with pytest.raises(NotFound):
         await database.get(SecretRef(ref="db:nope"))
 
-    no_key = RoutingSecretStore(configured, None)
+    no_key = RoutingSecretStore(None)
     with pytest.raises(InvalidRequest, match="LPB_SECRET_KEY"):
         await no_key.get(SecretRef(ref="db:x"))
     await no_key.delete(SecretRef(ref="db:x"))  # nothing to delete without a database store
 
-    routed = RoutingSecretStore(configured, database)
-    ref = await routed.put("n", "secret")
-    await routed.delete(ref)
+    built_in = RoutingSecretStore(database)
+    ref = await built_in.put("n", "secret")
+    await built_in.delete(SecretRef(ref="vault:elsewhere"))  # not one of its own: nothing is deleted
+    assert await built_in.get(ref) == "secret"
+    await built_in.delete(ref)
     with pytest.raises(NotFound):
-        await routed.get(ref)
+        await built_in.get(ref)

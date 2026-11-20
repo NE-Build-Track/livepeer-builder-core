@@ -372,7 +372,6 @@ classDiagram
         +async delete(ref) None
     }
     class PaymentsService {
-        +mode per_actor or per_application
         -manager AllocationManager?
         -secrets SecretStore
         -store ActorRepo
@@ -402,7 +401,6 @@ classDiagram
         GET /v1/usage
     }
     class RoutingSecretStore
-    class SettingsSecretStore
     class EncryptedDbSecretStore {
         Fernet, lpb_secrets
     }
@@ -420,7 +418,6 @@ classDiagram
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
     SecretStore <|.. RoutingSecretStore
-    RoutingSecretStore o-- SettingsSecretStore
     RoutingSecretStore o-- EncryptedDbSecretStore
 ```
 

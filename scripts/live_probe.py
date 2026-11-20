@@ -134,8 +134,10 @@ async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_
 
 async def cross_actor(probe: Probe, a: str, b: str) -> None:
     app = probe_app(probe.run)
-    # A POST /v1/jobs returns only after the runner call, and in per_application mode the shared key pays
-    # for any actor: a job for an advertised app is paid on the POST itself. So none is sent then (#83).
+    # A POST /v1/jobs returns only after the runner call. The probe's actors have no allocation, so a job
+    # for an advertised app fails not_provisioned, not the no_offering the checks below expect. An engine
+    # from before per_actor was the only allocation mode (#162) may hold a shared key, which pays for any
+    # actor on the POST itself. So none is sent then (#83).
     offered = await probe.call("GET", "/v1/offerings", None, params={"app": app})
     listing = offered.json() if offered.status_code == 200 else None
     if not isinstance(listing, list) or not all(isinstance(item, dict) for item in listing):

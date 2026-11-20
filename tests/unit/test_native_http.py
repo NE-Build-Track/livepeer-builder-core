@@ -17,6 +17,7 @@ from livepeer_builder.testing import (
     make_engine,
     runner,
 )
+from tests.conftest import provision
 
 # FakeEngine checks permissions before a job, as the engine does
 BUILDER = ActorContext(actor_id="a", permissions=frozenset({"jobs.run", "jobs.read"}))
@@ -82,16 +83,11 @@ async def test_raw_identity_and_headers_through_real_engine():
     transport = ScriptedStreamTransport(
         opens=[StreamScript(events=[b"raw"], headers=(("X-Trace", "one"), ("X-Trace", "two")))]
     )
-    async with make_engine(
-        runners=[runner("chat")],
-        supply=EngineSupply(transport=transport),
-        allocation_mode="per_application",
-        shared_payment_key="fixture",
-        shared_allocation_id="fixture",
-    ) as engine:
+    async with make_engine(runners=[runner("chat")], supply=EngineSupply(transport=transport)) as engine:
         actor = ActorContext(
             actor_id="a", application_id="app", permissions=frozenset({"jobs.run", "jobs.read"})
         )
+        await provision(engine, actor)
         request = raw_request(operation_ref="op")
         stream = await engine.jobs.streaming.stream(actor, request)
         async with stream:
@@ -115,16 +111,11 @@ async def test_fake_engine_exposes_headers():
 @pytest.mark.parametrize("ending", ["eof", "complete", "disconnect"])
 async def test_returned_http_errors_are_failed_jobs_not_successes(status, ending):
     transport = ScriptedStreamTransport(opens=[StreamScript(events=[b"backend error"], status_code=status)])
-    async with make_engine(
-        runners=[runner("chat")],
-        supply=EngineSupply(transport=transport),
-        allocation_mode="per_application",
-        shared_payment_key="fixture",
-        shared_allocation_id="fixture",
-    ) as engine:
+    async with make_engine(runners=[runner("chat")], supply=EngineSupply(transport=transport)) as engine:
         actor = ActorContext(
             actor_id="a", application_id="app", permissions=frozenset({"jobs.run", "jobs.read"})
         )
+        await provision(engine, actor)
         stream = await engine.jobs.streaming.stream(actor, raw_request(return_http_errors=True))
         async with stream:
             if ending == "eof":

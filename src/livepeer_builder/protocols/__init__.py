@@ -226,9 +226,9 @@ class UsageSource(Protocol):
 
 
 class AllowanceReader(Protocol):
-    """Finds the allocation that pays for an actor (or the application) and reads its allowance."""
+    """Finds the allocation that pays for an actor and reads its allowance."""
 
-    async def allocation_for(self, application_id: str, actor_id: str | None) -> str | None: ...
+    async def allocation_for(self, application_id: str, actor_id: str) -> str | None: ...
 
     async def read_allowance(self, allocation_id: str) -> Allowance: ...
 

@@ -1,9 +1,8 @@
-"""Payments: allocation modes, explicit provisioning, and the signer credential (docs/contracts/payments.md).
+"""Payments: explicit provisioning and the signer credential (docs/contracts/payments.md).
 
-- ``per_application``: one allocation and key, configured by the operator. No provisioning calls.
-- ``per_actor``: one allocation and key per actor, created only by an explicit admin command.
-  An unprovisioned actor fails *before payment* with NotProvisioned. There is no fallback to a
-  shared key and no automatic provisioning.
+Each actor has its own allocation and key (``per_actor``, the only allocation mode: D82), created only
+by an explicit admin command. An unprovisioned actor fails *before payment* with NotProvisioned. There
+is no shared key to fall back to and no automatic provisioning.
 
 Every provider write that moves money carries an idempotency key derived from
 (engine_id, operation, step), so a retried command never applies twice.
@@ -15,7 +14,6 @@ from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import (
     ActorContext,
-    AllocationMode,
     AllocationStatus,
     Allowance,
     Currency,
@@ -61,7 +59,6 @@ class PaymentsService:
     def __init__(
         self,
         *,
-        mode: AllocationMode,
         store: ActorRepo,
         secrets: SecretStore,
         policy: AccessPolicy,
@@ -71,10 +68,7 @@ class PaymentsService:
         manager: AllocationManager | None = None,
         grants: AllocationManager | None = None,
         currency: Currency = "USD",
-        shared_secret: SecretRef | None = None,
-        shared_allocation_id: str | None = None,
     ) -> None:
-        self.mode = mode
         self._store = store
         self._writes = ActorWrites(store, clock)
         self._secrets = secrets
@@ -88,19 +82,10 @@ class PaymentsService:
             GrantDesk(grants, policy, currency, ledger, engine_id) if grants is not None else None
         )
         self._currency = currency
-        self._shared_secret = shared_secret
-        self._shared_allocation_id = shared_allocation_id
 
     # -- CredentialResolver ---------------------------------------------------------------------
 
     async def credential(self, actor: ActorContext) -> PaymentCredential:
-        if self.mode == "per_application":
-            if self._shared_secret is None:
-                return PaymentCredential(token=None, allocation_id=None)  # unpaid (offchain)
-            return PaymentCredential(
-                token=await self._secrets.get(self._shared_secret),
-                allocation_id=self._shared_allocation_id,
-            )
         provisioned = await self._store.get_actor(actor.application_id, actor.actor_id)
         if provisioned is None or provisioned.status == "revoked":
             raise NotProvisioned(f"actor {actor.actor_id!r} has no allocation; an admin must provision it")
@@ -111,9 +96,7 @@ class PaymentsService:
 
     # -- AllowanceReader --------------------------------------------------------------------------
 
-    async def allocation_for(self, application_id: str, actor_id: str | None) -> str | None:
-        if self.mode == "per_application" or actor_id is None:
-            return self._shared_allocation_id
+    async def allocation_for(self, application_id: str, actor_id: str) -> str | None:
         provisioned = await self._store.get_actor(application_id, actor_id)
         return provisioned.allocation_id if provisioned else None
 
@@ -131,8 +114,6 @@ class PaymentsService:
         finished while it was at the provider (``PaymentKeys.overtaken``; #115, C4).
         """
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS)
-        if self.mode != "per_actor":
-            raise InvalidRequest("provisioning applies only in per_actor mode")
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
         manager = self._require_manager()  # refused before the ledger: nothing was sent
@@ -387,8 +368,6 @@ class PaymentsService:
         chosen = requested.strip()
         if chosen:
             return chosen
-        if self.mode != "per_actor":
-            return ""
         provisioned = await self._store.get_actor(actor.application_id, actor.actor_id)
         if provisioned is None or provisioned.status == "revoked" or not provisioned.grant_id:
             return ""

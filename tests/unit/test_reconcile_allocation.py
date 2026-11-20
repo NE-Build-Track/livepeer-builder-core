@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import update
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.contracts import (
@@ -25,6 +26,7 @@ from livepeer_builder.errors import NotFound
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import AllocationCostSnapshot
 from livepeer_builder.store import SqlStore
+from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
 from tests.conftest import EngineFactory
 
@@ -140,35 +142,37 @@ async def test_an_actor_with_one_allocation_lists_no_other(
     assert report.other_allocations == () and report.balanced is True
 
 
-async def test_a_shared_allocation_counts_only_what_it_paid(
-    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
+async def test_a_shared_allocation_of_the_removed_mode_still_reconciles_when_it_is_named(
+    make_engine: EngineFactory, store: SqlStore, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport, usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
-    """``per_application``: the operator replaced the shared allocation. Each one reconciles on its own,
-    over every actor of the application."""
-    one_eth = Money(amount=Decimal(1), currency="ETH")
-    old, new = [
-        (await manager.create_key_for_grant("grant_1", name, one_eth, name)).allocation_id for name in "ab"
-    ]
-    before = await make_engine(
-        allocation_mode="per_application", shared_payment_key="lpg_a", shared_allocation_id=old
-    )
+    """An engine in the removed ``per_application`` mode stored every actor's attempts under its one shared
+    allocation. That allocation is no actor's, so it is never the current one, and it still reconciles
+    when it is named, over every actor of the application: what was paid before the upgrade can still be
+    accounted for (#162)."""
+    engine = await make_engine(default_currency="ETH")
+    for actor_id in ("alice", "bob"):
+        mine = provision(f"provision-{actor_id}").model_copy(update={"actor_id": actor_id})
+        await engine.payments.provision(admin, mine)
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-1",))]
-    await before.jobs.run(alice, JobRequest(app=APP))
-    engine = await make_engine(
-        allocation_mode="per_application", shared_payment_key="lpg_b", shared_allocation_id=new
-    )
+    await engine.jobs.run(alice, JobRequest(app=APP))
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-2",))]
     await engine.jobs.run(bob, JobRequest(app=APP))
-    usage.rows = [row("1", "0.2", old, "m-1"), row("2", "0.3", new, "m-2")]
+    one_eth = Money(amount=Decimal(1), currency="ETH")
+    shared = (await manager.create_key_for_grant("grant_1", "shared", one_eth, "shared")).allocation_id
+    async with store.engine.begin() as conn:  # the attempts as the old engine stored them
+        await conn.execute(update(t.attempts).values(allocation_id=shared))
+    usage.rows = [row("1", "0.2", shared, "m-1"), row("2", "0.3", shared, "m-2")]
     await engine.costs.sync_once()
-    manager.allocations[old].spent, manager.allocations[new].spent = Decimal("0.2"), Decimal("0.3")
+    manager.allocations[shared].spent = Decimal("0.5")
 
-    current = await engine.costs.reconcile(admin, "default", None)
-    assert (current.allocation_id, current.other_allocations) == (new, (old,))
-    assert counted(current) == (Decimal("0.3"), Decimal("0")) and current.balanced is True
-    earlier = await engine.costs.reconcile(admin, "default", None, old)
-    assert counted(earlier) == (Decimal("0.2"), Decimal("0")) and earlier.balanced is True
+    with pytest.raises(NotFound, match="no allocation pays"):
+        await engine.costs.reconcile(admin, "default", None)  # nothing is the application's allocation
+    report = await engine.costs.reconcile(admin, "default", None, shared)
+    assert (report.actor_id, report.allocation_id) == (None, shared)
+    assert counted(report) == (Decimal("0.5"), Decimal("0")) and report.balanced is True
+    alices = await engine.costs.reconcile(admin, "default", "alice")  # her own allocation paid nothing
+    assert alices.other_allocations == (shared,) and counted(alices) == (Decimal("0"), Decimal("0"))
 
 
 async def test_the_rest_route_takes_the_allocation_as_a_typed_query_id(

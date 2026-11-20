@@ -139,10 +139,9 @@ async def test_readyz_without_a_credential_serves_codes_not_exception_text(
         "cost_sync_error",
         "cost_sync_set_aside",  # a count (#114, C13)
         "running_jobs",
-        "allocation_mode",
         "version",
-    }
-    assert (health["running_jobs"], health["allocation_mode"]) == (0, "per_actor")
+    }  # no allocation_mode: per_actor is the only one (D82, #162)
+    assert health["running_jobs"] == 0
     assert health["version"] == failing_engine.health().version
 
 

@@ -3,7 +3,6 @@
 from datetime import datetime
 
 from livepeer_builder.contracts.common import Contract, FailureCode, SourceFailureCode
-from livepeer_builder.contracts.payments import AllocationMode
 
 
 class EngineHealth(Contract):
@@ -17,7 +16,6 @@ class EngineHealth(Contract):
     # cost sync of this process
     cost_sync_set_aside: int | None = None
     running_jobs: int
-    allocation_mode: AllocationMode
     version: str
 
 

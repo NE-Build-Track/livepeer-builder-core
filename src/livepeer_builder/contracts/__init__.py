@@ -66,7 +66,6 @@ from livepeer_builder.contracts.operations import (
     OperationState,
 )
 from livepeer_builder.contracts.payments import (
-    AllocationMode,
     AllocationStatus,
     Allowance,
     FundRequest,
@@ -88,7 +87,6 @@ __all__ = [
     "OPERATION_REPLAYED",
     "AccessKey",
     "ActorContext",
-    "AllocationMode",
     "AllocationStatus",
     "Allowance",
     "Attempt",

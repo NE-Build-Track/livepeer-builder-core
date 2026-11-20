@@ -1,5 +1,5 @@
-"""Payment contracts: allocation modes, explicit provisioning, allowance, and whether an advertised price can
-be paid (docs/contracts/payments.md)."""
+"""Payment contracts: explicit provisioning, allowance, and whether an advertised price can be paid
+(docs/contracts/payments.md)."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -21,7 +21,6 @@ from livepeer_builder.contracts.operations import OperationRef
 if TYPE_CHECKING:
     from livepeer_builder.contracts.discovery import PriceInfo
 
-AllocationMode = Literal["per_application", "per_actor"]
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
 
 

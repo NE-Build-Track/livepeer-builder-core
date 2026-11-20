@@ -87,7 +87,7 @@ flowchart TB
     subgraph Impl["adapters/ and store/ — implementations"]
         direction LR
         AAuth["ApiKeyAuthenticator<br/>AuthenticatorChain"]
-        ASec["RoutingSecretStore<br/>(settings + Fernet DB)"]
+        ASec["RoutingSecretStore<br/>(Fernet DB)"]
         ASdk["HttpDiscoverySource<br/>SdkRunnerTransport"]
         ABat["BatteriesClient<br/>BatteriesUsageSource"]
         SQL["SqlStore + Alembic<br/>backup · retention"]

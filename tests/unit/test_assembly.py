@@ -11,7 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livepeer_builder import BuilderEngine, EngineSettings, generate_secret_key
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import ActorContext, AuthRequest, Runner
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import DiscoverySource
@@ -127,10 +127,9 @@ async def test_per_actor_with_a_provider_and_the_built_in_store_needs_the_secret
     [
         ({**PROVIDER_SETTINGS, "secret_key": generate_secret_key()}, {}),  # the key is set
         ({}, {}),  # no provider: provisioning is refused before any call
-        ({**PROVIDER_SETTINGS, "allocation_mode": "per_application", "shared_payment_key": "lpg_k"}, {}),
         (PROVIDER_SETTINGS, {"secret_store": MemorySecretStore()}),  # a plug-in store: asked per request
     ],
-    ids=["key", "no-provider", "per-application", "plug-in-store"],
+    ids=["key", "no-provider", "plug-in-store"],
 )
 async def test_an_engine_that_can_keep_its_payment_keys_starts(
     store: SqlStore, clock: FixedClock, values: dict[str, object], supplied: dict[str, object]
@@ -182,7 +181,7 @@ async def test_the_built_in_store_supplied_without_its_database_needs_the_secret
         store=store,
         clock=clock,
         allocation_manager=FakeAllocationManager(),
-        secret_store=RoutingSecretStore(SettingsSecretStore({}), None),
+        secret_store=RoutingSecretStore(None),
     )
     with pytest.raises(ValueError, match="LPB_SECRET_KEY"):
         await BuilderEngine.create(settings(), supply=supply)
@@ -198,11 +197,7 @@ async def test_a_decorated_default_discovery_source_is_the_configured_one() -> N
     app = web.Application()
     app.router.add_get("/discovery", inventory)
     async with TestServer(app) as discovery:
-        configured = settings(
-            discovery_url=str(discovery.make_url("/discovery")),
-            signer_url="http://signer",
-            shared_payment_key="lpg_k",
-        )
+        configured = settings(discovery_url=str(discovery.make_url("/discovery")), signer_url="http://signer")
         recording: list[Recording] = []
 
         def decorate(parts: EngineParts) -> EngineParts:

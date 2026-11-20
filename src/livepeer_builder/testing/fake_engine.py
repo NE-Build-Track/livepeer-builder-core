@@ -434,7 +434,6 @@ class FakeEngine:
             cost_sync_at=None,
             cost_sync_error=None,
             running_jobs=0,
-            allocation_mode="per_actor",
             version="fake",
         )
         self.started = False

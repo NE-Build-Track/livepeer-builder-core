@@ -119,15 +119,6 @@ async def test_provisioning_needs_a_provider_and_a_grant(
         await no_grant.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
 
 
-async def test_per_application_without_a_key_is_unpaid(
-    make_engine: EngineFactory, alice: ActorContext
-) -> None:
-    engine = await make_engine(allocation_mode="per_application", shared_allocation_id="alloc_shared")
-    unpaid = await engine.payments.credential(alice)  # off-chain: calls go unpaid
-    assert unpaid.token is None and unpaid.allocation_id is None
-    assert await engine.payments.allocation_for("default", "alice") == "alloc_shared"
-
-
 # -- costs ---------------------------------------------------------------------------------------------
 
 

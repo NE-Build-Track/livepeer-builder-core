@@ -134,14 +134,11 @@ async def test_an_engine_that_answers_wrongly_fails_the_probe(capsys: pytest.Cap
 async def test_a_probe_app_that_some_runner_advertises_sends_no_job(
     make_engine: EngineFactory, transport: ScriptedTransport, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """In per_application mode the shared key pays for any actor, so a job for an advertised app would be
-    paid on the POST itself. The probe's app is its own run's, and it checks the catalog first: an
-    advertised app sends no job at all (#83 review)."""
-    engine = await make_engine(
-        runners=(runner(app=SCRIPT["probe_app"]("lpb-probe-test")),),
-        allocation_mode="per_application",
-        shared_payment_key="lpg_shared",
-    )
+    """The probe's jobs are meant to fail ``no_offering``, so its app is its own run's, and it checks the
+    catalog first: an advertised app sends no job at all (#83 review). It does not count on its actors
+    having no allocation: the engine it probes may be an older one with a shared payment key, which paid
+    for any actor's job on the POST itself."""
+    engine = await make_engine(runners=(runner(app=SCRIPT["probe_app"]("lpb-probe-test")),))
     transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
     token = (await engine.keys.bootstrap_admin()).token
     app = create_app(engine, manage_lifecycle=False)

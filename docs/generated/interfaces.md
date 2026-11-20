@@ -156,7 +156,6 @@ classDiagram
     class RoutingSecretStore
     class SdkRunnerStream
     class SdkRunnerTransport
-    class SettingsSecretStore
     class SqlCostSnapshot
     class SqlMaintenance
     class SqlStore
@@ -166,7 +165,6 @@ classDiagram
     Authenticator <|.. JwtBearerAuthenticator
     AccessPolicy <|.. DefaultPolicy
     SecretStore <|.. RoutingSecretStore
-    SecretStore <|.. SettingsSecretStore
     SecretStore <|.. EncryptedDbSecretStore
     WritableSecretStore <|.. RoutingSecretStore
     DiscoverySource <|.. HttpDiscoverySource
@@ -199,7 +197,6 @@ classDiagram
 | `Authenticator` | `JwtBearerAuthenticator` | `livepeer_builder.adapters.jwt` |
 | `AccessPolicy` | `DefaultPolicy` | `livepeer_builder.services.policy` |
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
-| `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
 | `WritableSecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |

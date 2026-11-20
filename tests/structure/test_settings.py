@@ -2,14 +2,20 @@
 
 Only ``EngineSettings.from_env`` in config.py reads the environment. Everything else receives an
 ``EngineSettings``, so embedders can configure the engine in code and tests never set env vars.
+
+``per_actor`` is the only allocation mode (D82), so no setting chooses a mode or holds a shared key.
 """
 
 import ast
 from pathlib import Path
 
+from livepeer_builder import EngineSettings
+
 SRC = Path(__file__).resolve().parents[2] / "src" / "livepeer_builder"
 ENV_NAMES = {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
 ALLOWED = {SRC / "config.py"}
+# The settings of the per_application mode, and the one D74 planned and D82 replaced before it was built.
+NOT_SETTINGS = ("allocation_mode", "shared_payment_key", "shared_allocation_id", "payment_operation")
 
 
 def env_reads(path: Path) -> list[int]:
@@ -41,4 +47,14 @@ def test_only_config_reads_the_environment() -> None:
     assert not offenders, (
         "Settings are values: read the environment only in EngineSettings.from_env (config.py) "
         f"and pass EngineSettings in. Environment access found at: {offenders}"
+    )
+
+
+def test_no_setting_chooses_an_allocation_mode_or_holds_a_shared_payment_key() -> None:
+    present = sorted(set(NOT_SETTINGS) & set(EngineSettings.model_fields))
+    assert not present, (
+        f"EngineSettings has {present}. per_actor is the only allocation mode (D82 in "
+        "docs/design-docs/m4-decisions.md): every actor pays from its own allocation, and an actor "
+        "without one fails not_provisioned before any payment. Remove the setting. An application that "
+        "wants one shared budget runs every job as a single actor."
     )

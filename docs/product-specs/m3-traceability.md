@@ -171,7 +171,7 @@ Without `--yes` it spends nothing. It issues two actor keys and an auditor key f
 `lpb-probe-<run>` actors and revokes them at the end, records two failed `no_offering` jobs for them (no
 payment), never provisions, and runs no paid job. Its jobs name the run's own app, `lpb-probe/<run>`;
 it sends none if the catalog lists that app, and fails unless both end `no_offering` with nothing paid:
-in `per_application` mode the shared key would pay for an advertised app on the POST itself. It prints PASS, FAIL or SKIP per check and a summary,
+an engine from before `per_actor` was the only allocation mode (#162) may hold a shared key, which would pay for an advertised app on the POST itself. It prints PASS, FAIL or SKIP per check and a summary,
 and exits 1 when a check failed. Its logic is checked without a network against the engine in-process:
 `tests/unit/test_live_probe.py::test_every_check_passes_against_the_engine_and_the_fund_applies_once`.
 

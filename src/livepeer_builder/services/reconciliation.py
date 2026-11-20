@@ -19,7 +19,15 @@ from uuid import UUID
 
 from livepeer_builder.contracts import AttemptCost, JobCost
 from livepeer_builder.errors import NotFound
-from livepeer_builder.protocols import AllocationCostSnapshot, CostSnapshot
+from livepeer_builder.protocols import AllocationCostSnapshot, AllowanceReader, CostSnapshot
+
+
+async def current_allocation(
+    allowances: AllowanceReader, application_id: str, actor_id: str | None
+) -> str | None:
+    """The actor's current allocation. An allocation is an actor's, so a reconciliation over a whole
+    application (no ``actor_id``) has no current one: the caller names the allocation to reconcile."""
+    return None if actor_id is None else await allowances.allocation_for(application_id, actor_id)
 
 
 class PaidAttempts:

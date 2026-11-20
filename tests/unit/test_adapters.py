@@ -17,17 +17,19 @@ from livepeer_builder.adapters.batteries import (
     batteries_http_client,
 )
 from livepeer_builder.adapters.discovery_inventory import read_inventory
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     CursorMismatch,
     InvalidRequest,
+    NotFound,
     ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
+from tests.unit.refusal_forms import carried
 
 
 def mock_client(handler: httpx.MockTransport) -> httpx.AsyncClient:
@@ -262,11 +264,6 @@ def test_discovery_entries_become_runners() -> None:
 
 
 async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
-    configured = SettingsSecretStore({"shared": "lpg_shared"})
-    assert await configured.get(configured.ref("shared")) == "lpg_shared"
-    with pytest.raises(InvalidRequest):
-        await configured.put("x", "y")
-
     key = generate_secret_key()
     database = EncryptedDbSecretStore(store, key, clock)
     ref = await database.put("lpg/default/alice", "lpg_alice")
@@ -274,31 +271,71 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
     with pytest.raises(InvalidRequest, match="decrypted"):
         await EncryptedDbSecretStore(store, generate_secret_key(), clock).get(ref)
 
-    routing = RoutingSecretStore(configured, database)
-    assert await routing.get(SecretRef(ref="settings:shared")) == "lpg_shared"
-    assert await routing.get(ref) == "lpg_alice"
+    built_in = RoutingSecretStore(database)
+    assert await built_in.get(ref) == "lpg_alice"
     with pytest.raises(InvalidRequest, match="LPB_SECRET_KEY"):
-        await RoutingSecretStore(configured, None).put("x", "y")
+        await RoutingSecretStore(None).put("x", "y")
     # #112 C2: the optional check provisioning asks before the provider is called
-    assert await routing.writable() and not await RoutingSecretStore(configured, None).writable()
+    assert await built_in.writable() and not await RoutingSecretStore(None).writable()
+
+
+async def test_no_secret_comes_from_settings(store: SqlStore, clock: FixedClock) -> None:
+    """The shared payment key was the one secret the built-in store read from settings, under a
+    ``settings:`` reference. It went with per_application (#162): such a reference is unknown."""
+    built_in = RoutingSecretStore(EncryptedDbSecretStore(store, generate_secret_key(), clock))
+    with pytest.raises(NotFound, match="unknown secret reference"):
+        await built_in.get(SecretRef(ref="settings:shared_payment_key"))
 
 
 def test_settings_from_environment() -> None:
     settings = EngineSettings.from_env(
         {
             "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
-            "LPB_ALLOCATION_MODE": "per_application",
+            "LPB_DEFAULT_CURRENCY": "ETH",
             "LPB_MAX_CONCURRENT_JOBS": "3",
-            "LPB_SHARED_PAYMENT_KEY": "lpg_x",
+            "LPB_BATTERIES_TOKEN": "token_x",
         }
     )
-    assert settings.allocation_mode == "per_application" and settings.max_concurrent_jobs == 3
-    assert settings.shared_payment_key is not None and "lpg_x" not in repr(settings)
+    assert settings.default_currency == "ETH" and settings.max_concurrent_jobs == 3
+    assert settings.batteries_token is not None and "token_x" not in repr(settings)
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
     ignored = EngineSettings.from_env(
         {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_GRANT_ID": "grant_old"}
     )
     assert "grant_id" not in ignored.model_dump()
+
+
+REMOVED_WITH_PER_APPLICATION = {
+    "LPB_ALLOCATION_MODE": "per_application",
+    "LPB_SHARED_PAYMENT_KEY": "lpg_shared",
+    "LPB_SHARED_ALLOCATION_ID": "alloc_shared",
+}
+
+
+def test_the_allocation_mode_and_shared_key_variables_name_no_setting() -> None:
+    """``per_actor`` is the only allocation mode (D82, #162). An environment that still sets the removed
+    variables starts the same engine as one that does not: no shared key is read, so none can pay."""
+    plain = {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery"}
+    leftover = EngineSettings.from_env(plain | REMOVED_WITH_PER_APPLICATION)
+    assert leftover == EngineSettings.from_env(plain)
+    assert "lpg_shared" not in repr(leftover.model_dump())
+
+
+@pytest.mark.parametrize(
+    "name", [variable.removeprefix("LPB_").lower() for variable in REMOVED_WITH_PER_APPLICATION]
+)
+def test_a_removed_payment_setting_given_in_code_is_refused_and_not_echoed(name: str) -> None:
+    """Settings built in code refuse a field they do not have, so an embedder that still passes one
+    learns it when it builds them. The refusal names the field and never repeats its value, in any form
+    an embedder may log: its text, ``errors()``, ``json()`` or its traceback (#162 review; every kind of
+    refusal is in tests/unit/test_settings_refusals.py)."""
+    value = "lpg_shared"
+    given = {"discovery_url": "http://127.0.0.1:9/discovery", name: value}
+    with pytest.raises(ValidationError) as refused:
+        EngineSettings.model_validate(given)  # not the value itself: the traceback quotes this line
+    (error,) = refused.value.errors()
+    assert (error["type"], error["loc"]) == ("extra_forbidden", (name,))
+    assert carried(refused.value, value) == []
 
 
 def test_tuning_values_are_settings_with_todays_defaults() -> None:

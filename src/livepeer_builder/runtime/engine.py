@@ -142,7 +142,6 @@ class BuilderEngine:
             cost_sync_error=self.costs.last_error,
             cost_sync_set_aside=self.costs.set_aside_rows,
             running_jobs=self.admission.running,
-            allocation_mode=self.payments.mode,
             version=package_version(),
         )
 

@@ -351,17 +351,6 @@ async def test_a_job_keeps_the_selection_policy_s_order_when_the_transport_never
     assert [url for url, _ in transport.calls] == ["https://uncapped"]
 
 
-async def test_an_unpaid_job_keeps_the_selection_policy_s_order(
-    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
-) -> None:
-    engine = await make_engine(
-        allocation_mode="per_application", runners=capped_and_uncapped()
-    )  # no key: unpaid
-    transport.steps = [ScriptedTransport.ok()]
-    await engine.jobs.run(alice, JobRequest(app=APP))
-    assert transport.calls == [("https://uncapped", None)]
-
-
 async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:

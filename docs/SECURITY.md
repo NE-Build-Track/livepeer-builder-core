@@ -9,7 +9,6 @@
 | `LPB_SECRET_KEY` (Fernet KEK) | The deployment's secret manager | The database, backups |
 | `LPB_BATTERIES_TOKEN` | The deployment's secret manager | Clients, responses |
 | `LPB_BATTERIES_OPERATOR_TOKEN` (optional, the grant desk) | The deployment's secret manager | Clients, responses |
-| `LPB_SHARED_PAYMENT_KEY` (`per_application` mode) | The deployment's secret manager | Clients, responses, logs |
 
 Settings use `SecretStr`, so secrets don't print in reprs. `tests/unit/test_payments.py` checks that
 no plaintext payment key is stored, and `tests/unit/test_http.py` checks that none is returned.
@@ -17,8 +16,12 @@ no plaintext payment key is stored, and `tests/unit/test_http.py` checks that no
 **The payment path stays out of builder responses (D58).** A payment failure's message is the
 engine's own; the signer URL and the signer's or Batteries' text go to the log only, and
 `GET /v1/allowance` answers a provider error with a fixed message. `LPB_SIGNER_URL` may carry no
-userinfo, query or fragment (refused at startup), so the URL in the log holds no secret, and a refused
-setting is never echoed. `tests/unit/test_payment_failures_http.py` scans every builder-facing body
+userinfo, query or fragment (refused at startup), so the URL in the log holds no secret. A refused
+setting is never echoed: the refusal names the setting, and what was given is in none of its forms, its
+text, `errors()`, `json()` or traceback. A rule's own message says what the setting needs and quotes no
+value, a number included (`tests/unit/test_settings_refusals.py` gives each rule a value of its own to
+refuse, and fails when a rule is added without one).
+`tests/unit/test_payment_failures_http.py` scans every builder-facing body
 for a payment key, the signer URL and the signer's words ([payments.md](contracts/payments.md#who-answers-what)).
 
 ## Trust boundaries

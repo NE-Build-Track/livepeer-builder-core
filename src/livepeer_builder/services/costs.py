@@ -62,7 +62,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
-from livepeer_builder.services.reconciliation import PaidAttempts
+from livepeer_builder.services.reconciliation import PaidAttempts, current_allocation
 from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
 
 _LOG = logging.getLogger(__name__)
@@ -297,7 +297,7 @@ class CostService:
         self._policy.check(admin, Operation.ADMIN_READ, _resource(application_id, actor_id))
         if self._allowances is None:
             raise ProviderUnavailable("no payment provider is configured")
-        current = await self._allowances.allocation_for(application_id, actor_id)
+        current = await current_allocation(self._allowances, application_id, actor_id)
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         async with self._store.cost_snapshot() as reads:
             paid = await PaidAttempts.read(reads, application_id, actor_id)

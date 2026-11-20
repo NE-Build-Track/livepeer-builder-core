@@ -6,9 +6,17 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
+from livepeer_builder.contracts import Contract, Currency, Operation
 
 ENV_PREFIX = "LPB_"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
@@ -24,6 +32,13 @@ ASYMMETRIC_ALGORITHMS = frozenset(
 )
 
 
+# What a refused admin scope is, in the refusal's words. No refusal repeats the value it was given.
+_ORDINARY_SCOPE = (
+    "a scope ordinary tokens carry (an operation's name or a standard scope, as written or after "
+    "LPB_JWT_SCOPE_PREFIX)"
+)
+
+
 def _reserved(scope: str, prefix: str) -> bool:
     """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
     with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
@@ -31,7 +46,10 @@ def _reserved(scope: str, prefix: str) -> bool:
 
 
 class EngineSettings(Contract):
-    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url).
+    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url). This
+    # hides it from str(error); _a_refusal_holds_no_value, below every rule, from every other form. That
+    # keeps each rule's words, so no rule's words quote a value given: they name the setting and say what
+    # it needs (tests/unit/test_settings_refusals.py tries every refusal with a value of its own).
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
@@ -67,16 +85,12 @@ class EngineSettings(Contract):
     stream_settle_s: float = Field(default=1.0, ge=0)  # after a disconnect, time for the runner to end
     stream_open_grace_s: float = Field(default=5.0, gt=0)  # how far past its deadline an open may run
 
-    # payments
-    allocation_mode: AllocationMode = "per_actor"
+    # payments: one allocation and key per actor, the only mode (D82); no setting holds a payment key
     default_currency: Currency = "USD"
-    shared_payment_key: SecretStr | None = None  # per_application mode: the one lpg_ key
     batteries_url: str | None = None  # management API and usage feed
     batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
     batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
     batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
-    # per_application: the allocation behind shared_payment_key; every attempt stores it (200 characters)
-    shared_allocation_id: str | None = Field(default=None, max_length=200)
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
@@ -156,8 +170,8 @@ class EngineSettings(Contract):
             valid = False
         if not valid:
             raise ValueError(
-                f"LPB_DISCOVERY_URL must be an http:// or https:// URL with a host, such as "
-                f"http://discovery:8939/discovery; got {value!r}"
+                "LPB_DISCOVERY_URL must be an http:// or https:// URL with a host and no whitespace, such "
+                "as http://discovery:8939/discovery"
             )
         return value
 
@@ -173,9 +187,11 @@ class EngineSettings(Contract):
     @field_validator("jwt_algorithms")
     @classmethod
     def _asymmetric(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        refused = sorted(set(value) - ASYMMETRIC_ALGORITHMS)
-        if not value or refused:
-            raise ValueError(f"jwt_algorithms takes asymmetric algorithms only; refused {refused}")
+        if not value or set(value) - ASYMMETRIC_ALGORITHMS:
+            raise ValueError(
+                "jwt_algorithms takes asymmetric algorithms only, at least one of: "
+                + ", ".join(sorted(ASYMMETRIC_ALGORITHMS, key=str.lower))
+            )
         return value
 
     @field_validator("jwt_token_types")
@@ -195,10 +211,7 @@ class EngineSettings(Contract):
         # A process paused longer than that (a frozen VM) is the lease's limit: only a provider idempotency
         # key would close it.
         if self.operation_stale_s < 4 * self.batteries_timeout_s:
-            raise ValueError(
-                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
-                f"LPB_BATTERIES_TIMEOUT_S ({self.batteries_timeout_s:g})"
-            )
+            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_BATTERIES_TIMEOUT_S")
         return self
 
     @model_validator(mode="after")
@@ -215,17 +228,33 @@ class EngineSettings(Contract):
                         f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
                     )
         if self.jwt_admin_scope is not None and _reserved(self.jwt_admin_scope, self.jwt_scope_prefix):
-            raise ValueError(
-                f"jwt_admin_scope {self.jwt_admin_scope!r} is a scope ordinary tokens carry, "
-                "so every user would be an admin"
-            )
+            raise ValueError(f"jwt_admin_scope is {_ORDINARY_SCOPE}, so every user would be an admin")
         read = self.jwt_admin_read_scope
         if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
             raise ValueError(
-                f"jwt_admin_read_scope {read!r} is a scope ordinary tokens carry, or the admin scope, "
-                "so it would not mark a read-only admin"
+                f"jwt_admin_read_scope is {_ORDINARY_SCOPE}, or the admin scope, so it would not mark a "
+                "read-only admin"
             )
         return self
+
+    # The last model validator: pydantic runs each one defined after it outside it, where its refusal would
+    # carry every setting given (tests/unit/test_settings_refusals.py fails if one is).
+    @model_validator(mode="wrap")
+    @classmethod
+    def _a_refusal_holds_no_value(
+        cls, values: Any, handler: ModelWrapValidatorHandler["EngineSettings"]
+    ) -> "EngineSettings":
+        """A refusal names each setting, with its type and its words, and holds no value given (#162
+        review). ``hide_input_in_errors`` hides values from ``str(error)`` only: ``errors()`` and
+        ``json()`` keep them, and a whole-settings rule's or a missing setting's is every setting given,
+        credentials too. A rule's exception is kept as its words: its traceback holds the settings. The
+        words are the rule's own, so a rule that quoted what it refused would put the value back."""
+        try:
+            return handler(values)
+        except ValidationError as refused:
+            title, details = refused.title, refused.errors(include_url=False)
+        # Raised here, outside the except block, so the refusal does not chain the error that holds them.
+        raise ValidationError.from_exception_data(title, [_without_input(detail) for detail in details])
 
     @classmethod
     def from_env(
@@ -249,6 +278,21 @@ class EngineSettings(Contract):
         (#112, C23)."""
         source = os.environ if env is None else env
         return source.get(ENV_PREFIX + "DATABASE_URL") or DEFAULT_DATABASE_URL
+
+
+_HIDDEN_INPUT = "[hidden]"  # what a refusal's errors() and json() say was given
+
+
+def _without_input(detail: Mapping[str, Any]) -> Any:  # one of pydantic's InitErrorDetails
+    """A refused setting as pydantic reported it, with ``_HIDDEN_INPUT`` for what was given. A rule's
+    exception in the context becomes its message, so the refusal's words stay the rule's own."""
+    line = {"type": detail["type"], "loc": detail["loc"], "input": _HIDDEN_INPUT}
+    if "ctx" in detail:
+        line["ctx"] = {
+            name: str(value) if isinstance(value, BaseException) else value
+            for name, value in detail["ctx"].items()
+        }
+    return line
 
 
 def generate_secret_key() -> str:

@@ -165,7 +165,7 @@ REFUSED_IN_CODE = [
             "value_error",
             (),
             "Value error, LPB_CLEARINGHOUSE_URL, LPB_CLEARINGHOUSE_TOKEN, LPB_CLEARINGHOUSE_TENANT_ID cannot "
-            "be set with LPB_ROLE=both: an engine pays through a payment clearinghouse in its work role "
+            "be set unless LPB_ROLE=work: an engine pays through a payment clearinghouse in its work role "
             "only. Set LPB_ROLE=work to use a payment clearinghouse, or remove them",
         ),
         id="the role rule: a clearinghouse beside both halves",
@@ -176,8 +176,8 @@ REFUSED_IN_CODE = [
             "value_error",
             (),
             "Value error, LPB_CLEARINGHOUSE_URL, LPB_CLEARINGHOUSE_TOKEN, LPB_CLEARINGHOUSE_TENANT_ID cannot "
-            "be set with LPB_ROLE=clearinghouse: a payment clearinghouse is not a tenant of another one. "
-            "Set LPB_ROLE=work to use a payment clearinghouse, or remove them",
+            "be set unless LPB_ROLE=work: a payment clearinghouse is not a tenant of another one. Set "
+            "LPB_ROLE=work to use a payment clearinghouse, or remove them",
         ),
         id="the role rule: a clearinghouse that is a tenant",
     ),
@@ -470,6 +470,38 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
             },
             value_error(None, CLEARINGHOUSE_STALE_WINDOW_REFUSED),
             numerals=("6103.25", "1717.5"),
+        ),
+    ],
+    "_the_settings_agree_with_the_role": [  # #169: the role is one of three words, and carries nothing
+        Refused(
+            "the work role without a clearinghouse",
+            {"role": "work", "batteries_url": f"https://batteries.invalid/{CREDENTIAL}"},
+            value_error(
+                None,
+                "LPB_ROLE=work needs LPB_CLEARINGHOUSE_URL, LPB_CLEARINGHOUSE_TOKEN, "
+                "LPB_CLEARINGHOUSE_TENANT_ID: an engine in its work role pays through a payment "
+                "clearinghouse, and cannot hold LPB_BATTERIES_URL, LPB_BATTERIES_TOKEN",
+            ),
+        ),
+        Refused(
+            "a clearinghouse beside both halves",
+            CLEARINGHOUSE_OF_ITS_OWN | {"batteries_token": ABSENT, "role": "both"},
+            value_error(
+                None,
+                "LPB_CLEARINGHOUSE_URL, LPB_CLEARINGHOUSE_TOKEN, LPB_CLEARINGHOUSE_TENANT_ID cannot be set "
+                "unless LPB_ROLE=work: an engine pays through a payment clearinghouse in its work role "
+                "only. Set LPB_ROLE=work to use a payment clearinghouse, or remove them",
+            ),
+        ),
+        Refused(
+            "a clearinghouse without its private listener",
+            {"role": "clearinghouse", "batteries_url": f"https://batteries.invalid/{CREDENTIAL}"},
+            value_error(
+                None,
+                "LPB_ROLE=clearinghouse needs LPB_HTTP_PRIVATE_PORT: what only a clearinghouse admin does "
+                "(onboarding, grant top-ups, tenant status, the wallet) is served on the private "
+                "listener and nowhere else",
+            ),
         ),
     ],
 }

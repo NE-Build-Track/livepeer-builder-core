@@ -334,8 +334,8 @@ class EngineSettings(Contract):
                 else "a payment clearinghouse is not a tenant of another one"
             )
             raise ValueError(
-                f"{', '.join(named)} cannot be set with LPB_ROLE={self.role}: {why}. Set LPB_ROLE=work "
-                "to use a payment clearinghouse, or remove them"
+                f"{', '.join(named)} cannot be set unless LPB_ROLE=work: {why}. Set LPB_ROLE=work to use "
+                "a payment clearinghouse, or remove them"
             )
         if not self.runs_jobs and self.http_private_port is None:
             raise ValueError(

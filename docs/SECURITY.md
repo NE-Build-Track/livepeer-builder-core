@@ -76,11 +76,16 @@ See [contracts/access.md](contracts/access.md#boundaries).
   refused there for any other tenant (403) before any lookup or provider call. A tenant admin divides its
   tenant's grant and cannot enlarge it, issue an admin key, or act through `/v1/keys` on another
   tenant's key ([access.md](contracts/access.md#defaultpolicy)). No Batteries credential leaves the
-  engine.
+  engine. Since 19 November 2026 (D87 point 3, as amended) a tenant credential cannot name a tenant in a
+  path at all: a tenant's own routes take the tenant from the credential, and a path that names a tenant
+  takes a clearinghouse admin only, on the private listener
+  ([access.md](contracts/access.md#listeners)). An engine that uses a clearinghouse refuses a command
+  about another tenant than its own before it sends anything, since the clearinghouse would apply it to
+  the key's tenant.
 - **The private listener (D84, #167):** a clearinghouse admin key can onboard tenants and top up grants,
   so a leaked one could spend the wallet. A deployment that sets `LPB_HTTP_PRIVATE_PORT` serves what
-  only a clearinghouse admin does (onboarding, the tenant list, a grant's top-up, a tenant's status and
-  the wallet report) on a private listener, which binds loopback unless told otherwise. On the public
+  only a clearinghouse admin does (onboarding, the tenant list, a grant's top-up, a tenant's status, the
+  wallet report, and a tenant's routes at the paths that name the tenant) on a private listener, which binds loopback unless told otherwise. On the public
   listener those routes are 404, as any unknown path, and a clearinghouse admin credential is 403 on
   every route that takes an access credential, so a leaked clearinghouse admin key does nothing where
   the engine is published. The private listener takes a clearinghouse admin credential only. Reaching
@@ -93,7 +98,7 @@ See [contracts/access.md](contracts/access.md#boundaries).
   wallet's public address is in it because Batteries reports it. The engine reads no chain and holds no
   RPC address ([payments.md](contracts/payments.md#the-wallet-report)).
 - **A tenant's usage (#166):** the usage route reads Batteries with its `grant_id` filter set to the
-  tenant in the path, after the policy check, and a Batteries cursor is bound to that filter, so one
+  tenant of the credential, or for a clearinghouse admin the tenant in the path, after the policy check, and a Batteries cursor is bound to that filter, so one
   tenant's admin reads no row of another's ([payments.md](contracts/payments.md#a-tenants-usage)). The
   clearinghouse's runner list names orchestrators and runners, which the network publishes anyway; it is
   still served to a tenant's admin or auditor only.

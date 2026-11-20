@@ -47,8 +47,8 @@ copy from, not a service: see [Limits](#limits).
 | Volumes | `lpb-clearinghouse_engine-data`, `lpb-clearinghouse_paid-state` | `lpb-enterprise_engine-data` |
 | Holds | Batteries' credentials, the wallet's key folder (mounted read-only), an RPC address, the orchestrators' addresses | The clearinghouse's address, a tenant admin key, the tenant's id, and one payment key for each actor |
 
-- **What crosses the edge network is payment calls only:** the tenant's routes (allotment, allowance,
-  usage), the runner list and the signer's two paths. A prompt or a result never does: the enterprise's
+- **What crosses the edge network is payment calls only:** the tenant's own routes (allotment,
+  allowance, usage), which name no tenant, the runner list and the signer's two paths. A prompt or a result never does: the enterprise's
   engine sends each job straight to an orchestrator.
 - **The private listener is on the clearinghouse engine's own loopback.** No network reaches it, the
   enterprise project included. The clearinghouse admin reaches it with the `private` service, a curl
@@ -171,14 +171,15 @@ admin http://127.0.0.1:8081/v1/clearinghouse/tenants | jq 'map({tenant_id, name,
 
 Costs nothing. Check: two tenants, each with `total` and `unallocated` of `GRANT` and `spent` of 0.
 
-Tenant two allots its actor itself, on the public listener, with its own admin key:
+Tenant two allots its actor itself, on the public listener, with its own admin key. Its routes there
+name no tenant: the clearinghouse takes the tenant from the key.
 
 ```sh
 PUBLIC=http://127.0.0.1:8180
 tenant() { curl -sS -H "Authorization: Bearer $(cat secrets/tenant-$1-key)" "${@:2}"; }   # tenant one|two ...
 tenant two -H 'Content-Type: application/json' \
   -d "{\"amount\":{\"amount\":\"$ALLOT\",\"currency\":\"USD\"},\"operation_ref\":\"proof-allot-bob\"}" \
-  $PUBLIC/v1/clearinghouse/tenants/$TWO/actors/bob/allocation | jq '{allocation_id, status}'
+  $PUBLIC/v1/clearinghouse/actors/bob/allocation | jq '{allocation_id, status}'
 ```
 
 Costs nothing. The answer's `payment_key` is tenant two's to keep; this proof does not use it, so the
@@ -197,7 +198,7 @@ docker compose exec -T engine lpb payments check            # role work; every p
 WORK=http://127.0.0.1:8280
 curl -s $WORK/readyz | jq '{role, ready}'                   # "work", true
 curl -s $WORK/v1/offerings | jq 'map({app, rate_low, rate_high, stale})'   # the clearinghouse's runner list
-curl -s -o /dev/null -w '%{http_code}\n' $WORK/v1/clearinghouse/tenants/$ONE/grant   # 404: no clearinghouse route
+curl -s -o /dev/null -w '%{http_code}\n' $WORK/v1/clearinghouse/grant   # 404: no clearinghouse route
 
 mkdir -p secrets
 docker compose exec -T engine lpb bootstrap-admin | jq -r .token > secrets/admin-key
@@ -234,19 +235,25 @@ curl -sS -X POST -H "Authorization: Bearer $(cat secrets/admin-key)" $WORK/v1/co
 alice $WORK/v1/jobs/$JOB/cost | jq '{status, fees, billable}'                 # observed, with the fee
 alice "$WORK/v1/allowance" | jq                                               # spent is the fee
 cd ../clearinghouse
-tenant one $PUBLIC/v1/clearinghouse/tenants/$ONE/usage | jq '.items | length'     # 1: tenant one's payment
-tenant two $PUBLIC/v1/clearinghouse/tenants/$TWO/usage | jq '.items | length'     # 0: tenant two is untouched
-tenant two $PUBLIC/v1/clearinghouse/tenants/$TWO/actors/bob/allocation | jq .allowance   # spent 0
+tenant one $PUBLIC/v1/clearinghouse/usage | jq '.items | length'     # 1: tenant one's payment
+tenant two $PUBLIC/v1/clearinghouse/usage | jq '.items | length'     # 0: tenant two is untouched
+tenant two $PUBLIC/v1/clearinghouse/actors/bob/allocation | jq .allowance   # spent 0
 admin http://127.0.0.1:8081/v1/clearinghouse/tenants | jq 'map({name, spent})'       # one: the fee; two: 0
 admin http://127.0.0.1:8081/v1/clearinghouse/wallet | jq                             # the wallet after the job
 
-# tenant one's admin on tenant two: 403 on each
+# tenant one's key reads tenant one, and has no bob: its routes name no tenant, so they reach no other
+tenant one $PUBLIC/v1/clearinghouse/grant | jq -r .tenant_id                     # tenant one's id
+tenant one -o /dev/null -w '%{http_code}\n' $PUBLIC/v1/clearinghouse/actors/bob/allocation   # 404
+# no path that names a tenant is on the public listener: 404 on each, tenant two's or tenant one's own
 for path in grant actors usage actors/bob/allocation keys; do
   tenant one -o /dev/null -w "$path %{http_code}\n" $PUBLIC/v1/clearinghouse/tenants/$TWO/$path
 done
+# on the private listener those paths are the clearinghouse admin's: tenant one's key is 403 there
+private -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat secrets/tenant-one-key)" \
+  http://127.0.0.1:8081/v1/clearinghouse/tenants/$TWO/grant
 # and the clearinghouse admin's key does nothing on the public listener: 403
 curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat secrets/admin-key)" \
-  $PUBLIC/v1/clearinghouse/tenants/$ONE/grant
+  $PUBLIC/v1/clearinghouse/grant
 cd ../enterprise
 ```
 

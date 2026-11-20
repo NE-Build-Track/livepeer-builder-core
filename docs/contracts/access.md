@@ -79,9 +79,12 @@ class AccessPolicy(Protocol):
     rotate payment keys, issue and manage keys that are not admin keys, read its grant, its actors and
     their allocations, its usage and the clearinghouse's runner list (#166), and, on the work set, read
     every actor's jobs and costs and reconcile.
-  - **Another tenant** is `AccessDenied`, whatever the operation: 403 for a tenant a route or a body
-    names, before any lookup or provider call. Another tenant's record found by its id alone (a job, a
-    key under `/v1/keys`) reads as missing, as for anyone ([Answers](#answers)).
+  - **Another tenant** is `AccessDenied`, whatever the operation: 403 for a tenant a body or an embedded
+    call names, before any lookup or provider call. No route lets it name a tenant in a path: its own
+    routes at the clearinghouse name none and act on its tenant, and a path that names a tenant is a
+    clearinghouse admin's (D87 point 3, as amended on 19 November 2026; [Listeners](#listeners)).
+    Another tenant's record found by its id alone (a job, a key, an actor) reads as missing, as for
+    anyone ([Answers](#answers)).
   - **Never, in any tenant:** `admin.tenants` (onboard a tenant, list tenants, top up a grant, set a
     tenant's status); cost sync (`admin.costs`), which reads every tenant's usage; `actors.assert`; and
     issuing, rotating or revoking a `tenant_admin` or `clearinghouse_admin` key, its own included.
@@ -142,18 +145,20 @@ same test fails when a route declares a plain `datetime` query parameter.
 | `GET /v1/clearinghouse/tenants/{tenant}/grant` | `admin.read` ([payments.md](payments.md#tenants)) |
 | `POST /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants`, `POST .../tenants/{tenant}/grant/top-up`, `POST .../tenants/{tenant}/status`, `GET /v1/clearinghouse/wallet` | `admin.tenants`: a clearinghouse admin. With two [listeners](#listeners), on the private one only |
 
-**Every route that names a tenant answers the same way (#165):**
+**Every route of a tenant answers the same way (#165):**
 
 | The request | Answer |
 | --- | --- |
 | No credential, or a bad one | 401 |
 | A kind that may not call the route (an actor on an admin route, an auditor on a write, a tenant admin on `admin.tenants`) | 403 |
-| Another tenant's id in the path | 403, before any store lookup or provider call |
-| A record that does not exist (no such actor, key or grant) | 404 (400 for a key's rotate or revoke, as before) |
+| A tenant credential at a path that names a tenant, another tenant's or its own (since 19 November 2026); a clearinghouse admin at a tenant's own routes, which name none | 403, before any store lookup or provider call |
+| A record that does not exist (no such actor, key or grant), or another tenant's named by its id at a tenant's own routes | 404 (400 for a key's rotate or revoke, as before) |
 | No allocation, or an empty one, when a job needs it | 402 |
 
-`tests/unit/test_admin_route_sweep.py` reads the routes from the app, so a route added later that names a
-tenant is held to the third row.
+`tests/unit/test_admin_route_sweep.py` and `tests/unit/test_tenant_from_credential.py` read the routes
+from the app, so a route added later that names a tenant is held to the third row. Until 19 November
+2026 the third row was "another tenant's id in the path", the policy's refusal; a tenant credential
+can no longer name a tenant in a path at all.
 
 `GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
 come first.
@@ -179,9 +184,21 @@ A clearinghouse admin onboards tenants and tops up grants, so a leaked clearingh
 spend the wallet. A deployment can keep what only a clearinghouse admin does off the address it
 publishes (D84, #167).
 
+**A tenant's routes come in two forms** (D87 point 3, as Mike amended it on 19 November 2026 after the
+reviewer's comment on #175), and the rule about them holds on every listener. A tenant's own routes name
+no tenant (`GET /v1/clearinghouse/grant`, `GET /v1/clearinghouse/usage`, `/v1/clearinghouse/actors/...`,
+`/v1/clearinghouse/keys/...`): they act on the tenant of the credential, take a `tenant_admin` or an
+`auditor` credential, and refuse any other with 403, a clearinghouse admin's included, which has no
+tenant of its own. The same routes under `/v1/clearinghouse/tenants/{tenant_id}` act on the tenant the
+path names, take a `clearinghouse_admin` credential, and refuse any other with 403, a tenant admin's of
+that tenant included. Each kind keeps what it may do on each route ([DefaultPolicy](#defaultpolicy)).
+The tenant is resolved where the route authenticates (`http/clearinghouse.py`), before the service is
+asked, and both forms call the same service with it.
+
 **One listener is the default.** Without `LPB_HTTP_PRIVATE_PORT` the engine serves one listener, on
-`LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route for every kind of credential, as before #167.
-Self-hosted payments runs this way, and its clearinghouse admin key does everything it did.
+`LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route, as before #167, and both forms of a tenant's routes,
+each to its own kinds. Self-hosted payments runs this way, and its clearinghouse admin key does
+everything it did, at the paths that name a tenant.
 
 **With `LPB_HTTP_PRIVATE_PORT` set, the engine serves two**, each with an app of its own over one engine
 in one process:
@@ -189,8 +206,9 @@ in one process:
 | | Public listener | Private listener |
 | --- | --- | --- |
 | Address | `LPB_HTTP_HOST`, `LPB_HTTP_PORT` | `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1` unless set), `LPB_HTTP_PRIVATE_PORT` |
-| Routes | Every route but the private group | Every route |
-| The private group: onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report | 404, as any path the engine does not know, with a credential or without one | Served |
+| Routes | Every route but the private group | Every route but a tenant's own routes |
+| The private group: onboarding, the tenant list, a grant's top-up, a tenant's status, the wallet report, and a tenant's routes at the paths that name the tenant | 404, as any path the engine does not know, with a credential or without one | Served |
+| A tenant's own routes, which name no tenant | Served | 404, the same way |
 | A clearinghouse admin credential | 403 on every route that takes an access credential, the work routes included | Accepted |
 | A tenant admin, an auditor, an actor or a service credential | Accepted, as with one listener | 403 on every route, its own tenant's included |
 | No credential, or a bad one | 401 | 401 |
@@ -199,16 +217,17 @@ in one process:
 | `/openapi.json`, `/docs` | The public listener's routes only | Every route |
 
 - **The private listener is for a clearinghouse admin only.** It is where a clearinghouse admin does
-  everything, for any tenant. A tenant's admin and its auditor use the public listener, and a tenant
-  credential that reaches the private address is refused there.
+  everything, for any tenant, naming the tenant in the path. A tenant's admin and its auditor use the
+  public listener, at their own routes, and a tenant credential that reaches the private address is
+  refused there.
 - **A tenant admin key of kind `tenant_admin` is issued on the private listener:**
-  `POST .../tenants/{tenant_id}/keys` is served on both, and only a clearinghouse admin may issue that
-  kind ([a tenant's access keys](#a-tenants-access-keys)).
+  `POST /v1/clearinghouse/tenants/{tenant_id}/keys` is served there only, and only a clearinghouse admin
+  may issue that kind ([a tenant's access keys](#a-tenants-access-keys)).
 - **The signer's two paths are on every listener, and the rule about kinds does not reach them.** They
   take a payment key, which is no access credential and has no kind
   ([payments.md](payments.md#signing-through-a-clearinghouse)). An enterprise's engine reaches a
-  clearinghouse at its public listener, so they are served there; every public route is also on the
-  private one, so they are served there too, and a live payment key signs on both. An access key is
+  clearinghouse at its public listener, so they are served there; they are a group served on every
+  listener, so they are on the private one too, and a live payment key signs on both. An access key is
   401 on them on every listener: a clearinghouse admin key gets 401 there, not the public listener's
   403, and a tenant's key gets 401 there, not the private listener's 403.
 - **The credential rule is a property of the listener, not of each route.** It is applied where every
@@ -217,16 +236,19 @@ in one process:
   ([extending the engine](../design-docs/extending-the-engine.md#service-mode)). A JWT with the admin
   scope is a clearinghouse admin credential and is treated as one.
 - **Which group is served by which role and on which listener is one table,** `ROUTE_GROUPS` in
-  `http/listeners.py`: each group of routes with its half and whether it is private. A group of routes
-  that is not in it fails a test (`tests/unit/test_listeners.py`), which also reads the
-  routes from each app: every route of the private group is 404 on the public listener, and every route
-  that takes an access credential refuses a clearinghouse admin key on the public listener before the
-  provider or the store is asked. The routes that take no credential, and the two that take a payment
+  `http/listeners.py`: each group of routes with its half and which of two listeners serves it
+  (`served_on`: `every`, `public` or `private`). A group of routes that is not in it fails a test
+  (`tests/unit/test_listeners.py`), which also reads the routes from each app: every route of the
+  private group is 404 on the public listener, every route that takes an access credential refuses a
+  clearinghouse admin key on the public listener before the provider or the store is asked, and a
+  tenant's own routes are the public listener's alone. `tests/unit/test_tenant_from_credential.py`
+  sweeps both forms of a tenant's routes for the kinds each refuses. The routes that take no credential, and the two that take a payment
   key, are named there with their own answers, so a new one is a decision somebody made.
 - **The published schema.** `docs/generated/openapi.json` is generated from an engine in its `both`
   role with one listener, so it has every route. Each route but health carries the tag of its half,
-  `work half` or `clearinghouse half`, whose description names the roles that serve it, and the routes
-  of the private group also carry the tag `private listener`. An engine's own `/openapi.json` names the
+  `work half` or `clearinghouse half`, whose description names the roles that serve it. The routes of
+  the private group also carry the tag `private listener`, and a tenant's own routes the tag
+  `public listener`. An engine's own `/openapi.json` names the
   routes of its role and its listener, and no other.
 - **A clearinghouse has no route that issues a second clearinghouse admin key** (#169). `/v1/keys`,
   which issues every kind, is a work route. The first clearinghouse admin key is `lpb bootstrap-admin`'s,
@@ -436,7 +458,7 @@ Both are generic: no enterprise logic lives in the engine.
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
 | Clearinghouse admin credential | `lpb bootstrap-admin`, then a clearinghouse admin | Operator | Clearinghouse admin |
 | Tenant admin key | Onboarding the tenant (`POST /v1/clearinghouse/tenants`), then a clearinghouse admin (`POST .../tenants/{tenant_id}/keys`, kind `tenant_admin`) | The enterprise app | Clearinghouse admin; never a tenant admin |
-| A tenant's auditor key | That tenant's admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
+| A tenant's auditor key | That tenant's admin (`POST /v1/clearinghouse/keys`), or a clearinghouse admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
 | Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
 | Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
@@ -460,10 +482,12 @@ same steps run on the dev stack.
 
 ### A tenant's access keys
 
-A tenant's keys are also under its own path, in the clearinghouse set (D87, #165):
-`GET`, `POST /v1/clearinghouse/tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`,
-`POST .../keys/{key_id}/rotate` and `POST .../keys/{key_id}/revoke`. They are the commands above with the
-tenant taken from the path:
+A tenant's keys are also in the clearinghouse set (D87, #165), in two forms (D87 point 3, as amended on
+19 November 2026). Its admin and auditor call `GET`, `POST /v1/clearinghouse/keys`,
+`GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate` and `POST .../keys/{key_id}/revoke`, which name
+no tenant: the tenant is the credential's. A clearinghouse admin calls the same routes under
+`/v1/clearinghouse/tenants/{tenant_id}/keys`, for the tenant it names. They are the commands above with
+the tenant taken from the credential or the path:
 
 - **The body names no tenant** (a `tenant_id` there is a 422) **and takes two kinds:** `auditor` (the
   default) and `tenant_admin`. An actor's or a service's key belongs to an engine that runs jobs, and
@@ -471,8 +495,8 @@ tenant taken from the path:
 - **A tenant admin** issues, lists, inspects, rotates and revokes its tenant's keys that are not admin
   keys. Issuing, rotating or revoking a `tenant_admin` key is 403 for it, its own key included.
 - **A clearinghouse admin** issues another tenant admin key with kind `tenant_admin`, and revokes one.
-- **A key of another tenant** named under this tenant's path is missing: 404 for the read, 400 for a
-  rotate or revoke, as for a key that never existed.
+- **A key of another tenant**, named by its id under this tenant's routes, is missing: 404 for the read,
+  400 for a rotate or revoke, as for a key that never existed.
 
 Under `/v1/keys`, where no path names a tenant, a tenant admin is confined the same way: it lists its
 own tenant's keys, a body that names another tenant (or leaves the default, `default`) is 403, another

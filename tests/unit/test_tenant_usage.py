@@ -1,4 +1,6 @@
-"""#166: ``GET /v1/clearinghouse/tenants/{tenant_id}/usage`` returns one tenant's payment records.
+"""#166: a tenant's usage route returns one tenant's payment records: ``GET /v1/clearinghouse/usage`` to the
+tenant's admin or auditor, which names no tenant, and ``GET /v1/clearinghouse/tenants/{tenant_id}/usage``
+to a clearinghouse admin (D87 point 3, as amended on 19 November 2026).
 
 It is what an enterprise's engine reads in place of Batteries' usage feed (the ``UsageSource`` port, #168),
 so it answers with the port's own page: the rows cost sync attributes a fee by, the rows the source set
@@ -99,7 +101,13 @@ async def house(make_engine: EngineFactory, batteries: BatteriesUsage) -> AsyncI
 
 
 def usage(tenant: Tenant, **query: Any) -> str:
+    """The tenant's own usage route, for its admin or auditor: the tenant is the credential's."""
     return str(httpx.URL(tenant.path("/usage"), params=query))
+
+
+def named_usage(tenant: Tenant, **query: Any) -> str:
+    """The route that names the tenant, for a clearinghouse admin."""
+    return str(httpx.URL(tenant.named("/usage"), params=query))
 
 
 async def two_tenants_with_usage(house: House, batteries: BatteriesUsage, rows: int = 4) -> tuple[str, str]:
@@ -213,10 +221,14 @@ async def test_a_tenants_admin_and_auditor_read_its_usage_and_a_clearinghouse_ad
         headers=house.one.admin,
     )
     auditor = {"Authorization": f"Bearer {issued.json()['token']}"}
-    for caller in (house.one.admin, auditor, house.admin):
-        answer = await house.client.get(usage(house.one), headers=caller)
+    for path, caller in (
+        (usage(house.one), house.one.admin),
+        (usage(house.one), auditor),
+        (named_usage(house.one), house.admin),
+    ):
+        answer = await house.client.get(path, headers=caller)
         assert answer.status_code == 200 and [row["id"] for row in answer.json()["items"]] == ["one-0"]
-    assert (await house.client.get(usage(house.two), headers=house.admin)).status_code == 200
+    assert (await house.client.get(named_usage(house.two), headers=house.admin)).status_code == 200
 
 
 async def test_another_tenants_usage_is_403_before_the_provider_is_asked(
@@ -229,9 +241,10 @@ async def test_another_tenants_usage_is_403_before_the_provider_is_asked(
         headers=house.one.admin,
     )
     auditor = {"Authorization": f"Bearer {issued.json()['token']}"}
-    for caller in (house.one.admin, auditor):
-        refused = await house.client.get(usage(house.two), headers=caller)
-        assert refused.status_code == 403 and "another tenant" in refused.json()["error"]
+    for caller in (house.one.admin, auditor):  # a path that names a tenant, the other's or its own
+        for tenant in (house.two, house.one):
+            refused = await house.client.get(named_usage(tenant), headers=caller)
+            assert refused.status_code == 403 and "clearinghouse admin's" in refused.json()["error"]
     assert (await house.client.get(usage(house.one))).status_code == 401  # no credential
     assert batteries.requests == []  # Batteries heard of none of it
 
@@ -277,7 +290,7 @@ async def test_records_of_an_allocation_allotted_before_a_tenants_id_was_its_gra
         "set_aside": [],
     }
     assert batteries.requests[-1] == {"grant_id": "default", "limit": "1000"}
-    by_grant = await house.client.get(usage(house.one), headers=house.admin)
+    by_grant = await house.client.get(named_usage(house.one), headers=house.admin)
     assert {row["allocation_id"] for row in by_grant.json()["items"]} == {alice}
 
 
@@ -294,8 +307,9 @@ async def test_without_a_source_that_reads_one_tenants_usage_the_route_is_absent
 ) -> None:
     async with open_house(make_engine, supply=EngineSupply(usage_source=source)) as house:
         assert house.engine.payments.usage is None
-        missing = await house.client.get(usage(house.one), headers=house.admin)
+        missing = await house.client.get(named_usage(house.one), headers=house.admin)
         assert missing.status_code == 404
+        assert (await house.client.get(usage(house.one), headers=house.one.admin)).status_code == 404
 
 
 # -- the shipped fake --------------------------------------------------------------------------------------

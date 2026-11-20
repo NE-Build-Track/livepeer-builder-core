@@ -20,10 +20,15 @@ from livepeer_builder.http import create_app
 from tests.conftest import EngineFactory, allot
 
 OPERATOR = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
-# Where the three moved groups were served until #164. Each is 404 now.
+# Where reconciliation and cost sync were served until #164. Each is 404 now.
 OLD_PATHS = [
     ("GET", "/v1/clearinghouse/reconciliation"),
     ("POST", "/v1/clearinghouse/costs/sync"),
+]
+# Where an engine's own access keys were served until #164. Since 19 November 2026 these paths are a
+# tenant's own access keys, which name no tenant and take the tenant from a tenant admin's or an auditor's
+# credential (D87 point 3, as amended): a route again, and still no alias of /v1/keys.
+OLD_KEY_PATHS = [
     ("POST", "/v1/clearinghouse/keys"),
     ("GET", "/v1/clearinghouse/keys"),
     ("GET", "/v1/clearinghouse/keys/{key_id}"),
@@ -109,3 +114,21 @@ async def test_a_moved_route_is_404_at_its_old_path(api: Served, method: str, pa
     assert (await client.request(method, url, json=body)).status_code == 404
     routes = create_app(engine, manage_lifecycle=False).routes
     assert path not in [route.path for route in routes if isinstance(route, APIRoute)]
+
+
+@pytest.mark.parametrize(("method", "path"), OLD_KEY_PATHS, ids=[f"{m} {p}" for m, p in OLD_KEY_PATHS])
+async def test_the_old_key_paths_are_a_tenants_own_keys_and_no_alias_of_the_engines(
+    api: Served, method: str, path: str
+) -> None:
+    """The clearinghouse admin that ``/v1/keys`` serves is refused there, for it has no tenant of its own,
+    and no key is issued, rotated or revoked: the engine's own keys are at ``/v1/keys`` alone."""
+    client, engine, admin, _alice = api
+    assert engine.keys is not None
+    existing = (await engine.keys.list_keys(OPERATOR))[0]
+    url = path.format(key_id=existing.key_id)
+    body = {"actor_id": "bob", "operation_ref": "old-path"}
+    keys_before = await engine.store.list_access_keys(None)
+    refused = await client.request(method, url, json=body, headers=admin)
+    assert refused.status_code == 403 and "no tenant of its own" in refused.text
+    assert (await client.request(method, url, json=body)).status_code == 401
+    assert await engine.store.list_access_keys(None) == keys_before

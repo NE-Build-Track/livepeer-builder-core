@@ -512,7 +512,11 @@ as it was issued, **`"token": null`** and **`"replayed": true`** (`false` on the
 `Idempotent-Replayed: true`:
 the engine keeps only the token's hash, so it cannot show the token again. An admin who lost it
 rotates the key (under a new reference). The same reference with another request, or on another
-command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). Revoking
+command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). A
+repeated rotation is answered from its record only to a caller its first run would have answered
+(#165 review): repeated under another tenant's path it is `400`, as for a key that tenant never had, and
+repeated by a caller who may not change a key of that kind it is `403`. Neither shows the replacement
+key. Revoking
 a key takes no reference: a repeat cannot revoke twice, and a repeat of one that finished answers as
 the first did (`204`), so a retry after a lost answer is not an error (D61); a key that never existed is
 `400`. `lpb bootstrap-admin` takes none either.

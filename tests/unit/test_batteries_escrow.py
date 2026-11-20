@@ -102,6 +102,8 @@ async def test_a_batteries_whose_on_chain_listener_is_off_reports_no_account() -
         [row(reserve="")],
         [row(deposit="1e3x")],
         [row(deposit="NaN")],
+        [row(deposit="-1")],  # a balance is never below zero: not an amount the engine reports
+        [row(reserve="-0.000000000000000001")],
         [row(deposit=1.5)],  # a number, never read as money
         [{key: value for key, value in row().items() if key != "reserve_balance_eth"}],
         [row(sender="")],
@@ -123,9 +125,20 @@ async def test_a_report_the_engine_cannot_read_is_an_error_and_never_a_zero(body
 async def test_a_credential_without_the_permission_is_told_which_one_it_needs() -> None:
     """Batteries answers 403 ``Forbidden`` to a credential without ``escrow.read``, which the grants
     credential did not need before #167."""
-    with pytest.raises(ProviderError, match=r"escrow\.read") as refused:
+    with pytest.raises(ProviderError) as refused:
         await client(httpx.Response(403, json={"error": "Forbidden"})).escrow_accounts()
     assert refused.value.status_code == 403
+    assert refused.value.message == "Forbidden: the grants credential needs the permission escrow.read"
+
+
+async def test_a_credential_batteries_does_not_know_is_not_told_it_lacks_a_permission() -> None:
+    """Batteries answers 401 to a token it does not know or has revoked. No permission would mend that:
+    the failure passes through as the token failure it is, and names no permission to grant."""
+    with pytest.raises(ProviderError) as refused:
+        await client(httpx.Response(401, json={"error": "Unauthorized"})).escrow_accounts()
+    assert refused.value.status_code == 401
+    assert refused.value.message == "Unauthorized"
+    assert "escrow.read" not in str(refused.value) and "permission" not in str(refused.value)
 
 
 async def test_a_batteries_that_cannot_be_reached_or_redirects_is_no_report() -> None:

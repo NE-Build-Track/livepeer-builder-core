@@ -814,6 +814,82 @@ async def test_a_rotation_repeat_that_looked_too_early_answers_from_the_first_ro
     assert len(await engine.keys.list_keys(admin)) == 2
 
 
+# -- a repeated key rotation is answered only to a caller the first run would have answered (#165 review) --
+
+TENANT_ADMIN_TWIN = ActorContext(actor_id="operator", tenant_id="default", credential_kind="tenant_admin")
+
+
+async def looks_too_early(store: SqlStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lost race of a rotation: the repeat finds the reference free and the key still active, and
+    the store then refuses its write because the first rotation has the reference."""
+    get_operation, get_access_key = store.get_operation, store.get_access_key
+
+    async def looked_too_early(*scope: str) -> OperationRecord | None:
+        monkeypatch.setattr(store, "get_operation", get_operation)
+        return None
+
+    async def still_active(key_id: str) -> AccessKey | None:
+        old = await get_access_key(key_id)
+        return None if old is None else old.model_copy(update={"revoked_at": None})
+
+    monkeypatch.setattr(store, "get_operation", looked_too_early)
+    monkeypatch.setattr(store, "get_access_key", still_active)
+
+
+@pytest.mark.parametrize("lost_race", [False, True], ids=["the reference is held", "the write lost the race"])
+async def test_a_rotation_repeated_under_another_tenant_reads_as_missing_and_shows_no_key(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_race: bool,
+) -> None:
+    """A clearinghouse admin may name any tenant, so the policy does not stop the repeat. The first run
+    under tenant ``two`` would have found no such key there: the repeat says the same, and never
+    answers with tenant ``one``'s replacement key."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(
+        admin, kind="auditor", actor_id="dashboard", tenant_id="one", operation_ref="key-1"
+    )
+    old = issued.key.key_id
+    rotated = await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="one")
+    if lost_race:
+        await looks_too_early(store, monkeypatch)
+    with pytest.raises(InvalidRequest, match="no active key") as missing:
+        await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="two")
+    assert rotated.key.key_id not in str(missing.value) and old in str(missing.value)
+    again = await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="one")
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)  # its own tenant: as before
+    assert len(await engine.keys.list_keys(admin)) == 2  # the old key and one replacement
+
+
+@pytest.mark.parametrize("lost_race", [False, True], ids=["the reference is held", "the write lost the race"])
+async def test_a_rotation_repeated_by_a_caller_who_may_not_change_that_kind_of_key_is_refused(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_race: bool,
+) -> None:
+    """The ledger keys a reference by the caller's tenant and actor, not by its credential. A tenant
+    admin with the clearinghouse admin's tenant and actor id repeats the rotation of a tenant admin key:
+    a tenant admin changes no admin key, so it is 403 as its own first run would be, and the replacement
+    key is not shown."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(
+        admin, kind="tenant_admin", actor_id="second", tenant_id="default", operation_ref="key-1"
+    )
+    rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    if lost_race:
+        await looks_too_early(store, monkeypatch)
+    with pytest.raises(AccessDenied, match="tenant_admin key"):
+        await engine.keys.rotate(TENANT_ADMIN_TWIN, issued.key.key_id, operation_ref="rotate-key-1")
+    again = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)
+
+
 async def test_no_token_or_payment_key_is_ever_stored_in_the_ledger(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, store: SqlStore
 ) -> None:

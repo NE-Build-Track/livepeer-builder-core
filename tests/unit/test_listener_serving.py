@@ -11,6 +11,7 @@ The tests that serve bind loopback on a port the system picked, and leave nothin
 """
 
 import asyncio
+import contextlib
 import logging
 import signal
 import socket
@@ -263,6 +264,94 @@ async def test_one_listener_that_ends_takes_the_other_with_it(signals: dict[int,
         await asyncio.wait_for(serving, timeout=10)
     assert not any(listening(port) for port in ports)
     assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
+class Held:
+    """An ASGI app that takes a request and answers nothing until its caller hangs up, as a stream or a
+    slow job holds a connection open. ``arrived`` is set once a request is in the app, and
+    ``disconnected`` once the app is told its caller is gone."""
+
+    def __init__(self) -> None:
+        self.arrived = asyncio.Event()
+        self.disconnected = asyncio.Event()
+
+    async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        if scope["type"] == "lifespan":
+            raise RuntimeError("no lifespan")
+        self.arrived.set()
+        while (await receive())["type"] != "http.disconnect":
+            pass
+        self.disconnected.set()
+
+
+async def held_open(port: int, app: Held) -> asyncio.StreamWriter:
+    """A real connection to the listener on ``port``, with a request the app has taken and not answered.
+    The caller closes it."""
+    _, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), timeout=5)
+    writer.write(b"GET /held HTTP/1.1\r\nHost: listener.test\r\n\r\n")
+    await writer.drain()
+    await asyncio.wait_for(app.arrived.wait(), timeout=5)
+    return writer
+
+
+async def hung_up(writer: asyncio.StreamWriter) -> None:
+    writer.close()
+    with contextlib.suppress(OSError):
+        await asyncio.wait_for(writer.wait_closed(), timeout=5)
+
+
+async def test_a_listener_that_ends_does_not_leave_the_other_waiting_for_its_open_connections(
+    signals: dict[int, object],
+) -> None:
+    """A listener that ended for a reason of its own leaves a process that must end, so a supervisor can
+    start it again. The other listener does not wait for its open connections: uvicorn waits for them
+    without limit, and the process would stay up with one listener gone and the other accepting nothing."""
+    held = Held()
+    servers, ports = two_servers(first=held)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writer = await held_open(ports[0], held)
+        try:
+            servers[1].should_exit = True  # the private listener ends by itself; no signal was sent
+            await asyncio.wait_for(serving, timeout=10)
+            # the listener hung up on its caller, and the request in flight was told so
+            await asyncio.wait_for(held.disconnected.wait(), timeout=5)
+        finally:
+            await hung_up(writer)
+    assert [server.force_exit for server in servers] == [True, True]
+    assert not any(listening(port) for port in ports)
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
+async def test_a_first_signal_still_waits_for_an_open_connection(signals: dict[int, object]) -> None:
+    """Stopping the service in order is unchanged: after one SIGTERM both listeners stop accepting, and
+    the one with a request in flight ends when that request does, although the other has ended."""
+    held = Held()
+    servers, ports = two_servers(first=held)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writer = await held_open(ports[0], held)
+        try:
+            signal.raise_signal(signal.SIGTERM)
+            await nothing_listens(ports)  # both stopped accepting: the idle listener has ended
+            done, _ = await asyncio.wait([serving], timeout=1)
+            assert not done and not held.disconnected.is_set()  # the request in flight is waited for
+            assert [(server.should_exit, server.force_exit) for server in servers] == [(True, False)] * 2
+        finally:
+            await hung_up(writer)
+        await asyncio.wait_for(serving, timeout=10)
+    assert [server.force_exit for server in servers] == [False, False]
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
+async def nothing_listens(ports: list[int]) -> None:
+    for _ in range(200):
+        if not any(listening(port) for port in ports):
+            return
+        await asyncio.sleep(0.02)
+    pytest.fail("the listeners still accepted connections after 4 s")
 
 
 async def test_a_listener_whose_app_cannot_start_ends_both_and_exits_as_one_listener_does(

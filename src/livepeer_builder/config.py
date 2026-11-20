@@ -225,8 +225,8 @@ class EngineSettings(Contract):
     def _two_listeners_have_two_addresses(self) -> "EngineSettings":
         if (self.http_private_host, self.http_private_port) == (self.http_host, self.http_port):
             raise ValueError(
-                f"LPB_HTTP_PRIVATE_PORT ({self.http_private_port}) is the public listener's port on the "
-                "same host: the private listener needs an address of its own"
+                "LPB_HTTP_PRIVATE_PORT is the public listener's port (LPB_HTTP_PORT) on the same host: the "
+                "private listener needs an address of its own"
             )
         return self
 

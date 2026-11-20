@@ -126,7 +126,7 @@ from Batteries after each row; the run stops when the cap would be passed.
    2. admin step, shown: issue the credential and allot the allocation. In configuration 2 the
       clearinghouse admin onboards the tenant and tops up its grant, and the tenant admin allots;
    3. outcomes 2 to 5 through the row's interface;
-   4. wait for the cost to leave `pending` (cost sync every 30 s), or `POST /v1/admin/costs/sync`;
+   4. wait for the cost to leave `pending` (cost sync every 30 s), or `POST /v1/costs/sync`;
    5. `scripts/collect_evidence.py`; check the record; note anything unexpected.
 4. **Stop rules.** Cap reached; a cost class other than expected; reconciliation unbalanced; a
    job `uncertain` outside the recovery observation. Stop, record, investigate; do not repeat a paid row
@@ -236,7 +236,8 @@ configuration 2. The matrix keeps its seven rows.
 - **`lpb payments check`** is kept as a read-only check (D87), so the precondition in the runbook stands.
   A self-hosted engine probes the signer and Batteries. An engine that uses a clearinghouse probes the
   clearinghouse. It is built with the remote adapters (#168).
-- **The cost sync route** in the runbook moves to the work half (#164).
+- **The cost sync route** in the runbook is `POST /v1/costs/sync`, in the work half (#164, D87). A
+  clearinghouse admin credential of the engine that runs the jobs calls it.
 
 ## Delivery slices
 

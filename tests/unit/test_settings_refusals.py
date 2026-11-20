@@ -292,6 +292,24 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
             ),
         ),
     ],
+    "_jwt_names_one_tenant_source": [  # #163 review
+        Refused(
+            "a JWT's tenant named twice",
+            {
+                "auth": "jwt",
+                "jwt_issuer": "https://idp.invalid/",
+                "jwt_audience": "engine",
+                "jwt_tenant_claim": f"claim-{CREDENTIAL}",
+                "jwt_tenant_id": f"tenant-{CREDENTIAL}",
+            },
+            value_error(
+                None,
+                "LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID must be "
+                "set: the claim that names each token's tenant, or the one tenant every token is in; both "
+                "are set",
+            ),
+        ),
+    ],
 }
 
 

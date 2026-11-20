@@ -18,7 +18,9 @@ engine's own; the signer URL and the signer's or Batteries' text go to the log o
 `GET /v1/allowance` answers a provider error with a fixed message. `LPB_SIGNER_URL` may carry no
 userinfo, query or fragment (refused at startup), so the URL in the log holds no secret. A refused
 setting is never echoed: the refusal names the setting, and what was given is in none of its forms, its
-text, `errors()`, `json()` or traceback (`tests/unit/test_settings_refusals.py`).
+text, `errors()`, `json()` or traceback. A rule's own message says what the setting needs and quotes no
+value, a number included (`tests/unit/test_settings_refusals.py` gives each rule a value of its own to
+refuse, and fails when a rule is added without one).
 `tests/unit/test_payment_failures_http.py` scans every builder-facing body
 for a payment key, the signer URL and the signer's words ([payments.md](contracts/payments.md#who-answers-what)).
 

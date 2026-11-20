@@ -304,10 +304,7 @@ class EngineSettings(Contract):
                 "or credential of theirs"
             )
         if self.operation_stale_s < 4 * self.clearinghouse_timeout_s:  # as for Batteries, just above
-            raise ValueError(
-                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
-                f"LPB_CLEARINGHOUSE_TIMEOUT_S ({self.clearinghouse_timeout_s:g})"
-            )
+            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
         return self
 
     @property

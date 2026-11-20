@@ -47,6 +47,15 @@ CLEARINGHOUSE = {  # #168: the three settings of an engine that uses a payment c
     "clearinghouse_token": f"lpk-{CREDENTIAL}",
     "clearinghouse_tenant_id": "grant_7",
 }
+# The same three, each with the credential in its own value, for the rules that refuse them.
+CLEARINGHOUSE_OF_ITS_OWN = {
+    "clearinghouse_url": f"https://{CREDENTIAL}.invalid",
+    "clearinghouse_token": f"lpk-{CREDENTIAL}",
+    "clearinghouse_tenant_id": f"grant-{CREDENTIAL}",
+}
+CLEARINGHOUSE_STALE_WINDOW_REFUSED = (
+    "LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S"
+)
 # The model validator that hides what was given (config.py). Every other must run inside it.
 REDACTION = "_a_refusal_holds_no_value"
 
@@ -120,12 +129,7 @@ REFUSED_IN_CODE = [
     ),
     pytest.param(  # #168
         CLEARINGHOUSE | {"batteries_token": ABSENT, "batteries_timeout_s": 1, "operation_stale_s": 100},
-        (
-            "value_error",
-            (),
-            "Value error, LPB_OPERATION_STALE_S (100) must be at least four times "
-            "LPB_CLEARINGHOUSE_TIMEOUT_S (30)",
-        ),
+        ("value_error", (), f"Value error, {CLEARINGHOUSE_STALE_WINDOW_REFUSED}"),
         id="the rule on the stale window with a clearinghouse",
     ),
     pytest.param(  # #168
@@ -374,6 +378,51 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
             numerals=("18473",),
         ),
     ],
+    "_clearinghouse_url_is_an_origin": [  # #168
+        Refused(
+            "a clearinghouse address with a path",
+            CLEARINGHOUSE | {"clearinghouse_url": f"https://clearinghouse.invalid/{CREDENTIAL}"},
+            value_error(
+                "clearinghouse_url",
+                "LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, with no "
+                "path, query, fragment or userinfo, such as https://clearinghouse.example: the signer's "
+                "two paths are called at its root",
+            ),
+        ),
+    ],
+    "_a_clearinghouse_is_whole_and_alone": [  # #168
+        Refused(
+            "half a clearinghouse",
+            CLEARINGHOUSE_OF_ITS_OWN | {"clearinghouse_token": ABSENT},
+            value_error(
+                None,
+                "LPB_CLEARINGHOUSE_URL, LPB_CLEARINGHOUSE_TOKEN, LPB_CLEARINGHOUSE_TENANT_ID are set "
+                "together or not at all; missing: LPB_CLEARINGHOUSE_TOKEN",
+            ),
+        ),
+        Refused(
+            "a clearinghouse beside self-hosted payments",
+            CLEARINGHOUSE_OF_ITS_OWN | {"batteries_url": f"https://batteries.invalid/{CREDENTIAL}"},
+            value_error(
+                None,
+                "LPB_BATTERIES_URL, LPB_BATTERIES_TOKEN cannot be set with LPB_CLEARINGHOUSE_URL: an "
+                "engine that uses a payment clearinghouse reaches Batteries and the signer through it, "
+                "and holds no address or credential of theirs",
+            ),
+        ),
+        Refused(
+            "a stale window shorter than four calls to the clearinghouse",
+            CLEARINGHOUSE_OF_ITS_OWN
+            | {
+                "batteries_token": ABSENT,
+                "batteries_timeout_s": 1,
+                "operation_stale_s": 6103.25,
+                "clearinghouse_timeout_s": 1717.5,
+            },
+            value_error(None, CLEARINGHOUSE_STALE_WINDOW_REFUSED),
+            numerals=("6103.25", "1717.5"),
+        ),
+    ],
 }
 
 
@@ -384,6 +433,7 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
 def test_a_rule_does_not_repeat_the_value_it_refuses(case: Refused) -> None:
     """The rule's words say what the setting needs and name it. What was given is in no form."""
     given = {"discovery_url": DISCOVERY, **CREDENTIALS, **case.change}
+    given = {name: value for name, value in given.items() if value is not ABSENT}
     error = refusal(lambda: EngineSettings.model_validate(given))
     assert carried(error, CREDENTIAL, *case.numerals) == []
     assert described(error) == [case.expected]

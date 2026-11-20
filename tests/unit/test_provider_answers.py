@@ -234,9 +234,9 @@ async def test_the_rest_service_answers_a_malformed_provider_answer_with_502(
     )
     headers = {"Authorization": f"Bearer {key.token}"}
     async with httpx.AsyncClient(transport=transport, base_url="http://engine", headers=headers) as client:
-        listed = await client.get("/v1/clearinghouse/grants")
+        listed = await client.get("/v1/clearinghouse/tenants")
         created = await client.post(
-            "/v1/clearinghouse/grants",
+            "/v1/clearinghouse/tenants",
             json={"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"},
         )
     assert (listed.status_code, created.status_code) == (502, 502)
@@ -277,27 +277,27 @@ async def test_a_resumed_grant_create_never_creates_a_second_grant_over_a_malfor
     batteries = GrantDesk()
     client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
     engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     usd = Money(amount=Decimal(5), currency="USD")
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
     assert len(batteries.grants) == 1
 
     clock.advance(120)
     batteries.list_answers = [MALFORMED_PAGES[page]]
     try:
-        resumed: object = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+        resumed: object = await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
     except ProviderError as unknown:
         resumed = unknown
     assert len(batteries.grants) == 1, "the resume created a second grant"
     assert isinstance(resumed, ProviderError) and not definite_refusal(resumed)
     with pytest.raises(OperationInProgress):  # the reference is still held
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
 
     clock.advance(120)
-    adopted = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # the list answers
-    assert (adopted.id, len(batteries.grants)) == ("grant_1", 1)
+    adopted = await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # the list answers
+    assert (adopted.tenant_id, len(batteries.grants)) == ("grant_1", 1)
 
 
 TAGGED = GRANT | {"metadata": '{"lpb_operation": "tag-1"}'}
@@ -363,27 +363,27 @@ async def test_a_resumed_grant_create_never_creates_a_second_grant_over_a_grant_
     batteries = GrantDesk()
     client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
     engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     usd = Money(amount=Decimal(5), currency="USD")
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
     assert len(batteries.grants) == 1
 
     clock.advance(120)
     batteries.list_answers = [{"items": [UNREADABLE_GRANTS[item](batteries.grants[0])], "next_cursor": ""}]
     try:
-        resumed: object = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+        resumed: object = await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
     except ProviderError as unknown:
         resumed = unknown
     assert len(batteries.grants) == 1, "the resume created a second grant"
     assert isinstance(resumed, ProviderError) and not definite_refusal(resumed)
     with pytest.raises(OperationInProgress):  # the reference is still held
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
 
     clock.advance(120)
-    adopted = await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # the list answers
-    assert (adopted.id, len(batteries.grants)) == ("grant_1", 1)
+    adopted = await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # the list answers
+    assert (adopted.tenant_id, len(batteries.grants)) == ("grant_1", 1)
 
 
 async def ledger(store: SqlStore) -> list[tuple[str, str]]:
@@ -428,8 +428,8 @@ async def test_a_grant_read_back_the_engine_cannot_read_is_an_unknown_outcome_no
     key = await engine.keys.bootstrap_admin()
     body = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"}
     async with rest(engine, key.token) as http:
-        created = await http.post("/v1/clearinghouse/grants", json=body)
-        again = await http.post("/v1/clearinghouse/grants", json=body)
+        created = await http.post("/v1/clearinghouse/tenants", json=body)
+        again = await http.post("/v1/clearinghouse/tenants", json=body)
     assert (created.status_code, again.status_code) == (503, 409)  # the grant exists: unknown, and held
     assert "overloaded" not in created.text
     assert await ledger(store) == [("grant-1", "started")]
@@ -467,7 +467,7 @@ async def test_allotment_over_a_key_answer_it_cannot_read_is_an_unknown_outcome_
     manager = BatteriesClient(BASE, "t", client=answering(UNUSABLE_KEYS[answer], status=201))
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     key = await engine.keys.bootstrap_admin()
-    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "g1", "operation_ref": "p-1"}
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p-1"}
     async with rest(engine, key.token) as http:
         created = await http.post("/v1/clearinghouse/tenants/default/actors/alice/allocation", json=body)
         again = await http.post("/v1/clearinghouse/tenants/default/actors/alice/allocation", json=body)
@@ -559,14 +559,14 @@ async def test_a_usage_feed_whose_cursor_does_not_advance_fails_the_sync_as_an_i
 async def test_the_rest_service_answers_a_list_that_never_advances_with_502(
     make_engine: EngineFactory,
 ) -> None:
-    """``GET /v1/clearinghouse/grants`` and ``POST /v1/costs/sync`` asked for the same page without end and
+    """``GET /v1/clearinghouse/tenants`` and ``POST /v1/costs/sync`` asked for the same page without end and
     never answered."""
     desk = BatteriesClient(BASE, "t", client=stuck(GRANT, []))
     usage = BatteriesUsageSource(BASE, "t", client=stuck(USAGE_ITEM, []))
     engine = await make_engine(supply=EngineSupply(grants_manager=desk, usage_source=usage))
     key = await engine.keys.bootstrap_admin()
     async with rest(engine, key.token) as http:
-        listed = await http.get("/v1/clearinghouse/grants")
+        listed = await http.get("/v1/clearinghouse/tenants")
         synced = await http.post("/v1/costs/sync")
     assert (listed.status_code, synced.status_code) == (502, 502)
 
@@ -577,20 +577,20 @@ async def test_a_resumed_grant_create_over_a_list_that_never_advances_is_an_unkn
     batteries = GrantDesk()
     client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
     engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     usd = Money(amount=Decimal(5), currency="USD")
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
 
     clock.advance(120)
     batteries.list_answers = [{"items": [], "next_cursor": "c1"}] * 5  # then the real list
     with pytest.raises(ProviderError, match="did not advance") as refused:
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
     assert not definite_refusal(refused.value) and len(batteries.list_answers) == 3  # two pages asked
     assert len(batteries.grants) == 1  # never "no such grant"
     with pytest.raises(OperationInProgress):  # the reference is still held
-        await desk.create_grant(admin, "ops", usd, operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])

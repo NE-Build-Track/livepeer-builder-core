@@ -12,9 +12,13 @@ from typing import Annotated
 from fastapi import Path, Query
 from pydantic import AfterValidator, AwareDatetime
 
-from livepeer_builder.contracts.common import StoredText
+from livepeer_builder.contracts.common import GrantId, StoredText
 
 PathId = Annotated[StoredText, Path()]
+# A tenant whose grant the route acts on. A tenant's id is its grant's id (D83), and the engine places it
+# in the payment provider's URL path, so it is one path segment (#113, C10): a 422 otherwise, before the
+# operation ledger records anything or the provider is called.
+GrantTenantId = Annotated[GrantId, Path()]
 QueryId = Annotated[StoredText | None, Query()]  # optional: absent means "not narrowed"
 
 

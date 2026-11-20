@@ -85,7 +85,6 @@ async def paid_engine(
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
     actor = await engine.payments.allot(admin, request)
     return engine, actor.allocation_id

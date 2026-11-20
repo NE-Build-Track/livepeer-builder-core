@@ -32,12 +32,11 @@ PROVISION: dict[str, Any] = {
     "tenant_id": "default",
     "actor_id": "alice",
     "amount": Money(amount=Decimal("5"), currency="USD"),
-    "grant_id": "grant_1",
     "label": "Alice",
 }
 
 
-@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "grant_id", "label", "operation_ref"])
+@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "label", "operation_ref"])
 @pytest.mark.parametrize("value", UNSTORABLE, ids=["too long", "NUL", "lone surrogate"])
 def test_allotment_refuses_text_the_store_cannot_keep(field: str, value: str) -> None:
     with pytest.raises(ValidationError, match=field):

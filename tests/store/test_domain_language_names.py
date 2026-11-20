@@ -45,7 +45,6 @@ PROVISION = AllotRequest(
     actor_id="alice",
     amount=Money(amount=Decimal("5"), currency="USD"),
     label="Alice",
-    grant_id="grant_1",
     operation_ref="provision",
 )
 PROVISION_FINGERPRINT = "8eeeba74ca6295846627a15f9de0b1994cff06254598fdd95e62b0ff000b190d"

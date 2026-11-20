@@ -265,17 +265,19 @@ async def test_keys_off_removes_key_issuance_and_acceptance(
     assert (await client.get("/v1/jobs", headers={"x-user": "carol"})).status_code == 200
 
 
-async def test_without_a_grants_manager_the_grant_desk_routes_do_not_exist(store: SqlStore) -> None:
+async def test_without_a_grants_manager_the_tenant_desk_routes_do_not_exist(store: SqlStore) -> None:
     with_desk = await BuilderEngine.create(
         settings(), supply=EngineSupply(store=store, grants_manager=FakeAllocationManager())
     )
     without = await BuilderEngine.create(settings(), supply=EngineSupply(store=store))
     try:
-        assert with_desk.payments.grants is not None and without.payments.grants is None
+        assert with_desk.payments.tenants is not None and without.payments.tenants is None
         on = create_app(with_desk, manage_lifecycle=False).openapi()["paths"]
         off = create_app(without, manage_lifecycle=False).openapi()["paths"]
-        assert "/v1/clearinghouse/grants" in on and "/v1/clearinghouse/grants" not in off
-        assert "/v1/clearinghouse/grant/top-up" in off  # funding uses the engine token and stays
+        tenant = "/v1/clearinghouse/tenants/{tenant_id}"
+        for path in ("/v1/clearinghouse/tenants", tenant + "/grant", tenant + "/status"):
+            assert path in on and path not in off, path
+        assert tenant + "/grant/top-up" in off  # a top-up uses the engine token and stays
     finally:
         await with_desk.stop()
         await without.stop()
@@ -316,7 +318,7 @@ async def test_supplied_parts_are_borrowed_not_closed(store: SqlStore) -> None:
     assert await store.list_jobs("default", "nobody") == []  # still open: the caller owns it
 
 
-async def test_start_logs_the_authentication_and_grant_desk_modes(
+async def test_start_logs_the_authentication_and_tenant_desk_modes(
     store: SqlStore, clock: FixedClock, caplog: pytest.LogCaptureFixture
 ) -> None:
     engine = await BuilderEngine.create(
@@ -332,4 +334,4 @@ async def test_start_logs_the_authentication_and_grant_desk_modes(
         async with engine:
             pass
     (started,) = [r for r in caplog.records if getattr(r, "event", "") == "engine.started"]
-    assert (started.api_keys, started.own_authenticators, started.grant_desk) == ("off", 1, "off")  # type: ignore[attr-defined]
+    assert (started.api_keys, started.own_authenticators, started.tenant_desk) == ("off", 1, "off")  # type: ignore[attr-defined]

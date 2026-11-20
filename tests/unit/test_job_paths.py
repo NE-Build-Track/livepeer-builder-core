@@ -100,7 +100,7 @@ async def api(
     engine = await make_engine()
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-paths-1")
     amount = Money(amount=Decimal(5), currency="USD")
-    alice_allocation = {"tenant_id": "default", "actor_id": "alice", "grant_id": "grant_1"}
+    alice_allocation = {"tenant_id": "default", "actor_id": "alice"}
     await engine.payments.allot(admin, AllotRequest(**alice_allocation, amount=amount, operation_ref="p1"))
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:

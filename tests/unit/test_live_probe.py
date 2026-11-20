@@ -34,7 +34,7 @@ async def stack(
         admin,
         AllotRequest(
             operation_ref="allot:default:carol", tenant_id="default", actor_id="carol",
-            amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
+            amount=Money(amount=Decimal("5"), currency="USD"),
         ),
     )  # fmt: skip
     token = (await engine.keys.bootstrap_admin()).token

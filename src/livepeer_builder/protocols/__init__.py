@@ -41,6 +41,7 @@ from livepeer_builder.contracts import (
     SessionRequest,
     SetAsideUsage,
     SyncCheckpoint,
+    TenantGrant,
     UsagePage,
     UsageRow,
 )
@@ -217,6 +218,12 @@ class AllocationManager(Protocol):
     ) -> GrantRecord:
         """Create a grant carrying ``metadata``, which ``list_grants`` returns (the engine's tag, D57)."""
         ...
+
+    async def read_grant(self, grant_id: str) -> TenantGrant: ...  # total, unallocated balance, status
+
+    async def grant_balances(self) -> list[TenantGrant]: ...  # every grant, oldest first
+
+    async def set_grant_status(self, grant_id: str, status: str) -> None: ...  # active or paused
 
 
 class UsageSource(Protocol):

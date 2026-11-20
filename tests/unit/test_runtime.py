@@ -91,7 +91,7 @@ async def test_batteries_without_a_grants_token_starts_without_the_grant_desk() 
         parts = await default_parts(settings, stack)
         assert isinstance(parts.allocation_manager, BatteriesClient)  # funding still works
         assert parts.grants_manager is None  # the engine token cannot list or create grants
-        assert assemble(settings, parts).payments.grants is None
+        assert assemble(settings, parts).payments.tenants is None
 
 
 async def test_default_adapters_follow_settings() -> None:
@@ -136,7 +136,7 @@ async def test_grants_token_wires_a_separate_grants_client() -> None:
         assert isinstance(parts.allocation_manager, BatteriesClient)
         assert isinstance(parts.grants_manager, BatteriesClient)
         assert parts.grants_manager is not parts.allocation_manager
-        assert assemble(settings, parts).payments.grants is not None
+        assert assemble(settings, parts).payments.tenants is not None
 
 
 async def test_start_runs_the_loops_and_stop_ends_them(store: SqlStore, clock: FixedClock) -> None:

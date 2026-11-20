@@ -121,7 +121,7 @@ async def run_checks(probe: Probe, *, spend: bool, fund_actor: str | None, fund_
         probe.expect(f"no credential: {method} {path}", await probe.call(method, path, None), 401)
     for method, path in (
         ("GET", "/v1/keys"),
-        ("GET", "/v1/clearinghouse/actors"),
+        ("GET", f"/v1/clearinghouse/tenants/{TENANT}/actors"),
         ("POST", SYNC),
     ):
         probe.expect(f"actor key: {method} {path}", await probe.call(method, path, a), 403)

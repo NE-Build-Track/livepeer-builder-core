@@ -73,7 +73,6 @@ async def allotted(make_engine: EngineFactory, admin: ActorContext, transport: o
         tenant_id="default",
         actor_id="alice",
         amount=amount,
-        grant_id="grant_1",
     )
     await engine.payments.allot(admin, request)
     return engine

@@ -21,6 +21,9 @@ class Operation(StrEnum):
     ADMIN_ALLOCATIONS = "admin.allocations"
     ADMIN_COSTS = "admin.costs"
     ADMIN_READ = "admin.read"  # admin reads of one tenant: keys, actors, reconciliation (D46)
+    # What only a clearinghouse admin does to a tenant: onboard it, list every tenant, top up its grant,
+    # pause or resume it (D83, #165). A tenant admin divides its grant and never enlarges it.
+    ADMIN_TENANTS = "admin.tenants"
     ACTORS_ASSERT = "actors.assert"
 
 
@@ -28,8 +31,9 @@ DEFAULT_ACTOR_PERMISSIONS: frozenset[str] = frozenset(
     {Operation.DISCOVER, Operation.JOBS_RUN, Operation.JOBS_READ, Operation.COSTS_READ}
 )
 
-# auditor: a read-only admin (D46)
-CredentialKind = Literal["actor", "clearinghouse_admin", "auditor", "service"]
+# clearinghouse_admin: an admin of every tenant. tenant_admin: an admin of one tenant, its own (D83, #165).
+# auditor: a read-only admin of one tenant (D46)
+CredentialKind = Literal["actor", "clearinghouse_admin", "tenant_admin", "auditor", "service"]
 
 
 class AuthProvenance(Contract):
@@ -69,10 +73,13 @@ class AuthRequest(Contract):
 class ResourceRef(Contract):
     """What an operation touches, so a policy can check ownership."""
 
-    kind: Literal["job", "actor", "allocation", "key", "costs"]
+    kind: Literal["job", "actor", "allocation", "key", "costs", "tenant"]
     tenant_id: str
     owner_actor_id: str | None = None
     id: str | None = None
+    # For a key: the kind of the key being issued, rotated or revoked, so a policy can refuse a tenant
+    # admin an admin key (#165). ``None`` when the operation names a tenant's keys and no one key.
+    credential_kind: CredentialKind | None = None
 
 
 class AccessKey(Contract):

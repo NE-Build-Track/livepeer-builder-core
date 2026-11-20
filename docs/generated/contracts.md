@@ -31,6 +31,7 @@ classDiagram
         +str tenant_id
         +str? owner_actor_id
         +str? id
+        +enum? credential_kind
     }
     class JobRequest {
         +str app

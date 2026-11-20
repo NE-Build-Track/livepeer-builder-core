@@ -67,7 +67,12 @@ def transport() -> ScriptedStreamTransport:
 
 @pytest.fixture
 def manager() -> FakeAllocationManager:
-    return FakeAllocationManager()
+    """The payment provider, holding a grant for the tenant ``default``: a tenant's id is its grant's
+    id (D83), so an actor is allotted from the grant its tenant names. A test with another tenant adds
+    that grant (``add_grant``) or onboards the tenant."""
+    provider = FakeAllocationManager()
+    provider.add_grant("default")
+    return provider
 
 
 @pytest.fixture
@@ -101,13 +106,16 @@ async def allot(engine: BuilderEngine, *actors: ActorContext) -> None:
     """Give each actor an allocation of 5 USD, as an admin does. A job needs one: an actor with no
     allocation fails ``not_provisioned`` before any payment, and there is no shared key."""
     operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
+    provider = engine.payments._manager  # the fake provider under this engine
     for actor in actors:
+        # A tenant's id is its grant's id (D83): the provider holds a grant for each actor's tenant.
+        if isinstance(provider, FakeAllocationManager) and actor.tenant_id not in provider.held:
+            provider.add_grant(actor.tenant_id)
         request = AllotRequest(
             operation_ref=f"allot:{actor.tenant_id}:{actor.actor_id}",
             tenant_id=actor.tenant_id,
             actor_id=actor.actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
         )
         await engine.payments.allot(operator, request)
 

@@ -92,7 +92,7 @@ That is the only identity the engine understands.
 | Your app | `ActorContext` |
 | --- | --- |
 | Logged-in customer id | `actor_id` |
-| Tenant / org | `tenant_id` |
+| Tenant / org | `tenant_id`: your tenant's id, which is the id of its grant ([step 3](#3-allot-before-paid-work)) |
 | What this user may do | `permissions` (`discover`, `jobs.run`, `jobs.read`, `costs.read`) |
 | Operator / admin desk | `credential_kind="clearinghouse_admin"` |
 
@@ -110,6 +110,12 @@ Jobs that hit the network spend from an allocation. A job for an actor with no a
 `JobFailed` (`job.failure.kind == "not_provisioned"`; HTTP 402 in service mode). Allotment is an admin operation. There is no automatic allotment
 ([payments.md](../contracts/payments.md)).
 
+An allocation is allotted from its tenant's grant, and a tenant's id is its grant's id
+([payments.md](../contracts/payments.md#tenants)). So the `tenant_id` you allot under, and the one in
+each `ActorContext`, is that id. Onboard the tenant once (`engine.payments.tenants.onboard(admin, name,
+amount, operation_ref=...)`, which needs `LPB_BATTERIES_GRANTS_TOKEN`) and keep the `tenant_id` it
+answers with, or use the id of a grant you created at Batteries yourself.
+
 ```python
 from livepeer_builder import ActorContext, AllotRequest, Money
 
@@ -118,10 +124,9 @@ admin = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 await engine.payments.allot(
     admin,
     AllotRequest(
-        tenant_id="default",
+        tenant_id="<your tenant id>",  # the grant's id: the allocation is allotted from that grant
         actor_id="customer-42",
         amount=Money(amount="5", currency="USD"),
-        grant_id="<your grant id>",  # an admin with no allocation of its own must name the grant
         operation_ref="allot-customer-42",  # required: a repeat is answered, never applied twice
     ),
 )
@@ -166,7 +171,7 @@ Failures are Python exceptions, not HTTP statuses:
 Depend on the narrowest Protocol your code uses, not on `BuilderEngine`
 ([livepeer_builder.api](../../src/livepeer_builder/api.py)): `ActorApi` to run jobs and read their
 results, costs and catalog; `WorkApi` when you also manage the engine's access keys, reconcile or
-sync costs; `ClearinghouseApi` for allotment, top-ups and the grant desk; `EngineApi` for all of it.
+sync costs; `ClearinghouseApi` for tenants, allotment and top-ups; `EngineApi` for all of it.
 
 ```python
 from livepeer_builder import ActorApi, ActorContext, JobRequest
@@ -181,7 +186,7 @@ async def answer(engine: ActorApi, actor: ActorContext, prompt: dict[str, str]) 
 ```
 
 Optional capabilities are `X | None` members: `jobs.streaming`, `keys` on `WorkApi`, and
-`payments.grants` on `ClearinghouseApi`. Check for `None`; do not probe with `hasattr`.
+`payments.tenants` on `ClearinghouseApi`. Check for `None`; do not probe with `hasattr`.
 
 Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps them in step:
 
@@ -194,7 +199,11 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   the runner's settle window, as on the engine), and rejects a repeated
   `operation_ref` and a path with no leading `/`. It does not model admission, failover or payment.
 - **`make_engine(...)`** for integration tests: a real engine over in-memory SQLite and the shipped port
-  fakes (`async with make_engine(runners=[...]) as engine:`).
+  fakes (`async with make_engine(runners=[...]) as engine:`). Its `FakeAllocationManager` holds a grant
+  for the tenant `default`, so that tenant's actors can be allotted. For another tenant, supply a manager
+  of your own (`manager.add_grant("<tenant id>")`, then `EngineSupply(allocation_manager=manager,
+  grants_manager=manager)`), or onboard the tenant. The fake refuses as Batteries does: an unknown grant
+  is its 404, and an allocation or a top-up larger than the grant's unallocated balance its 409.
 
 ## 5. What you still run as an operator
 
@@ -202,8 +211,8 @@ Your process is the process that holds the engine. There is no separate `lpb ser
 
 - Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it),
   `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
-  `EngineSettings`. `LPB_BATTERIES_GRANTS_TOKEN` only turns on the grant desk
-  (`engine.payments.grants`); an application that never lists or creates grants leaves it unset.
+  `EngineSettings`. `LPB_BATTERIES_GRANTS_TOKEN` only turns on the tenant desk
+  (`engine.payments.tenants`); an application that never onboards or lists tenants leaves it unset.
 - Run `lpb migrate`, or leave `LPB_AUTO_MIGRATE=true`.
 - Run `lpb bootstrap-admin` only if you will use engine-issued admin keys. Embed can pass an
   in-process admin `ActorContext` instead, as above.

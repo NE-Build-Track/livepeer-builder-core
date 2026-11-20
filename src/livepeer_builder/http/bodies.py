@@ -1,13 +1,13 @@
 """The REST request bodies: what a route parses before it calls the engine. A 422 here moves no money."""
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from livepeer_builder import contracts
-from livepeer_builder.contracts import AllocationStatus, CredentialKind, OperationRef
-from livepeer_builder.contracts.common import AllotAmount, GrantId, StoredText, TopUpAmount
+from livepeer_builder.contracts import AllocationStatus, CredentialKind, OperationRef, TenantStatus
+from livepeer_builder.contracts.common import AllotAmount, StoredText
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
 
@@ -39,16 +39,31 @@ class IssueKeyBody(Body):
     operation_ref: OperationRef  # required (D57, Q4)
 
 
+# The path names the tenant, and a tenant's id is its grant's id (D83): a body that still names a grant
+# or a tenant is a 422 (``Body`` refuses every field it does not know), never a field the engine ignores
+# while money moves.
 class AllotBody(Body):
     amount: AllotAmount  # as AllotRequest: a 422 before money moves (#112, C11)
     label: StoredText = ""  # ActorAllocation.label; a 422 before money moves
-    grant_id: GrantId = ""  # as stored, and one provider path segment: a 422 before money moves (#113, C10)
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class GrantBody(Body):
-    name: str
-    amount: TopUpAmount  # a 422 before the ledger and the provider (#112, C11)
+class OnboardBody(Body):
+    name: Annotated[StoredText, Field(min_length=1)]  # the tenant's name, and its grant's
+    amount: AllotAmount  # the grant's first total; zero onboards a tenant to top up later
+    admin_actor_id: Annotated[StoredText, Field(min_length=1)] = "tenant-admin"  # whose key the first is
+    operation_ref: OperationRef  # required (D57, Q4)
+
+
+class TenantStatusBody(Body):
+    status: TenantStatus  # active or paused: a grant is never closed (D82)
+    operation_ref: OperationRef  # required: a late repeat never pauses a tenant resumed since
+
+
+class TenantKeyBody(Body):
+    kind: Literal["auditor", "tenant_admin"] = "auditor"  # tenant_admin: a clearinghouse admin's to issue
+    actor_id: Annotated[StoredText, Field(min_length=1)]
+    label: StoredText = ""
     operation_ref: OperationRef  # required (D57, Q4)
 
 

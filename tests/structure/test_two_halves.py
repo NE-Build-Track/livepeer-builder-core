@@ -69,6 +69,7 @@ CLEARINGHOUSE = {
     "services/grants.py",
     "services/payment_keys.py",
     "services/payments.py",
+    "services/tenants.py",
     "http/clearinghouse.py",
 }
 # What both halves use: access (policy, access keys, who signed in), the operation ledger, and the app

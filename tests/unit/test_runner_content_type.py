@@ -146,9 +146,7 @@ async def serving(
     """REST over an engine whose SDK transport calls ``runner``, with alice allotted and holding a key."""
     engine = await make_engine(runners=(runner,), supply=EngineSupply(transport=SdkRunnerTransport(None)))
     amount = Money(amount=Decimal(5), currency="USD")
-    request = AllotRequest(
-        operation_ref="p1", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
-    )
+    request = AllotRequest(operation_ref="p1", tenant_id="default", actor_id="alice", amount=amount)
     await engine.payments.allot(admin, request)
     issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-live")
     app = create_app(engine, manage_lifecycle=False)

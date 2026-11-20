@@ -180,7 +180,6 @@ async def test_a_stored_projection_keeps_billable_apart_from_fees(
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
-        grant_id="g",
     )
     allocation = (await engine.payments.allot(admin, request)).allocation_id
     transport.steps = [
@@ -215,7 +214,6 @@ async def allotted(make_engine: EngineFactory, admin: ActorContext):  # type: ig
         tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
-        grant_id="grant_1",
     )
     await engine.payments.allot(admin, request)
     return engine
@@ -233,7 +231,6 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-sess",))]
@@ -285,7 +282,6 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     allocation = actor.allocation_id
@@ -329,7 +325,6 @@ async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     usage.rows = [row("u1", "sess-1", "0.4", allocation=actor.allocation_id, manifest="m-early")]
@@ -356,7 +351,6 @@ async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     allocation = actor.allocation_id
@@ -394,7 +388,6 @@ async def test_a_forged_manifest_on_another_allocation_stays_unattributed(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-real",))]
@@ -474,8 +467,7 @@ async def test_a_job_that_ended_since_the_last_sync_counts_in_summary_and_recent
     engine = await make_engine()
     await engine.payments.allot(
         admin,
-        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                         grant_id="grant_1"),
+        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-new",))]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job  # no sync since it ended
@@ -560,8 +552,7 @@ async def test_a_reconciliation_during_a_sync_counts_every_row_once(
         engine = await make_engine(supply=EngineSupply(store=file_store))
         actor = await engine.payments.allot(
             admin,
-            AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                             grant_id="grant_1"),
+            AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
         )  # fmt: skip
         job, attempt = await running_job(file_store, clock, allocation=actor.allocation_id)
         usage.rows = [row("u1", "sess-1", "0.5", allocation=actor.allocation_id, manifest="m-1")]
@@ -600,8 +591,7 @@ async def test_a_running_jobs_matched_fee_is_pending_and_reconciliation_balances
     engine = await make_engine()
     actor = await engine.payments.allot(
         admin,
-        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                         grant_id="grant_1"),
+        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
     )  # fmt: skip
     transport.opens = [StreamScript(events=[b"a", 30.0], manifest_ids=("m-s",))]  # paid at open, then runs on
     streaming = engine.jobs.streaming
@@ -633,8 +623,7 @@ async def ended_paid_job(
     engine = await make_engine()
     actor = await engine.payments.allot(
         admin,
-        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                         grant_id="grant_1"),
+        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
     )  # fmt: skip
     job, attempt = await running_job(store, clock, allocation=actor.allocation_id)
     await ends_and_projects(engine, store, job, attempt, clock)

@@ -87,7 +87,6 @@ async def engine_offering(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
         )
         await engine.payments.allot(OPERATOR, request)
         yield engine

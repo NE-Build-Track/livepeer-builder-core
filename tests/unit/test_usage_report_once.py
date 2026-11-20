@@ -42,7 +42,6 @@ async def succeeded_job(
             tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="USD"),
-            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok()]

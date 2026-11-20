@@ -57,7 +57,7 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert (
         await client.post(
             ALLOCATION,
-            json={"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+            json={"amount": {"amount": "0", "currency": "USD"}, "operation_ref": "p1"},
             headers=admin,
         )
     ).status_code == 201
@@ -94,29 +94,38 @@ async def test_admin_allocation_lifecycle_over_rest(api, usage: FakeUsageSource)
     assert bad.status_code == 404  # revoked: no longer allotted
 
 
-async def test_grants_are_listed_and_created_over_rest(api) -> None:  # type: ignore[no-untyped-def]
+TENANTS = "/v1/clearinghouse/tenants"
+
+
+async def test_tenants_are_onboarded_and_listed_over_rest(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, alice = api
-    assert (await client.get("/v1/clearinghouse/grants", headers=alice)).status_code == 403
-    assert (await client.get("/v1/clearinghouse/grants", headers=admin)).json() == []
+    assert (await client.get(TENANTS, headers=alice)).status_code == 403
+    assert [tenant["tenant_id"] for tenant in (await client.get(TENANTS, headers=admin)).json()] == [
+        "default"
+    ]
     created = await client.post(
-        "/v1/clearinghouse/grants",
+        TENANTS,
         json={"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "grant-1"},
         headers=admin,
     )
     assert created.status_code == 201
-    assert created.json()["name"] == "ops" and created.json()["total"] == "5"
-    assert (await client.get("/v1/clearinghouse/grants", headers=admin)).json() == [created.json()]
+    tenant_id = created.json()["tenant_id"]
+    assert created.json()["name"] == "ops" and created.json()["admin_key"]["token"].startswith("lpk_")
+    five = {"amount": "5", "currency": "USD"}
+    assert (await client.get(TENANTS, headers=admin)).json()[-1] == {
+        "tenant_id": tenant_id, "name": "ops", "status": "active", "total": five, "unallocated": five,
+    }  # fmt: skip
 
 
-async def test_grant_top_up_is_admin_only(api, manager: FakeAllocationManager) -> None:  # type: ignore[no-untyped-def]
+async def test_grant_top_up_is_for_a_clearinghouse_admin_only(api, manager: FakeAllocationManager) -> None:  # type: ignore[no-untyped-def]
     client, _, admin, alice = api
-    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
-    assert (await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=alice)).status_code == 403
-    missing = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g2"}
-    assert (
-        await client.post("/v1/clearinghouse/grant/top-up", json=missing, headers=admin)
-    ).status_code == 400
-    funded = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
+    manager.add_grant("grant_chosen", total=0)
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
+    top_up = TENANTS + "/grant_chosen/grant/top-up"
+    assert (await client.post(top_up, json=body, headers=alice)).status_code == 403
+    unknown = await client.post(TENANTS + "/no-such-tenant/grant/top-up", json=body, headers=admin)
+    assert unknown.status_code == 404  # the provider holds no such grant
+    funded = await client.post(top_up, json=body, headers=admin)
     assert funded.status_code == 204 and funded.content == b""
     assert manager.topped_up_grants[0][0] == "grant_chosen"
 
@@ -127,7 +136,7 @@ async def test_keys_jobs_usage_and_costs_over_rest(
     client, _engine, admin, alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
     keys = (await client.get("/v1/keys", headers=admin)).json()
@@ -163,7 +172,7 @@ async def test_a_signing_that_may_have_charged_is_503_without_retry_after(
     client, _engine, admin, alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
     transport.steps = [
@@ -181,7 +190,7 @@ async def test_a_repeated_operation_ref_answers_409_with_a_stable_code(  # type:
     client, engine, admin, alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
     body = {"app": APP, "payload": {"a": 1}, "operation_ref": "o1"}
@@ -215,7 +224,7 @@ async def test_error_mapping(api, transport: ScriptedTransport, monkeypatch: pyt
     client, engine, admin, alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
 
@@ -341,7 +350,7 @@ async def test_a_missing_permission_is_403_and_another_actors_job_404_over_rest(
     client, engine, admin, alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
     transport.steps = [ScriptedTransport.ok()]
@@ -374,7 +383,7 @@ async def test_a_raw_body_arrives_as_base64_over_rest(  # type: ignore[no-untype
     client, _engine, admin, alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
     seen: list[JobRequest] = []
@@ -411,33 +420,36 @@ async def test_actors_are_listed_and_read_over_rest(api) -> None:  # type: ignor
         ALLOCATION,
         json={
             "amount": {"amount": "5", "currency": "USD"},
-            "grant_id": "grant_1",
             "operation_ref": "p1",
             "label": "Alice Smith",
         },
         headers=admin,
     )
     assert allotted.status_code == 201 and allotted.json()["label"] == "Alice Smith"
-    listed = await client.get("/v1/clearinghouse/actors", headers=admin)
+    listed = await client.get("/v1/clearinghouse/tenants/default/actors", headers=admin)
     assert listed.status_code == 200
     assert [(a["actor_id"], a["label"], a["allotted"], a["allocation"]["status"]) for a in listed.json()] == [
         ("alice", "Alice Smith", True, "active")
     ]  # D48: each row says whether it is allotted; the allocation is nested
-    assert (await client.get("/v1/clearinghouse/actors?allotted=false", headers=admin)).json() == []
-    assert (await client.get("/v1/clearinghouse/actors?status=paused", headers=admin)).json() == []
+    assert (
+        await client.get("/v1/clearinghouse/tenants/default/actors?allotted=false", headers=admin)
+    ).json() == []
+    assert (
+        await client.get("/v1/clearinghouse/tenants/default/actors?status=paused", headers=admin)
+    ).json() == []
     one = await client.get(ALLOCATION, headers=admin)
     assert one.status_code == 200 and one.json()["actor_id"] == "alice"
     assert (await client.get(ALLOCATION.replace("alice", "nobody"), headers=admin)).status_code == 404
-    assert (await client.get("/v1/clearinghouse/actors", headers=alice)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/tenants/default/actors", headers=alice)).status_code == 403
     operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     auditor = await engine.keys.issue(
         operator, kind="auditor", actor_id="dashboard", operation_ref="issue-http_routes-397"
     )
     as_auditor = {"Authorization": f"Bearer {auditor.token}"}
-    assert (await client.get("/v1/clearinghouse/actors", headers=as_auditor)).status_code == 200
     assert (
-        await client.get("/v1/clearinghouse/grants", headers=as_auditor)
-    ).status_code == 403  # every tenant's
+        await client.get("/v1/clearinghouse/tenants/default/actors", headers=as_auditor)
+    ).status_code == 200
+    assert (await client.get(TENANTS, headers=as_auditor)).status_code == 403  # every tenant's
     funded = await client.post(
         ALLOCATION + "/top-up",
         json={"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "x"},
@@ -454,7 +466,6 @@ async def test_a_label_too_long_to_store_is_refused_before_any_money_moves(  # t
     client, _engine, admin, _alice = api
     body = {
         "amount": {"amount": "5", "currency": "USD"},
-        "grant_id": "grant_1",
         "operation_ref": "p1",
         "label": "x" * 201,
     }
@@ -468,7 +479,7 @@ async def test_a_label_too_long_to_store_is_refused_before_any_money_moves(  # t
 async def test_an_admin_ref_reused_with_another_body_is_409_operation_conflict(api) -> None:  # type: ignore[no-untyped-def]
     """D57, ISS-11: the same code as for jobs; an admin command has no job, so no job id header."""
     client, _engine, admin, _alice = api
-    allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    allotted = {"amount": {"amount": "0", "currency": "USD"}, "operation_ref": "p1"}
     assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
     assert (await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)).status_code == 200
@@ -483,7 +494,7 @@ async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(
     api, manager: FakeAllocationManager
 ) -> None:
     client, _engine, admin, _alice = api
-    allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    allotted = {"amount": {"amount": "0", "currency": "USD"}, "operation_ref": "p1"}
     assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
     manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
@@ -497,7 +508,7 @@ async def test_an_admin_repeat_while_the_first_may_still_run_is_409_in_progress(
 
 async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
-    allotted = {"amount": {"amount": "0", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    allotted = {"amount": {"amount": "0", "currency": "USD"}, "operation_ref": "p1"}
     assert (await client.post(ALLOCATION, json=allotted, headers=admin)).status_code == 201
     fund = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "t1"}
     first = await client.post(ALLOCATION + "/top-up", json=fund, headers=admin)
@@ -509,15 +520,15 @@ async def test_an_admin_replay_has_the_original_status_and_says_it_is_a_replay(a
 
 async def test_a_replayed_grant_top_up_is_204_and_says_it_is_a_replay(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
-    body = {"amount": {"amount": "10", "currency": "USD"}, "operation_ref": "g1", "grant_id": "grant_chosen"}
-    first = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
-    again = await client.post("/v1/clearinghouse/grant/top-up", json=body, headers=admin)
+    body = {"amount": {"amount": "10", "currency": "USD"}, "operation_ref": "g1"}
+    first = await client.post(TENANTS + "/default/grant/top-up", json=body, headers=admin)
+    again = await client.post(TENANTS + "/default/grant/top-up", json=body, headers=admin)
     assert (first.status_code, again.status_code) == (204, 204)
     assert "Idempotent-Replayed" not in first.headers and again.headers["Idempotent-Replayed"] == "true"
 
 
 @pytest.mark.parametrize(
-    "path", [ALLOCATION + "/top-up", "/v1/clearinghouse/grant/top-up", ALLOCATION + "/rotate-payment-key"]
+    "path", [ALLOCATION + "/top-up", TENANTS + "/default/grant/top-up", ALLOCATION + "/rotate-payment-key"]
 )
 async def test_an_operation_ref_with_a_nul_is_422_on_top_up_and_rotate(  # type: ignore[no-untyped-def]
     api, manager: FakeAllocationManager, path: str
@@ -525,32 +536,32 @@ async def test_an_operation_ref_with_a_nul_is_422_on_top_up_and_rotate(  # type:
     client, _engine, admin, _alice = api
     await client.post(
         ALLOCATION,
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=admin,
     )
     before = list(manager.calls)
-    body = {"amount": {"amount": "1", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "a\x00b"}
+    body = {"amount": {"amount": "1", "currency": "USD"}, "operation_ref": "a\x00b"}
     answer = await client.post(path, json=body, headers=admin)
     assert answer.status_code == 422, answer.text
     assert manager.calls == before
 
 
 @pytest.mark.parametrize(
-    ("path", "grant_id"),
+    "path",
     [
-        (f"/v1/clearinghouse/tenants/default/actors/{'a' * 201}/allocation", "grant_1"),
-        (f"/v1/clearinghouse/tenants/{'a' * 201}/actors/alice/allocation", "grant_1"),
-        (ALLOCATION, "g" * 201),
-        ("/v1/clearinghouse/tenants/default/actors/a%00b/allocation", "grant_1"),
-        ("/v1/clearinghouse/tenants/a%00b/actors/alice/allocation", "grant_1"),
+        f"/v1/clearinghouse/tenants/default/actors/{'a' * 201}/allocation",
+        f"/v1/clearinghouse/tenants/{'a' * 201}/actors/alice/allocation",
+        f"/v1/clearinghouse/tenants/{'g' * 201}/grant/top-up",  # the tenant's id is its grant's id
+        "/v1/clearinghouse/tenants/default/actors/a%00b/allocation",
+        "/v1/clearinghouse/tenants/a%00b/actors/alice/allocation",
     ],
     ids=["actor", "tenant", "grant", "actor NUL", "tenant NUL"],
 )
 async def test_allotment_an_id_longer_than_the_store_keeps_is_422_before_money_moves(  # type: ignore[no-untyped-def]
-    api, manager: FakeAllocationManager, path: str, grant_id: str
+    api, manager: FakeAllocationManager, path: str
 ) -> None:
     client, _engine, admin, _alice = api
-    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": grant_id, "operation_ref": "p-long"}
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p-long"}
     answer = await client.post(path, json=body, headers=admin)
     assert answer.status_code == 422, answer.text
     assert manager.calls == []
@@ -564,15 +575,15 @@ async def test_an_amount_the_provider_would_not_take_is_422_before_the_ledger_an
     recorded nothing."""
     client, _engine, admin, _alice = api
     bad, good = {"amount": amount, "currency": "USD"}, {"amount": "5", "currency": "USD"}
-    allot = {"grant_id": "grant_1", "operation_ref": "p1"}
+    allot = {"operation_ref": "p1"}
     answer = await client.post(ALLOCATION, json=allot | {"amount": bad}, headers=admin)
     assert answer.status_code == 422, answer.text
     assert manager.calls == []
     assert (await client.post(ALLOCATION, json=allot | {"amount": good}, headers=admin)).status_code == 201
     funding = [
         (ALLOCATION + "/top-up", {"operation_ref": "f1"}, 200),
-        ("/v1/clearinghouse/grant/top-up", {"operation_ref": "g1", "grant_id": "grant_1"}, 204),
-        ("/v1/clearinghouse/grants", {"operation_ref": "c1", "name": "ops"}, 201),
+        (TENANTS + "/default/grant/top-up", {"operation_ref": "g1"}, 204),
+        (TENANTS, {"operation_ref": "c1", "name": "ops"}, 201),
     ]
     if amount.startswith("-"):  # a funding amount stays positive, refused as before (400)
         funding = []
@@ -595,10 +606,13 @@ async def test_every_command_that_moves_money_or_makes_a_credential_needs_a_ref(
         await engine.keys.list_keys(ActorContext(actor_id="operator", credential_kind="clearinghouse_admin"))
     )[0].key_id
     commands = [
-        (ALLOCATION, {"amount": usd, "grant_id": "grant_1"}),
+        (ALLOCATION, {"amount": usd}),
         (ALLOCATION + "/top-up", {"amount": usd}),
-        ("/v1/clearinghouse/grant/top-up", {"amount": usd, "grant_id": "grant_1"}),
-        ("/v1/clearinghouse/grants", {"name": "ops", "amount": usd}),
+        (TENANTS + "/default/grant/top-up", {"amount": usd}),
+        (TENANTS, {"name": "ops", "amount": usd}),
+        (TENANTS + "/default/status", {"status": "paused"}),
+        (TENANTS + "/default/keys", {"actor_id": "dashboard"}),
+        (TENANTS + f"/default/keys/{key_id}/rotate", {"label": "ci"}),
         (ALLOCATION + "/rotate-payment-key", {}),
         ("/v1/keys", {"actor_id": "bob", "tenant_id": "default"}),
         (f"/v1/keys/{key_id}/rotate", {"label": "ci"}),
@@ -633,21 +647,29 @@ async def test_a_replayed_key_issue_is_201_without_the_token(api) -> None:  # ty
     assert replayed.headers["Idempotent-Replayed"] == "true"
 
 
-async def test_replayed_allotment_and_grant_creation_say_so(api) -> None:  # type: ignore[no-untyped-def]
+async def test_replayed_allotment_and_onboarding_say_so(api) -> None:  # type: ignore[no-untyped-def]
     client, _engine, admin, _alice = api
-    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
-    grant = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
-    for path, sent in ((ALLOCATION, body), ("/v1/clearinghouse/grants", grant)):
-        first = await client.post(path, json=sent, headers=admin)
-        again = await client.post(path, json=sent, headers=admin)
-        assert (again.status_code, again.json()) == (first.status_code, first.json()) == (201, first.json())
-        assert again.headers.get("Idempotent-Replayed") == "true", path
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"}
+    first = await client.post(ALLOCATION, json=body, headers=admin)
+    again = await client.post(ALLOCATION, json=body, headers=admin)
+    assert (again.status_code, again.json()) == (first.status_code, first.json()) == (201, first.json())
+    assert again.headers.get("Idempotent-Replayed") == "true"
+    tenant = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
+    first = await client.post(TENANTS, json=tenant, headers=admin)
+    again = await client.post(TENANTS, json=tenant, headers=admin)
+    assert (first.status_code, again.status_code) == (201, 201)
+    assert (
+        first.json()["admin_key"]["token"].startswith("lpk_") and "Idempotent-Replayed" not in first.headers
+    )
+    shown_once = first.json()["admin_key"] | {"token": None, "replayed": True}
+    assert again.json() == first.json() | {"admin_key": shown_once}  # the same tenant; the token only once
+    assert again.headers.get("Idempotent-Replayed") == "true"
 
 
 async def test_allotment_an_actor_already_allotted_is_409_already_allotted(api) -> None:  # type: ignore[no-untyped-def]
     """Under a new reference nothing is applied, so the amount is not silently dropped: fund it instead."""
     client, _engine, admin, _alice = api
-    body = {"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"}
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"}
     first = await client.post(ALLOCATION, json=body, headers=admin)
     refused = await client.post(ALLOCATION, json=body | {"operation_ref": "p2"}, headers=admin)
     assert refused.status_code == 409 and refused.json()["code"] == "already_allotted"

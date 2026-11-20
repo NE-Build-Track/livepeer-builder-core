@@ -151,9 +151,7 @@ async def test_an_allowance_the_provider_cannot_read_has_a_fixed_message_and_its
     manager = BatteriesClient("https://batteries.test", "t", client=client)
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     amount = Money(amount=Decimal(5), currency="USD")
-    request = AllotRequest(
-        operation_ref="p", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
-    )
+    request = AllotRequest(operation_ref="p", tenant_id="default", actor_id="alice", amount=amount)
     await engine.payments.allot(admin, request)
     key = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-alice")
     app = create_app(engine, manage_lifecycle=False)
@@ -185,9 +183,7 @@ async def test_an_allowance_read_with_batteries_unreachable_says_so_in_the_engin
     manager = BatteriesClient("https://batteries.test", "t", client=client)
     engine = await make_engine(supply=EngineSupply(allocation_manager=manager))
     amount = Money(amount=Decimal(5), currency="USD")
-    request = AllotRequest(
-        operation_ref="p", tenant_id="default", actor_id="alice", amount=amount, grant_id="g"
-    )
+    request = AllotRequest(operation_ref="p", tenant_id="default", actor_id="alice", amount=amount)
     await engine.payments.allot(admin, request)
     key = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="issue-alice")
     app = create_app(engine, manage_lifecycle=False)

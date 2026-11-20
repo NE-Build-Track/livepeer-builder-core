@@ -67,12 +67,15 @@ classDiagram
         +async create_grant(name, amount, metadata) GrantRecord
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
+        +async grant_balances() TenantGrant[]
         +async grant_page(cursor) GrantPage
         +async list_grants() GrantRecord[]
         +async read_allocation(allocation_id) Allowance
+        +async read_grant(grant_id) TenantGrant
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None
         +async set_allocation_status(allocation_id, status) None
+        +async set_grant_status(grant_id, status) None
         +async top_up_allocation(allocation_id, amount, idempotency_key) None
         +async top_up_grant(grant_id, amount, idempotency_key) None
     }

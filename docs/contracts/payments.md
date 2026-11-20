@@ -1,8 +1,8 @@
 # Payments and cost contract
 
-**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82 (18 November 2026) · **Code:**
-`contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/costs.py`,
-`adapters/batteries.py`
+**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82 and D83 (18 November 2026) · **Code:**
+`contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
+`services/costs.py`, `adapters/batteries.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.
@@ -98,13 +98,92 @@ only one tenant. It is gone with its settings, `LPB_ALLOCATION_MODE`, `LPB_SHARE
   still reconciles when it is named, without an `actor_id`, over every actor of the tenant
   ([one allocation at a time](#cost-classification)).
 
+## Tenants
+
+A tenant is one enterprise app's account (D83, #165). Self-hosted payments has one tenant; a payment
+clearinghouse has one for each enterprise app.
+
+- **A tenant and its grant share one id.** Onboarding creates the grant at Batteries, and the id
+  Batteries gives it is the tenant's id from then on. Nothing maps one to the other, there is no binding
+  table, and no route or body takes a separate grant id. A body that still names one (`grant_id`) is a
+  422, never a field the engine ignores while money moves.
+- **One grant, for life.** It is prepaid and topped up as needed. A tenant that must stop is paused. The
+  engine never closes a grant.
+- **A tenant admin divides the grant and cannot enlarge it.** The kinds and what each may do are in
+  [access.md](access.md#defaultpolicy). Another tenant's id in a path is 403, before any lookup or
+  provider call.
+
+| Route | Who may call | What it does |
+| --- | --- | --- |
+| `POST /v1/clearinghouse/tenants` | A clearinghouse admin | Onboards a tenant: creates its grant and answers `201` `OnboardedTenant`, the `tenant_id`, the `name` and the first tenant admin key (`admin_key`, an `IssuedKey`), whose token is shown once. Body: `name`, `amount` (the grant's first total; zero onboards a tenant to top up later), `operation_ref`, and optionally `admin_actor_id` (`tenant-admin`), the actor the key is issued to |
+| `GET /v1/clearinghouse/tenants` | A clearinghouse admin | Every tenant with its grant: `TenantGrant[]` |
+| `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
+| `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total` and `unallocated` |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
+| `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment) |
+| `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
+
+A clearinghouse admin may call every route, for any tenant. The first four are what only a clearinghouse
+admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`), which
+#167 serves on a private listener. Today one listener serves everything.
+
+**The tenant desk.** Onboarding, the tenant list, the grant read and the tenant's status use the grants
+credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`
+and `allocations.read`). The token is optional. Without it the desk is off: `engine.payments.tenants` is
+`None` and those four routes are absent. A grant's top-up uses `LPB_BATTERIES_TOKEN` (`grants.fund`) and
+stays.
+
+**The unallocated balance is a figure to read, never one the engine refuses by.** Batteries serves a
+grant's total and no unallocated balance. The engine reads the grant, then the grant's allocations, and
+answers the total less what those allocations hold (verified at Batteries v0.0.3,
+`internal/store/manage.go`: allotting and topping up move an amount out of the grant, and a revoke
+returns what was not spent). The two reads are moments apart, so a command that lands between them can
+put the figure off by its amount; it is never below zero.
+
+**Batteries refuses what the grant cannot cover.** An allocation, or an allocation's top-up, larger than
+the grant's unallocated balance is refused by Batteries: 409, with its reason, "insufficient unallocated
+grant balance". The engine passes that on as a definite refusal, so the reference is free again and
+nothing is stored. It reads no balance first and decides nothing itself, so it cannot race the provider's
+ledger. The shipped fake (`FakeAllocationManager`) refuses the same way.
+
+**A paused tenant.** Pausing sets the grant's status at Batteries, and what that stops is Batteries'
+rule, not the engine's. At v0.0.3 (`internal/store/auth.go`) Batteries refuses every payment of a paused
+grant's allocations (403, reported as `payment` / `not_authorized`,
+[who answers what](#who-answers-what)). It still takes allotments, allocation top-ups, revokes and grant
+top-ups on a paused grant (`internal/store/manage.go`), so the engine does too: it adds no check of its
+own. Resuming sets the status back to `active`.
+
+**A tenant that was never onboarded** has no grant. Allotting to it is 404 ("tenant ... has no grant at
+the payment provider"), from Batteries' own 404, and so are its grant read, top-up and status.
+
+### Records from before a tenant's id was its grant's id
+
+Before #165 a tenant's id was a free name (often `default`, from `LPB_JWT_TENANT_ID`), and each allotted
+actor recorded the grant it was allotted from beside it (`lpb_actors.grant_id`). #165 rewrites and
+deletes no row: there is no migration.
+
+- **An existing allocation stays on its grant.** Top-up, status, revoke, payment key rotation, payments,
+  the allowance and reconciliation name the allocation, and Batteries keeps each allocation on the grant
+  it was allotted from. None of them sends a grant id, so none can move it. `ActorAllocation.grant_id`
+  still shows the recorded grant.
+- **Nothing new is allotted to such a tenant.** Its id is not a grant's id. Allotting a new actor is the
+  404 above, and allotting again to a revoked actor whose record names another grant is refused before
+  any provider call (400, "an allocation is never moved to another grant").
+- **Its grant is reached by its own id.** `GET /v1/clearinghouse/tenants/{grant id}/grant`, `.../top-up`
+  and `.../status` act on the grant, as the tenant it is. Actors allotted under that id are that
+  tenant's, and are not the free-named tenant's.
+- **To go on allotting,** onboard a tenant, or use the grant's id as the tenant's: issue keys for it, and
+  set `LPB_JWT_TENANT_ID` (or the tenant claim) to it. The free-named tenant's actors, jobs, keys and
+  costs stay where they are.
+
 ## Allotment
 
 **There is no automatic allotment.** Every money-moving command is explicit and needs the
 `admin.allocations` operation (an admin credential). Allocation and key writes carry an idempotency
 key of `base64url(sha256(engine_id:operation:step))`.
 
-Allotment refuses a `tenant_id`, `actor_id`, `grant_id` or `label` that is longer than 200
+Allotment refuses a `tenant_id`, `actor_id` or `label` that is longer than 200
 characters or holds a NUL character (422 over REST), before any provider call: every record stores them
 in 200 characters, PostgreSQL refuses a NUL, and the provider key is funded before the actor is saved.
 The same limit applies to every id, label and reference a request carries (`StoredText`): a job's
@@ -113,16 +192,16 @@ The same limit applies to every id, label and reference a request carries (`Stor
 (`"\ud800"`) and no store can keep: a 422 over REST, which repeats it as that escape. It was a 500,
 because the 422 could not be sent.
 
-**A grant id is one segment of the provider's URL path (#113, C10).** `grant_id`, on allotment and on
-`TopUpRequest`, is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`, `%`, control characters
-and the values `.` and `..`, which a client or server would read as another path. Whitespace around the
-id is removed before the check, so the value checked is the value the engine uses: `" .."` is refused as
-`..`, `" grant_1"` is used as `grant_1`, and an id of only whitespace is no grant chosen. It is a 422 over REST (a
-`ValidationError` in process) before the operation ledger records anything or the provider is called, and
-it applies to the allocation top-up route too, whose body is a `TopUpRequest`. It is held to no pattern such
-as a UUID: the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it
-places in a path, whatever its source (a grant, an allocation, a key, a created grant read back), so an id
-the provider itself returned cannot name another resource either.
+**A grant id is one segment of the provider's URL path (#113, C10).** A tenant's id is its grant's id,
+and the grant routes (`.../tenants/{tenant_id}/grant`, `.../grant/top-up`, `.../status`) place it in the
+provider's path. There the tenant id is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`,
+`%`, control characters and the values `.` and `..`, which a client or server would read as another path.
+Whitespace around the id is removed before the check, so the value checked is the value the engine uses:
+`" .."` is refused as `..`, and `" grant_1"` is used as `grant_1`. It is a 422 over REST before the
+operation ledger records anything or the provider is called. It is held to no pattern such as a UUID:
+the provider chooses its ids. Separately, the Batteries adapter percent-encodes every id it places in a
+path, whatever its source (a grant, an allocation, a key, a created grant read back), so an id the
+provider itself returned, or one an in-process caller passed, cannot name another resource either.
 
 **The new key must have somewhere to go (#112, C2).** Allotment funds the provider key before the
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
@@ -159,11 +238,12 @@ checks stop that:
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `allot(AllotRequest(tenant, actor, amount, grant_id, operation_ref))` | `POST /v1/api-keys` with `grant_id` (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; fund it instead |
-| `top_up(…, TopUpRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))`. `grant_id` on this body is ignored |
-| `top_up_grant(TopUpRequest(amount, operation_ref, grant_id))` | `POST /v1/grants/{grant_id}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{grant_id}:{operation_ref}:fund))` |
-| `grants.list_grants()` (the grant desk, `payments.grants`) | `GET /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN` | read |
-| `grants.create_grant(name, amount, operation_ref=…)` | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation` | the ledger; Batteries has none on grants, so a resume finds the tagged grant (Q5) |
+| `allot(AllotRequest(tenant, actor, amount, operation_ref))` | `POST /v1/api-keys` with `grant_id`, the tenant's id (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; top it up instead |
+| `top_up(…, TopUpRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))` |
+| `top_up_grant(tenant, TopUpRequest(amount, operation_ref))` | `POST /v1/grants/{tenant}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{tenant}:{operation_ref}:fund))` |
+| `tenants.onboard(name, amount, operation_ref=…)` (the tenant desk, `payments.tenants`) | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation`; then the tenant admin key, an engine record | the ledger; Batteries has no key on grants, so a resume finds the tagged grant (Q5) |
+| `tenants.list_tenants()`, `tenants.grant(tenant)` | `GET /v1/grants`, `GET /v1/grants/{tenant}` and `GET /v1/allocations` with `LPB_BATTERIES_GRANTS_TOKEN` | read |
+| `tenants.set_status(tenant, active / paused, operation_ref=…)` | `PATCH /v1/grants/{tenant}/status` with `LPB_BATTERIES_GRANTS_TOKEN` | the ledger; the call itself sets a state |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_payment_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
@@ -268,26 +348,25 @@ checks stop that:
   grant and creating a grant take an amount within the format and bound (`TopUpAmount`) and still need
   it positive. An amount outside these is refused when the request is parsed: 422 over REST, a
   `ValidationError` when an in-process request is built, and `InvalidRequest` (400) from
-  `grants.create_grant`, which takes the amount itself and names the field, not the value (#106
-  review). Each comes before the operation ledger records anything and before any provider call. A
-  zero or negative top-up or grant amount is
-  still the command's own refusal, 400, unless it also breaks the format: one with more than 18
+  `tenants.onboard`, which takes the grant's amount, the tenant's name and its first admin's actor id
+  itself and names the field, not the value (#106 review). Each comes before the operation ledger
+  records anything and before any provider call. A zero or negative top-up or grant amount is still
+  the command's own refusal, 400, unless it also breaks the format: one with more than 18
   decimal places (`-0.0000000000000000001`, `0E-19`) is refused when it is parsed, with the 422.
   **Upgrading:** resolve any `started` operation whose amount is above the bound or has more than
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
   the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
   which is opaque text of any length (#115): a supplied secret store may return a long path.
-- **Which grant.** The request names it. When `grant_id` is empty, the engine uses the grant of the
-  caller's own allocation (the actor that key belongs to). When that caller has no allocation,
-  the engine returns 400 `choose a grant`. There is no deployment-wide default. An admin may name any
-  grant. Batteries still applies `grants.fund` to every grant on the instance; the engine does not
-  narrow that. An actor key cannot call these routes (`admin.allocations`).
+- **Which grant.** The tenant's: a tenant's id is its grant's id ([Tenants](#tenants)), and no request
+  names a grant. Before #165 the request named it, or the grant of the caller's own allocation was used;
+  the caller's allocation chooses nothing now. Batteries still applies `grants.fund` to every grant on the
+  instance, so the engine draws the line: only a clearinghouse admin tops up a grant
+  (`admin.tenants`), and a tenant admin allots from its own tenant's grant alone.
 - **The engine's management credential** is least-privilege: `allocations.*`, `api_keys.*`,
   `usage.read`, and `grants.fund`. It has **no `grants.*`**.
-- **Listing and creating grants** uses `LPB_BATTERIES_GRANTS_TOKEN` (`grants.read`, `grants.create`).
-  The token is optional. Without it the grant desk is off: `engine.payments.grants` is `None` and the
-  grant list and create routes are absent. Topping up grants still works with `LPB_BATTERIES_TOKEN`.
+- **Creating, reading and pausing a grant** use `LPB_BATTERIES_GRANTS_TOKEN`
+  ([the tenant desk](#tenants)). Topping up grants works with `LPB_BATTERIES_TOKEN`.
 - **Cost sync** reads `GET /v1/usage` with no grant filter. Rows for allocations this engine did not
   allot are stored and are not part of any actor's reconciliation. A cursor saved under the old
   `grant_id` filter does not match, so the first sync after this change restarts from the beginning
@@ -313,7 +392,10 @@ Provider calls keep their derived idempotency keys, so a resumed command replays
 The fingerprint and each provider idempotency key are digests, so the text they hash is a format, not a
 name: it keeps the words it was first written with (`provision`, `fund`), whatever a command or a field
 is called now. A command recorded before a rename is therefore still replayed, or resumed without
-applying twice, when it is repeated after it (#163, `tests/unit/test_hashed_forms.py`).
+applying twice, when it is repeated after it (#163, `tests/unit/test_hashed_forms.py`). The same holds
+for a grant's top-up since #165 moved the grant from the body to the path: the hashed text is the same.
+What a repeat of an allotment or of a grant's creation recorded before #165 gets is under
+[Upgrading to tenants at the clearinghouse](index.md#upgrading-to-tenants-at-the-clearinghouse).
 
 A 409 for an admin command carries `operation: {command, operation_ref, state}` instead of a job, and
 no `Livepeer-Job-Id`. In embedded mode the replay is the return value; `OPERATION_REPLAYED` (a context
@@ -343,7 +425,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,
-  and `GET /v1/clearinghouse/grants` and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
+  and the grant list (`GET /v1/clearinghouse/tenants` since #165) and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
   comes back after other pages) is not detected. A grant, in a list or read alone,
   must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
@@ -383,13 +465,35 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   resume that never got that far or an actor revoked and allotted again under another reference,
   it is refused the same way and the reference is freed. A second allotment after a revoke is a new
   command: it needs a new reference.
-- **Creating a grant.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
-  grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
-  reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A
-  resumed create reads the grants page by page, oldest first, and adopts the one carrying its tag instead
-  of creating a second. It records the list cursor after each page, so a resume that runs out of its
-  budget in a slow catalog leaves the next one to go on from there; pages already read lacked the tag,
-  and a grant created later is on a later page. A list answer the engine cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114 (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`, or the grant with its `metadata` as `null` or as an object) read as a grant with no tag, and the resume created a second grant. A read-back of the new grant that the engine cannot read is an unknown outcome too (503, the reference held), never the command's result. Grant names stay free-form: two references may create two grants with one name.
+- **Onboarding a tenant** is two steps on one record: create the grant, then issue the tenant's first
+  admin key.
+  - **Its scope.** The record is scoped to the caller and the reference, as every command's is, so it
+    exists before Batteries is asked: the tenant has no id until Batteries answers with the grant's. The
+    record notes that id (`tenant_id`) as soon as it is known, and the key's id (`admin_key_id`) before
+    the key is stored.
+  - **The grant, once.** Batteries has no idempotency key on `POST /v1/grants`, so the engine tags each
+    grant it creates with `metadata` `{"lpb_operation": <a key derived from the engine, the caller and the
+    reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A
+    resumed onboarding that has no tenant id noted reads the grants page by page, oldest first, and adopts
+    the one carrying its tag instead of creating a second. It records the list cursor after each page, so a
+    resume that runs out of its budget in a slow catalog leaves the next one to go on from there; pages
+    already read lacked the tag, and a grant created later is on a later page. A list answer the engine
+    cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114
+    (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`,
+    or the grant with its `metadata` as `null` or as an object) read as a grant with no tag, and the resume
+    created a second grant. A read-back of the new grant that the engine cannot read is an unknown outcome
+    too (503, the reference held), never the command's result. Tenant names stay free-form: two references
+    may onboard two tenants with one name.
+  - **The key, once, and its token shown once.** The token is in the answer of the run that issued the
+    key and nowhere else: the engine keeps its hash, and the record holds the key without it. A repeat of
+    a finished onboarding answers `201` with the same tenant and key, **`"token": null`** and
+    `"replayed": true`, as a repeated key issue does ([access.md](access.md#repeated-key-commands)). So
+    does a resume after the key was stored (the engine stopped between storing the key and finishing the
+    record): it finds the key by its noted id and issues no second one. A clearinghouse admin who lost
+    the token issues another tenant admin key (`POST .../tenants/{tenant_id}/keys`, kind `tenant_admin`).
+  - With engine access keys off (`LPB_AUTH=jwt`) the grant is created and `admin_key` is `null`.
+- **A tenant's status** takes a reference although the provider call sets a state: a late repeat of a
+  pause is answered from its record, so it never pauses again a tenant that was resumed since.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.
@@ -398,7 +502,8 @@ Which commands take a reference:
 
 | Command | `operation_ref` |
 | --- | --- |
-| Allot, top up allocation, top up grant, create grant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
+| Allot, top up allocation, top up grant, onboard a tenant, rotate payment key | **required** (422 when missing): moves money or creates a provider credential |
+| Set a tenant's status | **required**: stops or restarts every payment of a tenant |
 | Issue access key, rotate access key | **required**: creates a live engine credential |
 | Set status, revoke allocation, revoke access key | not accepted: set-to-state or repeat-safe, a repeat cannot apply twice. A repeated set-status sets the same status at the provider again and answers with the actor in that status; after a revoke it is `404`, as for an actor that is not allotted. A repeated revoke answers as the first did: the actor, `revoked`, with no provider call; `204` for a key (D61). An actor or key that never existed keeps its `404` or `400` |
 
@@ -408,7 +513,7 @@ Three different things, often all called "funding":
 
 | Term | What it is | Who moves it | Repeat-safe |
 | --- | --- | --- | --- |
-| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (allot, top up allocation, top up grant, create grant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
+| **Allowance change** | An admin command moves value between a grant and an allocation in Batteries (allot, top up allocation, top up grant, onboard a tenant). Bookkeeping in the payment operator's ledger | The engine, on an admin's command | Yes, per `operation_ref` ([above](#repeat-safe-commands)) |
 | **Signer funding** | The payer's TicketBroker deposit and reserve on Arbitrum, which back the tickets the signer signs | The payment operator, outside the engine | No engine command touches it |
 | **Spending guarantee** | A hard limit no job can exceed | Nobody in M3 | n/a: the allowance is a cap that [can overshoot](#allowance); hard limits are stretch scope |
 
@@ -678,11 +783,13 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
 | Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Not built yet. M4 builds it as #162 to #169 |
 
-Both use `per_actor` allocations ([Allocation modes](#allocation-modes)). The tenant rules and the
-clearinghouse routes are added to this contract as they are built.
+Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
+([Tenants](#tenants)). The routes an enterprise's engine calls at a clearinghouse (payments, usage,
+discovery) are added to this contract as they are built.
 
 The engine's routes are two sets (D84, #164). The **clearinghouse routes**, all under
-`/v1/clearinghouse`, are the allocation routes, the actor list, the grant desk and the grant top-up. The
+`/v1/clearinghouse/tenants` since #165, are tenants and their grants, a tenant's actors and their
+allocations, and a tenant's access keys ([Tenants](#tenants)). The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
 engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The

@@ -165,15 +165,14 @@ sequenceDiagram
     participant Bat as Batteries management API
     participant Sec as EncryptedDbSecretStore
     participant DB as SqlStore (lpb_actors)
-    Op->>H: POST {amount: {amount: "1", currency: "USD"}, grant_id: "g_…"}
+    Op->>H: POST {amount: {amount: "1", currency: "USD"}} (the path names the tenant)
     H->>Pay: allot(admin, AllotRequest)
-    Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
+    Pay->>Pay: policy.check(ADMIN_ALLOCATIONS, the tenant)
     Pay->>DB: get_actor(app, actor)
     alt already allotted (under another reference)
         Pay-->>Op: 409 already_allotted, the actor (nothing applied: top it up instead)
     else new
-        Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
-        Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)
+        Pay->>B: create_key_for_grant(the tenant's id, name, Money, Idempotency-Key)
         B->>Bat: POST /v1/api-keys {grant_id, amount_usd}
         Bat-->>B: {allocation_id, id, api_key=lpg_…}
         B-->>Pay: NewAllocationKey (secret is a SecretStr)

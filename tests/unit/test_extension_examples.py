@@ -196,12 +196,14 @@ async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore
     def decorate(parts: EngineParts) -> EngineParts:
         return enterprise_decorations(install(parts))
 
+    provider = FakeAllocationManager()
+    provider.add_grant("acme")  # the enterprise's tenant: its id is its grant's id (D83)
     under_test = dataclasses.replace(
         supply,
         store=store,
         clock=clock,
         transport=transport,
-        allocation_manager=FakeAllocationManager(),
+        allocation_manager=provider,
     )
     engine = await BuilderEngine.create(
         EngineSettings(
@@ -248,7 +250,6 @@ async def test_enterprise_build_runs_without_core_patches(enterprise_engine) -> 
             tenant_id="acme",
             actor_id="alice",
             amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
         ),
     )
     assert vault.audit[0] == ("put", "lpg/acme/alice")  # the payment key went to the enterprise vault

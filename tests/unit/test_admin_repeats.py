@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from livepeer_builder import EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.contracts import (
     AccessKey,
     ActorAllocation,
@@ -50,7 +50,6 @@ def allot_request(actor_id: str = "alice", amount: str = "5", *, ref: str = "") 
         tenant_id="default",
         actor_id=actor_id,
         amount=usd(amount),
-        grant_id="grant_1",
         operation_ref=ref or f"allot:{actor_id}",
     )
 
@@ -164,12 +163,14 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
 async def test_top_up_a_grant_with_one_ref_and_another_grant_is_a_conflict(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    manager.add_grant("grant_a")
+    manager.add_grant("grant_b")
     engine = await make_engine()
-    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_a")
-    await engine.payments.top_up_grant(admin, request)
+    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1")
+    await engine.payments.top_up_grant(admin, "grant_a", request)
     with pytest.raises(OperationConflict):
-        await engine.payments.top_up_grant(admin, request.model_copy(update={"grant_id": "grant_b"}))
-    await engine.payments.top_up_grant(admin, request)  # a lost response: answered from the ledger
+        await engine.payments.top_up_grant(admin, "grant_b", request)
+    await engine.payments.top_up_grant(admin, "grant_a", request)  # a lost response: answered from the ledger
     assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_a"]
     assert manager.calls.count("top_up_grant") == 1
 
@@ -178,13 +179,13 @@ async def test_a_definite_refusal_frees_the_ref_for_a_corrected_repeat(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, store: SqlStore
 ) -> None:
     """A 4xx from the provider applied nothing, so the caller may fix the request and repeat it."""
+    manager.add_grant("grant_a")
     engine = await make_engine()
-    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_typo")
-    manager.fail_once("top_up_grant", ProviderError(404, "grant not found"))
-    with pytest.raises(ProviderError):
-        await engine.payments.top_up_grant(admin, request)
+    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1")
+    with pytest.raises(ProviderError, match="404"):  # no such grant: the provider's own refusal
+        await engine.payments.top_up_grant(admin, "grant_typo", request)
     assert await store.get_operation("default", "operator", "grant-topup-1") is None
-    await engine.payments.top_up_grant(admin, request.model_copy(update={"grant_id": "grant_a"}))
+    await engine.payments.top_up_grant(admin, "grant_a", request)
     assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_a"]
 
 
@@ -603,22 +604,36 @@ async def test_a_allotment_resumed_after_its_secret_was_stored_keeps_one_copy_of
     assert (await engine.payments.credential(alice)).token == manager.keys[actor.api_key_id][1]
 
 
-# -- creating a grant (slice 4, Q5) -----------------------------------------------------------------------
+# -- onboarding a tenant: its grant is created once (slice 4, Q5; #165) ------------------------------------
 
 
-async def test_creating_a_grant_twice_with_one_ref_creates_one_grant(
+def onboarded(manager: FakeAllocationManager) -> list[GrantRecord]:
+    """The grants made since the test began: every one but the ``default`` tenant's."""
+    return [grant for grant in manager.grants if grant.id != "default"]
+
+
+async def tenant_admin_keys(engine: BuilderEngine, tenant_id: str) -> list[str]:
+    return [
+        key.key_id for key in await engine.store.list_access_keys(tenant_id) if key.kind == "tenant_admin"
+    ]
+
+
+async def test_onboarding_a_tenant_twice_with_one_ref_creates_one_grant_and_one_key(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
-    first = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    again = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")  # a lost response
-    assert again == first
-    assert manager.calls.count("create_grant") == 1 and len(manager.grants) == 1
+    first = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    again = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")  # a lost response
+    assert first.admin_key is not None and again.admin_key is not None
+    assert (again.tenant_id, again.admin_key.key) == (first.tenant_id, first.admin_key.key)
+    assert first.admin_key.token is not None and again.admin_key.token is None  # shown once
+    assert manager.calls.count("create_grant") == 1 and len(onboarded(manager)) == 1
+    assert await tenant_admin_keys(engine, first.tenant_id) == [first.admin_key.key.key_id]
 
 
-async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_grant(
+async def test_an_onboarding_resumed_after_the_provider_created_the_grant_adopts_that_grant(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -628,7 +643,7 @@ async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_
     """Batteries has no idempotency key on grant creation, so the engine tags each grant it creates with
     ``metadata.lpb_operation`` and a resume lists the grants to find it."""
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     create_grant = manager.create_grant
 
@@ -639,14 +654,17 @@ async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_
 
     monkeypatch.setattr(manager, "create_grant", answer_lost)
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
     clock.advance(120)
-    adopted = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    assert manager.grants == [adopted] and manager.calls.count("create_grant") == 1
-    assert adopted.metadata["lpb_operation"]
+    adopted = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    assert [grant.id for grant in onboarded(manager)] == [adopted.tenant_id]
+    assert manager.calls.count("create_grant") == 1 and onboarded(manager)[0].metadata["lpb_operation"]
+    # the first run never got as far as the key: this run issued it, and shows its token
+    assert adopted.admin_key is not None and adopted.admin_key.token is not None
+    assert len(await tenant_admin_keys(engine, adopted.tenant_id)) == 1
 
 
-async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_last_resume_stopped(
+async def test_an_onboarding_resumed_over_a_slow_catalog_continues_where_the_last_resume_stopped(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -658,7 +676,7 @@ async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_la
     reference never finished. The list cursor is recorded after each page, so each resume goes on from where
     the last stopped (pages before it lacked the tag, and a newer grant is always on a later page)."""
     engine = await make_engine(operation_stale_s=0.4, batteries_timeout_s=0.1)  # a run gets 0.2 s
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     for n in range(6):  # grants made by hand, before the engine's
         await manager.create_grant(f"by hand {n}", usd("1"))
@@ -671,47 +689,50 @@ async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_la
 
     monkeypatch.setattr(manager, "create_grant", answer_lost)
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    manager.grant_page_size, manager.grant_page_delay_s = 1, 0.08  # two pages fit in a run, seven exist
-    for _ in range(6):
+        await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    manager.grant_page_size, manager.grant_page_delay_s = 1, 0.08  # two pages fit in a run, eight exist
+    for _ in range(8):
         clock.advance(0.4)
         try:
-            adopted = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+            adopted = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
             break
         except ProviderUnavailable:  # ran out of its budget in the listing: the next resume goes on
             continue
     else:
-        pytest.fail("the resumed grant create never finished")
-    assert adopted.metadata["lpb_operation"] and len(manager.grants) == 7
+        pytest.fail("the resumed onboarding never finished")
+    assert onboarded(manager)[-1].id == adopted.tenant_id and len(onboarded(manager)) == 7
+    assert onboarded(manager)[-1].metadata["lpb_operation"]
     assert manager.calls.count("create_grant") == 7  # six by hand and the engine's one
 
 
-async def test_a_grant_create_resumed_after_the_provider_never_created_it_creates_one(
+async def test_an_onboarding_resumed_after_the_provider_never_created_the_grant_creates_one(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
     """The first run's create never reached Batteries: no grant carries the tag, so the resume creates it."""
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     await manager.create_grant("by hand", usd("1"))
     manager.fail_once("create_grant", ProviderUnavailable("Batteries unreachable: refused"))
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
     clock.advance(120)
-    created = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    assert created.metadata["lpb_operation"] and [g.name for g in manager.grants] == ["by hand", "ops"]
+    created = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    assert [grant.name for grant in onboarded(manager)] == ["by hand", "ops"]
+    assert onboarded(manager)[-1].metadata["lpb_operation"] and onboarded(manager)[-1].id == created.tenant_id
 
 
-async def test_two_grants_with_one_name_and_different_refs_are_both_created(
+async def test_two_tenants_with_one_name_and_different_refs_are_both_onboarded(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
-    first = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    second = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-2")
-    assert first.id != second.id and len(manager.grants) == 2
-    assert first.metadata["lpb_operation"] != second.metadata["lpb_operation"]
+    first = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    second = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-2")
+    assert first.tenant_id != second.tenant_id and len(onboarded(manager)) == 2
+    tags = [grant.metadata["lpb_operation"] for grant in onboarded(manager)]
+    assert tags[0] != tags[1]
 
 
 # -- engine access keys (slice 4, B4) ---------------------------------------------------------------------
@@ -791,6 +812,82 @@ async def test_a_rotation_repeat_that_looked_too_early_answers_from_the_first_ro
     with pytest.raises(InvalidRequest, match="no active key"):  # rotated meanwhile by another reference
         await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-2")
     assert len(await engine.keys.list_keys(admin)) == 2
+
+
+# -- a repeated key rotation is answered only to a caller the first run would have answered (#165 review) --
+
+TENANT_ADMIN_TWIN = ActorContext(actor_id="operator", tenant_id="default", credential_kind="tenant_admin")
+
+
+async def looks_too_early(store: SqlStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lost race of a rotation: the repeat finds the reference free and the key still active, and
+    the store then refuses its write because the first rotation has the reference."""
+    get_operation, get_access_key = store.get_operation, store.get_access_key
+
+    async def looked_too_early(*scope: str) -> OperationRecord | None:
+        monkeypatch.setattr(store, "get_operation", get_operation)
+        return None
+
+    async def still_active(key_id: str) -> AccessKey | None:
+        old = await get_access_key(key_id)
+        return None if old is None else old.model_copy(update={"revoked_at": None})
+
+    monkeypatch.setattr(store, "get_operation", looked_too_early)
+    monkeypatch.setattr(store, "get_access_key", still_active)
+
+
+@pytest.mark.parametrize("lost_race", [False, True], ids=["the reference is held", "the write lost the race"])
+async def test_a_rotation_repeated_under_another_tenant_reads_as_missing_and_shows_no_key(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_race: bool,
+) -> None:
+    """A clearinghouse admin may name any tenant, so the policy does not stop the repeat. The first run
+    under tenant ``two`` would have found no such key there: the repeat says the same, and never
+    answers with tenant ``one``'s replacement key."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(
+        admin, kind="auditor", actor_id="dashboard", tenant_id="one", operation_ref="key-1"
+    )
+    old = issued.key.key_id
+    rotated = await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="one")
+    if lost_race:
+        await looks_too_early(store, monkeypatch)
+    with pytest.raises(InvalidRequest, match="no active key") as missing:
+        await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="two")
+    assert rotated.key.key_id not in str(missing.value) and old in str(missing.value)
+    again = await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="one")
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)  # its own tenant: as before
+    assert len(await engine.keys.list_keys(admin)) == 2  # the old key and one replacement
+
+
+@pytest.mark.parametrize("lost_race", [False, True], ids=["the reference is held", "the write lost the race"])
+async def test_a_rotation_repeated_by_a_caller_who_may_not_change_that_kind_of_key_is_refused(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_race: bool,
+) -> None:
+    """The ledger keys a reference by the caller's tenant and actor, not by its credential. A tenant
+    admin with the clearinghouse admin's tenant and actor id repeats the rotation of a tenant admin key:
+    a tenant admin changes no admin key, so it is 403 as its own first run would be, and the replacement
+    key is not shown."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(
+        admin, kind="tenant_admin", actor_id="second", tenant_id="default", operation_ref="key-1"
+    )
+    rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    if lost_race:
+        await looks_too_early(store, monkeypatch)
+    with pytest.raises(AccessDenied, match="tenant_admin key"):
+        await engine.keys.rotate(TENANT_ADMIN_TWIN, issued.key.key_id, operation_ref="rotate-key-1")
+    again = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)
 
 
 async def test_no_token_or_payment_key_is_ever_stored_in_the_ledger(

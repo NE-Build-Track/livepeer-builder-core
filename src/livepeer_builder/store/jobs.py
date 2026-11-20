@@ -190,7 +190,7 @@ async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
     stored = await conn.execute(
         select(t.payment_sessions.c.manifest_id, t.payment_sessions.c.payment_state).where(session_key)
     )
-    known: dict[str, str] = {manifest: state for manifest, state in stored}
+    known: dict[str, str] = dict(stored.all())
     for session in attempt.sessions:
         current = known.get(session.manifest_id)
         if current is None or current in (session.payment_state, "paid"):

@@ -44,7 +44,9 @@ class FakeStreaming:
     def __init__(self, jobs: "FakeJobs") -> None:
         self._jobs = jobs
 
-    async def stream(self, actor: ActorContext, request: JobRequest) -> FakeJobStream:
+    async def stream(  # NOSONAR - async by protocol (StreamingApi); the fake awaits nothing
+        self, actor: ActorContext, request: JobRequest
+    ) -> FakeJobStream:
         reply = self._jobs.reply_for(actor, request)
         return FakeJobStream(
             self._jobs.record(actor, request, "running", None),
@@ -117,42 +119,6 @@ class FakeJobs(FakeQueue):
         """
         now = datetime.now(UTC)
         job_id = queued.id if queued is not None else uuid4()
-        dispatched = failure is None or failure.kind not in NOT_DISPATCHED
-        used = self._discovery.candidates(request.app)[:1] if dispatched else []
-        if state == "running":
-            outcome: AttemptOutcome = "in_flight"
-        else:
-            outcome = "succeeded" if failure is None else attempt_outcome(failure.kind)
-        status = (
-            reply.status_code if reply is not None else failure.status_code if failure is not None else None
-        )
-        paid = failure is None or failure.payment_sent
-        sessions = (SignedSession(manifest_id="manifest-1"),) if failure is None else ()
-        attempts = tuple(
-            Attempt(
-                job_id=job_id,
-                number=1,
-                runner_url=runner.url,
-                orchestrator_url=runner.orchestrator_url,
-                allocation_id=None,
-                sessions=sessions,
-                payment_sent=paid,
-                outcome=outcome,
-                status_code=status,
-                started_at=now,
-                ended_at=None if state == "running" else now,
-            )
-            for runner in used
-        )
-        result = None
-        if reply is not None and state == "succeeded":
-            result = ResultRef(
-                storage="inline" if queued is None else "stored",
-                content_type=reply.content_type,
-                size_bytes=len(reply.content),
-                sha256=hashlib.sha256(reply.content).hexdigest(),
-                location=None if queued is None else RESULT_LOCATION.format(job_id=job_id),
-            )
         job = Job(
             id=job_id,
             actor_id=actor.actor_id,
@@ -163,9 +129,9 @@ class FakeJobs(FakeQueue):
             capability=None,
             model=None,
             state=state,
-            attempts=attempts,
+            attempts=self._attempts(job_id, request.app, state, failure, reply, now),
             failure=failure,
-            result=result,
+            result=_result(job_id, state, reply, stored=queued is not None),
             usage=None,
             created_at=now if queued is None else queued.created_at,
             completed_at=None if state == "running" else now,
@@ -176,6 +142,37 @@ class FakeJobs(FakeQueue):
             key = (actor.tenant_id, actor.actor_id, request.operation_ref)
             self._operations[key] = (request_fingerprint(request), job.id)
         return job
+
+    def _attempts(
+        self,
+        job_id: UUID,
+        app: str,
+        state: JobState,
+        failure: Failure | None,
+        reply: Reply | None,
+        now: datetime,
+    ) -> tuple[Attempt, ...]:
+        """One attempt on the first runner for the app, or none for a failure before dispatch."""
+        dispatched = failure is None or failure.kind not in NOT_DISPATCHED
+        used = self._discovery.candidates(app)[:1] if dispatched else []
+        sessions = (SignedSession(manifest_id="manifest-1"),) if failure is None else ()
+        outcome, status = _outcome(state, failure), _status(reply, failure)
+        return tuple(
+            Attempt(
+                job_id=job_id,
+                number=1,
+                runner_url=runner.url,
+                orchestrator_url=runner.orchestrator_url,
+                allocation_id=None,
+                sessions=sessions,
+                payment_sent=failure is None or failure.payment_sent,
+                outcome=outcome,
+                status_code=status,
+                started_at=now,
+                ended_at=None if state == "running" else now,
+            )
+            for runner in used
+        )
 
     def ended(
         self,
@@ -197,7 +194,10 @@ class FakeJobs(FakeQueue):
         paid = any(attempt.payment_sent for attempt in attempts)
         # A returned HTTP error is the caller's answer; a paid 502 or 504 may still run (D52).
         may_run = not http_error or attempt_verdict(outcome, status_code, True) == "uncertain"
-        state: JobState = "succeeded" if failure is None else "uncertain" if paid and may_run else "failed"
+        if failure is None:
+            state: JobState = "succeeded"
+        else:
+            state = "uncertain" if paid and may_run else "failed"
         done = job.model_copy(
             update={
                 "state": state,
@@ -225,7 +225,9 @@ class FakeJobs(FakeQueue):
         )
         return self.ended(job, attempt_outcome(fails.kind), status, failure=failure)
 
-    async def run(self, actor: ActorContext, request: JobRequest) -> JobResult:
+    async def run(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
+        self, actor: ActorContext, request: JobRequest
+    ) -> JobResult:
         if request.return_http_errors:
             raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
         reply = self.reply_for(actor, request)
@@ -238,7 +240,9 @@ class FakeJobs(FakeQueue):
             data=reply.data,
         )
 
-    async def get(self, actor: ActorContext, job_id: UUID) -> Job:
+    async def get(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
+        self, actor: ActorContext, job_id: UUID
+    ) -> Job:
         return self.owned(actor, Operation.JOBS_READ, job_id)
 
     def owned(self, actor: ActorContext, operation: Operation, job_id: UUID) -> Job:
@@ -250,7 +254,7 @@ class FakeJobs(FakeQueue):
         check_owner(self.policy, actor, operation, job_resource(job), f"job {job_id} not found")
         return job
 
-    async def list_jobs(
+    async def list_jobs(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
         target = None if sees_every_actor(actor) else actor.actor_id
@@ -272,7 +276,9 @@ class FakeJobs(FakeQueue):
             if job.tenant_id == tenant_id and actor_id in (None, job.actor_id)
         ]
 
-    async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
+    async def report_usage(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
+        self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]
+    ) -> Job:
         """Stored once on the job, by the engine's own rule (#115, C20): the same quantities again get the
         stored usage back, and any other report is refused. ``usage_reports`` lists each report answered."""
         job = self.owned(actor, Operation.JOBS_RUN, job_id)
@@ -281,3 +287,30 @@ class FakeJobs(FakeQueue):
         if usage is not None:
             self._jobs[job_id] = job.model_copy(update={"usage": usage})
         return self._jobs[job_id]
+
+
+def _outcome(state: JobState, failure: Failure | None) -> AttemptOutcome:
+    """The outcome of the one attempt of a job recorded in ``state``."""
+    if state == "running":
+        return "in_flight"
+    return "succeeded" if failure is None else attempt_outcome(failure.kind)
+
+
+def _status(reply: Reply | None, failure: Failure | None) -> int | None:
+    """The attempt's status: the reply's when there is one, else the failure's own."""
+    if reply is not None:
+        return reply.status_code
+    return None if failure is None else failure.status_code
+
+
+def _result(job_id: UUID, state: JobState, reply: Reply | None, *, stored: bool) -> ResultRef | None:
+    """What a succeeded job says of its result: returned inline, or ``stored`` for an async job."""
+    if reply is None or state != "succeeded":
+        return None
+    return ResultRef(
+        storage="stored" if stored else "inline",
+        content_type=reply.content_type,
+        size_bytes=len(reply.content),
+        sha256=hashlib.sha256(reply.content).hexdigest(),
+        location=RESULT_LOCATION.format(job_id=job_id) if stored else None,
+    )

@@ -5,12 +5,14 @@ from collections.abc import Iterable, Sequence
 from decimal import Decimal
 
 from livepeer_builder.contracts import (
+    Attempt,
     AttemptCost,
     CostClass,
     CostStatus,
     Fees,
     Job,
     JobCost,
+    SignedSession,
     UsageRow,
     add_fees,
     billable_fees,
@@ -28,77 +30,75 @@ def classify(job: Job, rows: Sequence[UsageRow]) -> JobCost:
     """
     applied = [row for row in rows if row.status == "applied"]
     running = job.state not in ENDED
-    # A runner's answer the engine could not keep is paid for and not delivered: the attempt succeeded,
-    # the job did not, and the cost follows the job (D69 (4)).
-    reply_lost = job.failure is not None and job.failure.kind == "result_not_stored"
-    last = max((attempt.number for attempt in job.attempts), default=0)
-    attempts: list[AttemptCost] = []
-    for attempt in job.attempts:
-        # A manifest the signer refused is no charge (D54); a stored ``unknown`` one may be, so it waits.
-        sessions = tuple(session for session in attempt.sessions if session.payment_state != "unpaid")
-        if not sessions and not attempt.payment_sent:
-            continue
-        matched_ids = {
-            session.payment_session_id
-            for session in sessions
-            if session.match == "matched" and session.payment_session_id
-        }
-        mine = [row for row in applied if row.payment_session_id in matched_ids]
-        last_word = attempt.outcome in ("in_flight", "payment_unknown") or (
-            job.state == "uncertain" and attempt.number == last
-        )
-        if running:
-            attempts.append(
-                AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
-            )
-            continue
-        arrived = {row.payment_session_id for row in mine}
-        # Unmatched, or matched with no applied row yet: the charge is not in what we can see.
-        # Ambiguous is not waiting: the usage arrived and the join was not unique.
-        waiting = any(
-            session.match == "unmatched"
-            or (session.match == "matched" and session.payment_session_id not in arrived)
-            for session in sessions
-        )
-        if waiting:
-            attempts.append(
-                AttemptCost(attempt_number=attempt.number, cost_class="pending", fees=fees_of(mine))
-            )
-            continue
-        # Pending wins while a sibling is still waiting. Once usage has been seen, an ambiguous
-        # signed session makes the attempt uncertain. Its rows stay unattributed; a sibling's
-        # matched fee stays on the attempt.
-        if any(session.match == "ambiguous" for session in sessions) and not waiting:
-            attempts.append(
-                AttemptCost(attempt_number=attempt.number, cost_class="uncertain", fees=fees_of(mine))
-            )
-            continue
-        cost_class: CostClass
-        if attempt.outcome == "succeeded" and not reply_lost:
-            cost_class = "delivered"
-        elif last_word:
-            cost_class = "uncertain"  # only the last attempt can leave a job uncertain (D52)
-        else:
-            cost_class = "failed_after_payment"
-        attempts.append(AttemptCost(attempt_number=attempt.number, cost_class=cost_class, fees=fees_of(mine)))
-    status: CostStatus
-    if running:
-        status = "pending"
-    elif not attempts:
-        status = "none"
-    elif any(attempt.cost_class == "pending" for attempt in attempts):
-        status = "pending"
-    else:
-        status = "observed"
+    costs = (_attempt_cost(job, attempt, applied, running) for attempt in job.attempts)
+    attempts = [cost for cost in costs if cost is not None]
     return JobCost(
         job_id=job.id,
-        status=status,
+        status=_status(running, attempts),
         fees=add_fees(attempt.fees for attempt in attempts),
         attempts=tuple(attempts),
         first_observed_at=None,
         updated_at=None,
         billable=billable_fees(attempts),
     )
+
+
+def _attempt_cost(
+    job: Job, attempt: Attempt, applied: Sequence[UsageRow], running: bool
+) -> AttemptCost | None:
+    """One attempt's class and the fees matched to it. ``None`` for an attempt that signed nothing."""
+    # A manifest the signer refused is no charge (D54); a stored ``unknown`` one may be, so it waits.
+    sessions = tuple(session for session in attempt.sessions if session.payment_state != "unpaid")
+    if not sessions and not attempt.payment_sent:
+        return None
+    matched_ids = {
+        session.payment_session_id
+        for session in sessions
+        if session.match == "matched" and session.payment_session_id
+    }
+    mine = [row for row in applied if row.payment_session_id in matched_ids]
+    cost_class: CostClass = "pending" if running else _ended_class(job, attempt, sessions, mine)
+    return AttemptCost(attempt_number=attempt.number, cost_class=cost_class, fees=fees_of(mine))
+
+
+def _ended_class(
+    job: Job, attempt: Attempt, sessions: Sequence[SignedSession], mine: Sequence[UsageRow]
+) -> CostClass:
+    """The class of an attempt of a job that has ended, from its sessions and the rows matched to it."""
+    arrived = {row.payment_session_id for row in mine}
+    # Unmatched, or matched with no applied row yet: the charge is not in what we can see.
+    # Ambiguous is not waiting: the usage arrived and the join was not unique.
+    waiting = any(
+        session.match == "unmatched"
+        or (session.match == "matched" and session.payment_session_id not in arrived)
+        for session in sessions
+    )
+    if waiting:
+        return "pending"
+    # Pending wins while a sibling is still waiting. Once usage has been seen, an ambiguous
+    # signed session makes the attempt uncertain. Its rows stay unattributed; a sibling's
+    # matched fee stays on the attempt.
+    if any(session.match == "ambiguous" for session in sessions):
+        return "uncertain"
+    # A runner's answer the engine could not keep is paid for and not delivered: the attempt succeeded,
+    # the job did not, and the cost follows the job (D69 (4)).
+    reply_lost = job.failure is not None and job.failure.kind == "result_not_stored"
+    if attempt.outcome == "succeeded" and not reply_lost:
+        return "delivered"
+    last = max((each.number for each in job.attempts), default=0)
+    last_word = attempt.outcome in ("in_flight", "payment_unknown") or (
+        job.state == "uncertain" and attempt.number == last
+    )
+    # only the last attempt can leave a job uncertain (D52)
+    return "uncertain" if last_word else "failed_after_payment"
+
+
+def _status(running: bool, attempts: Sequence[AttemptCost]) -> CostStatus:
+    if running:
+        return "pending"
+    if not attempts:
+        return "none"
+    return "pending" if any(attempt.cost_class == "pending" for attempt in attempts) else "observed"
 
 
 def fees_of(rows: Iterable[UsageRow]) -> Fees:

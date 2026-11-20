@@ -103,10 +103,12 @@ Index(  # the job holding a reference is the one not superseded; superseded ones
 Index("lpb_jobs_owner_created", jobs.c.tenant_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
 
+JOB_ID = "lpb_jobs.id"  # what every table of a job's own rows points at, and goes with
+
 attempts = Table(
     "lpb_attempts",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("number", Integer, primary_key=True),
     Column("runner_url", Text, nullable=True),
     Column("orchestrator_url", Text, nullable=True),
@@ -207,7 +209,7 @@ cost_cursor = Table(
 cost_projections = Table(
     "lpb_cost_projections",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("status", String(16), nullable=False),
     Column("fee_eth", String(AMOUNT), nullable=False),
     Column("fee_usd", String(AMOUNT), nullable=True),
@@ -275,7 +277,7 @@ payment_keys = Table(
 job_requests = Table(
     "lpb_job_requests",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("request", JSON, nullable=False),  # the JobRequest without its raw body
     Column("raw_body", LargeBinary, nullable=True),
     Column("actor", JSON, nullable=False),  # who it runs as: never a credential, never a display name
@@ -286,7 +288,7 @@ job_requests = Table(
 job_results = Table(
     "lpb_job_results",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("content", LargeBinary, nullable=False),
     Column("content_type", Text, nullable=False),
     Column("size_bytes", Integer, nullable=False),

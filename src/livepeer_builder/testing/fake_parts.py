@@ -31,7 +31,9 @@ class FakeAllowance:
         self._allowance = allowance
         self._policy = policy or DefaultPolicy()
 
-    async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
+    async def allowance(  # NOSONAR - async by protocol (AllowanceApi); the fake awaits nothing
+        self, actor: ActorContext, actor_id: str | None = None
+    ) -> Allowance:
         target = actor_id or actor.actor_id
         owner = ResourceRef(kind="allocation", tenant_id=actor.tenant_id, owner_actor_id=target)
         self._policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup

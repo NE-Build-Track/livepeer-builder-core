@@ -8,7 +8,9 @@ Construction (supply, decorate, assemble) lives in livepeer_builder.runtime.asse
 import asyncio
 import contextlib
 import logging
+from collections.abc import Coroutine
 from importlib.metadata import PackageNotFoundError, version
+from typing import Any
 
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import EngineHealth, PurgeReport, Role
@@ -106,14 +108,13 @@ class BuilderEngine:
             await run_shielded(self.stop())  # __aexit__ and a lifespan's finally never run after this
             raise
         self._stop.clear()
-        self._tasks = [asyncio.create_task(self.discovery.run(self._stop), name="lpb-discovery")]
+        self._tasks = []
+        self._run_loop(self.discovery.run(self._stop), "lpb-discovery")
         if runs_jobs:
-            self._tasks += [
-                asyncio.create_task(self.costs.run(self._stop), name="lpb-cost-sync"),
-                asyncio.create_task(self._retention_loop(), name="lpb-retention"),
-                # after recover_interrupted, which put back the jobs a restart left claimed (ISS-26)
-                asyncio.create_task(self.jobs.worker.run(self._stop), name="lpb-async-jobs"),
-            ]
+            self._run_loop(self.costs.run(self._stop), "lpb-cost-sync")
+            self._run_loop(self._retention_loop(), "lpb-retention")
+            # after recover_interrupted, which put back the jobs a restart left claimed (ISS-26)
+            self._run_loop(self.jobs.worker.run(self._stop), "lpb-async-jobs")
         _LOG.info(
             "engine started",
             extra={
@@ -125,6 +126,12 @@ class BuilderEngine:
                 "tenant_desk": "on" if self.payments.tenants is not None else "off",
             },
         )
+
+    def _run_loop(self, loop: Coroutine[Any, Any, None], name: str) -> None:
+        """Start a background loop and keep its task until ``stop()`` has cancelled and awaited it. The
+        event loop holds a running task only weakly, so the engine holds it."""
+        task = asyncio.create_task(loop, name=name)
+        self._tasks.append(task)
 
     async def stop(self) -> None:
         await self.jobs.close_streams()  # before the store closes: open streams drain, then end abandoned

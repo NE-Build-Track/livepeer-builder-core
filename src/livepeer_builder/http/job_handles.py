@@ -45,6 +45,6 @@ def add_job_handle_routes(app: FastAPI, engine: WorkApi) -> None:
         # as the job route: the stored content type as a header, since media_type would add a charset (C27)
         return Response(content=result.content, headers={"Content-Type": result.content_type})
 
-    @app.post("/v1/jobs/{job_id}/cancel", response_model=Job)
+    @app.post("/v1/jobs/{job_id}/cancel")
     async def cancel_job(actor: Actor, job_id: UUID) -> Job:
         return await engine.jobs.cancel(actor, job_id)

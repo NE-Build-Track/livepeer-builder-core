@@ -224,8 +224,19 @@ here and says where this flow applies.
   `auditor`, and absent for an actor. The realm's `operator` role is renamed and maps to
   `clearinghouse_admin`, because a self-hosted enterprise runs its whole stack. A second realm role maps
   to `tenant_admin`. Locked on 18 November (D87).
-- **Routes in the probe.** The `/v1/admin/keys` and `/v1/admin/actors` checks move to the clearinghouse
-  routes of the ISS-31 guide.
+- **What each value does, by role.** This is how the engine is built (#165, #169, #185); it decides
+  nothing new. A credential carries one kind. `clearinghouse_admin` is the kind of an engine's own admin
+  in every role: an admin of every tenant of that engine. On a self-hosted engine (role `both`) it tops up
+  a grant and allots, at the paths that name the tenant, on the engine's one listener or, where two are
+  served, on the private one. On an enterprise's engine that pays through a clearinghouse (role `work`)
+  there are only the work routes, and `clearinghouse_admin` is still the kind of that engine's admin:
+  cost sync asks for it, and so does issuing an admin key under `/v1/keys`. The tenant admin key such an
+  engine holds is the engine's own credential at the clearinghouse, a setting and not a person's token.
+  So the realm's renamed `operator` role maps to `clearinghouse_admin` in both roles, and `tenant_admin`
+  is for a person confined to one tenant.
+- **Routes in the probe.** The `/v1/admin/keys` check moves to `/v1/keys`, the access keys of an
+  enterprise's own engine in the work half (D87). The `/v1/admin/actors` check moves to the tenant's actor
+  list among the clearinghouse routes of the ISS-31 guide.
 - **#126 is replaced.** The design for admins scoped to one application is now D85 and #165.
 
 ## Delivery slices

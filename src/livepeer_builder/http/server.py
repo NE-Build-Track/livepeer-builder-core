@@ -163,7 +163,12 @@ def _bound(servers: Sequence["uvicorn.Server"]) -> Iterator[list[socket.socket]]
 async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence[socket.socket]) -> None:
     """Run every server until one ends, then end the others: a signal ends them all, and one that stops
     for a reason of its own takes the rest with it. The first error a server raised is raised here, and
-    so is the exit uvicorn asks for when an app's startup fails, once the other server has ended."""
+    so is the exit uvicorn asks for when an app's startup fails, once the other server has ended.
+
+    A signal ends the servers in order: each waits for its open connections, as one listener does. A
+    server that ended with no signal sent leaves a process that must end, so the rest do not wait for
+    theirs (``_end_without_waiting``): uvicorn waits for open connections without limit, and one held
+    open would keep the process up with a listener gone, where no supervisor restarts it."""
 
     async def run(server: "uvicorn.Server", sock: socket.socket) -> SystemExit | None:
         try:
@@ -172,7 +177,11 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
             return asked
         return None
 
+    signalled: list[int] = []  # the signals taken: a stop that was asked for ends in order
+
     def stop(signum: int | None = None, _frame: object = None) -> None:
+        if signum is not None:
+            signalled.append(signum)
         for server in servers:
             if server.should_exit and signum == signal.SIGINT:
                 server.force_exit = True  # a second Ctrl-C does not wait for open connections
@@ -186,16 +195,42 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
         asyncio.create_task(run(server, sock), name=f"lpb-listener-{index}")
         for index, (server, sock) in enumerate(zip(servers, sockets, strict=True))
     ]
+    ended_by_itself = False
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        ended_by_itself = not signalled  # a cancelled serve() is asked to stop too, and never gets here
     finally:
         stop()
+        if ended_by_itself:
+            await _end_without_waiting(servers, tasks)
         ended = await asyncio.gather(*tasks, return_exceptions=True)
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     for outcome in ended:
         if isinstance(outcome, BaseException):
             raise outcome
+
+
+_HANG_UP_EVERY_S = 0.1  # uvicorn's own tick: how soon a server asked to end stops accepting
+
+
+async def _end_without_waiting(
+    servers: Sequence["uvicorn.Server"], tasks: Sequence["asyncio.Task[SystemExit | None]"]
+) -> None:
+    """End every server still running without waiting for its callers. ``force_exit`` is uvicorn's
+    forced exit: no wait for open connections or for requests in flight, and no lifespan shutdown. It
+    is not enough by itself: from Python 3.12 the listening server's ``wait_closed()``, which uvicorn
+    awaits last, returns only once every connection is gone. So each open connection is hung up, again
+    on every tick until the servers have ended: one may still be accepted before a server closes its
+    listening socket. A request in flight sees its caller disconnect, as when a caller hangs up."""
+    for server in servers:
+        server.force_exit = True
+    running = {task for task in tasks if not task.done()}
+    while running:
+        for server in servers:
+            for connection in list(server.server_state.connections):
+                connection.transport.abort()
+        _, running = await asyncio.wait(running, timeout=_HANG_UP_EVERY_S)
 
 
 __all__ = ["Extend", "actor_dependency", "build_app", "serve"]

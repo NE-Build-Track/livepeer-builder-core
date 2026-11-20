@@ -72,8 +72,12 @@ starts from its settings, still require it (#112, C23). With a payment provider,
 addresses before the engine starts. An address that is taken is logged, the one bound before it is
 released, and the process exits with the status it exits with for one listener; the engine has not
 started. The engine starts once, before either listener accepts a request, and stops once, after both
-have ended. Neither serves without the other: SIGINT or SIGTERM ends both (a second Ctrl-C does not wait
-for open connections), and a listener that ends for a reason of its own ends the other. `lpb serve` then
+have ended. Neither serves without the other: SIGINT or SIGTERM ends both in order, each waiting for its
+open connections (a second Ctrl-C does not wait for them), and a listener that ends for a reason of its
+own ends the other. That other one does not wait: it hangs up on its open connections, so a request in
+flight sees its caller disconnect, and it skips its app's shutdown handlers, as after a second Ctrl-C;
+the engine still stops in order. The process then ends, where it used to stay up for as long as one
+connection was held open, with a listener gone and nothing to restart it. `lpb serve` then
 exits 0. Both listeners answer `/livez` and `/readyz`, from the one engine, so a health check may use
 either. The log line `http.listeners_bound` names both addresses.
 

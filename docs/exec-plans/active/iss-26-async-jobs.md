@@ -40,6 +40,9 @@ From ISS-26, as amended on 13 November 2026.
   and the FakeEngine's parity.
 - [x] **19 November 2026.** Retention of stored results; the clearinghouse role refuses async jobs; a
   queued job on both sets of payment adapters; the client going away; the documents.
+- [x] **20 November 2026, review fixes.** A submit stores its job and tells the worker in one task the
+  request's cancellation cannot stop, so a job stored just before its request was cancelled is not left
+  waiting for the next submit.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log

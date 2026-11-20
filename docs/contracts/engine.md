@@ -664,7 +664,8 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
 - **The queue's time limit.** A job still `queued` `LPB_ASYNC_QUEUE_TTL_S` after it was submitted ends
   `failed`, `no_capacity`, with no attempt: nothing was paid, and its cost is `none`.
 - **A client that goes away changes nothing.** The job belongs to the worker, not to the request that
-  submitted it.
+  submitted it. That holds from the moment the job is stored: a request cancelled just after that
+  write still wakes the worker, in a task the caller's cancellation cannot stop.
 
 | State | An async job |
 | --- | --- |

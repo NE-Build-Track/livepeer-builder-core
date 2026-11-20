@@ -202,12 +202,24 @@ class JobService:
         if held is None:
             if await self.worker.count_queue() >= self.worker.limits.max_queued:
                 raise NoCapacity("the queue is full; submit again later")
-            queue = functools.partial(self._store.enqueue_job, job, fingerprint, request, actor)
-            held = await claim_async_operation(queue, retrying)
+            # Shielded as run's final write is (D34): the worker is told in the task that stored the job,
+            # so a request cancelled after the commit still leaves a job the loop looks at (#184 review).
+            held = await run_shielded(self._enqueue(actor, request, job, fingerprint, retrying))
         if held is None:
-            self.worker.queued(job)
             return job
         OPERATION_REPLAYED.set(True)
+        return held
+
+    async def _enqueue(
+        self, actor: ActorContext, request: JobRequest, job: Job, fingerprint: str, retrying: UUID | None
+    ) -> Job | None:
+        """Store ``job`` queued and tell the worker, as one step: ``None`` once both are done, or the job
+        that holds its reference. The loop reads the queue only while it knows of a waiting job, so a
+        stored job it was never told of would wait for the next submit or a restart."""
+        queue = functools.partial(self._store.enqueue_job, job, fingerprint, request, actor)
+        held = await claim_async_operation(queue, retrying)
+        if held is None:
+            self.worker.queued(job)
         return held
 
     async def _unallotted(

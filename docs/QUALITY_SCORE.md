@@ -11,7 +11,7 @@ Update this file in the same change that moves a grade.
 | Jobs (immediate) | A | `test_jobs.py`: failover, uncertain, write ordering, recovery, admission, idempotency | |
 | Jobs (streaming) | B | `test_streaming.py`, `test_stream_lifecycle.py`, `test_stream_deadlines.py`, `test_stream_http.py`; the `FakeEngine` contract (`test_fake_engine_contract.py`) | |
 | Jobs (async), sessions | C | Contracts and 501 tests | M4 |
-| Payments | A | `test_payments.py`: explicit provisioning, idempotency, custody, rotation | Mode B (M4) |
+| Payments | A | `test_payments.py`: explicit allotment, idempotency, custody, rotation | Mode B (M4) |
 | Costs | A | `test_costs.py`: classification, corrected, reconciliation, cursor | — |
 | Events | C | Contract and 501 test | Held in M3 (D60) |
 | Store | A | Store suite on SQLite and PostgreSQL; migrations, drift, restart, backup, retention | — |

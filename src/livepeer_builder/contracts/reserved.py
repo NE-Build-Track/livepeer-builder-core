@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import Field
 
 from livepeer_builder.contracts.common import Contract
+from livepeer_builder.contracts.operations import OperationRef
 
 EventType = Literal["job.created", "job.finished", "usage.reported", "cost.observed", "cost.corrected"]
 
@@ -22,7 +23,7 @@ class EngineEvent(Contract):
     type: EventType
     schema_version: int
     occurred_at: datetime
-    application_id: str
+    tenant_id: str
     actor_id: str
     job_id: UUID
     operation_ref: str | None
@@ -36,7 +37,7 @@ class EventPage(Contract):
 
 class SessionRequest(Contract):
     app: str
-    operation_ref: str | None = None
+    operation_ref: OperationRef | None = None  # as a job's: never "", at most 200 characters (#113, C19)
     max_duration_s: int = Field(default=3600, gt=0)
     idle_timeout_s: int = Field(default=300, gt=0)
 
@@ -49,7 +50,7 @@ class Session(Contract):
 
     id: UUID
     job_id: UUID
-    application_id: str
+    tenant_id: str
     actor_id: str
     app: str
     state: SessionState

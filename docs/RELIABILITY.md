@@ -3,22 +3,24 @@
 ## Configuration
 
 Settings come from `LPB_<FIELD>` environment variables (`EngineSettings.from_env`). Defaults favor
-safety: a durable SQLite file, `per_actor` payments, and admission limits on.
+safety: a durable SQLite file and admission limits on. Payments are always `per_actor`: no setting
+chooses an allocation mode or holds a payment key (D82). Three variables were renamed on 18 November
+2026 (#163), and an old one is ignored, not read as the new one: rename them before starting the new
+release ([what changes](contracts/index.md#upgrading-to-the-domain-language-names)).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
-| `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate` |
+| `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate`. With `false`, `start()` compares the database's revision with the package's and refuses to start on any mismatch, behind or ahead. The message names both revisions and the database that was checked, says to run `lpb migrate` against that database when it is behind, and says to start the release that migrated it when its revision is one this package does not know. It checks at start only, so replicas already running through a rolling deploy keep running |
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
-| `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused), with no userinfo, query or fragment. Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record the reader cannot use is skipped (`discovery.inventory_skipped`) |
-| `LPB_ALLOCATION_MODE` | `per_actor` | Or `per_application` with `LPB_SHARED_PAYMENT_KEY` (and `LPB_SHARED_ALLOCATION_ID` for reconciliation) |
+| `LPB_DISCOVERY_URL` | required | `GET` this URL for livepeer/node's `/discovery` contract ([contract](contracts/discovery.md)). The engine does not start without it. No credential is sent. Must be an `http://` or `https://` URL with a host (a bare `host:port` is refused), with no userinfo, query or fragment. Redirects are not followed: a 3xx is a failed refresh. Each poll has 5 s in all. A failed poll keeps the last good snapshot. A record the reader cannot use is skipped (`discovery.inventory_skipped`); an answer with records and no readable runner is a failed poll (#114, C28) |
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
-| `LPB_BATTERIES_OPERATOR_TOKEN` | unset | `grants.read` and `grants.create`. Optional: without it the grant desk is off (`payments.grants` is `None`; the grant list and create routes are absent) |
+| `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read`, `grants.create`, `grants.fund`, `grants.status` and `allocations.read`. Optional: without it the tenant desk is off (`payments.tenants` is `None`; onboarding, the tenant list, a grant's read and a tenant's status are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
-| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required to provision in `per_actor` mode |
+| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
-| `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | How many times one runner call may retry a 402 payment challenge (≥ 0) |
+| `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |
 | `LPB_DEFAULT_CURRENCY` | `USD` | Grant and allocation currency (`USD` or `ETH`) |
 | `LPB_MAX_CONCURRENT_JOBS`, `LPB_MAX_CONCURRENT_JOBS_PER_APP` | `64`, unset | Admission limits (503 + `Retry-After`, before payment) |
 | `LPB_MAX_PAID_ATTEMPTS` | `2` | Paid attempts a job may fail over from (1 to 10; `1` turns paid failover off). The operator pays for them, so the caller's `max_attempts` cannot raise it (D55) |
@@ -37,7 +39,7 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 | `LPB_JWT_TOKEN_TYPES` | `at+jwt,application/at+jwt` | Accepted `typ` headers (RFC 9068). Adding `jwt` accepts plain JWTs and drops the `client_id` and `jti` requirements: weaker |
 | `LPB_JWT_MAX_LIFETIME_S` | `3600` | A token whose `exp - iat` is longer is refused |
 | `LPB_JWT_ALGORITHMS` | `RS256,ES256` | Allowed signature algorithms, asymmetric only |
-| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_APPLICATION_CLAIM`, `LPB_JWT_APPLICATION_ID` | `sub`, unset, `default` | Which claims become `actor_id` and `application_id` |
+| `LPB_JWT_ACTOR_CLAIM`, `LPB_JWT_TENANT_CLAIM`, `LPB_JWT_TENANT_ID` | `sub`, unset, unset | Which claims become `actor_id` and `tenant_id`. With `jwt` in `LPB_AUTH`, set exactly one of `LPB_JWT_TENANT_CLAIM` (the claim that names each token's tenant) and `LPB_JWT_TENANT_ID` (the one tenant every token is in): neither has a default, and with neither or both the engine refuses to start (#163 review) |
 | `LPB_JWT_SCOPE_CLAIM`, `LPB_JWT_SCOPE_PREFIX`, `LPB_JWT_ADMIN_SCOPE` | `scope`, empty, unset | Scopes named after operations become permissions; the admin scope makes an engine-wide admin credential, so it may not be an operation or a standard OpenID scope |
 | `LPB_JWT_NAME_CLAIM` | `preferred_username` | The person's display name, recorded on first sign-in for the operator's actor list (D48); empty turns it off |
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
@@ -47,9 +49,12 @@ safety: a durable SQLite file, `per_actor` payments, and admission limits on.
 
 ## Operations
 
-Every command but `gen-secret-key`, `verify` and `gen-docs` loads the settings, so it needs
-`LPB_DISCOVERY_URL` set, as the engine does; the URL is not called by a command that does not start the
-engine.
+`lpb migrate`, `revision`, `backup` and `restore` read only `LPB_DATABASE_URL`, so another setting
+that would not load does not stop them. `lpb purge`, `bootstrap-admin` and `smoke` load every setting but
+do not need `LPB_DISCOVERY_URL`, since they serve nothing. `lpb serve`, and any engine an application
+starts from its settings, still require it (#112, C23). With a payment provider, `purge` and
+`bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing; `smoke` and `serve` do.
+`gen-secret-key`, `verify` and `gen-docs` read no setting.
 
 | Command | When |
 | --- | --- |
@@ -57,16 +62,32 @@ engine.
 | `lpb bootstrap-admin` | Once per deployment; prints the first admin key once |
 | `lpb gen-secret-key` | Once; store the key in your secret manager, never in the database |
 | `lpb serve` | Run the REST service (`[server]` extra) |
-| `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install |
+| `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads |
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |
 
 Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors,
-the last cost sync and its error, running jobs, the allocation mode and the
-version. Logs are JSON lines; every
-line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
+the last cost sync, its error and the count of usage rows it has set aside (`cost_sync_set_aside`),
+running jobs and the version. It no longer reports an `allocation_mode`: `per_actor` is the only one
+(D82). Logs are JSON lines; every line has an `event` field (for example `jobs.recovered` or
+`costs.sync_failed`).
 
-`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated fund
+`/readyz` needs no credential, so `discovery_error` and `cost_sync_error` are short fixed codes, never
+an exception's text (#113, C7). The text, which can quote a URL, a provider's words or a store error's
+SQL and parameters, goes to the log with the code, in `discovery.failed` and `costs.sync_failed`:
+
+| Code | Meaning |
+| --- | --- |
+| `unavailable` | The discovery source or the usage source gave no answer (a timeout, a refused connection), answered with a status that is not 2xx (an error, or a redirect), or raised anything not listed below |
+| `invalid_answer` | It answered 2xx with something the engine could not read: a content encoding that does not decode, not JSON, not the expected shape, a value it cannot convert, or a discovery document with records and no readable runner |
+| `store_error` | Cost sync failed after the usage source answered: writing or matching the usage in the engine's store |
+
+The codes are a closed set in the contract (`SourceFailureCode` for `discovery_error`, `FailureCode` for
+`cost_sync_error`), so the OpenAPI schema lists them and nothing else can be written there. The shipped
+adapters decide the code where they read the answer; a supplied source's failure is read by its
+exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
+
+`scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated top-up
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
 `LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).
 
@@ -86,15 +107,22 @@ line has an `event` field (for example `jobs.recovered` or `costs.sync_failed`).
 | --- | --- |
 | The engine dies mid-job | On start, `running` jobs become `uncertain` (may have paid) or `failed`. Never re-run |
 | The signer or runner times out after payment | Job `uncertain`; cost classified `uncertain` |
-| Batteries unreachable | Cost sync records `cost_sync_error`; costs stay `pending`; jobs still run |
+| Batteries unreachable | Cost sync records `cost_sync_error` (`unavailable`); costs stay `pending`; jobs still run |
 | The usage cursor is rejected | Resync from the start; known rows are skipped (no double application) |
+| Batteries answers a 2xx the engine cannot read | Not a JSON object, a list page whose `items` is not a list of objects or whose `next_cursor` is not a string, a list page whose `next_cursor` is the cursor it was asked with, or a grant, a key or an allocation with no `id` or with a field that is not text: a provider error. An admin command answers 502 and its `operation_ref` stays held (an unknown outcome, resumed after `LPB_OPERATION_STALE_S`); cost sync fails that pass with `cost_sync_error` `invalid_answer` and asks for the page again. Never read as an empty answer (#114, C21). A redirect (3xx) is the same provider error whatever its body, and never the call's answer; as `cost_sync_error` it is `unavailable` |
+| Batteries delivers a usage row the engine cannot read or store | The row is set aside and the sync goes on: an unknown status, no id or timestamp, a fee that is not a finite number, or a text the store's column cannot keep (too long, a NUL, a lone surrogate). Its id, the reason and its fees are one row of `lpb_usage_set_aside`; a WARNING `costs.usage_set_aside` carries its content, once. `cost_sync_set_aside` in `/readyz` counts the rows left out in all, and `rows_set_aside` in the sync report the new ones. No job's cost includes the row, so reconciliation may not balance until it is accounted for (#114, C13; [payments.md](contracts/payments.md#cost-classification)) |
+| Two cost syncs run at once (the background loop and `POST /v1/costs/sync`) | Both end. Each usage row is stored once and each set-aside row recorded once, by whichever sync writes it first; the row is not new to the other, which counts and logs nothing for it. Before, the slower sync failed on the row's primary key and its pass ended before its cursor moved (review of #144) |
+| An orchestrator's payment challenge has a manifest id the store cannot keep | Refused before signing (`payment_refused`): nothing stored or paid, and the job fails over (#114, C13) |
 | Batteries delivers a known usage row id again with another fee | The stored copy is kept: it is not a correction, and only a new row id changes a job's cost. A WARNING `costs.usage_redelivered` carries the row id and both fees (D61) |
-| Discovery fails | The last good snapshot is kept; `discovery_error` is set; it goes stale after three intervals |
-| livepeer/node's `livepeer-discovery` fails a refresh | A TLS failure, a non-200, or a document `Decode` rejects keeps that source's last successful snapshot until `MaxFailedRefreshes` consecutive failures (default 6). The dev stack leaves that default and refreshes every 30s. A source that has never succeeded stays out. A runner with no `observed_at`, or one more than 30s ahead, is skipped inside `Decode` and does not drop the source when another runner in the document is valid. The engine keeps its own last good snapshot ([contract](contracts/discovery.md)) |
+| Discovery fails | The last good snapshot is kept; `discovery_error` is set to a code; it goes stale after three intervals |
+| Discovery answers with records and no readable runner | A failed refresh, not an empty inventory: the last good snapshot is kept and goes stale after three intervals; `discovery_error` is `invalid_answer`; `discovery.inventory_skipped` and `discovery.failed` carry the counts of skipped entries and runners. An empty answer (`[]`) still empties the catalog (#114, C28) |
+| livepeer/node's `livepeer-discovery` fails a refresh | A TLS failure, a non-200, or a document `Decode` rejects keeps that source's last successful snapshot until `MaxFailedRefreshes` consecutive failures (default 6). The dev stack leaves that default and refreshes every 30s. A source that has never succeeded stays out. A runner with no `observed_at`, or one more than 30s ahead, is skipped inside `Decode` and does not drop the source when another runner in the document is valid. From v1.0.7 the same holds for a runner with a wrongly typed optional field, a repeated key or a key in another letter case (node #82). The engine keeps its own last good snapshot ([contract](contracts/discovery.md)) |
+| Every runner for an app advertises zero capacity | A job that would sign no payment (unpaid, or the runners are free or have no price the signer pays) tries them anyway, in selection order: the advertisement can lag. If each refuses, the job fails `refused`, 503 + `Retry-After: 5`. A job that would pay them is not tried: it fails `no_capacity` before any attempt, 503 + `Retry-After: 5`, with nothing signed, because a full runner's refusal can cost a ticket: livepeer/node before v1.0.7 asks for payment before it checks capacity (#114, C17; [contract](contracts/discovery.md#advertised-capacity)) |
 | Admission limit reached | 503 + `Retry-After` before any payment |
 | A streaming client disconnects | The stream ends (`abandoned`, or `succeeded` if the runner closes within `LPB_STREAM_SETTLE_S`) and its slot is released |
 | The store fails while a stream ends | The slot is released; the job stays `running` until the next start resolves it (`jobs.stream_finish_failed` in the log) |
 | `start()` fails (a store error, or a cancellation) | The engine stops itself and closes what `create` opened before the error reaches the caller; create a new engine |
+| `start()` again on a running engine | Refused with `RuntimeError`; the running engine and its one set of background loops carry on (#113, C27). The REST app's lifespan (`create_app(engine)`) on a running engine is refused the same way and does not stop it |
 | The engine stops with open streams | They get `LPB_STREAM_DRAIN_TIMEOUT_S` to finish, then end `abandoned`; `stop()` returns only after every end is written |
 
 There is no HA, exactly-once or SLA. See

@@ -288,6 +288,56 @@ async def test_payment_retries_are_bounded(net: Net) -> None:
     )
 
 
+@pytest.mark.parametrize(("retries", "signatures"), [(0, 1), (1, 2), (3, 4)])
+async def test_one_call_signs_one_payment_plus_the_retries(net: Net, retries: int, signatures: int) -> None:
+    """#112 C1: a runner that answers 402 to every paid request is signed once plus
+    ``max_payment_challenge_retries`` times (4 at the default of 3), and the last challenge is not."""
+    net.challenge_paid = True
+    transport = SdkRunnerTransport(net.url, max_payment_challenge_retries=retries)
+    with pytest.raises(RunnerCallError) as asking:
+        await transport.call(net.runner(), JobRequest(app=APP), "lpg_k")
+    signed = [f"m-{n}" for n in range(1, signatures + 1)]
+    assert [entry for entry in net.log if entry.startswith("sign ")] == [f"sign {m}" for m in signed]
+    assert net.log[-1] == f"challenge m-{signatures + 1}"  # asked again, and not signed
+    error = asking.value
+    assert (error.kind, error.status_code, error.payment_sent, error.manifest_ids) == (
+        "http",
+        402,
+        True,
+        tuple(signed),
+    )
+
+
+@pytest.mark.parametrize(("retries", "unsigned"), [(0, 1), (3, 4)])
+async def test_unsigned_refresh_passes_have_their_own_bound(net: Net, retries: int, unsigned: int) -> None:
+    """#112 C1: a signer that answers 480 to every request sends the runner at most ``retries + 1``
+    unsigned requests (the first included), and the call is refused unpaid."""
+    net.sign = [480] * 10
+    transport = SdkRunnerTransport(net.url, max_payment_challenge_retries=retries)
+    with pytest.raises(RunnerCallError) as refreshing:
+        await transport.call(net.runner(), JobRequest(app=APP), "lpg_k")
+    assert [entry for entry in net.log if entry.startswith("challenge ")] == [
+        f"challenge m-{n}" for n in range(1, unsigned + 1)
+    ]
+    assert len(net.bodies) == unsigned  # every runner request was unsigned
+    error = refreshing.value
+    assert (error.kind, error.payment_sent, error.payment_unknown) == ("payment_refused", False, False)
+
+
+async def test_refreshes_do_not_use_up_the_signatures(net: Net) -> None:
+    """#112 C1: the two bounds are separate. Three refreshes, then a runner that asks again after every
+    payment: still four signatures at the default."""
+    net.sign = [480, 480, 480]
+    net.challenge_paid = True
+    with pytest.raises(RunnerCallError) as asking:
+        await call(net)
+    assert [entry for entry in net.log if entry.startswith("sign ")] == [
+        f"sign m-{n}" for n in range(1, 8)
+    ]  # m-1..m-3 refused (480), then m-4..m-7 signed; m-8 is the challenge left unsigned
+    assert asking.value.manifest_ids == ("m-4", "m-5", "m-6", "m-7")
+    assert net.log[-1] == "challenge m-8"
+
+
 OTHER_HOST = b'{"payment_params": "p", "manifest_id": "m-1", "payment_url": "https://elsewhere.example/pay"}'
 
 

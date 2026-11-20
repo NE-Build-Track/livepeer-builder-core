@@ -6,7 +6,7 @@ The discovery inventory is not served by a package in this repository
 ([contract](../contracts/discovery.md)).
 
 This document is for reviewing the shapes. Other documents cover the rest:
-- the flows between components (authentication, provisioning, a paid job with failover, cost sync,
+- the flows between components (authentication, allotment, a paid job with failover, cost sync,
   reconciliation, recovery): [architecture-diagrams.md](architecture-diagrams.md);
 - every interface's full method list, generated from the code: [generated/interfaces.md](../generated/interfaces.md);
 - how to replace a default, with runnable examples: [extending-the-engine.md](extending-the-engine.md).
@@ -21,7 +21,7 @@ The engine has two sets of interfaces, and they point in opposite directions:
 
 | Set | Module | Who implements it | Who calls it |
 | --- | --- | --- | --- |
-| What the engine **offers** | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
+| What the engine **offers** | `api.py` (`ActorApi`, `WorkApi`, `ClearinghouseApi`, `EngineApi`) | `BuilderEngine` (and `FakeEngine` for `ActorApi`) | applications in-process, and `http/` |
 | What the engine **needs** | `protocols/` (ports) | adapters, the store, or the enterprise | services only |
 
 ```mermaid
@@ -64,10 +64,12 @@ classDiagram
 
 ## What the engine offers: the facade
 
-`api.py` splits the engine by role. An application that only runs jobs types against `ActorApi`;
-`http/` types against `EngineApi`. Optional capabilities are `X?` members decided once at construction:
-`jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.grants`
-(the grant desk is on). Callers check for `None`; nothing probes with `hasattr`.
+`api.py` splits the engine into its two halves (D84). An application that only runs jobs types against
+`ActorApi`. `WorkApi` is the work half: the actor API, and the engine's own access keys, reconciliation
+and cost sync. `ClearinghouseApi` is the clearinghouse half: tenants and their grants, allotment and top-ups. In
+`http/` each set of routes is typed against its half, and `create_app` against `EngineApi`, which is both. Optional capabilities are `X?` members decided once at construction:
+`jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.tenants`
+(the tenant desk is on). Callers check for `None`; nothing probes with `hasattr`.
 
 ```mermaid
 classDiagram
@@ -82,19 +84,26 @@ classDiagram
         +async start() None
         +async stop() None
     }
-    class AdminApi {
+    class WorkApi {
+        <<interface>>
+        +costs EngineCostsApi
+        +keys KeysApi?
+        +authenticator Authenticator
+        +events EventFeed
+        +sessions SessionManager
+    }
+    class ClearinghouseApi {
         <<interface>>
         +payments PaymentsAdminApi
         +keys KeysApi?
-        +costs CostsAdminApi
+        +authenticator Authenticator
+        +health() EngineHealth
+        +async start() None
+        +async stop() None
     }
     class EngineApi {
         <<interface>>
         +payments PaymentsApi
-        +costs EngineCostsApi
-        +authenticator Authenticator
-        +events EventFeed
-        +sessions SessionManager
     }
     class JobsApi {
         <<interface>>
@@ -134,7 +143,7 @@ classDiagram
     class CostsAdminApi {
         <<interface>>
         +async recent(actor, limit) JobCost[]
-        +async reconcile(admin, application_id, actor_id) Reconciliation
+        +async reconcile(admin, tenant_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
     }
     class AllowanceApi {
@@ -143,46 +152,50 @@ classDiagram
     }
     class PaymentsAdminApi {
         <<interface>>
-        +async provision(admin, request) ProvisionedActor
-        +async fund(admin, application_id, actor_id, request) ProvisionedActor
-        +async set_status(admin, application_id, actor_id, status) ProvisionedActor
-        +async rotate_key(admin, application_id, actor_id, operation_ref) ProvisionedActor
-        +async revoke(admin, application_id, actor_id) ProvisionedActor
-        +async fund_grant(admin, request) None
-        +grants GrantsApi?
+        +async allot(admin, request) ActorAllocation
+        +async top_up(admin, tenant_id, actor_id, request) ActorAllocation
+        +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
+        +async rotate_payment_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
+        +async revoke(admin, tenant_id, actor_id) ActorAllocation
+        +async top_up_grant(admin, tenant_id, request) None
+        +tenants TenantsApi?
     }
-    class GrantsApi {
+    class TenantsApi {
         <<interface>>
-        +async list_grants(admin) GrantRecord[]
-        +async create_grant(admin, name, amount, operation_ref) GrantRecord
+        +async onboard(admin, name, amount, operation_ref, admin_actor_id) OnboardedTenant
+        +async list_tenants(admin) TenantGrant[]
+        +async grant(admin, tenant_id) TenantGrant
+        +async set_status(admin, tenant_id, status, operation_ref) TenantState
     }
     class KeysApi {
         <<interface>>
-        +async issue(admin, kind, actor_id, application_id, permissions, label, operation_ref) IssuedKey
-        +async list_keys(admin, application_id) AccessKey[]
-        +async revoke(admin, key_id) None
+        +async issue(admin, kind, actor_id, tenant_id, permissions, label, operation_ref) IssuedKey
+        +async list_keys(admin, tenant_id) AccessKey[]
+        +async revoke(admin, key_id, tenant_id) None
         +async bootstrap_admin(label) IssuedKey
     }
     class BuilderEngine
     class FakeEngine
-    ActorApi <|-- EngineApi
-    AdminApi <|-- EngineApi
+    ActorApi <|-- WorkApi
+    WorkApi <|-- EngineApi
+    ClearinghouseApi <|-- EngineApi
     ActorApi --> JobsApi
     ActorApi --> CostsApi
     ActorApi --> DiscoveryApi
     ActorApi --> AllowanceApi
     JobsApi --> StreamingApi
     StreamingApi ..> JobStreamApi : returns
-    AdminApi --> PaymentsAdminApi
-    AdminApi --> KeysApi
-    AdminApi --> CostsAdminApi
-    PaymentsAdminApi --> GrantsApi
+    WorkApi --> KeysApi
+    WorkApi --> CostsAdminApi
+    ClearinghouseApi --> PaymentsAdminApi
+    ClearinghouseApi --> KeysApi
+    PaymentsAdminApi --> TenantsApi
     BuilderEngine ..|> EngineApi
     FakeEngine ..|> ActorApi
 ```
 
 Behind the facade, each member is one concrete service: `jobs` is `JobService` (with `Streaming` and
-`JobStream`), `discovery` is `DiscoveryService`, `payments` is `PaymentsService` (with `GrantDesk`),
+`JobStream`), `discovery` is `DiscoveryService`, `payments` is `PaymentsService` (with `TenantDesk`),
 `costs` is `CostService`, `keys` is `KeyService`, and `authenticator` is `AuthenticatorChain`.
 
 ## What the engine needs: the ports
@@ -210,7 +223,7 @@ classDiagram
         +async insert_access_key(key, token_hash, operation) bool
         +async access_key_by_hash(token_hash) AccessKey?
         +async revoke_access_key(key_id, revoked_at) bool
-        +async list_access_keys(application_id) AccessKey[]
+        +async list_access_keys(tenant_id) AccessKey[]
         +async count_active_admin_keys() int
     }
     class AuthenticatorChain {
@@ -224,12 +237,12 @@ classDiagram
         -realm str
     }
     class DefaultPolicy {
-        admin kind passes
+        clearinghouse_admin kind passes
         else permission and ownership
     }
     class KeyService {
         +async issue(admin, ...) IssuedKey
-        +async list_keys(admin, application_id) AccessKey[]
+        +async list_keys(admin, tenant_id) AccessKey[]
         +async revoke(admin, key_id) None
         +async bootstrap_admin(label) IssuedKey
     }
@@ -340,19 +353,19 @@ classDiagram
     direction LR
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) PaymentCredential
+        +async credential(actor) PaymentKey
     }
     class AllowanceReader {
         <<interface>>
-        +async allocation_for(application_id, actor_id) str?
+        +async allocation_for(tenant_id, actor_id) str?
         +async read_allowance(allocation_id) Allowance
     }
     class AllocationManager {
         <<interface>>
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
-        +async fund_allocation(allocation_id, amount, idempotency_key) None
-        +async fund_grant(grant_id, amount, idempotency_key) None
+        +async top_up_allocation(allocation_id, amount, idempotency_key) None
+        +async top_up_grant(grant_id, amount, idempotency_key) None
         +async set_allocation_status(allocation_id, status) None
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None
@@ -360,6 +373,9 @@ classDiagram
         +async list_grants() GrantRecord[]
         +async grant_page(cursor) GrantPage
         +async create_grant(name, amount, metadata) GrantRecord
+        +async read_grant(grant_id) TenantGrant
+        +async grant_balances() TenantGrant[]
+        +async set_grant_status(grant_id, status) None
     }
     class UsageSource {
         <<interface>>
@@ -372,21 +388,21 @@ classDiagram
         +async delete(ref) None
     }
     class PaymentsService {
-        +mode per_actor or per_application
         -manager AllocationManager?
         -secrets SecretStore
         -store ActorRepo
-        +grants GrantDesk?
+        +tenants TenantDesk?
     }
-    class GrantDesk {
+    class TenantDesk {
         -manager AllocationManager
+        -keys KeyService?
     }
     class CostService {
         -store CostStore
         -worker CostSyncWorker?
         -allowances AllowanceReader
         +async for_job(actor, job_id) JobCost
-        +async reconcile(admin, application_id, actor_id) Reconciliation
+        +async reconcile(admin, tenant_id, actor_id, allocation_id) Reconciliation
         +async sync_now(admin) SyncReport
         +async run(stop) None
     }
@@ -396,13 +412,12 @@ classDiagram
         +async sync_once() SyncReport
     }
     class BatteriesClient {
-        engine token, or operator token for the grant desk
+        engine token, or grants token for the tenant desk
     }
     class BatteriesUsageSource {
         GET /v1/usage
     }
     class RoutingSecretStore
-    class SettingsSecretStore
     class EncryptedDbSecretStore {
         Fernet, lpb_secrets
     }
@@ -411,8 +426,8 @@ classDiagram
     PaymentsService ..|> AllowanceReader
     PaymentsService --> AllocationManager
     PaymentsService --> SecretStore
-    PaymentsService --> GrantDesk
-    GrantDesk --> AllocationManager
+    PaymentsService --> TenantDesk
+    TenantDesk --> AllocationManager
     CostService --> CostSyncWorker
     CostService --> AllowanceReader
     CostSyncWorker --> UsageSource
@@ -420,7 +435,6 @@ classDiagram
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
     SecretStore <|.. RoutingSecretStore
-    RoutingSecretStore o-- SettingsSecretStore
     RoutingSecretStore o-- EncryptedDbSecretStore
 ```
 
@@ -702,10 +716,21 @@ classDiagram
     class app_py {
         <<module>>
         +create_app(engine, manage_lifecycle) FastAPI
+        +shared_app(engine, manage_lifecycle) FastAPI
+        -_install_error_handlers(app, engine) None
+    }
+    class work_py {
+        <<module>>
+        +mount_work_routes(app, engine) None
+    }
+    class clearinghouse_py {
+        <<module>>
+        +mount_clearinghouse_routes(app, engine) None
+    }
+    class auth_py {
+        <<module>>
         +actor_dependency(engine) Dependency
         -_authenticated(engine, request) ActorContext
-        -_install_error_handlers(app, engine) None
-        +JOB_ID_HEADER Livepeer-Job-Id
     }
     class streaming_py {
         <<module>>
@@ -719,11 +744,17 @@ classDiagram
         starlette
     }
     class RequestBodies {
-        IssueKeyBody, ProvisionBody, GrantBody
+        IssueKeyBody, AllotBody, GrantBody
         StatusBody, RotateBody, UsageBody
     }
     class FastAPI
     class EngineApi {
+        <<interface>>
+    }
+    class WorkApi {
+        <<interface>>
+    }
+    class ClearinghouseApi {
         <<interface>>
     }
     class BuilderEngine
@@ -734,23 +765,36 @@ classDiagram
     server_py ..> app_py : create_app
     server_py ..> Extend : calls extend(app, engine)
     app_py ..> FastAPI : builds
-    app_py ..> EngineApi : one call per route
-    app_py ..> HTTPBearer : when engine.keys is set
-    app_py ..> RequestBodies
-    app_py ..> streaming_py : streamed jobs
+    app_py ..> work_py : mounts
+    app_py ..> clearinghouse_py : mounts
+    work_py ..> WorkApi : one call per route
+    clearinghouse_py ..> ClearinghouseApi : one call per route
+    WorkApi <|-- EngineApi
+    ClearinghouseApi <|-- EngineApi
+    work_py ..> auth_py
+    clearinghouse_py ..> auth_py
+    auth_py ..> HTTPBearer : when engine.keys is set
+    work_py ..> RequestBodies
+    clearinghouse_py ..> RequestBodies
+    work_py ..> streaming_py : streamed jobs
     streaming_py ..> AbortableStreamingResponse
     StreamingResponse <|-- AbortableStreamingResponse
     BuilderEngine ..|> EngineApi
 ```
 
-`create_app` registers every route as a closure over `engine`: nothing is looked up from a global or
-from `app.state`. `actor_dependency(engine)` is the authentication dependency, and routes you add with
-`extend` use the same one.
+The routes are two sets (D84). `mount_work_routes` adds the work half's routes to an app and
+`mount_clearinghouse_routes` the clearinghouse half's, each typed against its half of the facade.
+`shared_app` builds the app both need: the lifecycle, the error answers, the request limit and health.
+`create_app` mounts both sets on it. Every route is a closure over `engine`: nothing is looked up from a
+global or from `app.state`. `actor_dependency(engine)` is the authentication dependency, and routes you
+add with `extend` use the same one.
 
 ### Routes
 
 Each route authenticates, then makes one engine call. Authorization happens in the services. Health and
-`GET /v1/offerings` are public (D51, proposed).
+`GET /v1/offerings` are public (D51, proposed). Health belongs to the app both halves share. The rows
+from `/v1/offerings` to `/v1/keys` are the work set, and the rows under `/v1/clearinghouse` are the
+clearinghouse set.
 
 | Route | Engine call | Answer |
 | --- | --- | --- |
@@ -765,15 +809,16 @@ Each route authenticates, then makes one engine call. Authorization happens in t
 | `POST /v1/jobs/{id}/usage` | `jobs.report_usage` | `Job` |
 | `GET /v1/jobs/{id}/cost` | `costs.for_job` | `JobCost` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary` | `costs.recent`, `costs.summary` | `JobCost[]`, `CostSummary` |
+| `GET /v1/costs/reconciliation` | `costs.reconcile` | `Reconciliation` |
+| `POST /v1/costs/sync` | `costs.sync_now` | `SyncReport` |
 | `GET /v1/allowance` | `payments.allowance` | `Allowance` |
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
-| `POST, GET /v1/admin/keys`, `GET /v1/admin/keys/{id}`, `POST /v1/admin/keys/{id}/rotate`, `POST /v1/admin/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
-| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (provisioned, signed in, or both: D46, D48), `ProvisionedActor` |
-| `POST /v1/admin/applications/{app}/actors/{actor}/allocation` (and `/fund`, `/status`, `/revoke`, `/rotate-key`) | `payments.provision`, `fund`, `set_status`, `revoke`, `rotate_key` | `ProvisionedActor` |
-| `GET, POST /v1/admin/grants` | `payments.grants.*` | only when `payments.grants` is set |
-| `POST /v1/admin/grant/fund` | `payments.fund_grant` | `204` |
-| `GET /v1/admin/reconciliation` | `costs.reconcile` | `Reconciliation` |
-| `POST /v1/admin/costs/sync` | `costs.sync_now` | `SyncReport` |
+| `POST, GET /v1/keys`, `GET /v1/keys/{id}`, `POST /v1/keys/{id}/rotate`, `POST /v1/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
+| `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
+| `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation` |
+| `POST, GET /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants/{tenant}/grant`, `POST /v1/clearinghouse/tenants/{tenant}/status` | `payments.tenants.onboard`, `list_tenants`, `grant`, `set_status` | `OnboardedTenant`, `TenantGrant[]`, `TenantGrant`, `TenantState`; only when `payments.tenants` is set |
+| `POST /v1/clearinghouse/tenants/{tenant}/grant/top-up` | `payments.top_up_grant` | `204` |
+| `POST, GET /v1/clearinghouse/tenants/{tenant}/keys`, `GET .../keys/{id}`, `POST .../keys/{id}/rotate`, `POST .../keys/{id}/revoke` | `keys.*`, with the tenant from the path | only when `engine.keys` is set |
 
 The generated schema is [generated/openapi.json](../generated/openapi.json); CI fails when it drifts.
 
@@ -801,9 +846,9 @@ classDiagram
     class NotProvisioned {
         402
     }
-    class AlreadyProvisioned {
+    class AlreadyAllotted {
         409 + actor
-        code already_provisioned
+        code already_allotted
     }
     class OperationExists {
         409 + Livepeer-Job-Id + job
@@ -841,7 +886,7 @@ classDiagram
     EngineError <|-- NotFound
     EngineError <|-- InvalidRequest
     EngineError <|-- NotProvisioned
-    EngineError <|-- AlreadyProvisioned
+    EngineError <|-- AlreadyAllotted
     EngineError <|-- OperationExists
     OperationExists <|-- OperationInProgress
     EngineError <|-- OperationConflict
@@ -1016,8 +1061,9 @@ Points worth deciding, noticed while drawing these:
    document that, or move readiness to a policy-checked call?
 2. **`ProviderError` passes some provider statuses through.** A Batteries `400`, `404`, `409` or `422`
    becomes the engine's own status, so a client cannot tell a provider rejection from an engine one.
-3. **Route naming.** Grants are `/v1/admin/grants` but funding one is `/v1/admin/grant/fund`, with no
-   grant id in the path.
+3. **Route naming.** Settled by #165: a grant is its tenant's, and both are named in the path
+   (`/v1/clearinghouse/tenants/{tenant_id}/grant/top-up`). Grants were `/v1/clearinghouse/grants`, and
+   topping one up `/v1/clearinghouse/grant/top-up`, with no grant id in the path.
 4. **Reserved members.** `EngineApi.events`, `sessions` and `jobs.result` are on the facade and answer
    `501` until M4. Keep them visible so the contract is fixed early, or add them when they work?
 5. **Ports that services implement.** `CredentialResolver` and `AllowanceReader` are implemented by

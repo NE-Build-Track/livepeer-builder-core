@@ -4,7 +4,7 @@ Under JWT bearer an actor is the provider's immutable subject (``sub``), which a
 ``SightingRecorder`` wraps the engine's authenticator chain: when a credential from an identity provider
 names a builder (an actor credential, not an operator or the console's reader, and not an engine key,
 whose actors the key list already shows), it records that actor with the provider's display name. The
-operator's actor list then shows "alice, not provisioned" and provisions her by name.
+operator's actor list then shows "alice, no allocation" and allots one to her by name.
 
 A request writes nothing after the first: one write per person per process, then one an hour to move
 ``last_seen_at``, and one at once when the name changes. Recording never fails a request.
@@ -43,7 +43,7 @@ class SightingRecorder:
         self._store = store
         self._clock = clock
         self._refresh_after_s = refresh_after_s
-        self._recorded: dict[tuple[str, str], tuple[str, float]] = {}  # (application, actor) -> (name, when)
+        self._recorded: dict[tuple[str, str], tuple[str, float]] = {}  # (tenant, actor) -> (name, when)
 
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
         actor = await self._inner.authenticate(request)
@@ -55,7 +55,7 @@ class SightingRecorder:
         return self._inner.challenge()
 
     async def _record(self, actor: ActorContext) -> None:
-        key = (actor.application_id, actor.actor_id)
+        key = (actor.tenant_id, actor.actor_id)
         name = actor.display_name or ""
         now = self._clock.now()
         recorded = self._recorded.get(key)
@@ -66,7 +66,7 @@ class SightingRecorder:
         ):
             return
         seen = SeenActor(
-            application_id=actor.application_id,
+            tenant_id=actor.tenant_id,
             actor_id=actor.actor_id,
             name=name,
             first_seen_at=now,  # the store keeps the first one

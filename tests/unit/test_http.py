@@ -23,7 +23,7 @@ async def tokens(engine: BuilderEngine) -> tuple[str, str]:
     admin = await engine.keys.bootstrap_admin()
     from livepeer_builder.contracts import ActorContext
 
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-http-27")
     return admin.token, alice.token
 
@@ -83,18 +83,18 @@ async def test_job_round_trip_and_admin_boundary(
     as_alice = {"Authorization": f"Bearer {alice_token}"}
 
     forbidden = await client.post(
-        "/v1/admin/applications/default/actors/alice/allocation",
+        "/v1/clearinghouse/tenants/default/actors/alice/allocation",
         json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p0"},
         headers=as_alice,
     )
     assert forbidden.status_code == 403
-    provisioned = await client.post(
-        "/v1/admin/applications/default/actors/alice/allocation",
-        json={"amount": {"amount": "5", "currency": "USD"}, "grant_id": "grant_1", "operation_ref": "p1"},
+    allotted = await client.post(
+        "/v1/clearinghouse/tenants/default/actors/alice/allocation",
+        json={"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"},
         headers=as_admin,
     )
-    assert provisioned.status_code == 201
-    assert "lpg_" not in provisioned.text  # the payment key never appears in a response
+    assert allotted.status_code == 201
+    assert "lpg_" not in allotted.text  # the payment key never appears in a response
 
     offerings = await client.get("/v1/offerings", headers=as_alice)
     assert [o["app"] for o in offerings.json()] == ["example/echo"]
@@ -112,9 +112,9 @@ async def test_failures_and_reserved_routes(api: tuple[httpx.AsyncClient, Builde
     _, alice_token = await tokens(engine)
     as_alice = {"Authorization": f"Bearer {alice_token}"}
 
-    unprovisioned = await client.post("/v1/jobs", json={"app": "example/echo"}, headers=as_alice)
-    assert unprovisioned.status_code == 402
-    assert unprovisioned.json()["job"]["failure"]["kind"] == "not_provisioned"
+    unallotted = await client.post("/v1/jobs", json={"app": "example/echo"}, headers=as_alice)
+    assert unallotted.status_code == 402
+    assert unallotted.json()["job"]["failure"]["kind"] == "not_provisioned"
 
     reserved = await client.post("/v1/jobs", json={"app": "example/echo", "mode": "async"}, headers=as_alice)
     assert reserved.status_code == 501 and reserved.json()["milestone"] == "M4"

@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, ScriptedTransport, runner
 from tests.conftest import EngineFactory
@@ -28,13 +28,13 @@ ProbeSettings: Any = SCRIPT["ProbeSettings"]
 async def stack(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine, str]]:
-    """The engine behind its REST app, carol provisioned with 5 USD, and the bootstrap admin key."""
+    """The engine behind its REST app, carol allotted with 5 USD, and the bootstrap admin key."""
     engine = await make_engine()
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:carol", application_id="default", actor_id="carol",
-            amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
+        AllotRequest(
+            operation_ref="allot:default:carol", tenant_id="default", actor_id="carol",
+            amount=Money(amount=Decimal("5"), currency="USD"),
         ),
     )  # fmt: skip
     token = (await engine.keys.bootstrap_admin()).token
@@ -95,7 +95,7 @@ async def test_every_check_passes_against_the_engine_and_the_fund_applies_once(
     out = capsys.readouterr().out
     assert "FAIL  " not in out and "SKIP  " not in out and ": 26 passed, 0 failed, 0 skipped" in out, out
     assert manager.allocations[allocation].granted == Decimal("5.01")  # one cent, applied once
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
     probe_keys = [
         key for key in await engine.store.list_access_keys(None) if key.actor_id.startswith("lpb-probe-")
     ]
@@ -108,7 +108,7 @@ async def test_without_yes_the_probe_spends_nothing(
 ) -> None:  # fmt: skip
     assert await run(stack, spend=False, fund_actor="carol") == 0
     assert "SKIP  a fund repeated under one operation_ref applies once: pass --yes" in capsys.readouterr().out
-    assert "fund_allocation" not in manager.calls
+    assert "top_up_allocation" not in manager.calls
 
 
 async def test_a_fund_above_the_cap_is_refused_before_any_call(
@@ -117,7 +117,7 @@ async def test_a_fund_above_the_cap_is_refused_before_any_call(
 ) -> None:  # fmt: skip
     assert await run(stack, spend=True, fund_actor="carol", fund_amount="1") == 1
     assert "FAIL  a fund repeated under one operation_ref applies once: refused" in capsys.readouterr().out
-    assert "fund_allocation" not in manager.calls
+    assert "top_up_allocation" not in manager.calls
 
 
 async def test_an_engine_that_answers_wrongly_fails_the_probe(capsys: pytest.CaptureFixture[str]) -> None:
@@ -134,14 +134,11 @@ async def test_an_engine_that_answers_wrongly_fails_the_probe(capsys: pytest.Cap
 async def test_a_probe_app_that_some_runner_advertises_sends_no_job(
     make_engine: EngineFactory, transport: ScriptedTransport, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """In per_application mode the shared key pays for any actor, so a job for an advertised app would be
-    paid on the POST itself. The probe's app is its own run's, and it checks the catalog first: an
-    advertised app sends no job at all (#83 review)."""
-    engine = await make_engine(
-        runners=(runner(app=SCRIPT["probe_app"]("lpb-probe-test")),),
-        allocation_mode="per_application",
-        shared_payment_key="lpg_shared",
-    )
+    """The probe's jobs are meant to fail ``no_offering``, so its app is its own run's, and it checks the
+    catalog first: an advertised app sends no job at all (#83 review). It does not count on its actors
+    having no allocation: the engine it probes may be an older one with a shared payment key, which paid
+    for any actor's job on the POST itself."""
+    engine = await make_engine(runners=(runner(app=SCRIPT["probe_app"]("lpb-probe-test")),))
     transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
     token = (await engine.keys.bootstrap_admin()).token
     app = create_app(engine, manage_lifecycle=False)
@@ -278,7 +275,7 @@ async def test_a_201_without_a_key_id_is_a_failed_issue(capsys: pytest.CaptureFi
     """A token with no key id is not a key the probe can revoke, nor the previous one (#83)."""
 
     def no_key_id(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/admin/keys" and request.method == "POST":
+        if request.url.path == "/v1/keys" and request.method == "POST":
             return httpx.Response(201, json={"token": "lpk_new"})
         return httpx.Response(200, json=[])
 

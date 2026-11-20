@@ -27,7 +27,7 @@ def job(
 ) -> Job:
     job_id = uuid4()
     return Job(
-        id=job_id, actor_id="alice", application_id="default", operation_ref="op-1", mode="immediate",
+        id=job_id, actor_id="alice", tenant_id="default", operation_ref="op-1", mode="immediate",
         app="a/b", capability=None, model=None, state=state,
         attempts=tuple(
             attempt(job_id, outcome, paid=paid, status_code=status_code).model_copy(update={"number": n})

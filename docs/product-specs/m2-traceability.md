@@ -45,7 +45,7 @@ change that moves a ticket.
 
 | Need | Code | Tests | Doc |
 | --- | --- | --- | --- |
-| Allocation modes; no fallback to a shared key | `services/payments.py` | `test_unprovisioned_actor_fails_before_any_payment`, `test_per_application_mode_uses_the_configured_key` | [payments.md#allocation-modes](../contracts/payments.md#allocation-modes) |
+| Allocation modes; no fallback to a shared key | `services/payments.py` | `test_unprovisioned_actor_fails_before_any_payment` (`test_per_application_mode_uses_the_configured_key` went with the mode in M4, #162) | [payments.md#allocation-modes](../contracts/payments.md#allocation-modes) |
 | Explicit provisioning; idempotent money moves; rotation and revocation | `services/payments.py`, `adapters/batteries.py` | `tests/unit/test_payments.py` (9 tests at M2 close), `test_create_key_for_grant_is_one_idempotent_call` | [payments.md#provisioning](../contracts/payments.md#provisioning) |
 | Least-privilege management credential | `deploy/dev-stack/config/init-secrets.py` | dev-stack run | [batteries-api.md](../references/batteries-api.md) |
 | Reporting access and units | `BatteriesUsageSource`, `allowance_from_body`, `Money` | `test_usage_pages_and_cursor_mismatch`, `test_allowance_follows_the_allocation_currency` | [payments.md#units](../contracts/payments.md#units) |

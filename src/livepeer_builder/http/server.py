@@ -12,7 +12,8 @@ from collections.abc import Callable
 from fastapi import FastAPI
 
 from livepeer_builder import BuilderEngine, Decorate, EngineApi, EngineSettings, EngineSupply
-from livepeer_builder.http.app import actor_dependency, create_app
+from livepeer_builder.http.app import create_app
+from livepeer_builder.http.auth import actor_dependency
 from livepeer_builder.runtime import configure_logging
 
 Extend = Callable[[FastAPI, EngineApi], None]

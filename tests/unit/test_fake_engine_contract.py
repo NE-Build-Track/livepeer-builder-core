@@ -30,8 +30,8 @@ from livepeer_builder import (
     OperationExists,
     OperationInProgress,
 )
-from livepeer_builder.contracts import AttemptOutcome, FailureKind, Fees, PaymentReason, ProvisionRequest
-from livepeer_builder.errors import AccessDenied, NotFound, RunnerCallError
+from livepeer_builder.contracts import AllotRequest, AttemptOutcome, FailureKind, Fees, PaymentReason
+from livepeer_builder.errors import AccessDenied, InvalidRequest, NotFound, RunnerCallError
 from livepeer_builder.testing import (
     Fails,
     FakeEngine,
@@ -47,7 +47,7 @@ APP, OTHER, NONE = "example/echo", "example/other", "example/nobody"  # no runne
 ALICE = ActorContext(
     actor_id="alice", permissions=frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 )
-ADMIN = ActorContext(actor_id="operator", credential_kind="admin")
+ADMIN = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 BOB = ALICE.model_copy(update={"actor_id": "bob"})
 RUNNERS = (runner(APP, url="https://orch.example/r1"), runner(OTHER, url="https://orch.example/r2"))
 
@@ -121,14 +121,13 @@ async def real(
         transport = ScriptedTransport([ScriptedTransport.ok(), ScriptedTransport.ok()])
     async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport)) as engine:
         amount = Money(amount=Decimal("5"), currency="USD")
-        request = ProvisionRequest(
-            operation_ref="provision:default:alice",
-            application_id="default",
+        request = AllotRequest(
+            operation_ref="allot:default:alice",
+            tenant_id="default",
             actor_id="alice",
             amount=amount,
-            grant_id="grant_1",
         )
-        await engine.payments.provision(ADMIN, request)
+        await engine.payments.allot(ADMIN, request)
         yield engine
 
 
@@ -258,6 +257,24 @@ async def test_a_usage_report_needs_jobs_run_only_and_an_admin_lists_every_actor
         assert [listed.id for listed in await engine.jobs.list_jobs(ADMIN)] == [job.id]
 
 
+async def test_usage_is_stored_once_and_a_repeat_is_answered_by_its_quantities(side: Side) -> None:
+    """#115 C20, as docs/contracts/engine.md has it: the usage is on the job, the same quantities again get
+    the stored usage back, and any other report is refused with the stored usage left as it is."""
+    async with side() as engine:
+        job = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        with pytest.raises(InvalidRequest, match="at least one non-negative quantity"):
+            await engine.jobs.report_usage(ALICE, job.id, {})
+        reported = await engine.jobs.report_usage(ALICE, job.id, {"tokens": 3})
+        assert reported.usage is not None
+        assert (reported.usage.quantities, reported.usage.source) == ({"tokens": 3}, "app_reported")
+        assert (await engine.jobs.get(ALICE, job.id)).usage == reported.usage
+        assert await engine.jobs.report_usage(ALICE, job.id, {"tokens": 3}) == reported
+        for other in ({"tokens": 9}, {}, {"tokens": 3, "seconds": 0}):
+            with pytest.raises(InvalidRequest, match="usage was already reported"):
+                await engine.jobs.report_usage(ALICE, job.id, other)
+        assert (await engine.jobs.get(ALICE, job.id)).usage == reported.usage
+
+
 async def test_cost_of_an_unknown_job_is_not_found(side: Side) -> None:
     async with side() as engine:
         with pytest.raises(NotFound):
@@ -287,6 +304,19 @@ async def test_streaming_yields_the_chunks(side: Side) -> None:
 async def test_health_is_ready_after_a_discovery_snapshot(side: Side) -> None:
     async with side() as engine:
         assert engine.health().ready
+
+
+async def test_a_second_start_on_a_running_engine_is_refused(side: Side) -> None:
+    """#113 C27: an application that starts its engine twice hears of it from the fake too."""
+    async with side() as engine:
+        await engine.start()
+        # The refusal names the way out for whoever serves an engine they started (review of #140).
+        with pytest.raises(RuntimeError, match=r"engine is already started.*manage_lifecycle=False"):
+            await engine.start()
+        assert engine.health().ready  # the running engine carries on
+        await engine.stop()
+        with pytest.raises(RuntimeError, match="engine is stopped"):
+            await engine.start()
 
 
 async def test_run_returns_the_parsed_body_as_data(side: Side) -> None:
@@ -331,6 +361,25 @@ async def test_a_failure_mid_stream_raises_job_failed_after_the_earlier_chunks(s
     assert job.state == "uncertain" and job.failure is not None and job.failure.payment_sent
     assert (job.failure.kind, job.failure.status_code) == ("runner_error", None)
     assert (job.attempts[-1].outcome, job.attempts[-1].status_code) == ("http", 200)  # the stream's status
+
+
+@pytest.mark.parametrize("path", ["run", "../run", "a//b"])
+async def test_a_path_with_no_leading_slash_is_an_invalid_request_after_the_permission_check(
+    side: Side, path: str
+) -> None:
+    """#113, C3: the engine refuses every such path with one answer, before anything is written."""
+    request = JobRequest(app=APP, path=path, operation_ref="op-1")
+    no_run = ALICE.model_copy(update={"permissions": ALICE.permissions - {"jobs.run"}})
+    async with side(chunks=(b"a",)) as engine:
+        streaming = engine.jobs.streaming
+        assert streaming is not None
+        with pytest.raises(InvalidRequest, match="path must start with '/'"):
+            await engine.jobs.run(ALICE, request)
+        with pytest.raises(InvalidRequest, match="path must start with '/'"):
+            await streaming.stream(ALICE, request)
+        with pytest.raises(AccessDenied):
+            await engine.jobs.run(no_run, request)
+        assert await engine.jobs.list_jobs(ALICE) == []  # no job, so the reference is still free
 
 
 async def test_a_repeated_operation_ref_raises_operation_exists_or_conflict(side: Side) -> None:

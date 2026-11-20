@@ -16,7 +16,7 @@ from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import ActorContext, JobRequest
 from livepeer_builder.errors import AccessDenied, NotFound, NotImplementedInMilestone
 from livepeer_builder.testing import ScriptedTransport
-from tests.conftest import EngineFactory
+from tests.conftest import EngineFactory, allot
 
 APP = "example/echo"
 EPOCH, LATER = datetime(2026, 1, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)
@@ -45,7 +45,8 @@ def without(actor: ActorContext, permission: str) -> ActorContext:
 async def engine_with_job(
     make_engine: EngineFactory, transport: ScriptedTransport, actor: ActorContext
 ) -> tuple[BuilderEngine, UUID]:
-    engine = await make_engine(allocation_mode="per_application", shared_payment_key="lpg_shared")
+    engine = await make_engine()
+    await allot(engine, actor)
     transport.steps = [ScriptedTransport.ok()]
     return engine, (await engine.jobs.run(actor, JobRequest(app=APP))).job.id
 
@@ -66,7 +67,7 @@ async def test_a_missing_permission_is_403_on_the_list_routes(
     route: str, make_engine: EngineFactory, alice: ActorContext
 ) -> None:
     permission, call = LISTS[route]
-    engine = await make_engine(allocation_mode="per_application", shared_payment_key="lpg_shared")
+    engine = await make_engine()
     with pytest.raises(AccessDenied):
         await call(engine, without(alice, permission))
 
@@ -102,7 +103,7 @@ async def test_a_usage_report_needs_jobs_run_and_not_jobs_read(
     assert reported.usage is not None and reported.usage.quantities == {"tokens": 3}
 
 
-async def test_an_admin_lists_every_actors_jobs_in_its_application(
+async def test_an_admin_lists_every_actors_jobs_in_its_tenant(
     make_engine: EngineFactory,
     transport: ScriptedTransport,
     admin: ActorContext,
@@ -110,10 +111,11 @@ async def test_an_admin_lists_every_actors_jobs_in_its_application(
     bob: ActorContext,
 ) -> None:
     engine, alices = await engine_with_job(make_engine, transport, alice)
-    carol = bob.model_copy(update={"actor_id": "carol", "application_id": "app-2"})
+    carol = bob.model_copy(update={"actor_id": "carol", "tenant_id": "app-2"})
+    await allot(engine, bob, carol)
     transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
     bobs = (await engine.jobs.run(bob, JobRequest(app=APP))).job.id
-    await engine.jobs.run(carol, JobRequest(app=APP))  # another application: not the admin's
+    await engine.jobs.run(carol, JobRequest(app=APP))  # another tenant: not the admin's
     assert {job.id for job in await engine.jobs.list_jobs(admin)} == {alices, bobs}
     assert [job.id for job in await engine.jobs.list_jobs(alice)] == [alices]
 
@@ -121,10 +123,10 @@ async def test_an_admin_lists_every_actors_jobs_in_its_application(
 # -- the auditor (#52, D46) --------------------------------------------------------------------------------
 
 
-async def test_an_auditor_reads_every_actor_in_its_application_and_changes_nothing(
+async def test_an_auditor_reads_every_actor_in_its_tenant_and_changes_nothing(
     make_engine: EngineFactory, transport: ScriptedTransport, alice: ActorContext, bob: ActorContext
 ) -> None:
-    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # application "default"
+    auditor = ActorContext(actor_id="dashboard", credential_kind="auditor")  # tenant "default"
     engine, alices = await engine_with_job(make_engine, transport, alice)
     assert [job.id for job in await engine.jobs.list_jobs(auditor)] == [alices]  # another actor's job
     assert (await engine.jobs.get(auditor, alices)).id == alices
@@ -133,10 +135,11 @@ async def test_an_auditor_reads_every_actor_in_its_application_and_changes_nothi
         await engine.costs.sync_now(auditor)
     with pytest.raises(AccessDenied):
         await engine.jobs.run(auditor, JobRequest(app=APP))
-    with pytest.raises(AccessDenied, match="another application"):
+    with pytest.raises(AccessDenied, match="another tenant"):
         await engine.costs.reconcile(auditor, "other-app", None)
-    other = bob.model_copy(update={"application_id": "other-app"})
+    other = bob.model_copy(update={"tenant_id": "other-app"})
+    await allot(engine, other)
     transport.steps = [ScriptedTransport.ok()]
     elsewhere = (await engine.jobs.run(other, JobRequest(app=APP))).job.id
     with pytest.raises(NotFound):
-        await engine.jobs.get(auditor, elsewhere)  # another application's job reads as missing
+        await engine.jobs.get(auditor, elsewhere)  # another tenant's job reads as missing

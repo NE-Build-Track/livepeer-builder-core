@@ -2,10 +2,12 @@
 
 It returns real contract values and raises real engine errors, so code under test cannot tell it from
 the engine for the API's *shape*: run a job, read it back, stream it, see costs and the catalog.
-Like the engine, a run records an attempt on the first runner for the app, a repeated
+Like the engine, a run records an attempt on the first runner for the app, a path with no leading
+``/`` is an ``InvalidRequest``, a repeated
 ``operation_ref`` follows the engine's rules (D57): ``OperationConflict`` for a different request,
 ``OperationInProgress`` while its stream is open, a new job after a failure that never reached a
-runner, ``OperationExists`` otherwise; and a stream that fails part-way leaves the job ``uncertain``.
+runner, ``OperationExists`` otherwise; a stream that fails part-way leaves the job ``uncertain``; and a
+job's usage is stored once, a repeat answered by its quantities (#115, C20).
 It does not model the money rules (admission, failover, payment); script those outcomes with
 ``Fails`` and ``Raises``, or use ``make_engine`` when they matter. A contract test runs the same
 actor-API assertions against both.
@@ -55,6 +57,7 @@ from livepeer_builder.services.operations import retry_of
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.request_identity import request_fingerprint
+from livepeer_builder.services.usage_reports import usage_to_store
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
@@ -101,6 +104,8 @@ class FakeJobs:
     def reply_for(self, actor: ActorContext, request: JobRequest) -> Reply:
         """The scripted reply, after the checks the engine makes before it dispatches."""
         self.policy.check(actor, Operation.JOBS_RUN)  # first, as the engine's _admit_request
+        if request.path and not request.path.startswith("/"):  # then the path, as the engine (#113, C3)
+            raise InvalidRequest("path must start with '/'")
         self.requests.append((actor, request))
         self._check_operation(actor, request)
         scripted = self.replies.get((request.app, request.path), Reply())
@@ -126,7 +131,7 @@ class FakeJobs:
     def _check_operation(self, actor: ActorContext, request: JobRequest) -> None:
         if request.operation_ref is None:
             return
-        found = self._operations.get((actor.application_id, actor.actor_id, request.operation_ref))
+        found = self._operations.get((actor.tenant_id, actor.actor_id, request.operation_ref))
         if found is None:
             return
         fingerprint, job_id = found
@@ -145,7 +150,7 @@ class FakeJobs:
     ) -> Job:
         """Store a job with one attempt on the first runner for the app, as the engine would record it.
 
-        A failure before dispatch (no offering, no capacity, not provisioned) has no attempt. A succeeded
+        A failure before dispatch (no offering, no capacity, no allocation) has no attempt. A succeeded
         ``reply`` sets the attempt's status and the job's ``ResultRef``.
         """
         now = datetime.now(UTC)
@@ -188,7 +193,7 @@ class FakeJobs:
         job = Job(
             id=job_id,
             actor_id=actor.actor_id,
-            application_id=actor.application_id,
+            tenant_id=actor.tenant_id,
             operation_ref=request.operation_ref,
             mode="immediate",
             app=request.app,
@@ -204,7 +209,7 @@ class FakeJobs:
         )
         self._jobs[job.id] = job
         if request.operation_ref is not None:
-            key = (actor.application_id, actor.actor_id, request.operation_ref)
+            key = (actor.tenant_id, actor.actor_id, request.operation_ref)
             self._operations[key] = (request_fingerprint(request), job.id)
         return job
 
@@ -290,21 +295,19 @@ class FakeJobs:
         self.policy.check(
             actor,
             Operation.JOBS_READ,
-            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+            ResourceRef(kind="job", tenant_id=actor.tenant_id, owner_actor_id=target),
         )
         mine = [
-            job
-            for job in self.in_scope(actor.application_id, target)
-            if before is None or job.created_at < before
+            job for job in self.in_scope(actor.tenant_id, target) if before is None or job.created_at < before
         ]
         return sorted(mine, key=lambda job: job.created_at, reverse=True)[:limit]
 
-    def in_scope(self, application_id: str, actor_id: str | None) -> list[Job]:
-        """The jobs of one application, and of one actor when given: what an admin or an actor sees."""
+    def in_scope(self, tenant_id: str, actor_id: str | None) -> list[Job]:
+        """The jobs of one tenant, and of one actor when given: what an admin or an actor sees."""
         return [
             job
             for job in self._jobs.values()
-            if job.application_id == application_id and actor_id in (None, job.actor_id)
+            if job.tenant_id == tenant_id and actor_id in (None, job.actor_id)
         ]
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
@@ -314,13 +317,14 @@ class FakeJobs:
         return self._results[job_id]
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
+        """Stored once on the job, by the engine's own rule (#115, C20): the same quantities again get the
+        stored usage back, and any other report is refused. ``usage_reports`` lists each report answered."""
         job = self.owned(actor, Operation.JOBS_RUN, job_id)
-        if job.state != "succeeded":
-            raise InvalidRequest("usage can only be reported for a succeeded job")
-        if any(value < 0 for value in quantities.values()):
-            raise InvalidRequest("usage quantities must be non-negative")
+        usage = usage_to_store(job, quantities, datetime.now(UTC))
         self.usage_reports.append((job_id, dict(quantities)))
-        return job
+        if usage is not None:
+            self._jobs[job_id] = job.model_copy(update={"usage": usage})
+        return self._jobs[job_id]
 
 
 class FakeCosts:
@@ -356,12 +360,12 @@ class FakeCosts:
         actor_id: str | None = None,
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
-        owner = ResourceRef(kind="costs", application_id=actor.application_id, owner_actor_id=target)
+        owner = ResourceRef(kind="costs", tenant_id=actor.tenant_id, owner_actor_id=target)
         self._jobs.policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._summary is not None:
             return self._summary
         start, end = summary_window(datetime.now(UTC), start, end)  # the fake's jobs use the wall clock
-        ran = self._jobs.in_scope(actor.application_id, target)
+        ran = self._jobs.in_scope(actor.tenant_id, target)
         since, until = utc(start), utc(end)  # as the store: a time with no offset is UTC (T25)
         return summarize(
             start, end, [(job.app, classify(job, ())) for job in ran if since <= utc(job.created_at) < until]
@@ -393,7 +397,7 @@ class FakeAllowance:
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
         target = actor_id or actor.actor_id
-        owner = ResourceRef(kind="allocation", application_id=actor.application_id, owner_actor_id=target)
+        owner = ResourceRef(kind="allocation", tenant_id=actor.tenant_id, owner_actor_id=target)
         self._policy.check(actor, Operation.COSTS_READ, owner)  # as the engine, before any lookup
         if self._allowance is None:
             raise NotProvisioned("no allowance scripted")
@@ -401,7 +405,8 @@ class FakeAllowance:
 
 
 class FakeEngine:
-    """Implements ``ActorApi``; ``streaming=False`` gives an engine whose transport cannot stream."""
+    """Implements ``ActorApi``; ``streaming=False`` gives an engine whose transport cannot stream.
+    Like the engine, it refuses a second ``start()``, and a ``start()`` after ``stop()``."""
 
     def __init__(
         self,
@@ -427,7 +432,6 @@ class FakeEngine:
             cost_sync_at=None,
             cost_sync_error=None,
             running_jobs=0,
-            allocation_mode="per_actor",
             version="fake",
         )
         self.started = False
@@ -439,6 +443,11 @@ class FakeEngine:
     async def start(self) -> None:
         if self.stopped:
             raise RuntimeError("engine is stopped; create a new one")
+        if self.started:  # as the engine (#113, C27)
+            raise RuntimeError(
+                "engine is already started; stop() it, then create a new one to start again. "
+                "To serve an engine you start yourself, pass create_app(engine, manage_lifecycle=False)"
+            )
         self.started = True
 
     async def stop(self) -> None:

@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     CostClass,
     CostStatus,
     CostSummary,
+    FailureCode,
     Fees,
     Job,
     JobCost,
@@ -41,13 +42,15 @@ from livepeer_builder.contracts import (
     Operation,
     Reconciliation,
     ResourceRef,
+    SetAsideUsage,
     SyncCheckpoint,
     SyncReport,
+    UsagePage,
     UsageRow,
     add_fees,
     billable_fees,
 )
-from livepeer_builder.errors import CursorMismatch, NotFound, ProviderUnavailable
+from livepeer_builder.errors import CursorMismatch, NotFound, ProviderError, ProviderUnavailable
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllowanceReader,
@@ -57,7 +60,10 @@ from livepeer_builder.protocols import (
     JobRepo,
     UsageSource,
 )
+from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
+from livepeer_builder.services.reconciliation import PaidAttempts, current_allocation
+from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -88,32 +94,67 @@ class CostSyncWorker:
     ) -> None:
         self._source = source
         self._store = store
+        self._aside = SetAsideRecorder(store)
         self._filters = dict(filters or {})
+        self.source_error: Exception | None = None  # what the usage source last raised: its health code
 
     async def sync_once(self) -> tuple[SyncReport, list[UsageRow]]:
         checkpoint = await self._store.cost_checkpoint()
         cursor = checkpoint.resume_cursor if checkpoint and checkpoint.filters == self._filters else None
-        pages = rows_seen = 0
+        pages = rows_seen = set_aside = 0
         new_rows: list[UsageRow] = []
         restarted = False
         while True:
             try:
-                page = await self._source.page(cursor, limit=1000)
+                page = await self._page(cursor)
             except CursorMismatch:
                 if restarted:
                     raise
                 restarted, cursor = True, None
                 await self._store.apply_usage((), SyncCheckpoint(resume_cursor=None, filters=self._filters))
                 continue
+            rows, aside = sort_page(page)  # a row the engine cannot read or store never stops the sync
+            set_aside += await self._set_aside(aside)  # recorded before the cursor moves past it
             resume = page.next_cursor or cursor  # an empty cursor means "re-read this page next time"
             new_rows += await self._store.apply_usage(
-                page.items, SyncCheckpoint(resume_cursor=resume, filters=self._filters)
+                rows, SyncCheckpoint(resume_cursor=resume, filters=self._filters)
             )
             pages += 1
-            rows_seen += len(page.items)
+            rows_seen += len(rows) + len(aside)
             if not page.next_cursor:
-                return SyncReport(pages=pages, rows_seen=rows_seen, rows_new=len(new_rows)), new_rows
+                report = SyncReport(
+                    pages=pages, rows_seen=rows_seen, rows_new=len(new_rows), rows_set_aside=set_aside
+                )
+                return report, new_rows
             cursor = page.next_cursor
+
+    async def _page(self, cursor: str | None) -> UsagePage:
+        try:
+            page = await self._source.page(cursor, limit=1000)
+            if page.next_cursor and page.next_cursor == cursor:  # asking again would never end
+                raise ProviderError(200, "the usage cursor did not advance")
+            return page
+        except Exception as error:
+            self.source_error = error
+            raise
+
+    async def _set_aside(self, rows: Sequence[SetAsideUsage]) -> int:
+        """Record the rows left out (#114, C13). A row is recorded, counted and logged once, however often
+        its page is read again; its content goes to the log only."""
+        recorded = await self._aside.record(rows) if rows else []
+        for row in recorded:
+            _LOG.warning(
+                "a usage row was set aside: no cost includes it",
+                extra={
+                    "event": "costs.usage_set_aside",
+                    "row_id": row.id,
+                    "reason": row.reason,
+                    "fee_eth": None if row.computed_fee_eth is None else str(row.computed_fee_eth),
+                    "fee_usd": None if row.computed_fee_usd is None else str(row.computed_fee_usd),
+                    "raw": row.raw,
+                },
+            )
+        return len(recorded)
 
 
 class CostService:
@@ -133,12 +174,18 @@ class CostService:
         self._allowances = allowances
         self._interval_s = interval_s
         self.last_synced_at: datetime | None = None
-        self.last_error: str | None = None
+        self.last_error: FailureCode | None = None
+        self.set_aside_rows: int | None = None  # every usage row left out so far, as of the last sync
 
     async def sync_once(self) -> SyncReport:
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
-        report, new_rows = await self._worker.sync_once()
+        try:
+            report, new_rows = await self._worker.sync_once()
+        except Exception:  # the pages before the failure may have set rows aside: the table has them
+            self.set_aside_rows = await count_set_aside(self._store, self.set_aside_rows)
+            raise
+        self.set_aside_rows = await count_set_aside(self._store, self.set_aside_rows)  # before a later step
         affected = await self._store.match_sessions(new_rows)
         jobs = await self._store.jobs_for_projection(list(affected))
         for job in jobs:
@@ -158,9 +205,14 @@ class CostService:
             if self._worker is not None:
                 try:
                     await self.sync_once()
-                except Exception as exc:  # keep syncing; surface the error in health
-                    self.last_error = str(exc)
-                    _LOG.warning("cost sync failed", extra={"event": "costs.sync_failed", "error": str(exc)})
+                except Exception as exc:  # keep syncing; health shows a code, the log the text (#113, C7)
+                    from_source = self._worker.source_error is exc
+                    code: FailureCode = source_failure(exc) if from_source else STORE_ERROR
+                    self.last_error = code
+                    _LOG.warning(
+                        "cost sync failed",
+                        extra={"event": "costs.sync_failed", "code": code, "error": str(exc)},
+                    )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self._interval_s)
             except TimeoutError:
@@ -200,7 +252,7 @@ class CostService:
             if found is None:
                 raise NotFound(f"job {job_id} not found")
             job, projection = found
-            owner = _resource(job.application_id, job.actor_id)
+            owner = _resource(job.tenant_id, job.actor_id)
             check_owner(self._policy, actor, Operation.COSTS_READ, owner, f"job {job_id} not found")
             if projection is not None and _covered(projection, job):
                 return projection
@@ -208,9 +260,9 @@ class CostService:
 
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]:
         target = None if sees_every_actor(actor) else actor.actor_id
-        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
+        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.tenant_id, target))
         async with self._store.cost_snapshot() as reads:
-            recent = await reads.recent_with_projections(actor.application_id, target, limit)
+            recent = await reads.recent_with_projections(actor.tenant_id, target, limit)
             due = [job for job, cost in recent if not _covered(cost, job)]
             computed = {cost.job_id: cost for cost in await _compute_all(due, reads)}
         return [
@@ -225,33 +277,35 @@ class CostService:
         actor_id: str | None = None,
     ) -> CostSummary:
         target = actor_id or (None if sees_every_actor(actor) else actor.actor_id)
-        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.application_id, target))
+        self._policy.check(actor, Operation.COSTS_READ, _resource(actor.tenant_id, target))
         start, end = summary_window(self._clock.now(), start, end)
         async with self._store.cost_snapshot() as reads:
-            costs = await _rollup(reads, actor.application_id, target, start, end)
+            costs = await _rollup(reads, actor.tenant_id, target, start, end)
         return summarize(start, end, costs)
 
     async def reconcile(
-        self, admin: ActorContext, application_id: str, actor_id: str | None
+        self, admin: ActorContext, tenant_id: str, actor_id: str | None, allocation_id: str | None = None
     ) -> Reconciliation:
-        """provider spent == delivered + failed_after_payment + uncertain + pending + unattributed.
+        """provider spent == delivered + failed_after_payment + uncertain + pending + unattributed, for one
+        allocation: the actor's current one, or an earlier one named by ``allocation_id`` (#115, C9). Only
+        the attempts that allocation paid are counted.
 
         The engine side (the classes and the unattributed rows) comes from one snapshot, so a sync running
         alongside can never count a row twice or nowhere. ``spent`` is read from the provider afterwards
         and can be ahead of usage the engine has not synced yet; ``balanced`` is then ``False`` until it is.
         """
-        self._policy.check(admin, Operation.ADMIN_READ, _resource(application_id, actor_id))
+        self._policy.check(admin, Operation.ADMIN_READ, _resource(tenant_id, actor_id))
         if self._allowances is None:
             raise ProviderUnavailable("no payment provider is configured")
-        allocation_id = await self._allowances.allocation_for(application_id, actor_id)
-        if allocation_id is None:
-            raise NotFound("no allocation pays for that actor or application")
+        current = await current_allocation(self._allowances, tenant_id, actor_id)
         totals: dict[CostClass, list[Fees]] = {cls: [] for cls in COST_CLASSES}
         async with self._store.cost_snapshot() as reads:
-            costs = await _rollup(reads, application_id, actor_id, _EPOCH, _FAR_FUTURE)
+            paid = await PaidAttempts.read(reads, tenant_id, actor_id)
+            allocation_id = paid.reconciled(current, allocation_id)
+            costs = await _rollup(reads, tenant_id, actor_id, _EPOCH, _FAR_FUTURE)
             unattributed = fees_of(await reads.unattributed_usage(allocation_id))
         for _, cost in costs:
-            for attempt in cost.attempts:
+            for attempt in paid.by(allocation_id, cost):
                 totals[attempt.cost_class].append(attempt.fees)
         by_class = {cls: add_fees(totals[cls]) for cls in COST_CLASSES}
         spent: Money | None = None
@@ -260,9 +314,10 @@ class CostService:
         except ProviderUnavailable:
             spent = None
         return Reconciliation(
-            application_id=application_id,
+            tenant_id=tenant_id,
             actor_id=actor_id,
             allocation_id=allocation_id,
+            other_allocations=paid.others(current, allocation_id),
             provider_spent=spent,
             by_class=by_class,
             unattributed=unattributed,
@@ -278,11 +333,11 @@ class _UsageReads(Protocol):
 
 
 async def _rollup(
-    reads: CostSnapshot, application_id: str, actor_id: str | None, start: datetime, end: datetime
+    reads: CostSnapshot, tenant_id: str, actor_id: str | None, start: datetime, end: datetime
 ) -> list[tuple[str, JobCost]]:
     """One cost per job in the window, with the job's runner app: the stored projections, plus a live
     compute of the jobs none covers."""
-    stored, not_projected = await reads.projections_and_unprojected(application_id, actor_id, start, end)
+    stored, not_projected = await reads.projections_and_unprojected(tenant_id, actor_id, start, end)
     costs = {cost.job_id: cost for _, cost in stored}
     apps = {cost.job_id: app for app, cost in stored} | {job.id: job.app for job in not_projected}
     due = [job for job in not_projected if not _covered(costs.get(job.id), job)]
@@ -439,5 +494,5 @@ def _balanced(spent: Money | None, parts: list[Fees]) -> bool | None:
     return None if total.fee_usd is None else total.fee_usd == spent.amount
 
 
-def _resource(application_id: str, owner: str | None) -> ResourceRef:
-    return ResourceRef(kind="costs", application_id=application_id, owner_actor_id=owner)
+def _resource(tenant_id: str, owner: str | None) -> ResourceRef:
+    return ResourceRef(kind="costs", tenant_id=tenant_id, owner_actor_id=owner)

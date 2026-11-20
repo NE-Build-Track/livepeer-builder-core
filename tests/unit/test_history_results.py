@@ -17,7 +17,7 @@ from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FixedClock, ScriptedTransport
-from tests.conftest import EngineFactory
+from tests.conftest import EngineFactory, allot
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_signing_intent import paid_engine
 
@@ -52,8 +52,9 @@ class History:
 async def history(
     make_engine: EngineFactory, clock: FixedClock, transport: ScriptedTransport
 ) -> AsyncIterator[History]:
-    engine = await make_engine(allocation_mode="per_application", shared_payment_key="lpg_shared")
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    engine = await make_engine()
+    await allot(engine, ActorContext(actor_id="alice"), ActorContext(actor_id="bob"))
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     admin = await engine.keys.bootstrap_admin()
     alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-alice")
     bob = await engine.keys.issue(operator, kind="actor", actor_id="bob", operation_ref="issue-bob")
@@ -76,7 +77,7 @@ async def test_before_pages_the_history_newest_first_and_only_the_callers_own(hi
     assert await history.page(history.alice, limit=2) == [third, second]
     cursor = (await history.client.get(f"/v1/jobs/{second}", headers=history.alice)).json()["created_at"]
     assert await history.page(history.alice, limit=2, before=cursor) == [first]  # bob's is not alice's
-    assert await history.page(history.admin, before=cursor) == [bobs, first]  # the application's
+    assert await history.page(history.admin, before=cursor) == [bobs, first]  # the tenant's
 
 
 async def test_before_in_another_zone_is_the_same_instant_in_utc(history: History) -> None:

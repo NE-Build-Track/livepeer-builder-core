@@ -55,9 +55,9 @@ access_keys = Table(
     metadata,
     Column("key_id", String(64), primary_key=True),
     Column("token_hash", String(64), nullable=False, unique=True),
-    Column("kind", String(16), nullable=False),
+    Column("kind", String(32), nullable=False),  # a credential kind; 32 since 0014: clearinghouse_admin
     Column("actor_id", String(ID), nullable=False),
-    Column("application_id", String(ID), nullable=False),
+    Column("tenant_id", String(ID), nullable=False),
     Column("permissions", JSON, nullable=False),
     Column("label", String(ID), nullable=False, server_default=""),
     Column("created_at", UTCDateTime, nullable=False),
@@ -68,7 +68,7 @@ jobs = Table(
     "lpb_jobs",
     metadata,
     Column("id", String(36), primary_key=True),
-    Column("application_id", String(ID), nullable=False),
+    Column("tenant_id", String(ID), nullable=False),
     Column("actor_id", String(ID), nullable=False),
     Column("operation_ref", String(ID), nullable=True),
     Column("request_fingerprint", String(64), nullable=True),
@@ -89,14 +89,14 @@ jobs = Table(
 )
 Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
-    jobs.c.application_id,
+    jobs.c.tenant_id,
     jobs.c.actor_id,
     jobs.c.operation_ref,
     unique=True,
     sqlite_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
     postgresql_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
 )
-Index("lpb_jobs_owner_created", jobs.c.application_id, jobs.c.actor_id, jobs.c.created_at)
+Index("lpb_jobs_owner_created", jobs.c.tenant_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
 
 attempts = Table(
@@ -139,12 +139,13 @@ Index("lpb_payment_sessions_session", payment_sessions.c.payment_session_id)
 actors = Table(
     "lpb_actors",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("grant_id", String(ID), nullable=False),
     Column("allocation_id", String(ID), nullable=False, unique=True),
     Column("api_key_id", String(ID), nullable=False),
-    Column("secret_ref", String(ID), nullable=False),  # a SecretRef, never the key itself
+    # A SecretRef, never the key itself. Opaque text of any length since 0013 (#115): a vault's path.
+    Column("secret_ref", Text, nullable=False),
     Column("currency", String(3), nullable=False),
     Column("status", String(16), nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
@@ -156,7 +157,7 @@ actors = Table(
 actor_sightings = Table(
     "lpb_actor_sightings",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("name", String(ID), nullable=False, server_default=""),
     Column("first_seen_at", UTCDateTime, nullable=False),
@@ -220,7 +221,7 @@ cost_projections = Table(
 operations = Table(
     "lpb_operations",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("operation_ref", String(ID), primary_key=True),
     Column("command", String(32), nullable=False),
@@ -231,6 +232,21 @@ operations = Table(
     Column("result", JSON, nullable=True),
     Column("started_at", UTCDateTime, nullable=False),
     Column("completed_at", UTCDateTime, nullable=True),
+)
+
+# -- 0012: usage rows cost sync set aside (#114, C13) ----------------------------------------------------
+
+# A provider usage row the sync could not read or store, left out of every cost: its id, why, and the fee
+# it stated. The row's content is in the log (``costs.usage_set_aside``), never here. No purge.
+usage_set_aside = Table(
+    "lpb_usage_set_aside",
+    metadata,
+    # the provider's row id; "sha256:" and a digest of the content when it has none this column can keep
+    Column("id", String(ID), primary_key=True),
+    Column("reason", String(64), nullable=False),
+    Column("computed_fee_eth", String(AMOUNT), nullable=True),
+    Column("computed_fee_usd", String(AMOUNT), nullable=True),
+    Column("set_aside_at", UTCDateTime, nullable=False),
 )
 
 VERSION_TABLE = "lpb_alembic_version"

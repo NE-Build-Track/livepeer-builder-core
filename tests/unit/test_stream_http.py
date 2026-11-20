@@ -18,14 +18,14 @@ from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.testing import ScriptedStreamTransport, ScriptedTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.test_stream_lifecycle import ended
-from tests.unit.test_streaming import APP, provisioned
+from tests.unit.test_streaming import APP, allotted
 
 Message = dict[str, Any]
 
 
 async def bearer(engine: BuilderEngine, admin: ActorContext) -> str:
     issued = await engine.keys.issue(
-        admin, kind="actor", actor_id="alice", application_id="default", operation_ref="issue-stream_http-27"
+        admin, kind="actor", actor_id="alice", tenant_id="default", operation_ref="issue-stream_http-27"
     )
     return issued.token
 
@@ -86,7 +86,7 @@ def job_id_of(sent: list[Message]) -> str:
 async def test_a_failure_after_the_first_byte_aborts_the_response(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     error = RunnerCallError("http", "500", payment_sent=True, status_code=500)
     transport.opens = [StreamScript(events=[b"half", error])]
     sent = await raw_stream(engine, await bearer(engine, admin))
@@ -100,7 +100,7 @@ async def test_a_failure_after_the_first_byte_aborts_the_response(
 async def test_failures_before_the_first_chunk_are_ordinary_error_responses(
     make_engine: EngineFactory, admin: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     headers = {"Authorization": f"Bearer {await bearer(engine, admin)}"}
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
@@ -125,7 +125,7 @@ async def test_failures_before_the_first_chunk_are_ordinary_error_responses(
 async def test_a_client_disconnect_ends_the_job_and_frees_the_slot(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, max_concurrent_jobs=1, stream_settle_s=0.05)
+    engine = await allotted(make_engine, admin, max_concurrent_jobs=1, stream_settle_s=0.05)
     token = await bearer(engine, admin)
     for spec in ("2.3", "2.4"):  # uvicorn's cancel-scope path, and a server whose send raises
         transport.opens = [StreamScript(events=[b"a", 0.05, b"b", 5.0, b"c"])]
@@ -139,7 +139,7 @@ async def test_a_client_disconnect_ends_the_job_and_frees_the_slot(
 async def test_a_client_that_disconnects_as_the_runner_finishes_still_succeeds(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_settle_s=1.0)
+    engine = await allotted(make_engine, admin, stream_settle_s=1.0)
     token = await bearer(engine, admin)
     for spec in ("2.3", "2.4"):  # both ways a disconnect arrives get the settle window, not an abandon
         transport.opens = [StreamScript(events=[b"a", b"b", 0.05])]  # the runner closes 50 ms later
@@ -152,7 +152,7 @@ async def test_a_client_that_disconnects_as_the_runner_finishes_still_succeeds(
 async def test_streaming_without_a_streaming_transport_is_a_400(
     make_engine: EngineFactory, admin: ActorContext
 ) -> None:
-    engine = await provisioned(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
+    engine = await allotted(make_engine, admin, supply=EngineSupply(transport=ScriptedTransport()))
     assert engine.jobs.streaming is None
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
@@ -162,3 +162,56 @@ async def test_streaming_without_a_streaming_transport_is_a_400(
             headers={"Authorization": f"Bearer {await bearer(engine, admin)}"},
         )
     assert response.status_code == 400 and "does not support streaming" in response.text
+
+
+async def headers_never_sent(engine: BuilderEngine, token: str, spec: str) -> None:
+    """POST /v1/jobs?stream=true with a client that is gone before the response headers go out: a 2.4
+    server's send raises, and under 2.3 Starlette cancels the send when it hears the disconnect."""
+    request_read = False
+
+    async def receive() -> Message:
+        nonlocal request_read
+        if not request_read:
+            request_read = True
+            return {"type": "http.request", "body": json.dumps({"app": APP}).encode(), "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            if spec == "2.4":
+                raise OSError("client went away")
+            await asyncio.Event().wait()  # cancelled by the disconnect
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/jobs",
+        "raw_path": b"/v1/jobs",
+        "query_string": b"stream=true",
+        "root_path": "",
+        "headers": [(b"content-type", b"application/json"), (b"authorization", f"Bearer {token}".encode())],
+        "client": ("127.0.0.1", 50000),
+        "server": ("engine", 80),
+    }
+    with contextlib.suppress(ClientDisconnect):
+        await create_app(engine, manage_lifecycle=False)(scope, receive, send)
+
+
+async def test_a_disconnect_before_the_headers_settles_like_any_other(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
+) -> None:
+    """#113 C27: the header send was outside the guarded block, so the stream was never told: the job
+    stayed running and held its slot."""
+    engine = await allotted(make_engine, admin, max_concurrent_jobs=1, stream_settle_s=0.05)
+    token = await bearer(engine, admin)
+    for spec in ("2.3", "2.4"):
+        seen = {job.id for job in await engine.jobs.list_jobs(alice)}
+        transport.opens = [StreamScript(events=[b"a", 0.05, b"b", 5.0, b"c"])]
+        await headers_never_sent(engine, token, spec)
+        await ended(engine)
+        (job,) = [job for job in await engine.jobs.list_jobs(alice) if job.id not in seen]
+        assert job.state == "uncertain" and job.attempts[0].outcome == "abandoned", spec
+        assert engine.admission.running == 0 and transport.streams[-1].closed, spec

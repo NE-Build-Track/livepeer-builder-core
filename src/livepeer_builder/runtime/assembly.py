@@ -20,12 +20,11 @@ import enum
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import SecretRef
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
@@ -52,15 +51,9 @@ from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
 from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
-
-# The one deliberate conditional import: the default adapters load inside default_parts, so that
-# `import livepeer_builder` stays light (tests/structure/test_import_weight.py). This annotation-only
-# import keeps cryptography out of the import too.
-if TYPE_CHECKING:
-    from livepeer_builder.adapters.secrets import SettingsSecretStore
+from livepeer_builder.services.tenants import TenantDesk
 
 _LOG = logging.getLogger(__name__)
-_SHARED_KEY = "shared_payment_key"
 
 
 class _Unset(enum.Enum):
@@ -191,7 +184,7 @@ async def default_parts(
             if settings.secret_key
             else None
         )
-        secret_store = RoutingSecretStore(_configured_secrets(settings), database)
+        secret_store = RoutingSecretStore(database)
     else:
         secret_store = supply.secret_store
 
@@ -206,14 +199,14 @@ async def default_parts(
     else:
         allocation_manager = None
 
-    operator = (
-        settings.batteries_operator_token.get_secret_value() if settings.batteries_operator_token else None
+    grants_token = (
+        settings.batteries_grants_token.get_secret_value() if settings.batteries_grants_token else None
     )
     grants_manager: AllocationManager | None
     if not isinstance(supply.grants_manager, _Unset):
         grants_manager = supply.grants_manager
-    elif settings.batteries_url and operator:
-        desk = BatteriesClient(settings.batteries_url, operator, timeout_s=settings.batteries_timeout_s)
+    elif settings.batteries_url and grants_token:
+        desk = BatteriesClient(settings.batteries_url, grants_token, timeout_s=settings.batteries_timeout_s)
         own(stack, desk, desk.aclose)
         grants_manager = desk
     else:
@@ -285,8 +278,17 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         rate_max_age_s=settings.rate_max_age_s,
     )
     ledger = OperationLedger(parts.store, parts.clock, settings.operation_stale_s)  # one, for every command
+    authenticators: list[Authenticator] = list(parts.authenticators)
+    keys: KeyService | None = None
+    if parts.api_keys is not None:
+        authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
+        keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
+    tenants: TenantDesk | None = None
+    if parts.grants_manager is not None:  # otherwise the tenant desk is off
+        tenants = TenantDesk(
+            parts.grants_manager, parts.policy, settings.default_currency, ledger, settings.engine_id, keys
+        )
     payments = PaymentsService(
-        mode=settings.allocation_mode,
         store=parts.store,
         secrets=parts.secret_store,
         policy=parts.policy,
@@ -294,10 +296,8 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         engine_id=settings.engine_id,
         ledger=ledger,
         manager=parts.allocation_manager,
-        grants=parts.grants_manager,
+        tenants=tenants,
         currency=settings.default_currency,
-        shared_secret=_shared_secret_ref(settings),
-        shared_allocation_id=settings.shared_allocation_id,
     )
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
     jobs = JobService(
@@ -321,11 +321,6 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     costs = CostService(
         parts.store, parts.policy, parts.clock, worker, payments, settings.cost_sync_interval_s
     )
-    authenticators: list[Authenticator] = list(parts.authenticators)
-    keys: KeyService | None = None
-    if parts.api_keys is not None:
-        authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
-        keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
     return EngineServices(
         store=parts.store,
         clock=parts.clock,
@@ -354,6 +349,7 @@ async def build(
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
+        await _require_storable_payment_keys(parts)  # the final parts, after decoration
         resources = stack.pop_all()  # out of the stack: the caller takes them with the services
     try:
         return assemble(settings, parts), resources
@@ -362,12 +358,19 @@ async def build(
         raise
 
 
-def _configured_secrets(settings: EngineSettings) -> "SettingsSecretStore":
-    from livepeer_builder.adapters.secrets import SettingsSecretStore
+async def _require_storable_payment_keys(parts: EngineParts) -> None:
+    """Allotment would fund an allocation, then fail to keep its key (#112, C2). Judged on the parts the
+    engine will run with, so a decorator that turns the provider off or installs its own store is not
+    refused, and one that adds a provider is. Only the built-in store is asked here: a plug-in store that
+    cannot write at boot (a sealed vault) still starts, and is asked per request."""
+    from livepeer_builder.adapters.secrets import RoutingSecretStore
 
-    shared_key = settings.shared_payment_key.get_secret_value() if settings.shared_payment_key else None
-    return SettingsSecretStore({_SHARED_KEY: shared_key} if shared_key else {})
-
-
-def _shared_secret_ref(settings: EngineSettings) -> SecretRef | None:
-    return _configured_secrets(settings).ref(_SHARED_KEY) if settings.shared_payment_key else None
+    if (
+        parts.allocation_manager is not None
+        and isinstance(parts.secret_store, RoutingSecretStore)
+        and not await parts.secret_store.writable()
+    ):
+        raise ValueError(
+            "LPB_SECRET_KEY is required with a payment provider: the built-in secret store needs it to keep "
+            "each actor's payment key (lpb gen-secret-key), or supply a secret_store"
+        )

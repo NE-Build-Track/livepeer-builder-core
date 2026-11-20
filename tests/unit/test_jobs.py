@@ -13,12 +13,12 @@ from pydantic import ValidationError
 from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     Attempt,
     CallTimings,
     Job,
     JobRequest,
     Money,
-    ProvisionRequest,
     Runner,
 )
 from livepeer_builder.errors import (
@@ -38,24 +38,23 @@ from tests.conftest import EngineFactory
 APP = "example/echo"
 
 
-async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: str, **settings: object):  # type: ignore[no-untyped-def]
+async def allotted(make_engine: EngineFactory, admin: ActorContext, *actors: str, **settings: object):  # type: ignore[no-untyped-def]
     engine = await make_engine(**settings)
     for actor_id in actors:
-        request = ProvisionRequest(
-            operation_ref=f"provision:default:{actor_id}",
-            application_id="default",
+        request = AllotRequest(
+            operation_ref=f"allot:default:{actor_id}",
+            tenant_id="default",
             actor_id=actor_id,
             amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
         )
-        await engine.payments.provision(admin, request)
+        await engine.payments.allot(admin, request)
     return engine
 
 
 async def test_success_records_attempt_payment_and_result_reference(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [ScriptedTransport.ok(b'{"echo": 1}', manifest_ids=("manifest-1",))]
     result = await engine.jobs.run(alice, JobRequest(app=APP, path="/echo", payload={"x": 1}))
     assert result.content == b'{"echo": 1}'
@@ -73,7 +72,7 @@ async def test_success_records_attempt_payment_and_result_reference(
 async def test_fails_over_and_never_pays_the_same_orchestrator_twice(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
+    engine = await allotted(
         make_engine, admin, "alice", runners=(runner(url="https://r1"), runner(url="https://r2"))
     )
     transport.steps = [RunnerCallError("refused", "503", payment_sent=False), ScriptedTransport.ok()]
@@ -106,7 +105,7 @@ async def test_a_paid_failure_that_did_not_run_fails_over_to_another_orchestrato
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
     """A paid 404 is the orchestrator, before the app ran. The other statuses are in test_attempt_verdict."""
-    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=two_orchestrators())
     transport.steps = [
         RunnerCallError("http", "refused", payment_sent=True, manifest_ids=("m-1",), status_code=404),
         ScriptedTransport.ok(manifest_ids=("m-2",)),
@@ -147,7 +146,7 @@ async def test_paid_failovers_stop_at_the_operator_cap(
     """LPB_MAX_PAID_ATTEMPTS (default 2) bounds the payments a job fails over from, whatever the caller's
     max_attempts (D55): the operator pays for them, and they are never billable."""
     caplog.set_level(logging.INFO, logger="livepeer_builder.services.failover")
-    engine = await provisioned(make_engine, admin, "alice", runners=three_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=three_orchestrators())
     transport.steps = [paid_refusal("m-1"), paid_refusal("m-2"), ScriptedTransport.ok(manifest_ids=("m-3",))]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=3))
@@ -162,9 +161,7 @@ async def test_paid_failovers_stop_at_the_operator_cap(
 async def test_a_paid_attempt_cap_of_one_turns_paid_failover_off(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
-        make_engine, admin, "alice", runners=three_orchestrators(), max_paid_attempts=1
-    )
+    engine = await allotted(make_engine, admin, "alice", runners=three_orchestrators(), max_paid_attempts=1)
     transport.steps = [paid_refusal("m-1"), ScriptedTransport.ok(manifest_ids=("m-2",))]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
@@ -174,7 +171,7 @@ async def test_a_paid_attempt_cap_of_one_turns_paid_failover_off(
 async def test_unpaid_failovers_do_not_count_toward_the_paid_attempt_cap(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice", runners=three_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=three_orchestrators())
     transport.steps = [
         RunnerCallError("refused", "busy", payment_sent=False, status_code=503),  # refused before payment
         paid_refusal("m-1"),
@@ -192,9 +189,7 @@ async def test_unpaid_failovers_do_not_count_toward_the_paid_attempt_cap(
 async def test_the_caller_s_max_attempts_still_applies_under_the_cap(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
-        make_engine, admin, "alice", runners=three_orchestrators(), max_paid_attempts=3
-    )
+    engine = await allotted(make_engine, admin, "alice", runners=three_orchestrators(), max_paid_attempts=3)
     transport.steps = [paid_refusal("m-1"), ScriptedTransport.ok(manifest_ids=("m-2",))]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP, max_attempts=1))
@@ -204,7 +199,7 @@ async def test_the_caller_s_max_attempts_still_applies_under_the_cap(
 async def test_a_paid_request_error_does_not_fail_over(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=two_orchestrators())
     transport.steps = [
         RunnerCallError("http", "bad", payment_sent=True, manifest_ids=("m-1",), status_code=400)
     ]
@@ -219,7 +214,7 @@ async def test_a_paid_request_error_does_not_fail_over(
 async def test_paid_failures_everywhere_fail_with_the_last_runner_s_words(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=two_orchestrators())
     transport.steps = [
         RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m-1",), status_code=503),
         RunnerCallError(
@@ -255,7 +250,7 @@ async def test_a_paid_5xx_never_runs_the_work_again(
     state: str,
 ) -> None:
     """A 500 is the app's own error after it ran. A 502 may come while it still runs. 504 is in the table."""
-    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=two_orchestrators())
     transport.steps = [
         RunnerCallError("http", "5xx", payment_sent=True, manifest_ids=("m-1",), status_code=status)
     ]
@@ -267,7 +262,7 @@ async def test_a_paid_5xx_never_runs_the_work_again(
 async def test_the_job_failure_says_paid_when_an_earlier_attempt_paid(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=two_orchestrators())
     transport.steps = [
         RunnerCallError("refused", "busy", payment_sent=True, manifest_ids=("m-1",), status_code=503),
         RunnerCallError("http", "bad request", payment_sent=False, status_code=400),
@@ -282,7 +277,7 @@ async def test_the_job_failure_says_paid_when_an_earlier_attempt_paid(
 async def test_an_unknown_payment_never_pays_another_orchestrator(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice", runners=two_orchestrators())
+    engine = await allotted(make_engine, admin, "alice", runners=two_orchestrators())
     transport.steps = [
         RunnerCallError("unreachable", "signer reply lost", payment_sent=False, payment_unknown=True)
     ]
@@ -306,7 +301,7 @@ async def test_a_paid_job_tries_runners_it_can_cap_first(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
     """A runner with no usable ceiling is refused at its 402 (D62): first, it would fail over on every paid job."""
-    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    engine = await allotted(make_engine, admin, "alice", runners=capped_and_uncapped())
     transport.steps = [ScriptedTransport.ok()]
     await engine.jobs.run(alice, JobRequest(app=APP))
     assert [url for url, _ in transport.calls] == ["https://capped"]
@@ -316,7 +311,7 @@ async def test_a_paid_job_still_tries_a_runner_it_cannot_cap_last(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
     """It may serve without asking for payment; only a 402 from it is refused."""
-    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    engine = await allotted(make_engine, admin, "alice", runners=capped_and_uncapped())
     transport.steps = [
         RunnerCallError("refused", "busy", payment_sent=False, status_code=503),
         ScriptedTransport.ok(),
@@ -333,7 +328,7 @@ async def test_a_paid_job_tries_a_free_runner_before_one_with_no_rate(
         runner(url="https://unpriced", orchestrator_url=ORCH_A, price=None, capacity_available=5),
         runner(url="https://free", orchestrator_url=ORCH_B, price="0", capacity_available=1),
     )
-    engine = await provisioned(make_engine, admin, "alice", runners=runners)
+    engine = await allotted(make_engine, admin, "alice", runners=runners)
     transport.steps = [ScriptedTransport.ok()]
     await engine.jobs.run(alice, JobRequest(app=APP))
     assert [url for url, _ in transport.calls] == ["https://free"]
@@ -342,24 +337,13 @@ async def test_a_paid_job_tries_a_free_runner_before_one_with_no_rate(
 async def test_a_job_keeps_the_selection_policy_s_order_when_the_transport_never_pays(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    """With no LPB_SIGNER_URL a provisioned actor still has a token. A priced runner's 402 ends that unpaid
+    """With no LPB_SIGNER_URL an allotted actor still has a token. A priced runner's 402 ends that unpaid
     job, so the selection policy's order stays (#77 review)."""
-    engine = await provisioned(make_engine, admin, "alice", runners=capped_and_uncapped())
+    engine = await allotted(make_engine, admin, "alice", runners=capped_and_uncapped())
     transport.pays = False
     transport.steps = [ScriptedTransport.ok()]
     await engine.jobs.run(alice, JobRequest(app=APP))
     assert [url for url, _ in transport.calls] == ["https://uncapped"]
-
-
-async def test_an_unpaid_job_keeps_the_selection_policy_s_order(
-    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
-) -> None:
-    engine = await make_engine(
-        allocation_mode="per_application", runners=capped_and_uncapped()
-    )  # no key: unpaid
-    transport.steps = [ScriptedTransport.ok()]
-    await engine.jobs.run(alice, JobRequest(app=APP))
-    assert transport.calls == [("https://uncapped", None)]
 
 
 async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
@@ -369,7 +353,7 @@ async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
         def order(self, candidates: Sequence[Runner], request: JobRequest) -> Sequence[Runner]:
             return ()
 
-    engine = await provisioned(make_engine, admin, "alice", supply=EngineSupply(selection=Nobody()))
+    engine = await allotted(make_engine, admin, "alice", supply=EngineSupply(selection=Nobody()))
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     job = failed.value.job
@@ -380,7 +364,7 @@ async def test_a_selection_policy_that_selects_nobody_fails_before_payment(
 async def test_signer_refusal_for_one_orchestrator_fails_over(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
+    engine = await allotted(
         make_engine,
         admin,
         "alice",
@@ -397,7 +381,7 @@ async def test_signer_refusal_for_one_orchestrator_fails_over(
 async def test_signer_refusal_everywhere_fails_as_payment(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
+    engine = await allotted(
         make_engine, admin, "alice", runners=(runner(url="https://r1"), runner(url="https://r2"))
     )
     transport.steps = [RunnerCallError("payment_refused", "400", payment_sent=False, status_code=400)] * 2
@@ -410,7 +394,7 @@ async def test_signer_refusal_everywhere_fails_as_payment(
 async def test_caller_side_payment_refusal_does_not_fail_over(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
+    engine = await allotted(
         make_engine, admin, "alice", runners=(runner(url="https://r1"), runner(url="https://r2"))
     )
     transport.steps = [
@@ -424,7 +408,7 @@ async def test_caller_side_payment_refusal_does_not_fail_over(
 async def test_paid_then_unreachable_is_uncertain_never_failed(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [RunnerCallError("timeout", "timed out", payment_sent=True, manifest_ids=("m-2",))]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
@@ -441,7 +425,7 @@ async def test_attempt_is_written_before_the_call(
             seen_during_call.extend(await store.jobs_in_state("running"))
             return ScriptedTransport.ok()
 
-    engine = await provisioned(make_engine, admin, "alice", supply=EngineSupply(transport=Observing()))
+    engine = await allotted(make_engine, admin, "alice", supply=EngineSupply(transport=Observing()))
     await engine.jobs.run(alice, JobRequest(app=APP))
     assert len(seen_during_call) == 1
     assert [a.outcome for a in seen_during_call[0].attempts] == ["in_flight"]
@@ -449,7 +433,7 @@ async def test_attempt_is_written_before_the_call(
 
 def running_job(clock: FixedClock) -> Job:
     return Job(
-        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        id=uuid4(), actor_id="alice", tenant_id="default", operation_ref=None, mode="immediate", app=APP,
         capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
         created_at=clock.now(), completed_at=None,
     )  # fmt: skip
@@ -520,7 +504,7 @@ async def test_restart_between_attempts_after_a_paid_failover_is_failed(
 async def test_operation_ref_dispatches_at_most_once(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [ScriptedTransport.ok()]
     first = await engine.jobs.run(alice, JobRequest(app=APP, payload={"a": 1}, operation_ref="order-1"))
     with pytest.raises(OperationExists) as again:
@@ -541,7 +525,7 @@ async def test_a_repeat_after_every_runner_refused_runs_a_new_job_under_the_same
     store: SqlStore,
 ) -> None:
     """B3 (D57): a 503 with Retry-After invites a retry, so it must not burn the reference."""
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     request = JobRequest(app=APP, payload={"a": 1}, operation_ref="order-1")
     transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
     with pytest.raises(JobFailed) as busy:
@@ -569,7 +553,7 @@ async def test_a_repeat_while_the_job_runs_is_in_progress_and_dispatches_nothing
             return ScriptedTransport.ok()
 
     slow = Slow()
-    engine = await provisioned(make_engine, admin, "alice", supply=EngineSupply(transport=slow))
+    engine = await allotted(make_engine, admin, "alice", supply=EngineSupply(transport=slow))
     request = JobRequest(app=APP, operation_ref="order-1")
     first = asyncio.create_task(engine.jobs.run(alice, request))
     await entered.wait()
@@ -607,7 +591,7 @@ async def test_a_repeat_after_a_failure_that_never_reached_a_runner_dispatches_a
     transport: ScriptedTransport,
     ending: RunnerCallError,
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     request = JobRequest(app=APP, operation_ref="order-1")
     transport.steps = [ending]
     with pytest.raises(JobFailed) as first:
@@ -627,7 +611,7 @@ async def test_a_repeat_after_a_job_that_reached_a_runner_is_operation_exists(
     transport: ScriptedTransport,
     ending: RunnerCallError,
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     request = JobRequest(app=APP, operation_ref="order-1")
     transport.steps = [ending]
     with pytest.raises(JobFailed) as first:
@@ -642,7 +626,7 @@ async def test_a_repeat_after_a_job_that_reached_a_runner_is_operation_exists(
 async def test_a_different_body_after_a_retryable_failure_is_a_conflict(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
     with pytest.raises(JobFailed):
         await engine.jobs.run(alice, JobRequest(app=APP, payload={"a": 1}, operation_ref="order-1"))
@@ -657,15 +641,14 @@ async def test_a_repeat_after_a_failure_before_dispatch_runs_once_the_cause_is_f
     """Before any attempt (``no_offering``, ``no_capacity``, ``not_provisioned``): nothing was dispatched."""
     engine = await make_engine()
     request = JobRequest(app=APP, operation_ref="order-1")
-    with pytest.raises(JobFailed) as unprovisioned:
+    with pytest.raises(JobFailed) as unallotted:
         await engine.jobs.run(bob, request)
-    assert unprovisioned.value.job.failure is not None
-    assert unprovisioned.value.job.failure.kind == "not_provisioned"
-    await engine.payments.provision(
+    assert unallotted.value.job.failure is not None
+    assert unallotted.value.job.failure.kind == "not_provisioned"
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(operation_ref="provision:default:bob",
-            application_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
-            grant_id="grant_1",
+        AllotRequest(operation_ref="allot:default:bob",
+            tenant_id="default", actor_id="bob", amount=Money(amount=Decimal(5), currency="USD"),
         ),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok()]
@@ -682,7 +665,7 @@ async def test_a_ref_taken_between_the_check_and_the_write_is_answered_from_its_
 ) -> None:
     """A concurrent request took the reference after this one looked (the check saw nothing). The unique
     index refuses the write, and the job holding the reference answers as a repeat would (D57)."""
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     request = JobRequest(app=APP, operation_ref="order-1")
     transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
     with pytest.raises(JobFailed) as busy:
@@ -709,7 +692,7 @@ async def test_a_ref_other_requests_keep_retrying_is_in_progress(
     transport: ScriptedTransport, monkeypatch: pytest.MonkeyPatch,
 ) -> None:  # fmt: skip
     """Bounded: a reference that keeps being re-dispatched by other requests is busy, not ours to take."""
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [RunnerCallError("refused", "busy", payment_sent=False)]
     with pytest.raises(JobFailed) as busy:
         await engine.jobs.run(alice, JobRequest(app=APP, operation_ref="order-1"))
@@ -726,7 +709,7 @@ async def test_a_ref_other_requests_keep_retrying_is_in_progress(
     assert len(transport.calls) == 1
 
 
-async def test_unprovisioned_actor_fails_before_any_payment(
+async def test_unallotted_actor_fails_before_any_payment(
     make_engine: EngineFactory, bob: ActorContext, transport: ScriptedTransport
 ) -> None:
     engine = await make_engine()
@@ -736,14 +719,18 @@ async def test_unprovisioned_actor_fails_before_any_payment(
     assert transport.calls == []  # no silent fallback to a shared key
 
 
-async def test_no_offering_and_no_capacity(make_engine: EngineFactory, alice: ActorContext) -> None:
+async def test_no_offering_and_a_runner_with_zero_capacity_is_still_asked(
+    make_engine: EngineFactory, alice: ActorContext
+) -> None:
+    """Zero advertised capacity fails only a job that would pay (#114, C17, tests/unit/test_zero_capacity.py),
+    so alice's allocation is looked up first: she has none, and the job fails there."""
     engine = await make_engine(runners=(runner(capacity_available=0),))
     with pytest.raises(JobFailed) as missing:
         await engine.jobs.run(alice, JobRequest(app="nothing/here"))
     assert missing.value.job.failure is not None and missing.value.job.failure.kind == "no_offering"
     with pytest.raises(JobFailed) as busy:
         await engine.jobs.run(alice, JobRequest(app=APP))
-    assert busy.value.job.failure is not None and busy.value.job.failure.kind == "no_capacity"
+    assert busy.value.job.failure is not None and busy.value.job.failure.kind == "not_provisioned"
 
 
 async def test_admission_refuses_before_dispatch(
@@ -757,7 +744,7 @@ async def test_admission_refuses_before_dispatch(
             await release.wait()
             return ScriptedTransport.ok()
 
-    engine = await provisioned(
+    engine = await allotted(
         make_engine, admin, "alice", max_concurrent_jobs=1, supply=EngineSupply(transport=Slow())
     )
     first = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
@@ -783,7 +770,7 @@ async def test_other_actors_jobs_are_invisible(
     bob: ActorContext,
     transport: ScriptedTransport,
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [ScriptedTransport.ok()]
     result = await engine.jobs.run(alice, JobRequest(app=APP))
     with pytest.raises(NotFound):
@@ -795,7 +782,7 @@ async def test_other_actors_jobs_are_invisible(
 async def test_usage_is_reported_once_by_the_owner(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     transport.steps = [ScriptedTransport.ok()]
     result = await engine.jobs.run(alice, JobRequest(app=APP))
     updated = await engine.jobs.report_usage(alice, result.job.id, {"tokens_out": 42})
@@ -809,7 +796,7 @@ async def test_usage_is_reported_once_by_the_owner(
 async def test_an_attempt_keeps_where_its_time_went(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     timings = CallTimings(challenge_ms=110, signing_ms=1700, response_ms=240)
     transport.steps = [ScriptedTransport.ok().model_copy(update={"timings": timings})]
     result = await engine.jobs.run(alice, JobRequest(app=APP, path="/echo", payload={"x": 1}))
@@ -820,7 +807,7 @@ async def test_an_attempt_keeps_where_its_time_went(
 async def test_a_failed_attempt_keeps_where_its_time_went(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(
+    engine = await allotted(
         make_engine, admin, "alice", runners=(runner(url="https://r1"), runner(url="https://r2"))
     )
     timings = CallTimings(challenge_ms=110, signing_ms=1700)

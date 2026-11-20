@@ -12,7 +12,7 @@ async def render_openapi() -> str:
     from livepeer_builder.runtime.assembly import EngineSupply
     from livepeer_builder.testing import FakeAllocationManager
 
-    # Every optional capability on (API keys by default; the grant desk needs a grants manager),
+    # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
     # so the committed spec documents the whole API. A deployment without one lacks those routes.
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
@@ -57,7 +57,7 @@ def render_db_schema() -> str:
 
 # Relationships the schema expresses by convention rather than foreign keys (joined in queries).
 _LOGICAL_LINKS = (
-    ('lpb_actors ||--o{ lpb_jobs : "owns (application_id, actor_id)"'),
+    ('lpb_actors ||--o{ lpb_jobs : "owns (tenant_id, actor_id)"'),
     ('lpb_actors ||--o| lpb_secrets : "secret_ref"'),
     ('lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"'),
     ('lpb_actors ||--o{ lpb_usage_rows : "allocation_id"'),

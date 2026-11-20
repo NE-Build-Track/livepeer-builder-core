@@ -1,5 +1,13 @@
 # ISS-36: Funded journeys across the acceptance matrix
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D80 in
+> [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked.\
 **Tracker:** ISS-36 ([Network-Engineering-SPE#50](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/50)),
 source task V2.\
@@ -29,10 +37,10 @@ ISS-35 (#49). **External:** H4 (funded environment).
 | Evidence precedent | Markdown per run: component pins table, ids per step, Batteries rows behind each cost, reconciliation, "Not covered" | `docs/references/evidence/2026-10-19-dev-stack-session-log.md` |
 | Evidence collector | **Not found.** Evidence has been assembled by hand from REST and Batteries reads | |
 | Live probe | Proposed by ISS-23 (`scripts/live_probe.py`), not built | ISS-23 guide |
-| Payment configurations | Configuration 1 = the console stack (ISS-13). Configuration 2 = separately operated, `per_application` (ISS-31 guide) | |
+| Payment configurations | Configuration 1 = self-hosted payments, the console stack (ISS-13). Configuration 2 = a payment clearinghouse, with the enterprise's engine in its `work` role (ISS-31 guide, rewritten 18 November) | |
 
-Note: the console calls the second configuration "`per_application`". ISS-31 defines it as a separately
-operated payment service that runs `per_application`; the matrix uses ISS-31's definition.
+Note: until 18 November the second configuration was a separately operated payment service that ran
+`per_application`. It is now a payment clearinghouse, and `per_actor` is the only allocation mode (D82).
 
 ## Decision proposed
 
@@ -49,13 +57,13 @@ from the job ids; a $3 cap across dry and final runs; the ISS-25 procedure (agen
 | **C** | Image, FLUX schnell | **async** | REST (console) | service | engine actor key | 1, `per_actor` |
 | **D** | First ISS-27 endpoint | **persistent** | REST (console) | service | engine actor key | 1, `per_actor` |
 | **E** | Chat, Qwen | immediate | **MCP** (pinned client, ISS-30) | service | JWT from the enterprise provider | 1, `per_actor` |
-| **F** | Image, FLUX schnell | async | **MCP** (status and result tools) | service | JWT | **2**, `per_application` |
-| **G** | Chat, Qwen, streamed | immediate | facade | **embedded** (ChatLPT) | ChatLPT's own sign-in | **2**, `per_application` |
+| **F** | Image, FLUX schnell | async | **MCP** (status and result tools) | service | JWT | **2**, payment clearinghouse |
+| **G** | Chat, Qwen, streamed | immediate | facade | **embedded** (ChatLPT) | ChatLPT's own sign-in | **2**, payment clearinghouse |
 
 Coverage check: modes (A, C, D); REST and MCP (A, E); service and embedded (A, G); standalone and
 enterprise access (A, B); configuration 1 and 2 (A, F, G). Two rows on configuration 2 because one
-alone could not show both interfaces. ChatLPT already runs `per_application` (its decision D3), so row
-G changes only where its payment service runs.
+alone could not show both interfaces. ChatLPT moves to `per_actor` and runs its embedded engine in the
+`work` role (#116), so row G is also the proof that ISS-31 names.
 
 **Failure and recovery observations** ride on the rows, not extra rows: on row A, a second job with
 the allocation paused (an understandable failure before payment, $0); on row C, the engine restarted
@@ -109,16 +117,16 @@ from Batteries after each row; the run stops when the cap would be passed.
 
 1. **Preconditions.** ISS-31 to ISS-35 merged; console, ChatLPT and the MCP client pinned to the same
    builder-core merge; `lpb payments check` green on both configurations; ISS-35's `lpb costs verify`
-   clean; payer deposit and reserve funded; one signer per payer (ChatLPT, the console stack and the
-   configuration 2 operator share it today), so rows run one configuration at a time.
+   clean; the wallet's deposit and reserve funded; one signer per wallet (ChatLPT, the console stack and
+   the configuration 2 clearinghouse share it today), so rows run one configuration at a time.
 2. **Dry run** of every row on the same stacks, with the expected cost stated first; fix and re-pin
    before the final run.
 3. **Per row, final run** (agent driving, Mike watching):
    1. state the row, the pins and the expected cost;
-   2. operator step, shown: issue the credential, fund the allocation (configuration 1) or show the
-      operator's funded allocation (configuration 2);
+   2. admin step, shown: issue the credential and allot the allocation. In configuration 2 the
+      clearinghouse admin onboards the tenant and tops up its grant, and the tenant admin allots;
    3. outcomes 2 to 5 through the row's interface;
-   4. wait for the cost to leave `pending` (cost sync every 30 s), or `POST /v1/admin/costs/sync`;
+   4. wait for the cost to leave `pending` (cost sync every 30 s), or `POST /v1/costs/sync`;
    5. `scripts/collect_evidence.py`; check the record; note anything unexpected.
 4. **Stop rules.** Cap reached; a cost class other than expected; reconciliation unbalanced; a
    job `uncertain` outside the recovery observation. Stop, record, investigate; do not repeat a paid row
@@ -152,7 +160,7 @@ lists exactly that session's usage rows.
 [ ] failover job → both attempts, billable apart from fees
 [ ] no token or secret appears in the output (scan for lpk_, lpg_, Bearer)
 [ ] the collector sends only GET requests
-[ ] pins are read from the running services' reported versions, not typed by hand   [?] Q3
+[ ] pins are read from the running services' reported versions, not typed by hand
 ```
 
 **Definition of done.** Every row's record present with all seven outcomes and its limitations; the
@@ -183,13 +191,53 @@ setup (a separately operated signer and Batteries) is a deploy change in its rep
 - **A separate failure row with a paid failure.** Rejected: a pre-payment failure and the ISS-35
   restart show outcome 5 without paying for a failure on purpose.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** The seven rows above, or a smaller set (for example, drop F and put MCP on configuration 2 in E)?
-- **Q2.** Cap: $3 across dry and final runs (recommended), or keep $1?
-- **Q3.** Where the evidence lives: builder-core `docs/references/evidence/` (recommended, home ENGINE),
-  or the console repository as for ISS-25?
-- **Q4.** Does M3 decision 8 (agent runs, Mike watches) carry to M4 unchanged?
+Locked by Mike on 13 November 2026.
+
+- **Q1, the rows:** the seven rows above.
+  - Row C is FLUX schnell with `mode="async"`.
+  - Row D is the `realtime-transcription` session, driven from an audio file, or the CPU-only fallback
+    runner of ISS-27.
+  - The MCP client in rows E and F is Claude Code.
+  - No row needs runners that follow the new runner standard.
+- **Q2, the cap:** $3 across dry and final runs. The session rate for `realtime-transcription` is unknown,
+  and it is read from the catalog and stated before the first paid session.
+- **Q3, where the evidence lives:** in builder-core, under `docs/references/evidence/`, beside the
+  collector. Evidence about the builder console alone stays in its repository (ISS-25, ISS-33). Each
+  record is read before it is committed.
+- **Q4, the procedure:** M3 decision 8 carries to M4. The agent runs each step and Mike watches; a dry run
+  first, the final run on merged code. Adjustments: the cap is $3; the JWT rows issue no engine key; on
+  configuration 2 the funding step is to show the operator's funded allocation. John reviews the written
+  evidence afterwards.
+
+**Other decisions that touch this guide.**
+
+- **Not verified:** Claude Code signing in to the Keycloak realm with OAuth. If it fails, rows E and F
+  fall back to an engine key, and row B still shows the JWT sign-in.
+- **The pins have moved** (#117): livepeer/node to a commit at or after `2364436`, Batteries to `v0.0.3`,
+  the SDK to `7dc2a07`. The upstream table in this guide names the old node pin.
+- **The candidate** every client pins is a `v0.3.0rcN` tag (ISS-32).
+- **Admin from a token claim** (ISS-33) changes the JWT rows' settings.
+- **ISS-48** is the last feature of M4 and may move to M5. The M4 gate, and this matrix, do not wait for
+  it.
+
+## Amended on 18 November 2026
+
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) is now
+configuration 2. The matrix keeps its seven rows.
+
+- **Configuration 2** is an enterprise's engine in its `work` role paying through an engine in its
+  `clearinghouse` role. It runs `per_actor`, like configuration 1. The tables above are changed.
+- **Row G** is ChatLPT with its embedded engine. It is the proof ISS-31 names (#116).
+- **Row F** uses an engine server in its `work` role.
+- **Evidence item 6.** The clearinghouse admin's top-up of the grant and the tenant admin's allotment take
+  the place of the operator funding step.
+- **`lpb payments check`** is kept as a read-only check (D87), so the precondition in the runbook stands.
+  A self-hosted engine probes the signer and Batteries. An engine that uses a clearinghouse probes the
+  clearinghouse. It is built with the remote adapters (#168).
+- **The cost sync route** in the runbook is `POST /v1/costs/sync`, in the work half (#164, D87). A
+  clearinghouse admin credential of the engine that runs the jobs calls it.
 
 ## Delivery slices
 

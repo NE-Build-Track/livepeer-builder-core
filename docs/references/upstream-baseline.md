@@ -6,17 +6,17 @@ goes on a `releases/m2` branch in each. The SDK, node and Batteries forks matche
 
 | Component | Repository | Baseline commit | Used by |
 | --- | --- | --- | --- |
-| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (12 October baseline); pinned now to `2017a80` on `main` (26 October: [#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), [#80](https://github.com/livepeer/livepeer-python-gateway/pull/80), [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), [#83](https://github.com/livepeer/livepeer-python-gateway/pull/83); was `76a1a1c`, and `3238731` on the NE fork before that) | `adapters/sdk.py` |
-| Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `f45d83fd68f73d195dffe8b45f6cac296d023c49` (main, 10 commits after v1.0.6; was `406b248` / v1.0.2, and `f970be6` and `1432123` before that). The dev stack builds the signer and `livepeer-discovery` from this commit. `tests/unit/node_discovery_f45d83f.json` is that commit's `livepeer-discovery` output, which the discovery reader is tested against; refresh it when this pin moves | dev stack; `HttpDiscoverySource`; [node-signer.md](node-signer.md) |
+| Python gateway SDK | [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) | `44df06157fcdb864e37d971e8caba86b2a7dc92e` (12 October baseline); pinned now to `7dc2a07` on `main` (6 November: [#90](https://github.com/livepeer/livepeer-python-gateway/pull/90) on top of `2017a80`, 26 October: [#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), [#80](https://github.com/livepeer/livepeer-python-gateway/pull/80), [#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), [#83](https://github.com/livepeer/livepeer-python-gateway/pull/83); was `2017a80`, `76a1a1c`, and `3238731` on the NE fork before that) | `adapters/sdk.py` |
+| Signer and orchestrator | [livepeer/node](https://github.com/livepeer/node) | `eee09c41f46d64a34bfd9ed3c9cb649536490f13`, the v1.0.7 release (12 November; was `f45d83f`, 10 commits after v1.0.6, `406b248` / v1.0.2 before that, and `f970be6` and `1432123` earlier). The dev stack builds the signer and `livepeer-discovery` from this commit. `tests/unit/node_discovery_f45d83f.json` is the `livepeer-discovery` output of `f45d83f`, which the discovery reader is tested against; v1.0.7 emits the same format, and its decoder passes every runner in that file unchanged. Refresh it when this pin moves | dev stack; `HttpDiscoverySource`; [node-signer.md](node-signer.md) |
 | Clearinghouse Batteries | [livepeer/clearinghouse-batteries](https://github.com/livepeer/clearinghouse-batteries) | `03bc9fb5e15b073e68986ec0261e68d7ecd9598b`, the v0.0.3 release (12 November, [#94](https://github.com/NE-Build-Track/livepeer-builder-core/issues/94); was `ca09e47`). Built from upstream since 28 October: the NE-Build-Track fork has no commits of its own on any branch. See [the Batteries pin](#the-batteries-pin) | `adapters/batteries.py`; [batteries-api.md](batteries-api.md) |
 | Prototype (reference only) | [eliteprox/livepeer-core](https://github.com/eliteprox/livepeer-core) | `bbe1253d9bb84d33914cdb19864aba1e32eb8202` | Starting point for this repository (D4) |
 
 ## The SDK pin
 
 `pyproject.toml` pins `livepeer-gateway` by direct reference to
-`2017a80c740af5fcb0fef4ee84659af9b07fb90c`, the head of
+`7dc2a072e618fc526741ad22642e6034836edcc9`, the head of
 [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) `main`
-on 26 October. That commit includes:
+on 6 November. That commit includes:
 
 - "Enforce TLS" ([#76](https://github.com/livepeer/livepeer-python-gateway/pull/76), `fc47903`);
 - streamable runner request bodies ([#80](https://github.com/livepeer/livepeer-python-gateway/pull/80),
@@ -31,9 +31,20 @@ on 26 October. That commit includes:
   [sdk-gateway.md](sdk-gateway.md#runner-session-stop-83);
 - Ruff typing modernisation ([#84](https://github.com/livepeer/livepeer-python-gateway/pull/84)) and
   the SDK's own lockfile ([#85](https://github.com/livepeer/livepeer-python-gateway/pull/85)), with no
-  change to the calls the engine makes.
+  change to the calls the engine makes;
+- the challenge probe before a streamed upload ([#90](https://github.com/livepeer/livepeer-python-gateway/pull/90),
+  `e52ad26`): for a priced single-shot runner and a streamed payload, `call_runner` sends an empty
+  request to get the 402 before it reads the source, and `Expect: 100-continue` is gone
+  (`_http_continue.py` is removed). It changes `call_runner` and `http._open_request`, which the
+  engine's copy follows, and nothing was carried over: the engine sends a buffered `bytes` body, never
+  a stream, and imports only `errors` and `remote_signer` from the SDK;
+- a `multidict` bump, distributions built in the SDK's CI and a README note
+  ([#86](https://github.com/livepeer/livepeer-python-gateway/pull/86),
+  [#89](https://github.com/livepeer/livepeer-python-gateway/pull/89),
+  [#92](https://github.com/livepeer/livepeer-python-gateway/pull/92)), with no change to the calls
+  the engine makes.
 
-The 22 October pin was `76a1a1c` (#81). `call_runner`, `discover_runners`, `open_stream` and
+The 26 October pin was `2017a80` (#83, #84, #85). The 22 October pin was `76a1a1c` (#81). `call_runner`, `discover_runners`, `open_stream` and
 `run_payments` are identical in `76a1a1c` and `2017a80`. The 21 October pin `3238731` was the head of NE-Build-Track `dev/bytestreaming`
 ([NE livepeer-python-gateway#5](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/5)).
 #80 and #81 are on upstream `main`, so that fork pin is dropped.

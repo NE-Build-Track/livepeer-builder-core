@@ -23,7 +23,7 @@ pip install "livepeer-builder[server,postgres]"   # optional PostgreSQL store
 ```
 
 The engine pins the SDK to [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway)
-`main` at `2017a80` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
+`main` at `7dc2a07` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
 
 ## Embed it
 
@@ -60,6 +60,10 @@ async def quick_start(
 Run it with `asyncio.run(quick_start(EngineSettings.from_env()))`. `async with` starts the engine and
 stops it, closing what it opened. This block is tested (`tests/unit/test_readme_example.py`).
 
+The customer needs an allocation before its first job: an admin allots one, once
+([embedded-mode.md](docs/guides/embedded-mode.md#3-allot-before-paid-work)). A job for an actor
+with no allocation fails `not_provisioned`, and nothing is paid.
+
 ## Run the service
 
 ```sh
@@ -67,7 +71,7 @@ export LPB_DATABASE_URL=sqlite+aiosqlite:///./livepeer-builder.db
 export LPB_DISCOVERY_URL=http://discovery:8939/discovery
 export LPB_SIGNER_URL=https://signer.example LPB_BATTERIES_URL=https://batteries.example
 export LPB_BATTERIES_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
-export LPB_BATTERIES_OPERATOR_TOKEN=...   # optional: turns on the grant desk (list and create grants)
+export LPB_BATTERIES_GRANTS_TOKEN=...     # optional: turns on the tenant desk (onboard and list tenants)
 uv run lpb migrate
 uv run lpb bootstrap-admin   # prints the first admin key once
 uv run lpb serve

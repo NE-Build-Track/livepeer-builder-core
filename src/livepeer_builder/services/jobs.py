@@ -4,12 +4,12 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 1. Fail over when another runner can do what this one did not, and only to another orchestrator after
    a payment (services/failover.py, D52). A paid failure that may have run the work, or whose payment is
    unknown, is ``uncertain``; one that ran, or is about the request, is ``failed``.
-2. One (application, actor, operation_ref) dispatches at most once; a changed body is a conflict. A
+2. One (tenant, actor, operation_ref) dispatches at most once; a changed body is a conflict. A
    repeat while the job runs is ``OperationInProgress``; a repeat after a failure that never reached a
    runner dispatches a new job under the same reference (D57, services/operations.py).
 3. An attempt row is written *before* the call and updated after it. Paid-but-unknown is
    ``uncertain``, never ``failed``. Jobs left ``running`` by a restart are resolved on start.
-4. Admission and provisioning are checked before any payment.
+4. Admission and allotment are checked before any payment.
 5. A streamed job (docs/contracts/engine.md#streaming) is bound to its runner once the stream is
    open; it ends ``succeeded``, or ``uncertain`` when the runner failed, timed out, or the caller
    stopped reading (``abandoned``). The admission slot is held until the stream ends.
@@ -37,9 +37,8 @@ from livepeer_builder.contracts import (
     JobRequest,
     JobResult,
     JobState,
-    MeasuredUsage,
     Operation,
-    PaymentCredential,
+    PaymentKey,
     ResourceRef,
     ResultRef,
     Runner,
@@ -64,7 +63,7 @@ from livepeer_builder.protocols import (
     StreamingRunnerTransport,
 )
 from livepeer_builder.services.admission import AdmissionLimiter
-from livepeer_builder.services.discovery import DiscoveryService, capped_first
+from livepeer_builder.services.discovery import DiscoveryService, capped_first, paid_candidates
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.failover import (
     Candidates,
@@ -79,6 +78,7 @@ from livepeer_builder.services.operations import check_operation, claim_operatio
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
+from livepeer_builder.services.usage_reports import report_once
 from livepeer_builder.utils import run_shielded
 
 _LOG = logging.getLogger(__name__)
@@ -205,30 +205,21 @@ class JobService:
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]:
-        """The caller's own jobs; an admin's are every actor's in its application, as the cost reads (D44)."""
+        """The caller's own jobs; an admin's are every actor's in its tenant, as the cost reads (D44)."""
         target = None if sees_every_actor(actor) else actor.actor_id
         self._policy.check(
             actor,
             Operation.JOBS_READ,
-            ResourceRef(kind="job", application_id=actor.application_id, owner_actor_id=target),
+            ResourceRef(kind="job", tenant_id=actor.tenant_id, owner_actor_id=target),
         )
-        return await self._store.list_jobs(actor.application_id, target, limit=limit, before=before)
+        return await self._store.list_jobs(actor.tenant_id, target, limit=limit, before=before)
 
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job:
-        """The application measured the work and reports it once (service-mode default). Running the job
-        is the permission it needs, not reading it (D44)."""
+        """The application measured the work and reports it once (service-mode default): it is stored once,
+        and an identical repeat is answered with the stored usage (#115, C20; ``services/usage_reports``).
+        Running the job is the permission it needs, not reading it (D44)."""
         job = await self._owned(actor, Operation.JOBS_RUN, job_id)
-        if job.usage is not None:
-            raise InvalidRequest("usage was already reported for this job")
-        if job.state != "succeeded":
-            raise InvalidRequest("usage can only be reported for a succeeded job")
-        if not quantities or any(value < 0 for value in quantities.values()):
-            raise InvalidRequest("usage needs at least one non-negative quantity")
-        usage = MeasuredUsage(
-            quantities=dict(quantities), source="app_reported", reported_at=self._clock.now()
-        )
-        await self._store.set_usage(job.id, usage)
-        return job.model_copy(update={"usage": usage})
+        return await report_once(self._store, job, quantities, self._clock.now())
 
     async def recover_interrupted(self) -> int:
         """Resolve jobs a restart left ``running`` (``failover.recover_interrupted``)."""
@@ -260,27 +251,31 @@ class JobService:
 
     async def _candidates(
         self, job: Job, actor: ActorContext, request: JobRequest, attempts: list[Attempt]
-    ) -> tuple[Candidates, PaymentCredential]:
+    ) -> tuple[Candidates, PaymentKey]:
         """Who could run this, and with which credential. Fails the job (before payment) when nobody can."""
         candidates = self._discovery.candidates(request.app)
         if not candidates:
             raise await self._fail(job, attempts, "no_offering", f"no runner advertises app {request.app!r}")
-        if all(r.capacity_available is not None and r.capacity_available <= 0 for r in candidates):
-            raise await self._fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
         try:
             credential = await self._credentials.credential(actor)
         except NotProvisioned as exc:
             raise await self._fail(job, attempts, "not_provisioned", str(exc)) from exc
+        paid = credential.token is not None and getattr(self._transport, "pays", True)  # no signer, no pay
+        # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
+        # tries it last, and if every runner refuses the job fails ``refused`` through failover. A job
+        # that pays is not tried on runners that all advertise zero: a full runner's refusal can cost a
+        # ticket.
+        if paid and not (candidates := paid_candidates(candidates)):
+            raise await self._fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
         ordered = tuple(self._selection.order(candidates, request))
-        # paid: a runner with no usable ceiling is refused at its 402 (D62); with no signer, nothing pays
-        if credential.token is not None and getattr(self._transport, "pays", True):
+        if paid:  # a runner with no usable ceiling is refused at its 402 (D62)
             ordered = capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
             raise await self._fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
         return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
 
     async def _start_attempt(
-        self, job: Job, number: int, runner: Runner, credential: PaymentCredential, attempts: list[Attempt]
+        self, job: Job, number: int, runner: Runner, credential: PaymentKey, attempts: list[Attempt]
     ) -> Attempt:
         attempt = Attempt(
             job_id=job.id,
@@ -472,7 +467,7 @@ class JobService:
         return Job(
             id=uuid4(),
             actor_id=actor.actor_id,
-            application_id=actor.application_id,
+            tenant_id=actor.tenant_id,
             operation_ref=request.operation_ref,
             mode=request.mode,
             app=request.app,

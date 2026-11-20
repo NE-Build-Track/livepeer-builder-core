@@ -13,11 +13,11 @@ import pytest
 
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     Attempt,
     Job,
     JobRequest,
     Money,
-    ProvisionRequest,
     SignedSession,
     SyncCheckpoint,
     UsageRow,
@@ -53,7 +53,7 @@ def job_with(*attempts: tuple[str, tuple[str, ...], bool], state: str = "succeed
     job_id = uuid4()
     now = FixedClock().now()
     return Job(
-        id=job_id, actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        id=job_id, actor_id="alice", tenant_id="default", operation_ref=None, mode="immediate", app=APP,
         capability=None, model=None, state=state, failure=None, result=None, usage=None,  # type: ignore[arg-type]
         created_at=now, completed_at=now,
         attempts=tuple(
@@ -175,14 +175,13 @@ async def test_a_stored_projection_keeps_billable_apart_from_fees(
             runner(url="https://b1", orchestrator_url="https://orch-b.example"),
         ),
     )
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
-        application_id="default",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
-        grant_id="g",
     )
-    allocation = (await engine.payments.provision(admin, request)).allocation_id
+    allocation = (await engine.payments.allot(admin, request)).allocation_id
     transport.steps = [
         RunnerCallError("refused", "no capacity", payment_sent=True, manifest_ids=("m-a",), status_code=503),
         ScriptedTransport.ok(manifest_ids=("m-b",)),
@@ -208,16 +207,15 @@ def test_usd_total_only_when_every_row_is_priced() -> None:
     assert classify(job, [row("1", "s", "1", usd="2"), row("2", "s", "1")]).fees.fee_usd is None
 
 
-async def provisioned(make_engine: EngineFactory, admin: ActorContext):  # type: ignore[no-untyped-def]
+async def allotted(make_engine: EngineFactory, admin: ActorContext):  # type: ignore[no-untyped-def]
     engine = await make_engine()
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
-        application_id="default",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(1), currency="ETH"),
-        grant_id="grant_1",
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     return engine
 
 
@@ -226,14 +224,13 @@ async def test_sync_attributes_by_payment_session_and_marks_corrections(
     usage: FakeUsageSource, clock: FixedClock,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice",
-            application_id="default",
+        AllotRequest(
+            operation_ref="allot:default:alice",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-sess",))]
@@ -278,14 +275,13 @@ async def test_failed_after_payment_and_forged_manifest_reconcile(
     usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice",
-            application_id="default",
+        AllotRequest(
+            operation_ref="allot:default:alice",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     allocation = actor.allocation_id
@@ -322,14 +318,13 @@ async def test_rows_that_arrive_before_the_attempt_match_on_the_next_sync(
     usage: FakeUsageSource,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice",
-            application_id="default",
+        AllotRequest(
+            operation_ref="allot:default:alice",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     usage.rows = [row("u1", "sess-1", "0.4", allocation=actor.allocation_id, manifest="m-early")]
@@ -349,14 +344,13 @@ async def test_a_manifest_shared_by_two_sessions_is_uncertain_and_unattributed(
     usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice",
-            application_id="default",
+        AllotRequest(
+            operation_ref="allot:default:alice",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     allocation = actor.allocation_id
@@ -387,14 +381,13 @@ async def test_a_forged_manifest_on_another_allocation_stays_unattributed(
     usage: FakeUsageSource,
 ) -> None:  # fmt: skip
     engine = await make_engine(default_currency="ETH")
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice",
-            application_id="default",
+        AllotRequest(
+            operation_ref="allot:default:alice",
+            tenant_id="default",
             actor_id="alice",
             amount=Money(amount=Decimal(1), currency="ETH"),
-            grant_id="grant_1",
         ),
     )
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-real",))]
@@ -426,7 +419,7 @@ async def running_job(
     """A job with one attempt still in flight, as the engine stores it before the runner answers."""
     now = clock.now()
     job = Job(
-        id=uuid4(), actor_id="alice", application_id="default", operation_ref=None, mode="immediate", app=APP,
+        id=uuid4(), actor_id="alice", tenant_id="default", operation_ref=None, mode="immediate", app=APP,
         capability=None, model=None, state="running", attempts=(), failure=None, result=None, usage=None,
         created_at=now, completed_at=None,
     )  # fmt: skip
@@ -472,10 +465,9 @@ async def test_a_job_that_ended_since_the_last_sync_counts_in_summary_and_recent
     clock: FixedClock,
 ) -> None:  # fmt: skip
     engine = await make_engine()
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                         grant_id="grant_1"),
+        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
     )  # fmt: skip
     transport.steps = [ScriptedTransport.ok(manifest_ids=("m-new",))]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job  # no sync since it ended
@@ -558,10 +550,9 @@ async def test_a_reconciliation_during_a_sync_counts_every_row_once(
     file_store = await SqlStore.connect(f"sqlite+aiosqlite:///{tmp_path}/costs.db")  # a snapshot needs a file
     try:
         engine = await make_engine(supply=EngineSupply(store=file_store))
-        actor = await engine.payments.provision(
+        actor = await engine.payments.allot(
             admin,
-            ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                             grant_id="grant_1"),
+            AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
         )  # fmt: skip
         job, attempt = await running_job(file_store, clock, allocation=actor.allocation_id)
         usage.rows = [row("u1", "sess-1", "0.5", allocation=actor.allocation_id, manifest="m-1")]
@@ -598,10 +589,9 @@ async def test_a_running_jobs_matched_fee_is_pending_and_reconciliation_balances
     usage: FakeUsageSource, manager: FakeAllocationManager,
 ) -> None:  # fmt: skip
     engine = await make_engine()
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                         grant_id="grant_1"),
+        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
     )  # fmt: skip
     transport.opens = [StreamScript(events=[b"a", 30.0], manifest_ids=("m-s",))]  # paid at open, then runs on
     streaming = engine.jobs.streaming
@@ -631,10 +621,9 @@ async def ended_paid_job(
 ) -> tuple[BuilderEngine, Job, str]:
     """A paid job that ended and was projected, with its session signed for manifest m-1."""
     engine = await make_engine()
-    actor = await engine.payments.provision(
+    actor = await engine.payments.allot(
         admin,
-        ProvisionRequest(operation_ref="provision:default:alice", application_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD"),
-                         grant_id="grant_1"),
+        AllotRequest(operation_ref="allot:default:alice", tenant_id="default", actor_id="alice", amount=Money(amount=Decimal(1), currency="USD")),
     )  # fmt: skip
     job, attempt = await running_job(store, clock, allocation=actor.allocation_id)
     await ends_and_projects(engine, store, job, attempt, clock)
@@ -683,7 +672,7 @@ async def test_a_match_counts_before_sync_stores_the_projection(
 async def test_a_row_committed_while_a_sync_classifies_the_job_is_never_lost(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore, clock: FixedClock,
     usage: FakeUsageSource, monkeypatch: pytest.MonkeyPatch,
-) -> None:  # fmt: skip  # #43 review: two syncs at once (the loop and POST /v1/admin/costs/sync)
+) -> None:  # fmt: skip  # #43 review: two syncs at once (the loop and POST /v1/costs/sync)
     engine, job, allocation = await ended_paid_job(make_engine, admin, store, clock)
     first = row("u1", "sess-1", "0.5", allocation=allocation, manifest="m-1")
     usage.rows = [first]

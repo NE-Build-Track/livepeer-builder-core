@@ -24,6 +24,13 @@ classDiagram
         +async get(ref) str
         +async put(name, secret) SecretRef
     }
+    class WritableSecretStore {
+        <<interface>>
+        +async delete(ref) None
+        +async get(ref) str
+        +async put(name, secret) SecretRef
+        +async writable() bool
+    }
     class DiscoverySource {
         <<interface>>
         +async fetch() Runner[]
@@ -53,21 +60,24 @@ classDiagram
     }
     class CredentialResolver {
         <<interface>>
-        +async credential(actor) PaymentCredential
+        +async credential(actor) PaymentKey
     }
     class AllocationManager {
         <<interface>>
         +async create_grant(name, amount, metadata) GrantRecord
         +async create_key(allocation_id, name, idempotency_key) NewAllocationKey
         +async create_key_for_grant(grant_id, name, amount, idempotency_key) NewAllocationKey
-        +async fund_allocation(allocation_id, amount, idempotency_key) None
-        +async fund_grant(grant_id, amount, idempotency_key) None
+        +async grant_balances() TenantGrant[]
         +async grant_page(cursor) GrantPage
         +async list_grants() GrantRecord[]
         +async read_allocation(allocation_id) Allowance
+        +async read_grant(grant_id) TenantGrant
         +async revoke_allocation(allocation_id) None
         +async revoke_key(api_key_id) None
         +async set_allocation_status(allocation_id, status) None
+        +async set_grant_status(grant_id, status) None
+        +async top_up_allocation(allocation_id, amount, idempotency_key) None
+        +async top_up_grant(grant_id, amount, idempotency_key) None
     }
     class UsageSource {
         <<interface>>
@@ -75,7 +85,7 @@ classDiagram
     }
     class AllowanceReader {
         <<interface>>
-        +async allocation_for(application_id, actor_id) str?
+        +async allocation_for(tenant_id, actor_id) str?
         +async read_allowance(allocation_id) Allowance
     }
     class EngineStore {
@@ -89,11 +99,35 @@ classDiagram
         +async purge(now, jobs_days, usage_days) PurgeReport
         +async schema_revision() str?
     }
+    class ActorCommandRepo {
+        <<interface>>
+        +async allot_actor(actor, replacing) bool
+        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ActorAllocation?
+        +async set_actor_status(tenant_id, actor_id, allocation_id, status, updated_at, only_from) ActorAllocation?
+    }
+    class UsageOnceRepo {
+        <<interface>>
+        +async set_usage_once(job_id, usage) bool
+    }
+    class UsageSetAsideRepo {
+        <<interface>>
+        +async count_set_aside_usage() int
+        +async set_aside_usage(rows) SetAsideUsage[]
+    }
     class CostSnapshot {
         <<interface>>
         +async job_with_projection(job_id) tuple~Job JobCost?~?
-        +async projections_and_unprojected(application_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
-        +async recent_with_projections(application_id, actor_id, limit) tuple~Job JobCost?~[]
+        +async projections_and_unprojected(tenant_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
+        +async recent_with_projections(tenant_id, actor_id, limit) tuple~Job JobCost?~[]
+        +async unattributed_usage(allocation_id) UsageRow[]
+        +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
+    }
+    class AllocationCostSnapshot {
+        <<interface>>
+        +async attempt_allocations(tenant_id, actor_id) map
+        +async job_with_projection(job_id) tuple~Job JobCost?~?
+        +async projections_and_unprojected(tenant_id, actor_id, start, end) tuple~tuple~str JobCost~[] Job[]~
+        +async recent_with_projections(tenant_id, actor_id, limit) tuple~Job JobCost?~[]
         +async unattributed_usage(allocation_id) UsageRow[]
         +async usage_for_payment_sessions(payment_session_ids) UsageRow[]
     }
@@ -125,7 +159,6 @@ classDiagram
     class RoutingSecretStore
     class SdkRunnerStream
     class SdkRunnerTransport
-    class SettingsSecretStore
     class SqlCostSnapshot
     class SqlMaintenance
     class SqlStore
@@ -135,8 +168,8 @@ classDiagram
     Authenticator <|.. JwtBearerAuthenticator
     AccessPolicy <|.. DefaultPolicy
     SecretStore <|.. RoutingSecretStore
-    SecretStore <|.. SettingsSecretStore
     SecretStore <|.. EncryptedDbSecretStore
+    WritableSecretStore <|.. RoutingSecretStore
     DiscoverySource <|.. HttpDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
@@ -148,7 +181,11 @@ classDiagram
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
+    ActorCommandRepo <|.. SqlStore
+    UsageOnceRepo <|.. SqlStore
+    UsageSetAsideRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
+    AllocationCostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
     EventFeed <|.. ReservedEventFeed
     SessionManager <|.. ReservedSessions
@@ -163,8 +200,8 @@ classDiagram
 | `Authenticator` | `JwtBearerAuthenticator` | `livepeer_builder.adapters.jwt` |
 | `AccessPolicy` | `DefaultPolicy` | `livepeer_builder.services.policy` |
 | `SecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
-| `SecretStore` | `SettingsSecretStore` | `livepeer_builder.adapters.secrets` |
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
+| `WritableSecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
@@ -176,7 +213,11 @@ classDiagram
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
+| `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |
+| `UsageOnceRepo` | `SqlStore` | `livepeer_builder.store.sql` |
+| `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
+| `AllocationCostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |
 | `EventFeed` | `ReservedEventFeed` | `livepeer_builder.services.reserved` |
 | `SessionManager` | `ReservedSessions` | `livepeer_builder.services.reserved` |
@@ -189,7 +230,7 @@ classDiagram
 | --- | --- |
 | `ActorRepo` | `get_actor`, `save_actor`, `list_actors`, `save_sighting`, `get_sighting`, `list_sightings` |
 | `KeyRepo` | `insert_access_key`, `get_operation`, `access_key_by_hash`, `revoke_access_key`, `get_access_key`, `rotate_access_key`, `list_access_keys`, `count_active_admin_keys` |
-| `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `jobs_between`, `start_attempt`, `record_payment_evidence`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
+| `JobRepo` | `create_job`, `job_by_operation_ref`, `get_job`, `list_jobs`, `start_attempt`, `record_payment_evidence`, `finish_attempt`, `finish_job`, `set_usage`, `jobs_in_state` |
 | `OperationRepo` | `begin_operation`, `resume_operation`, `remember_operation`, `complete_operation`, `abandon_operation`, `get_operation` |
 | `CostRepo` | `cost_checkpoint`, `apply_usage`, `match_sessions`, `jobs_for_projection`, `job_for_projection`, `usage_for_payment_sessions`, `unattributed_usage`, `get_projection`, `cost_snapshot`, `save_projection` |
 | `SecretRepo` | `put_secret`, `get_secret`, `delete_secret` |

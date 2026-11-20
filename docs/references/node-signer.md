@@ -1,6 +1,6 @@
 # livepeer/node signer (as relied on by the engine)
 
-Baseline livepeer/node `f45d83f` (main, 10 commits after v1.0.6; was `406b248` / v1.0.2, and `f970be6` and `1432123` before that). Since `f970be6` the signer takes the orchestrator's identity from `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`; payment state and the `orch_address` in events are the recipient. Source: `signer/service.go`, `signer/events.go`, `docs/http-api.md`,
+Baseline livepeer/node `eee09c4` (v1.0.7; was `f45d83f`, 10 commits after v1.0.6, `406b248` / v1.0.2 before that, and `f970be6` and `1432123` earlier). Since `f970be6` the signer takes the orchestrator's identity from `TicketParams.Recipient` and ignores `OrchestratorInfo.Address`; payment state and the `orch_address` in events are the recipient. Source: `signer/service.go`, `signer/events.go`, `docs/http-api.md`,
 `docs/signer.md`.
 
 - **Authorization webhook:** before signing, the signer POSTs `{headers, state}` to the configured
@@ -15,6 +15,18 @@ Baseline livepeer/node `f45d83f` (main, 10 commits after v1.0.6; was `406b248` /
 - **ManifestID:** an empty `ManifestID` defaults to `OrchestratorInfo.Auth.SessionID`; any other value must
   equal it, or the signer answers 400 `manifest ID does not match payment params` (`service.go:371`).
   The caller supplies both, and the signer doesn't verify them against the orchestrator (D20, T13).
+- **Chain observer (since v1.0.7, node #38 to #43):** the signer keeps the chain state a payment needs
+  in memory: the block, the round and its block hash, the ticket validity period, and each known
+  payer's deposit and reserve. A background task refreshes it every 5 seconds and treats it as expired
+  after 30 seconds without a refresh; both are fixed in `eth/payment_observer.go`, and no flag or config
+  option changes them. Measured on the dev stack on 17 and 18 November: about 28 RPC requests per
+  refresh with no jobs running (about 480,000 a day), most of them one `eth_getBlockByNumber` per
+  Arbitrum block; the first payment to an orchestrator added 2 foreground requests
+  (`livepeer_rpc_work_total{work="foreground",kind="transport"}` on the metrics port). An operator's RPC
+  plan must allow for the idle traffic. When the signer has no usable observation (the RPC provider is
+  down or lags by 30 seconds, or four first reads of a new payer and orchestrator pair are already running), signing fails
+  400 `payer funds unavailable`, as it did before when a direct read failed, and `/readyz` on the
+  metrics port answers 503.
 - **Discovery:** the engine does not use the signer for discovery, and the signer contacts no
   orchestrator (D63; T12 is resolved). It only signs.
 - **Event fields:** `auth_id`, `manifest_id`, `session_id` (state ID), `sequence_number`,

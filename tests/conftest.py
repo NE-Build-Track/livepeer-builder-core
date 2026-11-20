@@ -1,13 +1,16 @@
 """Shared fixtures: a real SQLite store, a fixed clock, fakes, and an engine factory."""
 
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+import gc
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from decimal import Decimal
 from typing import Any
 
 import pytest
+from livepeer_gateway.remote_signer import get_signer_info
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, Runner
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money, Runner
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import (
     FakeAllocationManager,
@@ -20,6 +23,29 @@ from livepeer_builder.testing import make_engine as make_shared_engine
 from livepeer_builder.testing.engine import overlay
 
 MEMORY_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def no_collection_inside_a_test() -> Iterator[None]:
+    """Many tests measure real time in tenths of a second (stream deadlines, call timings, the engine's
+    loops), and a full garbage collection stops the process for longer: 0.3 s and more late in the suite,
+    about fifty times a run. One that fell inside a deadline failed the test, on whichever commit happened
+    to put one there. The collector is off while any test runs, its fixtures included, and on between
+    tests, where what the test made is collected."""
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+
+
+@pytest.fixture(autouse=True)
+def no_signer_identity_from_an_earlier_test() -> None:
+    """The payment SDK remembers a signer's identity per URL for the life of the process. A test's fake
+    signer listens on a port the system picks, and when that is a port an earlier test's signer had, the
+    SDK does not ask who the signer is: a test that lists the calls it expects then fails, about once in
+    some dozens of runs. Every test starts with nothing remembered."""
+    get_signer_info.cache_clear()  # type: ignore[attr-defined]
 
 
 @pytest.fixture
@@ -41,7 +67,12 @@ def transport() -> ScriptedStreamTransport:
 
 @pytest.fixture
 def manager() -> FakeAllocationManager:
-    return FakeAllocationManager()
+    """The payment provider, holding a grant for the tenant ``default``: a tenant's id is its grant's
+    id (D83), so an actor is allotted from the grant its tenant names. A test with another tenant adds
+    that grant (``add_grant``) or onboards the tenant."""
+    provider = FakeAllocationManager()
+    provider.add_grant("default")
+    return provider
 
 
 @pytest.fixture
@@ -51,7 +82,7 @@ def usage() -> FakeUsageSource:
 
 @pytest.fixture
 def admin() -> ActorContext:
-    return ActorContext(actor_id="operator", credential_kind="admin")
+    return ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 
 
 @pytest.fixture
@@ -69,6 +100,24 @@ def bob() -> ActorContext:
 
 
 EngineFactory = Callable[..., Awaitable[BuilderEngine]]
+
+
+async def allot(engine: BuilderEngine, *actors: ActorContext) -> None:
+    """Give each actor an allocation of 5 USD, as an admin does. A job needs one: an actor with no
+    allocation fails ``not_provisioned`` before any payment, and there is no shared key."""
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
+    provider = engine.payments._manager  # the fake provider under this engine
+    for actor in actors:
+        # A tenant's id is its grant's id (D83): the provider holds a grant for each actor's tenant.
+        if isinstance(provider, FakeAllocationManager) and actor.tenant_id not in provider.held:
+            provider.add_grant(actor.tenant_id)
+        request = AllotRequest(
+            operation_ref=f"allot:{actor.tenant_id}:{actor.actor_id}",
+            tenant_id=actor.tenant_id,
+            actor_id=actor.actor_id,
+            amount=Money(amount=Decimal(5), currency="USD"),
+        )
+        await engine.payments.allot(operator, request)
 
 
 @pytest.fixture

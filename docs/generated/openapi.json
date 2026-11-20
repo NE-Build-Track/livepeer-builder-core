@@ -9,10 +9,6 @@
             "title": "Actor Id",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -25,7 +21,8 @@
           "kind": {
             "enum": [
               "actor",
-              "admin",
+              "clearinghouse_admin",
+              "tenant_admin",
               "auditor",
               "service"
             ],
@@ -54,19 +51,125 @@
               }
             ],
             "title": "Revoked At"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
           "key_id",
           "kind",
           "actor_id",
-          "application_id",
+          "tenant_id",
           "permissions",
           "label",
           "created_at",
           "revoked_at"
         ],
         "title": "AccessKey",
+        "type": "object"
+      },
+      "ActorAllocation": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ActorAllocation",
+        "type": "object"
+      },
+      "AllotBody": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "AllotBody",
         "type": "object"
       },
       "Allowance": {
@@ -393,10 +496,6 @@
             "title": "Actor Id",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -435,6 +534,10 @@
             "title": "Sequence",
             "type": "integer"
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "type": {
             "enum": [
               "job.created",
@@ -453,7 +556,7 @@
           "type",
           "schema_version",
           "occurred_at",
-          "application_id",
+          "tenant_id",
           "actor_id",
           "job_id",
           "operation_ref",
@@ -465,14 +568,6 @@
       "EngineHealth": {
         "additionalProperties": false,
         "properties": {
-          "allocation_mode": {
-            "enum": [
-              "per_application",
-              "per_actor"
-            ],
-            "title": "Allocation Mode",
-            "type": "string"
-          },
           "cost_sync_at": {
             "anyOf": [
               {
@@ -488,6 +583,11 @@
           "cost_sync_error": {
             "anyOf": [
               {
+                "enum": [
+                  "unavailable",
+                  "invalid_answer",
+                  "store_error"
+                ],
                 "type": "string"
               },
               {
@@ -496,9 +596,24 @@
             ],
             "title": "Cost Sync Error"
           },
+          "cost_sync_set_aside": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync Set Aside"
+          },
           "discovery_error": {
             "anyOf": [
               {
+                "enum": [
+                  "unavailable",
+                  "invalid_answer"
+                ],
                 "type": "string"
               },
               {
@@ -544,7 +659,6 @@
           "cost_sync_at",
           "cost_sync_error",
           "running_jobs",
-          "allocation_mode",
           "version"
         ],
         "title": "EngineHealth",
@@ -678,97 +792,6 @@
         "title": "Fees",
         "type": "object"
       },
-      "FundRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Money-Input"
-          },
-          "grant_id": {
-            "default": "",
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "operation_ref": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Operation Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "amount",
-          "operation_ref"
-        ],
-        "title": "FundRequest",
-        "type": "object"
-      },
-      "GrantBody": {
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Money-Input"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "operation_ref": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Operation Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "amount",
-          "operation_ref"
-        ],
-        "title": "GrantBody",
-        "type": "object"
-      },
-      "GrantRecord": {
-        "additionalProperties": false,
-        "description": "A Batteries grant the operator can fund actors from.",
-        "properties": {
-          "currency": {
-            "title": "Currency",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Metadata",
-            "type": "object"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "total": {
-            "title": "Total",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "status",
-          "currency",
-          "total"
-        ],
-        "title": "GrantRecord",
-        "type": "object"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -783,6 +806,7 @@
         "type": "object"
       },
       "IssueKeyBody": {
+        "additionalProperties": false,
         "properties": {
           "actor_id": {
             "maxLength": 200,
@@ -790,18 +814,12 @@
             "title": "Actor Id",
             "type": "string"
           },
-          "application_id": {
-            "default": "default",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Application Id",
-            "type": "string"
-          },
           "kind": {
             "default": "actor",
             "enum": [
               "actor",
-              "admin",
+              "clearinghouse_admin",
+              "tenant_admin",
               "auditor",
               "service"
             ],
@@ -833,10 +851,17 @@
               }
             ],
             "title": "Permissions"
+          },
+          "tenant_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
           "actor_id",
+          "tenant_id",
           "operation_ref"
         ],
         "title": "IssueKeyBody",
@@ -881,10 +906,6 @@
           },
           "app": {
             "title": "App",
-            "type": "string"
-          },
-          "application_id": {
-            "title": "Application Id",
             "type": "string"
           },
           "attempts": {
@@ -988,6 +1009,10 @@
             "title": "State",
             "type": "string"
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "usage": {
             "anyOf": [
               {
@@ -1002,7 +1027,7 @@
         "required": [
           "id",
           "actor_id",
-          "application_id",
+          "tenant_id",
           "operation_ref",
           "mode",
           "app",
@@ -1204,6 +1229,7 @@
             "anyOf": [
               {
                 "maxLength": 200,
+                "minLength": 1,
                 "type": "string"
               },
               {
@@ -1264,7 +1290,7 @@
       },
       "KnownActor": {
         "additionalProperties": false,
-        "description": "One row of the operator's actor list (D46, D48): provisioned, signed in, or both.",
+        "description": "One row of the operator's actor list (D46, D48): allotted, signed in, or both.",
         "properties": {
           "actor_id": {
             "title": "Actor Id",
@@ -1273,16 +1299,17 @@
           "allocation": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ProvisionedActor"
+                "$ref": "#/components/schemas/ActorAllocation"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
+          "allotted": {
+            "readOnly": true,
+            "title": "Allotted",
+            "type": "boolean"
           },
           "first_seen_at": {
             "anyOf": [
@@ -1323,21 +1350,20 @@
             ],
             "title": "Name"
           },
-          "provisioned": {
-            "readOnly": true,
-            "title": "Provisioned",
-            "type": "boolean"
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
-          "application_id",
+          "tenant_id",
           "actor_id",
           "label",
           "name",
           "allocation",
           "first_seen_at",
           "last_seen_at",
-          "provisioned"
+          "allotted"
         ],
         "title": "KnownActor",
         "type": "object"
@@ -1562,6 +1588,71 @@
         "title": "Offering",
         "type": "object"
       },
+      "OnboardBody": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_actor_id": {
+            "default": "tenant-admin",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Admin Actor Id",
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "operation_ref"
+        ],
+        "title": "OnboardBody",
+        "type": "object"
+      },
+      "OnboardedTenant": {
+        "additionalProperties": false,
+        "description": "The answer to onboarding a tenant (D83, #165): the tenant, whose id is the id of the grant the\nprovider created for it, and its first tenant admin key. The key's token is in the answer to the\nfirst successful call only: the engine keeps its hash, so a repeat of the reference answers\n``token: null`` and ``replayed: true``, as issuing any access key does.",
+        "properties": {
+          "admin_key": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssuedKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "admin_key"
+        ],
+        "title": "OnboardedTenant",
+        "type": "object"
+      },
       "PriceInfo": {
         "additionalProperties": false,
         "description": "``price_info`` as advertised. ``price`` and ``price_usd`` are exact decimals, all four fields optional.\n\nA JSON number ``Decimal`` cannot hold is absent here. The runner is still kept, and ``payable_rate``\nreports that the price cannot be paid.",
@@ -1614,113 +1705,6 @@
         "title": "PriceInfo",
         "type": "object"
       },
-      "ProvisionBody": {
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Money-Input"
-          },
-          "grant_id": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "label": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "operation_ref": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Operation Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "amount",
-          "operation_ref"
-        ],
-        "title": "ProvisionBody",
-        "type": "object"
-      },
-      "ProvisionedActor": {
-        "additionalProperties": false,
-        "properties": {
-          "actor_id": {
-            "title": "Actor Id",
-            "type": "string"
-          },
-          "allocation_id": {
-            "title": "Allocation Id",
-            "type": "string"
-          },
-          "api_key_id": {
-            "title": "Api Key Id",
-            "type": "string"
-          },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "currency": {
-            "enum": [
-              "USD",
-              "ETH"
-            ],
-            "title": "Currency",
-            "type": "string"
-          },
-          "grant_id": {
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "label": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "secret_ref": {
-            "$ref": "#/components/schemas/SecretRef"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "paused",
-              "exhausted",
-              "revoked"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "application_id",
-          "actor_id",
-          "grant_id",
-          "allocation_id",
-          "api_key_id",
-          "secret_ref",
-          "currency",
-          "status",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "ProvisionedActor",
-        "type": "object"
-      },
       "Reconciliation": {
         "additionalProperties": false,
         "description": "Batteries spent = delivered + failed_after_payment + uncertain + unattributed (per allocation).",
@@ -1738,10 +1722,6 @@
           },
           "allocation_id": {
             "title": "Allocation Id",
-            "type": "string"
-          },
-          "application_id": {
-            "title": "Application Id",
             "type": "string"
           },
           "balanced": {
@@ -1770,6 +1750,14 @@
             "title": "By Class",
             "type": "object"
           },
+          "other_allocations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Other Allocations",
+            "type": "array"
+          },
           "provider_spent": {
             "anyOf": [
               {
@@ -1780,12 +1768,16 @@
               }
             ]
           },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "unattributed": {
             "$ref": "#/components/schemas/Fees"
           }
         },
         "required": [
-          "application_id",
+          "tenant_id",
           "actor_id",
           "allocation_id",
           "provider_spent",
@@ -1842,6 +1834,7 @@
         "type": "object"
       },
       "RotateBody": {
+        "additionalProperties": false,
         "properties": {
           "operation_ref": {
             "maxLength": 200,
@@ -1857,6 +1850,7 @@
         "type": "object"
       },
       "RotateKeyBody": {
+        "additionalProperties": false,
         "properties": {
           "label": {
             "anyOf": [
@@ -2081,10 +2075,6 @@
             "title": "App",
             "type": "string"
           },
-          "application_id": {
-            "title": "Application Id",
-            "type": "string"
-          },
           "closed_at": {
             "anyOf": [
               {
@@ -2132,12 +2122,16 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "job_id",
-          "application_id",
+          "tenant_id",
           "actor_id",
           "app",
           "state",
@@ -2170,6 +2164,8 @@
           "operation_ref": {
             "anyOf": [
               {
+                "maxLength": 200,
+                "minLength": 1,
                 "type": "string"
               },
               {
@@ -2232,6 +2228,7 @@
         "type": "object"
       },
       "StatusBody": {
+        "additionalProperties": false,
         "properties": {
           "status": {
             "enum": [
@@ -2269,6 +2266,11 @@
           "rows_seen": {
             "title": "Rows Seen",
             "type": "integer"
+          },
+          "rows_set_aside": {
+            "default": 0,
+            "title": "Rows Set Aside",
+            "type": "integer"
           }
         },
         "required": [
@@ -2279,7 +2281,149 @@
         "title": "SyncReport",
         "type": "object"
       },
+      "TenantGrant": {
+        "additionalProperties": false,
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "unallocated": {
+            "$ref": "#/components/schemas/Money-Output"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "status",
+          "total",
+          "unallocated"
+        ],
+        "title": "TenantGrant",
+        "type": "object"
+      },
+      "TenantKeyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "auditor",
+            "enum": [
+              "auditor",
+              "tenant_admin"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_id",
+          "operation_ref"
+        ],
+        "title": "TenantKeyBody",
+        "type": "object"
+      },
+      "TenantState": {
+        "additionalProperties": false,
+        "description": "The answer to pausing or resuming a tenant: the status its grant now has.",
+        "properties": {
+          "status": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "status"
+        ],
+        "title": "TenantState",
+        "type": "object"
+      },
+      "TenantStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "operation_ref"
+        ],
+        "title": "TenantStatusBody",
+        "type": "object"
+      },
+      "TopUpRequest": {
+        "additionalProperties": false,
+        "description": "A top-up of an allocation or of a tenant's grant. The path names which: the body names no grant.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "TopUpRequest",
+        "type": "object"
+      },
       "UsageBody": {
+        "additionalProperties": false,
         "properties": {
           "quantities": {
             "additionalProperties": {
@@ -2369,25 +2513,140 @@
         "summary": "Readyz"
       }
     },
-    "/v1/admin/actors": {
+    "/v1/allowance": {
       "get": {
-        "description": "Provisioned actors and people an identity provider signed in (D46, D48).",
-        "operationId": "list_actors_v1_admin_actors_get",
+        "operationId": "allowance_v1_allowance_get",
         "parameters": [
           {
             "in": "query",
-            "name": "application_id",
+            "name": "actor_id",
             "required": false,
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 200,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Application Id"
+              "title": "Actor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Allowance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Allowance"
+      }
+    },
+    "/v1/clearinghouse/tenants": {
+      "get": {
+        "operationId": "list_tenants_v1_clearinghouse_tenants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TenantGrant"
+                  },
+                  "title": "Response List Tenants V1 Clearinghouse Tenants Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tenants"
+      },
+      "post": {
+        "description": "Create the tenant's grant and its first tenant admin key, whose token is shown once.",
+        "operationId": "onboard_tenant_v1_clearinghouse_tenants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardedTenant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Onboard Tenant"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors": {
+      "get": {
+        "description": "The tenant's allotted actors and the people an identity provider signed in (D46, D48).",
+        "operationId": "list_actors_v1_clearinghouse_tenants__tenant_id__actors_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
             }
           },
           {
@@ -2414,7 +2673,7 @@
           },
           {
             "in": "query",
-            "name": "provisioned",
+            "name": "allotted",
             "required": false,
             "schema": {
               "anyOf": [
@@ -2425,7 +2684,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Provisioned"
+              "title": "Allotted"
             }
           },
           {
@@ -2449,7 +2708,7 @@
                   "items": {
                     "$ref": "#/components/schemas/KnownActor"
                   },
-                  "title": "Response List Actors V1 Admin Actors Get",
+                  "title": "Response List Actors V1 Clearinghouse Tenants  Tenant Id  Actors Get",
                   "type": "array"
                 }
               }
@@ -2475,16 +2734,17 @@
         "summary": "List Actors"
       }
     },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation": {
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": {
       "get": {
-        "operationId": "get_actor_v1_admin_applications__application_id__actors__actor_id__allocation_get",
+        "operationId": "get_actor_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_get",
         "parameters": [
           {
             "in": "path",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": true,
             "schema": {
-              "title": "Application Id",
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           },
@@ -2493,6 +2753,7 @@
             "name": "actor_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Actor Id",
               "type": "string"
             }
@@ -2503,7 +2764,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -2528,15 +2789,15 @@
         "summary": "Get Actor"
       },
       "post": {
-        "operationId": "provision_v1_admin_applications__application_id__actors__actor_id__allocation_post",
+        "operationId": "allot_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_post",
         "parameters": [
           {
             "in": "path",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": true,
             "schema": {
               "maxLength": 200,
-              "title": "Application Id",
+              "title": "Tenant Id",
               "type": "string"
             }
           },
@@ -2555,7 +2816,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProvisionBody"
+                "$ref": "#/components/schemas/AllotBody"
               }
             }
           },
@@ -2566,7 +2827,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -2588,19 +2849,20 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Provision"
+        "summary": "Allot"
       }
     },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/fund": {
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/revoke": {
       "post": {
-        "operationId": "fund_v1_admin_applications__application_id__actors__actor_id__allocation_fund_post",
+        "operationId": "revoke_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_revoke_post",
         "parameters": [
           {
             "in": "path",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": true,
             "schema": {
-              "title": "Application Id",
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           },
@@ -2609,69 +2871,7 @@
             "name": "actor_id",
             "required": true,
             "schema": {
-              "title": "Actor Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FundRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Fund"
-      }
-    },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/revoke": {
-      "post": {
-        "operationId": "revoke_v1_admin_applications__application_id__actors__actor_id__allocation_revoke_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "application_id",
-            "required": true,
-            "schema": {
-              "title": "Application Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "actor_id",
-            "required": true,
-            "schema": {
+              "maxLength": 200,
               "title": "Actor Id",
               "type": "string"
             }
@@ -2682,7 +2882,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -2707,16 +2907,17 @@
         "summary": "Revoke"
       }
     },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/rotate-key": {
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-payment-key": {
       "post": {
-        "operationId": "rotate_v1_admin_applications__application_id__actors__actor_id__allocation_rotate_key_post",
+        "operationId": "rotate_payment_key_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_rotate_payment_key_post",
         "parameters": [
           {
             "in": "path",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": true,
             "schema": {
-              "title": "Application Id",
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           },
@@ -2725,6 +2926,7 @@
             "name": "actor_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Actor Id",
               "type": "string"
             }
@@ -2745,7 +2947,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -2767,19 +2969,20 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate"
+        "summary": "Rotate Payment Key"
       }
     },
-    "/v1/admin/applications/{application_id}/actors/{actor_id}/allocation/status": {
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/status": {
       "post": {
-        "operationId": "set_status_v1_admin_applications__application_id__actors__actor_id__allocation_status_post",
+        "operationId": "set_status_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_status_post",
         "parameters": [
           {
             "in": "path",
-            "name": "application_id",
+            "name": "tenant_id",
             "required": true,
             "schema": {
-              "title": "Application Id",
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
           },
@@ -2788,6 +2991,7 @@
             "name": "actor_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Actor Id",
               "type": "string"
             }
@@ -2808,7 +3012,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProvisionedActor"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -2833,19 +3037,61 @@
         "summary": "Set Status"
       }
     },
-    "/v1/admin/costs/sync": {
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/top-up": {
       "post": {
-        "operationId": "sync_costs_v1_admin_costs_sync_post",
+        "operationId": "top_up_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncReport"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -2853,17 +3099,75 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Sync Costs"
+        "summary": "Top Up"
       }
     },
-    "/v1/admin/grant/fund": {
+    "/v1/clearinghouse/tenants/{tenant_id}/grant": {
+      "get": {
+        "description": "The grant's total, its unallocated balance and its status.",
+        "operationId": "get_grant_v1_clearinghouse_tenants__tenant_id__grant_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grant"
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/grant/top-up": {
       "post": {
-        "operationId": "fund_grant_v1_admin_grant_fund_post",
+        "operationId": "top_up_grant_v1_clearinghouse_tenants__tenant_id__grant_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FundRequest"
+                "$ref": "#/components/schemas/TopUpRequest"
               }
             }
           },
@@ -2889,95 +3193,21 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Fund Grant"
+        "summary": "Top Up Grant"
       }
     },
-    "/v1/admin/grants": {
+    "/v1/clearinghouse/tenants/{tenant_id}/keys": {
       "get": {
-        "operationId": "list_grants_v1_admin_grants_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/GrantRecord"
-                  },
-                  "title": "Response List Grants V1 Admin Grants Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Grants"
-      },
-      "post": {
-        "operationId": "create_grant_v1_admin_grants_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GrantBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GrantRecord"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Grant"
-      }
-    },
-    "/v1/admin/keys": {
-      "get": {
-        "operationId": "list_keys_v1_admin_keys_get",
+        "operationId": "list_tenant_keys_v1_clearinghouse_tenants__tenant_id__keys_get",
         "parameters": [
           {
-            "in": "query",
-            "name": "application_id",
-            "required": false,
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Application Id"
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
             }
           }
         ],
@@ -2989,7 +3219,7 @@
                   "items": {
                     "$ref": "#/components/schemas/AccessKey"
                   },
-                  "title": "Response List Keys V1 Admin Keys Get",
+                  "title": "Response List Tenant Keys V1 Clearinghouse Tenants  Tenant Id  Keys Get",
                   "type": "array"
                 }
               }
@@ -3012,15 +3242,28 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Keys"
+        "summary": "List Tenant Keys"
       },
       "post": {
-        "operationId": "issue_key_v1_admin_keys_post",
+        "description": "Issue an auditor key for the tenant, or, as a clearinghouse admin, another tenant admin key.",
+        "operationId": "issue_tenant_key_v1_clearinghouse_tenants__tenant_id__keys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/IssueKeyBody"
+                "$ref": "#/components/schemas/TenantKeyBody"
               }
             }
           },
@@ -3053,18 +3296,29 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Issue Key"
+        "summary": "Issue Tenant Key"
       }
     },
-    "/v1/admin/keys/{key_id}": {
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}": {
       "get": {
-        "operationId": "get_key_v1_admin_keys__key_id__get",
+        "operationId": "get_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__get",
         "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "key_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Key Id",
               "type": "string"
             }
@@ -3097,18 +3351,29 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Key"
+        "summary": "Get Tenant Key"
       }
     },
-    "/v1/admin/keys/{key_id}/revoke": {
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/revoke": {
       "post": {
-        "operationId": "revoke_key_v1_admin_keys__key_id__revoke_post",
+        "operationId": "revoke_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__revoke_post",
         "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "key_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Key Id",
               "type": "string"
             }
@@ -3134,18 +3399,29 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Revoke Key"
+        "summary": "Revoke Tenant Key"
       }
     },
-    "/v1/admin/keys/{key_id}/rotate": {
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/rotate": {
       "post": {
-        "operationId": "rotate_key_v1_admin_keys__key_id__rotate_post",
+        "operationId": "rotate_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__rotate_post",
         "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "key_id",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "Key Id",
               "type": "string"
             }
@@ -3188,46 +3464,41 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate Key"
+        "summary": "Rotate Tenant Key"
       }
     },
-    "/v1/admin/reconciliation": {
-      "get": {
-        "operationId": "reconcile_v1_admin_reconciliation_get",
+    "/v1/clearinghouse/tenants/{tenant_id}/status": {
+      "post": {
+        "description": "Pause or resume the tenant by pausing or resuming its grant.",
+        "operationId": "set_tenant_status_v1_clearinghouse_tenants__tenant_id__status_post",
         "parameters": [
           {
-            "in": "query",
-            "name": "application_id",
-            "required": false,
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
             "schema": {
-              "default": "default",
-              "title": "Application Id",
+              "maxLength": 200,
+              "title": "Tenant Id",
               "type": "string"
             }
-          },
-          {
-            "in": "query",
-            "name": "actor_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Actor Id"
-            }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantStatusBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Reconciliation"
+                  "$ref": "#/components/schemas/TenantState"
                 }
               }
             },
@@ -3249,58 +3520,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Reconcile"
-      }
-    },
-    "/v1/allowance": {
-      "get": {
-        "operationId": "allowance_v1_allowance_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "actor_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Actor Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Allowance"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Allowance"
+        "summary": "Set Tenant Status"
       }
     },
     "/v1/costs/projections": {
@@ -3354,6 +3574,86 @@
         "summary": "Cost Projections"
       }
     },
+    "/v1/costs/reconciliation": {
+      "get": {
+        "operationId": "reconcile_v1_costs_reconciliation_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "allocation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allocation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reconciliation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile"
+      }
+    },
     "/v1/costs/summary": {
       "get": {
         "operationId": "cost_summary_v1_costs_summary_get",
@@ -3399,6 +3699,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 200,
                   "type": "string"
                 },
                 {
@@ -3437,6 +3738,29 @@
           }
         ],
         "summary": "Cost Summary"
+      }
+    },
+    "/v1/costs/sync": {
+      "post": {
+        "operationId": "sync_costs_v1_costs_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Costs"
       }
     },
     "/v1/events": {
@@ -3806,6 +4130,241 @@
         "summary": "Report Usage"
       }
     },
+    "/v1/keys": {
+      "get": {
+        "operationId": "list_keys_v1_keys_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccessKey"
+                  },
+                  "title": "Response List Keys V1 Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Keys"
+      },
+      "post": {
+        "operationId": "issue_key_v1_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Key"
+      }
+    },
+    "/v1/keys/{key_id}": {
+      "get": {
+        "operationId": "get_key_v1_keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Key"
+      }
+    },
+    "/v1/keys/{key_id}/revoke": {
+      "post": {
+        "operationId": "revoke_key_v1_keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Key"
+      }
+    },
+    "/v1/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_access_key_v1_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Access Key"
+      }
+    },
     "/v1/offerings": {
       "get": {
         "operationId": "offerings_v1_offerings_get",
@@ -3817,6 +4376,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 200,
                   "type": "string"
                 },
                 {
@@ -3865,6 +4425,7 @@
             "name": "app",
             "required": true,
             "schema": {
+              "maxLength": 200,
               "title": "App",
               "type": "string"
             }

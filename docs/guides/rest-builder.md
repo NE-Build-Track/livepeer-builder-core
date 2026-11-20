@@ -27,7 +27,7 @@ curl -sS -D headers.txt -o result.bin "$ENGINE/v1/jobs" \
   or ask the runner for inline output where it offers one
   ([provider-hosted assets](../contracts/engine.md#provider-hosted-assets)).
 - **Send an `operation_ref`** so a retry after a lost response cannot run the job twice
-  ([idempotency](../contracts/engine.md#idempotency)).
+  ([idempotency](../contracts/engine.md#idempotency)). Send a real one or leave it out: `""` is a 422.
 
 Streaming (`?stream=true` or `Accept: text/event-stream`) is the same job delivered as it arrives
 ([REST streaming](../contracts/engine.md#rest-d37)).
@@ -59,7 +59,7 @@ curl -sS -G "$ENGINE/v1/jobs" -H "Authorization: Bearer $KEY" \
   --data-urlencode "limit=50" --data-urlencode "before=2026-10-30T12:00:00.123456Z"
 ```
 
-Newest first, your own jobs only; an admin or auditor key lists the application's
+Newest first, your own jobs only; an admin or auditor key lists the tenant's
 ([job history](../contracts/engine.md#job-history)). An empty page is the end.
 
 ## 4. When a job fails

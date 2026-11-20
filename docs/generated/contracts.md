@@ -14,7 +14,7 @@ classDiagram
     }
     class ActorContext {
         +str actor_id
-        +str application_id
+        +str tenant_id
         +str[] permissions
         +enum credential_kind
         +map attributes
@@ -28,9 +28,10 @@ classDiagram
     }
     class ResourceRef {
         +enum kind
-        +str application_id
+        +str tenant_id
         +str? owner_actor_id
         +str? id
+        +enum? credential_kind
     }
     class JobRequest {
         +str app
@@ -53,7 +54,7 @@ classDiagram
     class Job {
         +UUID id
         +str actor_id
-        +str application_id
+        +str tenant_id
         +str? operation_ref
         +enum mode
         +str app
@@ -179,8 +180,8 @@ classDiagram
         +Decimal? fee_usd
         +int row_count
     }
-    class ProvisionedActor {
-        +str application_id
+    class ActorAllocation {
+        +str tenant_id
         +str actor_id
         +str grant_id
         +str allocation_id
@@ -206,6 +207,7 @@ classDiagram
         +Decimal amount
         +enum currency
     }
+    ActorAllocation *-- SecretRef : secret_ref
     ActorContext *-- AuthProvenance : auth
     Allowance *-- Money : available
     Allowance *-- Money : granted
@@ -221,7 +223,6 @@ classDiagram
     JobResult *-- Job : job
     Offering *-- ObservedRate : rate_high
     Offering *-- ObservedRate : rate_low
-    ProvisionedActor *-- SecretRef : secret_ref
     Runner *-- PriceInfo : price_info
     Runner *-- RunnerGPU : gpu
 ```

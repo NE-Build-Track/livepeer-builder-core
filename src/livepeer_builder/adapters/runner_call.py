@@ -32,9 +32,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urlsplit
 
 import aiohttp
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError, SignerRefreshRequired
@@ -47,6 +47,8 @@ from livepeer_gateway.remote_signer import (
 )
 
 from livepeer_builder.adapters.call_timer import CallTimer
+from livepeer_builder.adapters.runner_address import as_built, origin
+from livepeer_builder.adapters.runner_content_type import content_type_as_sent, headers_as_sent
 from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
 from livepeer_builder.adapters.signer_failures import (
     classify,
@@ -65,6 +67,8 @@ _LOG = logging.getLogger(__name__)
 PAYMENT_HEADER = "Livepeer-Payment"
 SEGMENT_HEADER = "Livepeer-Segment"
 PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
+MANIFEST_ID_LIMIT = 200  # ``lpb_payment_sessions.manifest_id``
+_NOT_STORED = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]")  # a control character or a lone surrogate
 
 
 @runtime_checkable
@@ -156,8 +160,8 @@ class PaidRequest:
     ) -> None:
         self.url = url
         # A challenge may only send renewals and refreshes to the runner's own host or its orchestrator's.
-        origins = {_origin(url), _origin(orchestrator_url) if orchestrator_url else None} - {None}
-        if _origin(url) is None:  # unpaid, before any request
+        origins = {origin(url), origin(orchestrator_url) if orchestrator_url else None} - {None}
+        if origin(url) is None:  # unpaid, before any request
             raise RunnerCallError("http", f"invalid runner URL {url!r}", payment_sent=False)
         self._payment_origins = origins
         self._method = method.upper()
@@ -169,7 +173,7 @@ class PaidRequest:
         self._app = app
         self._signer_url = signer_url
         self._signer_headers = signer_headers or {}
-        self._attempts = (max(0, retries) + 1) * 2
+        self._retries = self._refreshes_left = max(0, retries)  # per call, each (#112, C1)
         self._events = events
         self._rate = rate
         self._payment_type = ""  # set by the first 402: a unit matters only when payment is asked for
@@ -185,7 +189,7 @@ class PaidRequest:
                 finally:
                     await stop_funding(funding)
                     response.release()
-        return response.status, body, response.content_type
+        return response.status, body, content_type_as_sent(response.raw_headers)
 
     async def open(self, connect_timeout_s: float) -> "SdkRunnerStream":
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout_s, sock_read=None)
@@ -226,7 +230,7 @@ class PaidRequest:
             material = await self._signer_identity(self._signer_url)
             headers[PAYER_ADDRESS_HEADER] = str(material.address)
         challenge: LivePaymentChallenge | None = None
-        for attempt in range(self._attempts):
+        while len(self._events.manifest_ids) <= self._retries:  # signatures, not passes (#112, C1)
             sent = dict(headers)
             payment: LivePaymentSession | None = None
             if challenge is not None and self._signer_url is not None:
@@ -243,18 +247,18 @@ class PaidRequest:
                             "paid": self._events.signed,
                         },
                     )
-                    if attempt + 1 >= self._attempts:
+                    if not self._refreshes_left:  # unsigned requests: the first, then one per refresh
                         raise
-                    challenge = None  # expired params: ask the runner for a fresh challenge
+                    challenge, self._refreshes_left = None, self._refreshes_left - 1  # expired params
                     continue
                 sent[PAYMENT_HEADER] = signed.payment
                 sent[SEGMENT_HEADER] = signed.seg_creds or ""
             funding = start_funding(payment) if self._payment_type == "live" else None
             started = self._events.timer.start()
             try:
-                # A redirect would replay the payment headers to another host.
+                # As built, never re-normalized (#113, C3). A redirect would replay the payment headers.
                 response = await session.request(
-                    self._method, self.url, data=self._body, headers=sent, allow_redirects=False
+                    self._method, as_built(self.url), data=self._body, headers=sent, allow_redirects=False
                 )
             except BaseException:
                 # No answer came, and the wait still counts: without a payment it waited for the challenge.
@@ -380,10 +384,18 @@ class PaidRequest:
             if isinstance(data, dict):
                 fields = {key: data.get(key) for key in ("payment_params", "manifest_id", "payment_url")}
                 valid = all(isinstance(value, str) and value for value in fields.values())
-                if valid and _origin(str(fields["payment_url"])) in self._payment_origins:
+                if valid and origin(str(fields["payment_url"])) in self._payment_origins:
+                    self._refuse_unstorable(str(fields["manifest_id"]))
                     return LivePaymentChallenge(**fields)
         # Malformed, or payment_url names another host: nothing is signed.
         raise self._events.error("http", f"invalid payment challenge from {self.url}", status_code=402)
+
+    def _refuse_unstorable(self, manifest_id: str) -> None:
+        """The manifest is stored before the signer is asked (D54), so one the store cannot keep is refused
+        here, unsigned (#114, C13): the orchestrator chose it, and another orchestrator may do the work."""
+        if len(manifest_id) > MANIFEST_ID_LIMIT or _NOT_STORED.search(manifest_id):
+            message = f"{self.url} sent a payment challenge whose manifest id the engine cannot record"
+            raise self._events.error("payment_refused", message, status_code=402)
 
 
 class SdkRunnerStream:
@@ -405,12 +417,12 @@ class SdkRunnerStream:
 
     @property
     def content_type(self) -> str:
-        return self._response.content_type or "application/octet-stream"
+        return content_type_as_sent(self._response.raw_headers)
 
     @property
     def headers(self) -> tuple[tuple[str, str], ...]:
         """Every response header pair, repeated names included, as the runner sent them."""
-        return tuple(self._response.headers.items())
+        return headers_as_sent(self._response.raw_headers)
 
     @property
     def manifest_ids(self) -> tuple[str, ...]:
@@ -450,23 +462,6 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
         raise signer_error(error, events) from error
     except (aiohttp.ClientError, OSError) as error:
         raise events.error(network_kind(error), f"{prefix}{error}") from error
-
-
-def _origin(url: str) -> str | None:
-    """``scheme://host:port``, or ``None`` when the URL or its port is not one aiohttp would request.
-
-    An empty port is the scheme default. A stated port counts only in ``1..65535``: ``0`` is not ``443``.
-    """
-    try:
-        parts = urlsplit(url)
-        scheme, host, port = parts.scheme.lower(), parts.hostname, parts.port
-    except (ValueError, UnicodeError):
-        return None
-    if port is None:
-        port = 443 if scheme == "https" else 80
-    if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
-        return None
-    return f"{scheme}://{host.lower()}:{port}"
 
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:

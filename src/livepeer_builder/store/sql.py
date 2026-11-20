@@ -10,22 +10,23 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import and_, delete, event, insert, select, update
+from sqlalchemy import String, and_, cast, delete, event, func, insert, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from livepeer_builder.contracts import (
+    ActorAllocation,
     Attempt,
     Failure,
     Job,
     JobCost,
     JobState,
     MeasuredUsage,
-    ProvisionedActor,
     ResultRef,
     SeenActor,
+    SetAsideUsage,
     SyncCheckpoint,
     UsageRow,
 )
@@ -37,13 +38,12 @@ from livepeer_builder.store.maintenance import SqlMaintenance
 from livepeer_builder.store.matching import (
     bump_evidence,
     bump_evidence_on_new_rows,
-    in_window,
     jobs_needing_projection,
     match_payment_sessions,
 )
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.operations import SqlOperations
-from livepeer_builder.store.rows import chunks, load_jobs
+from livepeer_builder.store.rows import chunks, insert_once, load_jobs
 
 _LOG = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def create_engine(url: str) -> AsyncEngine:
     return engine
 
 
-class SqlStore(SqlKeys, SqlOperations):
+class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
         self.maintenance = SqlMaintenance(engine)
@@ -86,29 +86,29 @@ class SqlStore(SqlKeys, SqlOperations):
 
     # -- actors -------------------------------------------------------------------------------------
 
-    async def get_actor(self, application_id: str, actor_id: str) -> ProvisionedActor | None:
+    async def get_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation | None:
         async with self.engine.connect() as conn:
-            return await actors.get_actor(conn, application_id, actor_id)
+            return await actors.get_actor(conn, tenant_id, actor_id)
 
-    async def save_actor(self, actor: ProvisionedActor) -> None:
+    async def save_actor(self, actor: ActorAllocation) -> None:
         async with self.engine.begin() as conn:
             await actors.save_actor(conn, actor)
 
-    async def list_actors(self, application_id: str | None = None) -> list[ProvisionedActor]:
+    async def list_actors(self, tenant_id: str | None = None) -> list[ActorAllocation]:
         async with self.engine.connect() as conn:
-            return await actors.list_actors(conn, application_id)
+            return await actors.list_actors(conn, tenant_id)
 
     async def save_sighting(self, seen: SeenActor) -> None:
         async with self.engine.begin() as conn:
             await actors.save_sighting(conn, seen)
 
-    async def get_sighting(self, application_id: str, actor_id: str) -> SeenActor | None:
+    async def get_sighting(self, tenant_id: str, actor_id: str) -> SeenActor | None:
         async with self.engine.connect() as conn:
-            return await actors.get_sighting(conn, application_id, actor_id)
+            return await actors.get_sighting(conn, tenant_id, actor_id)
 
-    async def list_sightings(self, application_id: str | None = None) -> list[SeenActor]:
+    async def list_sightings(self, tenant_id: str | None = None) -> list[SeenActor]:
         async with self.engine.connect() as conn:
-            return await actors.list_sightings(conn, application_id)
+            return await actors.list_sightings(conn, tenant_id)
 
     # -- jobs and attempts --------------------------------------------------------------------------
 
@@ -130,7 +130,7 @@ class SqlStore(SqlKeys, SqlOperations):
         except (IntegrityError, refs.Superseded):
             if job.operation_ref is None:
                 raise
-            found = await self.job_by_operation_ref(job.application_id, job.actor_id, job.operation_ref)
+            found = await self.job_by_operation_ref(job.tenant_id, job.actor_id, job.operation_ref)
             if found is None:
                 if retry_of is not None:  # the failed job is gone (retention): the reference is free
                     return await self.create_job(job, fingerprint)
@@ -138,13 +138,11 @@ class SqlStore(SqlKeys, SqlOperations):
             raise refs.taken(*found, fingerprint) from None
 
     async def job_by_operation_ref(
-        self, application_id: str, actor_id: str, operation_ref: str
+        self, tenant_id: str, actor_id: str, operation_ref: str
     ) -> tuple[Job, str | None] | None:
         """The job holding the reference: the one no retry superseded (D57)."""
         async with self.engine.connect() as conn:
-            row = (
-                (await conn.execute(refs.holder(application_id, actor_id, operation_ref))).mappings().first()
-            )
+            row = (await conn.execute(refs.holder(tenant_id, actor_id, operation_ref))).mappings().first()
             if row is None:
                 return None
             return (await load_jobs(conn, [row]))[0], row["request_fingerprint"]
@@ -155,9 +153,9 @@ class SqlStore(SqlKeys, SqlOperations):
             return (await load_jobs(conn, [row]))[0] if row else None
 
     async def list_jobs(
-        self, application_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
+        self, tenant_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
     ) -> list[Job]:
-        query = select(t.jobs).where(t.jobs.c.application_id == application_id)
+        query = select(t.jobs).where(t.jobs.c.tenant_id == tenant_id)
         if actor_id is not None:
             query = query.where(t.jobs.c.actor_id == actor_id)
         if before is not None:
@@ -165,15 +163,6 @@ class SqlStore(SqlKeys, SqlOperations):
         query = query.order_by(t.jobs.c.created_at.desc()).limit(limit)
         async with self.engine.connect() as conn:
             return await load_jobs(conn, list((await conn.execute(query)).mappings()))
-
-    async def jobs_between(
-        self, application_id: str, actor_id: str | None, start: datetime, end: datetime
-    ) -> list[Job]:
-        query = select(t.jobs).where(*in_window(application_id, actor_id, start, end))
-        async with self.engine.connect() as conn:
-            return await load_jobs(
-                conn, list((await conn.execute(query.order_by(t.jobs.c.created_at))).mappings())
-            )
 
     async def jobs_in_state(self, state: JobState) -> list[Job]:
         async with self.engine.connect() as conn:
@@ -235,6 +224,17 @@ class SqlStore(SqlKeys, SqlOperations):
                 update(t.jobs).where(t.jobs.c.id == str(job_id)).values(usage=usage.model_dump(mode="json"))
             )
 
+    async def set_usage_once(self, job_id: UUID, usage: MeasuredUsage) -> bool:
+        """Store ``usage`` only where the job has none and is ``succeeded``, in one statement (#115, C20):
+        of two reports at the same moment, one is stored. A job without usage holds a JSON ``null``."""
+        none = or_(t.jobs.c.usage.is_(None), cast(t.jobs.c.usage, String) == "null")
+        free = and_(t.jobs.c.id == str(job_id), t.jobs.c.state == "succeeded", none)
+        async with self.engine.begin() as conn:
+            stored = await conn.execute(
+                update(t.jobs).where(free).values(usage=usage.model_dump(mode="json"))
+            )
+        return stored.rowcount == 1
+
     # -- costs ----------------------------------------------------------------------------------------
 
     async def cost_checkpoint(self) -> SyncCheckpoint | None:
@@ -250,7 +250,8 @@ class SqlStore(SqlKeys, SqlOperations):
         """Insert rows not seen before and move the cursor, in one transaction. Returns the new rows.
 
         A new row on an already matched session bumps that job's evidence version in the same transaction.
-        A row id seen before keeps its stored copy; delivered again with another fee, it is logged (D61)."""
+        A row id seen before keeps its stored copy; delivered again with another fee, it is logged (D61).
+        Two syncs may write one page at once (the loop and an admin's): each row is new to one of them."""
         new: list[UsageRow] = []
         synced_at = datetime.now(UTC)
         fees = (t.usage_rows.c.id, t.usage_rows.c.computed_fee_eth, t.usage_rows.c.computed_fee_usd)
@@ -264,14 +265,38 @@ class SqlStore(SqlKeys, SqlOperations):
                     _log_another_fee(row, *stored[row.id])
                     continue
                 stored[row.id] = _fee_text(row)
-                await conn.execute(insert(t.usage_rows).values(_usage_values(row) | {"synced_at": synced_at}))
-                new.append(row)
+                values = _usage_values(row) | {"synced_at": synced_at}
+                if (await conn.execute(insert_once(conn, t.usage_rows).values(values))).rowcount:
+                    new.append(row)  # not new when another sync stored it since this one looked
             await bump_evidence_on_new_rows(conn, new)
             cursor = {"resume_cursor": checkpoint.resume_cursor, "filters": checkpoint.filters}
             moved = await conn.execute(update(t.cost_cursor).where(t.cost_cursor.c.id == 1).values(cursor))
-            if moved.rowcount == 0:
-                await conn.execute(insert(t.cost_cursor).values(id=1, **cursor))
+            if moved.rowcount == 0:  # the first sync; of two at once, one cursor is kept
+                await conn.execute(insert_once(conn, t.cost_cursor).values(id=1, **cursor))
         return new
+
+    async def set_aside_usage(self, rows: Sequence[SetAsideUsage]) -> list[SetAsideUsage]:
+        """Record rows cost sync left out, once per id (#114, C13). Returns the ones not recorded before;
+        the first record of an id is kept, also when two syncs record it at once. ``raw`` is not stored."""
+        new: list[SetAsideUsage] = []
+        table, at = t.usage_set_aside, datetime.now(UTC)
+        async with self.engine.begin() as conn:
+            known: set[str] = set()
+            for chunk in chunks([row.id for row in rows]):
+                known.update((await conn.execute(select(table.c.id).where(table.c.id.in_(chunk)))).scalars())
+            for row in (row for row in rows if row.id not in known):
+                known.add(row.id)  # the same id later on this page is the same row
+                fees = _fee_text(row)
+                values = {"id": row.id, "reason": row.reason, "set_aside_at": at}
+                values |= {"computed_fee_eth": fees[0], "computed_fee_usd": fees[1]}
+                # Another sync may have recorded it since this one looked: then nothing is written.
+                if (await conn.execute(insert_once(conn, table).values(values))).rowcount:
+                    new.append(row)
+        return new
+
+    async def count_set_aside_usage(self) -> int:
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(select(func.count()).select_from(t.usage_set_aside))).scalar_one())
 
     async def match_sessions(self, rows: Sequence[UsageRow]) -> set[UUID]:
         """Resolve session-log entries on (allocation, manifest). Returns jobs to recompute, and bumps their
@@ -410,7 +435,7 @@ async def _append_sessions(conn: AsyncConnection, attempt: Attempt) -> None:
 def _job_values(job: Job) -> dict[str, Any]:
     return {
         "id": str(job.id),
-        "application_id": job.application_id,
+        "tenant_id": job.tenant_id,
         "actor_id": job.actor_id,
         "operation_ref": job.operation_ref,
         "mode": job.mode,
@@ -432,7 +457,7 @@ def _attempt_values(attempt: Attempt) -> dict[str, Any]:
     return values | attempt.timings.model_dump() if attempt.timings else values
 
 
-def _fee_text(row: UsageRow) -> tuple[str | None, str | None]:
+def _fee_text(row: UsageRow | SetAsideUsage) -> tuple[str | None, str | None]:
     """A row's fees as the store holds them, to compare a later copy of the same id against."""
     eth, usd = row.computed_fee_eth, row.computed_fee_usd
     return (None if eth is None else str(eth), None if usd is None else str(usd))

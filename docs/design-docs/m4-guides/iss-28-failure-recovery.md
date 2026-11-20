@@ -1,5 +1,13 @@
 # ISS-28: Failure classification and recovery across baseline modes
 
+> **Questions locked on 12 and 13 November 2026.** Mike answered every open question; see [Questions
+> locked](#questions-locked). Where an answer differs from the proposal below, the answer wins, and that
+> section says which part it replaces. The answers are decision D71 in
+> [m4-decisions.md](../m4-decisions.md).
+>
+> **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
+> November 2026](#amended-on-18-november-2026).
+
 **Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
 rules become a decision in the M4 decision record.\
 **Tracker:** ISS-28 ([Network-Engineering-SPE#42](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/42)).\
@@ -77,9 +85,9 @@ the stored fact. A pure function maps the stored facts (state, failure, attempts
 | --- | --- | --- |
 | `retry` | Nothing reached a runner and nothing was paid. Repeating with the **same** `operation_ref` re-dispatches (ISS-14) | Caller, after `Retry-After` |
 | `resume` | The engine continues by itself (an async job requeued after a restart) | Nobody |
-| `check` | It may have run or been paid. Read the job and its cost; do not resubmit blindly. A new reference is new paid work | Caller, then operator if cost stays `uncertain` |
+| `check` | It may have run or been paid. Read the job and its cost; do not resubmit blindly. A new reference is new paid work | Caller, then an admin if cost stays `uncertain` |
 | `fix_request` | The request is wrong for this runner or the engine | Caller |
-| `operator` | An operator must act (fund, re-authorize, provision, fix configuration) | Operator |
+| `admin` | An admin must act (allot or top up an allocation, re-authorize, fix configuration). It was named `operator` until 18 November (D83) | The tenant admin or the clearinghouse admin, by reason; see [Amended on 18 November 2026](#amended-on-18-november-2026) |
 | `final` | It ran and failed. A new reference is new paid work, at the caller's choice | Caller |
 
 Both are **computed, never stored** (a pydantic `computed_field` on `Job`), so they appear in REST and
@@ -107,11 +115,11 @@ record get the same two words in the problem body.
 | `interrupted` (`restart`), async, no attempt | execution | queued | `resume` | async |
 | `interrupted` (`final_save_failed`) | reporting | uncertain | `check` | immediate, streamed, async |
 | `result_not_stored` (ISS-26) | reporting | failed | `check` | async |
-| `not_provisioned` | payment | failed | `operator` | all |
-| `payment` (`not_authorized`, `allowance_exhausted`) | payment | failed | `operator` | all |
+| `not_provisioned` | payment | failed | `admin` | all |
+| `payment` (`not_authorized`, `allowance_exhausted`) | payment | failed | `admin` | all |
 | `payment` (`signer_unavailable`) | payment | failed | `retry` | all |
 | `payment_unknown` (`signer_unknown`) | payment | uncertain | `check` | all |
-| cost `pending` past a threshold, `ambiguous`, `quarantined` | reporting | unchanged | `operator` (reconcile) | all |
+| cost `pending` past a threshold, `ambiguous`, `quarantined` | reporting | unchanged | `admin` (reconcile) | all |
 
 `reason` generalizes ISS-12's `PaymentReason` into `FailureReason`, adding `restart`, `final_save_failed`,
 `released`, `queue_expired` and (if Q3 of ISS-26 says yes) `cancelled`.
@@ -139,7 +147,7 @@ re-dispatch, ISS-26's requeue and the FakeEngine.
 
 ### Persistent sessions (ISS-27)
 
-From #73's session end table: signer refused before reserve → `payment`, `operator` or `retry` by
+From #73's session end table: signer refused before reserve → `payment`, `admin` or `retry` by
 reason; reserve refused after signing → D52 failover, then `refused`; client closed or limit reached →
 `succeeded`; runner released → `succeeded` if frames flowed, else `failed`, `final`; connection lost
 after signing → `uncertain`, `check`; engine restart → the session lapses, `interrupted`/`restart`,
@@ -178,13 +186,13 @@ that fails `finish_job` once (failed final save); `FixedClock`; the SDK's `PAYME
 [ ] no_offering → capacity / retry
 [ ] every runner refused, nothing paid → capacity / retry; after a paid failover → final
 [ ] runner 4xx → validation / fix_request; runner 5xx → execution / final
-[ ] paid timeout → uncertain / check; unpaid timeout → failed / check          [?] Q2
+[ ] paid timeout → uncertain / check; unpaid timeout after send → failed / check; connect-phase → retry (Q2)
 [ ] signer 402 and 403 → payment / operator; signer 5xx before signing → payment / retry (ISS-12)
 [ ] payment_unknown → uncertain / check
 [ ] property: a job with any paid attempt is never retry; every uncertain job is check
 [ ] restart with an in_flight paid attempt → interrupted/restart, uncertain, check
 [ ] failed final save after a 2xx: restart gives interrupted/final_save_failed, uncertain, attempt kept succeeded
-[ ] failed final save: cost class per Q1                                        [?] Q1
+[ ] failed final save: cost class uncertain (Q1)
 [ ] usage confirming an unknown session leaves an uncertain job uncertain (no success from payment)
 [ ] finish_job on an ended job changes nothing (store, both backends)
 [ ] stream: each D34–D40 end gives the documented category and recovery
@@ -217,7 +225,6 @@ diff-cover, ruff, mypy strict, `check_docs.py`, `gen-docs`) and `tests/store` on
 | Builder console | Show category and the recovery hint on the job view; "check" jobs link to the cost |
 | ChatLPT | Replace `_UNAVAILABLE_KINDS` and the timeout rule with `recovery` (fixes unpaid timeout shown as uncertain) |
 | inference-gateway | Map `retry` → unavailable, `check` → error with job id; drop the inline kind set |
-| Enterprise desk | Branch on `recovery`; reconcile `check` jobs from cost |
 
 ## Alternatives considered
 
@@ -227,16 +234,72 @@ diff-cover, ruff, mypy strict, `check_docs.py`, `gen-docs`) and `tests/store` on
 - **Engine-side automatic retries of `check` jobs.** Rejected: paid, maybe ran; exactly-once is not
   promised, and the pinned node gives no handle to ask.
 
-## Open questions to lock
+## Questions locked
 
-- **Q1.** A `succeeded` attempt on a job that ended `uncertain` (`final_save_failed`) or `failed`
-  (`result_not_stored`): cost class `uncertain` / `failed_after_payment` (recommended), or keep
-  `delivered` as today?
-- **Q2.** Split `unreachable`/`timeout` into connect-phase (retry) and after-send (check) in the runner
-  call? Recommended for M4; it also answers ISS-14's Q2.
-- **Q3.** `runner_rejected` under `validation` (recommended) or `execution`?
-- **Q4.** A `pending` cost older than a threshold surfaces as `reporting` / `operator` in health and
-  reconciliation (recommended), or stays only `pending`?
+Locked by Mike on 13 November 2026.
+
+- **Q1, the cost of a job whose runner answered but which did not succeed:** the cost class follows the
+  job. `final_save_failed` is `uncertain`; `result_not_stored` is `failed_after_payment` (ISS-26). One
+  rule: a `succeeded` attempt is `delivered` only when its job succeeded.
+- **Q2, connect-phase failures:** split in M4. A failure in the connect phase (DNS, TCP, TLS or a connect
+  timeout) with nothing paid is `retry`, and a repeat under the same `operation_ref` dispatches again. A
+  failure after the request went out stays `check`. A closed list: only an error the engine positively
+  identifies as a connect failure is `retry`. This adds one entry to D57's "never reached a runner" list.
+- **Q3, a runner's own 4xx:** category `validation`, recovery `fix_request`. **To be revisited when the
+  runner standard is complete** (Mike: "We need clear and concise error reporting"). Known weak spot until
+  then: a runner 401, 403 or 429 after payment also reads `fix_request`. The revisit belongs with ISS-48.
+- **Q4, a cost that stays `pending` too long:** health gains a count of ended jobs whose cost has been
+  `pending` longer than a threshold, and the age of the oldest. Reconciliation lists them as `reporting` /
+  `admin`. The job's state and cost class do not change. The threshold is a setting, proposed default
+  one hour after the job ended.
+
+**Other decisions that touch this guide.**
+
+- **`cancelled`** is a reason, because ISS-26 adds a cancel for queued jobs.
+- **Zero-capacity runners** (#114): a job refused by every runner fails `refused`, and `no_capacity` means
+  only the engine's own admission limits. The classification table reads accordingly.
+- **A streamed answer's header send** moves inside the guarded block (#113), so a disconnect before the
+  headers settles like any other streaming end.
+- **The set-aside usage rows** of #114 add a count to health, beside the pending-cost count of Q4.
+- **REST problem bodies** are RFC 9457 (ISS-29), and they carry `category` and `recovery` as extension
+  fields.
+- **Parts of this guide are already built:** `Failure.reason` (D58) and the ISS-14 repeat rules (D57). The
+  current-state section predates both.
+
+### Where the runner standard plugs in later
+
+Runner contract v1 (ISS-47) is not vetted yet. This ticket therefore routes by app ID, as today, and reads
+no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may move to M5.
+
+- **Working assumption for ISS-48 (12 November):** app IDs stay the routing key; v1 metadata describes a
+  runner and never routes; missing, old or unreadable metadata is ignored and logged; model and profile
+  are filters; no schema check.
+- **Criterion moved to ISS-48 on 13 November:** runner failures map to the standard's base error kinds
+  through the registry entry; retries follow each kind's rule, only where the application opts in, and
+  never when the entry says the caller owns attempts; streamed results are judged by the entry's success
+  rule.
+- **The seam to keep:** `services/recovery.py` is the one classifier, so the standard's error kinds map
+  into it in one place. That is also where the category of a runner's 4xx (Q3) is revisited.
+
+## Amended on 18 November 2026
+
+The recovery value `operator` becomes `admin` (D83), because the payment clearinghouse splits that person
+in two. The tables above are changed.
+
+| Reason | Who acts |
+| --- | --- |
+| `not_provisioned` | The tenant admin, who allots an allocation |
+| `allowance_exhausted` | The tenant admin, who tops up the allocation from the grant. If the grant is empty, the enterprise buys more and the clearinghouse admin tops up the grant |
+| `not_authorized` | Usually the tenant admin: a paused allocation or a rotated payment key. The clearinghouse admin if the whole tenant is paused |
+| A cost that stays `pending`, `ambiguous` or `quarantined` | Either, depending on which side holds the problem |
+
+- **One value, not two.** The engine cannot always tell which admin must act, so it reports `admin` and
+  the `reason` carries the detail.
+- **Self-hosted payments.** Both admins are the same party, so the value reads correctly there too.
+- **Failures of the clearinghouse itself**, as an enterprise's engine sees them, take the place of signer
+  failures: unreachable or not ready is `signer_unavailable` and `retry`, an unknown outcome is
+  `signer_unknown` and `check`, and a refusal keeps its reason. Locked on 18 November (D87). The remote
+  adapters build it (#168).
 
 ## Delivery slices
 

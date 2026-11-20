@@ -5,7 +5,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Table, select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from livepeer_builder.contracts import (
@@ -58,6 +59,14 @@ def chunks(values: list[str], size: int = 500) -> Iterable[list[str]]:
         yield values[start : start + size]
 
 
+def insert_once(conn: AsyncConnection, table: Table) -> Any:
+    """An insert that leaves a row with the same primary key as it is (``ON CONFLICT DO NOTHING``), in
+    the connection's dialect. Its ``rowcount`` is 0 for a row another transaction stored first, where a
+    plain insert fails on the key: two writers that both looked and saw no row."""
+    build = postgresql.insert if conn.dialect.name == "postgresql" else sqlite.insert
+    return build(table).on_conflict_do_nothing(index_elements=list(table.primary_key.columns))
+
+
 async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
     """Jobs from their rows, with each attempt and its signed sessions, read in chunks."""
     ids = [row["id"] for row in rows]
@@ -108,7 +117,7 @@ async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
             Job(
                 id=UUID(row["id"]),
                 actor_id=row["actor_id"],
-                application_id=row["application_id"],
+                tenant_id=row["tenant_id"],
                 operation_ref=row["operation_ref"],
                 mode=row["mode"],
                 app=row["app"],

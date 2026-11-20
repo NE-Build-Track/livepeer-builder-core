@@ -13,7 +13,7 @@ belief can be checked mechanically, the enforcing test is named.
 3. **Classify every charge.** Each charge is `delivered`, `failed_after_payment`, `uncertain` or
    `pending`. Charges with no matching attempt are `unattributed`. Reconciliation must balance
    against the provider's own figure.
-4. **No money moves implicitly.** Provisioning and funding are explicit admin commands, and every
+4. **No money moves implicitly.** Allotment and top-ups are explicit admin commands, and every
    money-moving call carries an idempotency key.
 5. **Customize without forking.** Enterprises plug in authentication, policy, secret storage,
    discovery and transport through protocols. Core is never patched.

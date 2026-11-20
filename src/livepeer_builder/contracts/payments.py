@@ -1,5 +1,5 @@
-"""Payment contracts: allocation modes, explicit provisioning, allowance, and whether an advertised price can
-be paid (docs/contracts/payments.md)."""
+"""Payment contracts: explicit allotment, allowance, and whether an advertised price can be paid
+(docs/contracts/payments.md)."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -7,18 +7,25 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, SecretStr, computed_field, field_validator
 
-from livepeer_builder.contracts.common import Contract, Currency, Money, StoredText
+from livepeer_builder.contracts.access import IssuedKey
+from livepeer_builder.contracts.common import (
+    AllotAmount,
+    Contract,
+    Currency,
+    Money,
+    StoredText,
+    TopUpAmount,
+)
 from livepeer_builder.contracts.operations import OperationRef
 
 if TYPE_CHECKING:
     from livepeer_builder.contracts.discovery import PriceInfo
 
-AllocationMode = Literal["per_application", "per_actor"]
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
 
 
-class PaymentCredential(Contract):
-    """The signer bearer for one call, and the allocation that bearer spends."""
+class PaymentKey(Contract):
+    """The key that pays for one actor's call, sent as the signer's bearer, and the allocation it spends."""
 
     token: str | None
     allocation_id: str | None
@@ -30,21 +37,23 @@ class SecretRef(Contract):
     ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
 
-class ProvisionRequest(Contract):
-    """Explicit, admin-authorized provisioning. There is no automatic provisioning."""
+class AllotRequest(Contract):
+    """Explicit, admin-authorized allotment. There is no automatic allotment. The allocation is allotted
+    from the tenant's grant, whose id is the tenant's id (D83): the request names no grant."""
 
-    # ``StoredText``: provisioning funds a provider key before it saves the actor, so an id or a label
+    # ``StoredText``: allotment funds a provider key before it saves the actor, so an id or a label
     # the store could not keep is refused here, before any provider call.
-    application_id: StoredText
+    tenant_id: StoredText
     actor_id: StoredText
-    amount: Money  # may be zero: identity without money; fund later with an explicit command
+    # may be zero: identity without money; top up later with an explicit command. Never negative, and within
+    # the provider's format and the engine's bound (#112, C11)
+    amount: AllotAmount
     label: StoredText = ""
-    grant_id: StoredText = ""  # empty uses the grant of the caller's own allocation
     operation_ref: OperationRef  # required (D57, Q4): a repeat is answered from the operation ledger
 
 
 class GrantRecord(Contract):
-    """A Batteries grant the operator can fund actors from."""
+    """A grant as the payment provider keeps it. Its id is its tenant's id (D83)."""
 
     id: str
     name: str
@@ -63,9 +72,45 @@ class GrantPage(Contract):
     next_cursor: str | None = None
 
 
-class ProvisionedActor(Contract):
-    application_id: str
+TenantStatus = Literal["active", "paused"]  # what an admin sets; a grant is never closed (D82)
+
+
+class TenantGrant(Contract):
+    """A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's
+    id. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation
+    larger than it."""
+
+    tenant_id: str
+    name: str
+    status: str  # the provider's word: active or paused (draft or closed for a grant made elsewhere)
+    total: Money
+    unallocated: Money
+
+
+class OnboardedTenant(Contract):
+    """The answer to onboarding a tenant (D83, #165): the tenant, whose id is the id of the grant the
+    provider created for it, and its first tenant admin key. The key's token is in the answer to the
+    first successful call only: the engine keeps its hash, so a repeat of the reference answers
+    ``token: null`` and ``replayed: true``, as issuing any access key does."""
+
+    tenant_id: str
+    name: str
+    admin_key: IssuedKey | None  # None when engine access keys are off (LPB_AUTH=jwt)
+
+
+class TenantState(Contract):
+    """The answer to pausing or resuming a tenant: the status its grant now has."""
+
+    tenant_id: str
+    status: TenantStatus
+
+
+class ActorAllocation(Contract):
+    tenant_id: str
     actor_id: str
+    # The provider's grant the allocation was allotted from: the tenant's id, for every allocation
+    # allotted since a tenant and its grant share one id (D83, #165). A record written before that
+    # keeps the grant it names.
     grant_id: str
     allocation_id: str
     api_key_id: str
@@ -84,7 +129,7 @@ class SeenActor(Contract):
     immutable ``sub``, so a renamed person keeps their actor and a reused name never inherits one.
     """
 
-    application_id: str
+    tenant_id: str
     actor_id: str
     name: str = Field(default="", max_length=200)
     first_seen_at: datetime
@@ -92,26 +137,27 @@ class SeenActor(Contract):
 
 
 class KnownActor(Contract):
-    """One row of the operator's actor list (D46, D48): provisioned, signed in, or both."""
+    """One row of the operator's actor list (D46, D48): allotted, signed in, or both."""
 
-    application_id: str
+    tenant_id: str
     actor_id: str
     label: str  # the operator's label, else the name the provider gave, else ""
     name: str | None  # the provider's latest name; None until the person signs in with a token
-    allocation: ProvisionedActor | None  # None until an operator provisions the actor
+    allocation: ActorAllocation | None  # None until an operator allots one
     first_seen_at: datetime | None
     last_seen_at: datetime | None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def provisioned(self) -> bool:
+    def allotted(self) -> bool:
         return self.allocation is not None
 
 
-class FundRequest(Contract):
-    amount: Money
-    operation_ref: OperationRef  # required: makes a retried fund safe
-    grant_id: str = ""  # grant funding only; allocation funding ignores it
+class TopUpRequest(Contract):
+    """A top-up of an allocation or of a tenant's grant. The path names which: the body names no grant."""
+
+    amount: TopUpAmount  # the provider's format and the engine's bound (#112, C11)
+    operation_ref: OperationRef  # required: makes a retried top-up safe
 
 
 class Allowance(Contract):

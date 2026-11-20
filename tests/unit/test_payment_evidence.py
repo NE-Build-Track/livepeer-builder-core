@@ -12,10 +12,10 @@ import pytest
 
 from livepeer_builder.contracts import (
     ActorContext,
+    AllotRequest,
     Attempt,
     JobRequest,
     Money,
-    ProvisionRequest,
     Runner,
     RunnerReply,
 )
@@ -63,19 +63,18 @@ async def signed(transport: "SignsThenWaits", task: "asyncio.Task[object]", with
             await asyncio.sleep(0.01)  # waits on two things: the event and the task
 
 
-async def provisioned(make_engine: EngineFactory, admin: ActorContext, transport: object):  # type: ignore[no-untyped-def]
+async def allotted(make_engine: EngineFactory, admin: ActorContext, transport: object):  # type: ignore[no-untyped-def]
     from livepeer_builder.runtime.assembly import EngineSupply
 
     engine = await make_engine(supply=EngineSupply(transport=transport))  # type: ignore[arg-type]
     amount = Money(amount=Decimal(1), currency="USD")
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
-        application_id="default",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
+        tenant_id="default",
         actor_id="alice",
         amount=amount,
-        grant_id="grant_1",
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     return engine
 
 
@@ -86,7 +85,7 @@ async def test_evidence_is_stored_before_the_paid_request_answers(
         status_code=200, content=b"{}", content_type="application/json", data=None, manifest_ids=("m-1",),
         payment_sent=True,
     ))  # fmt: skip
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
     await signed(transport, task)
     [job] = await store.jobs_in_state("running")  # what a crash right now would leave
@@ -102,7 +101,7 @@ async def test_a_cancelled_paid_call_keeps_its_evidence(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore
 ) -> None:
     transport = SignsThenWaits(store)
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
     await signed(transport, task)
     task.cancel()
@@ -121,7 +120,7 @@ async def test_an_error_after_signing_never_turns_the_attempt_unpaid(
     error = RunnerCallError("unreachable", "connection reset", payment_sent=False)
     transport = SignsThenWaits(store, then=error)
     transport.release.set()
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
     job = failed.value.job
@@ -147,7 +146,7 @@ async def test_a_stream_cancelled_before_its_first_byte_keeps_its_evidence(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, store: SqlStore
 ) -> None:
     transport = OpensAfterSigning(store)
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     streaming = engine.jobs.streaming
     assert streaming is not None
     task = asyncio.create_task(streaming.stream(alice, JobRequest(app=APP)))
@@ -181,7 +180,7 @@ async def test_a_cancel_after_a_failed_evidence_write_still_stores_the_evidence(
 ) -> None:  # fmt: skip  # #44 review: the close path wrote only the job row, so the signature was lost
     fails_first_evidence_write(store, monkeypatch)
     transport = SignsThenWaits(store)
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
     await signed(transport, task)
     task.cancel()  # the caller disconnects during the paid request
@@ -198,7 +197,7 @@ async def test_a_stream_cancelled_after_a_failed_evidence_write_still_stores_the
 ) -> None:  # fmt: skip
     fails_first_evidence_write(store, monkeypatch)
     transport = OpensAfterSigning(store)
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     streaming = engine.jobs.streaming
     assert streaming is not None
     task = asyncio.create_task(streaming.stream(alice, JobRequest(app=APP)))
@@ -219,7 +218,7 @@ async def test_a_store_that_cannot_take_evidence_still_closes_the_job(
 
     monkeypatch.setattr(store, "record_payment_evidence", down)
     transport = SignsThenWaits(store)
-    engine = await provisioned(make_engine, admin, transport)
+    engine = await allotted(make_engine, admin, transport)
     task = asyncio.create_task(engine.jobs.run(alice, JobRequest(app=APP)))
     await signed(transport, task)
     task.cancel()

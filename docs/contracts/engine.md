@@ -116,6 +116,36 @@ names the runner `app`; `capability` and `model` are labels only.
 [Streaming](#deadlines-d35)), plus the labels `capability` and `model`. The SDK transport sends a
 missing `payload` as the JSON object `{}` (D41).
 
+**`path` is appended to the runner URL as written (#113, C3).** A runner URL names one app on an
+orchestrator, so a path that a client or server would normalize could reach another app. The contract
+refuses a path that is not already normal, with a 422 (a `ValidationError` in process) before anything
+is written: a `.` or `..` segment, literal or percent-encoded in any case (`%2e`, `%2E`), an empty
+segment (`//`), an encoded separator (`%2F`, `%5C`), and a backslash, a control character, a lone
+surrogate or a fragment (`#`) anywhere. An encoded separator is refused because livepeer/node decodes the
+path before it forwards it, so `%2F` reaches the runner as a separator: `/a%2F%2Fb` arrives as `/a//b`
+and `/a%2F.%2Fb` as `/a/./b`, the empty and `.` segments this rule refuses as written. `..%2Fother` is
+not the reason: the node answers any decoded `..` segment with 400 `invalid path` before it routes, so it
+reaches no runner. The node passes `%5C` on as `%5C`; it is refused because it decodes to the backslash,
+which the contract refuses as written. A lone surrogate is half of a UTF-16 pair, which JSON can write
+(`"\ud800"`) and no request target can encode; the 422 repeats it as that escape. A trailing `/` and a
+query string stay allowed; a query's slashes, dots and escapes are data. An empty path is the runner URL
+itself, and a path that is set must start with `/` (400, as before). Every path with no leading `/` gets
+that 400, whatever its segments (`run`, `a//b`, `../run` and `a%2Fb` alike); only a backslash, a control
+character, a lone surrogate or a fragment in it is a 422. The transport then sends the address
+without re-normalizing it: it percent-encodes only what a request target cannot hold as written (a space,
+a non-ASCII character), decodes nothing, and refuses, unpaid and before any request, an address that no
+longer begins with the runner's (the same scheme, host and port, and a path at or under the runner's)
+or that it cannot encode (a lone surrogate that got past the contract).
+The one exception is the `?` of an empty query: `/run?` is accepted, and the runner receives `/run`,
+because the HTTP client leaves an empty query out of the request target (`/run?x=` and `/run?&` arrive
+as written).
+The runner URL's own path is encoded by the same rule, so a runner URL may hold a space or a non-ASCII
+character in its path: escapes it already holds are kept, and a `%` that begins none is sent as `%25`.
+Its scheme, host and port go out as written, except a host that is not ASCII, which is sent by its IDNA
+name. The payment-origin check names every host that way too, so a 402 whose `payment_url` writes the
+same host in Unicode still matches the runner. A runner URL that cannot be read (a supplied discovery source can return one; the default source
+refuses it earlier) fails that attempt, unpaid, as `invalid runner URL`, like any other runner failure.
+
 | State | Meaning |
 | --- | --- |
 | `queued` | Reserved for async jobs (M4) |
@@ -176,6 +206,21 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    - **The charge stays attributed.** A paid attempt the job failed over from keeps its sessions and is
      `failed_after_payment`: the allocation paid it, and it is never `billable`
      ([payments.md](payments.md#cost-classification)).
+   - **Advertised capacity is a hint (#114, C17).** A runner that advertises zero free capacity stays a
+     candidate. The default selection tries it after every runner with room: the advertisement is as
+     old as the discovery snapshot. On a job that pays, "after" holds within the runners the signer can
+     pay (and free ones) and within the rest, since those are moved ahead of the rest: a priced
+     zero-capacity runner is tried before a runner with room and no payable price. When every runner for the app advertises zero, the engine tries only
+     the runners an attempt signs no payment for, which on an unpaid job is all of them. An attempt
+     on a full priced runner can cost a ticket: livepeer/node before v1.0.7 asks for payment before it
+     checks capacity, and from v1.0.7 a slot can still be taken between the challenge and the paid
+     request. That
+     cost is accepted when any runner for the app has room: a full priced runner then stays a
+     candidate, since its advertisement may be out of date, and a job whose other runners failed can
+     reach it and pay for its refusal. If
+     the runners tried all refuse, the job fails `refused` like any other job whose runners all refused.
+     A job that would pay every one of them fails `no_capacity` before any attempt, with nothing signed
+     ([discovery.md](discovery.md#advertised-capacity)).
    - **Every runner failed over.** The job is `failed` with the last runner's status code and body. A
      404 or 409 is reported as `refused` (503, retry later), so the caller never reads an orchestrator's
      refusal as its own not-found or conflict.
@@ -192,10 +237,21 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    - **No runner selected.** A `SelectionPolicy` that returns no runner fails the job `no_offering`,
      before any payment.
    - **`payment_refused`:** the signer refused to pay *this orchestrator*. The signer statuses are 400
-     (incomplete or expired payment params) and 481 (price above the session ceiling). A
+     (incomplete or expired payment params) and 481 (price above the session ceiling). The engine
+     refuses the same way, before the signer is asked, a runner with no usable rate and a challenge
+     whose `manifest_id` it cannot record (over 200 characters, a control character or a lone surrogate;
+     #114, C13; [payments.md](payments.md#correlation)). A
      `SignerRefreshRequired` (HTTP 480) that uses up the payment retry budget is the same refusal:
      unpaid, and not `payment_unknown`. A refresh that still has budget asks the runner for a fresh
      challenge and does not fail the attempt. Another orchestrator may succeed.
+     The runner's HTTP 402 payment challenge flow has two separate budgets per call.
+     It can sign at most `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` + 1 challenge payments
+     (4 at the default of 3) and send at most the same number of unsigned requests,
+     including the initial request. A signer HTTP 480 uses the unsigned-request
+     budget when it triggers a fresh challenge request. If the runner returns HTTP
+     402 after the last permitted challenge payment, the attempt ends as paid with
+     `http` (402), and the final challenge remains unsigned. Metered live sessions
+     sign renewal payments separately, outside the challenge signature cap.
    - **`payment`:** caller- or signer-side refusals: 401 or 403 (`not_authorized`) and 402
      (`allowance_exhausted`). The stored manifest becomes `unpaid` (D54), so it is never matched or
      billed, and the job ends `failed`. They do **not** fail over, because every orchestrator would
@@ -207,7 +263,7 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      signed. A signer 5xx, timeout or lost reply **while signing** is not a refusal: it is
      `payment_unknown` (`signer_unknown`), the manifest stays `unknown`, and the job ends
      `uncertain`. The cost stays `pending` until usage matches it.
-2. **At most one dispatch per operation.** One `(application_id, actor_id, operation_ref)` dispatches at
+2. **At most one dispatch per operation.** One `(tenant_id, actor_id, operation_ref)` dispatches at
    most one job that reaches a runner. A job that failed before any runner accepted the work may be
    dispatched again under the same reference (see [idempotency](#idempotency)).
 3. **The attempt row is written before the call** (`in_flight`) and updated after it. **The manifest is stored before
@@ -234,18 +290,23 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    ended increments the job's evidence version, so its stored cost projection is out of date and the
    next read and sync count it. If the engine dies mid-call, `recover_interrupted()` marks the job
    `uncertain` when anything may have paid, and `failed` otherwise.
-4. **Admission and provisioning are checked before any payment.** The admission limits
+4. **Admission and allotment are checked before any payment.** The admission limits
    (`max_concurrent_jobs`, `max_concurrent_jobs_per_app`) refuse with 503 and `Retry-After`. An
-   unprovisioned actor fails with `not_provisioned`.
+   actor with no allocation fails with `not_provisioned`.
 5. **A cost that hasn't arrived is `pending`.** So is a job still running, which may yet pay. Only a job
    that ended without reaching payment has cost status `none`.
 
 ### Idempotency
 
 Final rules (D57; they replace D11's interim 409). A repeat is identified by
-`(application_id, actor_id, operation_ref)`. The request's fingerprint covers `app`, `path`, `method`,
+`(tenant_id, actor_id, operation_ref)`. The request's fingerprint covers `app`, `path`, `method`,
 `payload` (or the raw body), `capability`, `model`, `content_type`, `headers` and `return_http_errors`.
 Limits such as `timeout_s` and `max_attempts` may differ between repeats.
+
+A job's `operation_ref` is the admin commands' `OperationRef`: 1 to 200 characters, no NUL. An empty
+string is a 422 that names the field (a `ValidationError` in process), before anything is written
+(#113, C19); it used to count as a reference, so a second empty-reference job of the same actor was
+answered as a repeat of the first. Send a real reference, or leave the field out.
 
 | The reference names a job that… | Answer | Dispatched? |
 | --- | --- | --- |
@@ -257,7 +318,7 @@ Limits such as `timeout_s` and `max_attempts` may differ between repeats.
 | `failed` in any other way | 409 `OperationExists`, `code: operation_exists`, the job in the body | no |
 | no reference given | Runs it | yes |
 
-Every 409 for a job carries the job's id in `Livepeer-Job-Id`. Admin commands (provision, fund,
+Every 409 for a job carries the job's id in `Livepeer-Job-Id`. Admin commands (allot, top up,
 grants, rotations, keys) use the same codes, with the command in the body instead of a job: see
 [payments.md](payments.md#repeat-safe-commands). `OperationInProgress` is an `OperationExists`, so
 a caller that catches `OperationExists` keeps working; branch on `code` to tell them apart.
@@ -307,13 +368,13 @@ the last kind alone.
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
 | `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
-| `no_capacity` | | no | 503 + `Retry-After` | The engine's admission limits are full. Retry after the header, with the same `operation_ref` |
-| `not_provisioned` | | no | 402 | The actor has no allocation (`per_actor` mode). An operator provisions it; retrying alone does not help. Then the same `operation_ref` runs again |
+| `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: an attempt on a full priced runner can cost a ticket, because livepeer/node before v1.0.7 asks for payment before it checks capacity (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written |
+| `not_provisioned` | | no | 402 | The actor has no allocation. An operator allots one; retrying alone does not help. Then the same `operation_ref` runs again |
 | `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
 | `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
-| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator funds the allocation; then the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
+| `payment` | `allowance_exhausted` | no | **402**, no `Retry-After` | The signer refused because the allocation is spent (Batteries 402). The manifest is `unpaid`. An operator tops up the allocation; then the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
 | `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first. An operator checks the signer if it lasts |
-| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, or a refresh past its budget), the signer refused with another status, or its identity reply was malformed. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
+| `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, a refresh past its budget, or a challenge whose manifest id the engine cannot record), the signer refused with another status, or its identity reply was malformed. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
 | `payment_unknown` | `signer_unknown` | maybe | 503, no `Retry-After` | The signer was asked and gave no validated answer while signing (a 5xx, a timeout, a dropped or malformed reply): it may have charged. The job is `uncertain` and the cost `pending` until usage settles it. Do not retry blindly: a repeat under the same `operation_ref` is 409, and a new one could pay twice |
 | `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time; it may still have run the work. Read the job: when `uncertain`, wait for its cost before running it again. A repeat under the same `operation_ref` is 409, so a new attempt needs a new reference |
 | `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner ran and refused the request; `failure.body` holds its words. Fix the request and send it with a new `operation_ref`. A paid attempt is `failed_after_payment`, never billable ([payments.md](payments.md#cost-classification)) |
@@ -347,7 +408,7 @@ async with stream:  # leaving the block ends the stream, however the block ends
         forward(chunk)
 ```
 
-Everything up to the runner's answer is `run`: admission, idempotency, provisioning, failover (a paid
+Everything up to the runner's answer is `run`: admission, idempotency, allotment, failover (a paid
 refusal at open moves to another orchestrator, as for `run`). The
 transport's `open` pays the 402 challenge before any byte flows, so `payment_sent` and the signed
 `manifest_ids` are known when the stream opens and are **written on the attempt before the first
@@ -413,8 +474,28 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
   resets the stream). `GET /v1/jobs/{id}` carries the outcome. The engine writes nothing into the
   stream itself, because it does not know the format. uvicorn logs one line for the abort.
 - A client disconnect gets the settle window: the REST layer calls `JobStream.disconnected()` when a
-  send fails or is cancelled, however the server reports it (D40). An app serving a stream over its
-  own HTTP layer should do the same; without it, a closed iterator is the caller stopping.
+  send fails or is cancelled, however the server reports it (D40), the send of the response headers
+  included (#113, C27). An app serving a stream over its own HTTP layer should do the same; without it,
+  a closed iterator is the caller stopping.
+- **The runner's `Content-Type` goes out unchanged**, streamed, buffered or read back as a stored
+  result (`GET /v1/jobs/{id}/result`, 501 until ISS-26) (#113, C27): its parameters
+  (`charset`, `profile`, `boundary`) are kept, and the engine adds none, not even a `charset` to a
+  `text/` type. A runner that sends none is `application/octet-stream`. `RunnerReply.content_type`,
+  `JobStream.content_type` and the stored `ResultRef.content_type` are that same header value.
+  Unchanged means byte for byte. The SDK transport reads the header's bytes as Latin-1, the encoding an
+  HTTP server writes a header in, so a value that is not ASCII goes out as the bytes the runner sent,
+  whatever encoding the runner meant. In those three fields such a value is its bytes read as Latin-1: a
+  parameter the runner wrote in UTF-8 (`title="é"`, bytes `C3 A9`) reads there as `Ã©`. A value that
+  holds a control character, which a header may not, is replaced by `application/octet-stream`. The only
+  length limit is the HTTP client's for one header, 8190 bytes; a longer one fails the call as a runner
+  error.
+
+  **Upgrading:** before this release those three fields held the media type alone, in lower case
+  (`application/json`), whatever parameters the runner sent. A caller that compares one with a bare
+  type (`content_type == "application/json"`) stops matching a runner that sends
+  `application/json; charset=utf-8`: read the media type as the part before the first `;`, without
+  regard to case. Job records written before the upgrade keep the bare value, so `GET /v1/jobs` and
+  `GET /v1/jobs/{id}` over retained jobs answer with both shapes.
 
 **Transports:** streaming needs a `StreamingRunnerTransport` (`open` beside `call`). The SDK
 transport implements it. With a transport that has no `open`, `jobs.streaming` is `None` in-process and
@@ -476,10 +557,10 @@ should handle a failed load ("the provider no longer serves this file") instead 
 ### Job history
 
 `GET /v1/jobs` (`jobs.list_jobs` in-process) lists jobs **newest first**: an actor's own; for an admin
-or an auditor, every actor's in its application ([access.md](access.md#answers)). `limit` is 1 to 500
+or an auditor, every actor's in its tenant ([access.md](access.md#answers)). `limit` is 1 to 500
 (default 50). To page, pass `before`: the `created_at` of the last job on the previous page, as an
 ISO-8601 time with its offset (`Z` or `+00:00`; percent-encode `+` in a URL). A time without an offset
-is 422. Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
+is 422, and so is one that UTC cannot hold ([access.md](access.md#answers)). Jobs created in the same microsecond share a `created_at`, so a page that ends between two of
 them skips the second. `GET /v1/jobs/{id}` returns one job; another actor's job, or a missing one, is
 404.
 
@@ -493,9 +574,33 @@ and `failed` jobs; `uncertain` ones are kept ([persistence.md](persistence.md#re
 ## Measured usage
 
 Usage is the work done, in units the capability defines. The default in M2 is **app-reported**:
-`report_usage(actor, job_id, quantities)`. It is accepted once per job, only from the job's owner,
-and only for a succeeded job. The value keeps its source (`app_reported`). Usage is never confused
-with cost. Engine-side meters (`engine_meter`) are a later extension.
+`report_usage(actor, job_id, quantities)`. It is stored once per job, only from the job's owner, and
+only for a succeeded job. The value keeps its source (`app_reported`). Usage is never confused with
+cost. Engine-side meters (`engine_meter`) are a later extension.
+
+**A repeated report (#115, C20).** The store writes usage only where the job has none and is
+`succeeded`, in one statement, so of two reports at the same moment one is stored. Before, both
+succeeded and the second replaced the first.
+
+| A report for a job that already has usage | Answer |
+| --- | --- |
+| the same quantities (a retry after a lost answer, or the slower of two identical reports) | 200 with the job and the **stored** usage, its `reported_at` included. Nothing is written |
+| other quantities | refused as before: `InvalidRequest` (HTTP 400), "usage was already reported for this job". The stored usage stays |
+
+`FakeEngine` (`livepeer_builder.testing`) answers by the same rule, from the engine's own function:
+it keeps the usage on its job and answers a repeat as the table says.
+
+**Upgrading (tests that use `FakeEngine`):** the fake now refuses what the engine refuses, in the
+engine's words. A report with no quantities (`{}`) is refused, where the fake took it. A negative
+quantity is refused with "usage needs at least one non-negative quantity", where the fake said "usage
+quantities must be non-negative". A second report with other quantities is refused, where the fake took
+every report. A test that matched the old text, or relied on one of those reports passing, needs the
+change. The engine's own answers to these three are as they were.
+
+The conditional write is optional for a store (`UsageOnceRepo.set_usage_once` in `protocols`). The
+packaged SQL store has it. With a supplied store without it, the engine checks the job it read and
+calls `set_usage`, which updates unconditionally: a repeat is answered as in the table, but two reports
+at the same moment can still both succeed, the later write replacing the earlier, as before.
 
 ## Async jobs (reserved, M4 · ISS-26)
 
@@ -566,7 +671,12 @@ default `*/*`. Signer credentials and the payment headers stay the transport's.
 
 `RunnerStream.headers` and `JobStreamApi.headers` expose response header pairs to embedded
 callers, preserving repeated fields as the runner sent them. Custom stream implementations must provide
-this property (an empty tuple when no headers exist). The shipped fakes support it. These
+this property (an empty tuple when no headers exist). The shipped fakes support it. The SDK
+transport reads each name and value as its bytes in Latin-1, as it reads the `Content-Type` (#113, C27):
+no value holds a lone surrogate, so every pair can be logged, written as JSON and sent on as the bytes
+the runner sent. A value the runner wrote in UTF-8 reads as those bytes (`é` as `Ã©`); before this
+release it read as `é`, and a byte that is not UTF-8 as a lone surrogate. Nothing is replaced or left
+out here, a control character included. These
 headers are untrusted; applications must filter cookies, credentials, hop-by-hop fields and
 content framing before forwarding them to another client. The stock REST stream keeps its
 existing header policy. Buffered SDK results do not expose a new header guarantee.
@@ -589,6 +699,6 @@ ever sent twice: aiohttp's resend of an idempotent request on a dropped connecti
 every runner request (D56).
 
 The engine sends the runner request itself (D53), so no SDK change is needed: the SDK stays
-pinned to upstream `2017a80`. An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
+pinned to upstream `main` (`7dc2a07` now, `2017a80` when this was written). An earlier draft pinned NE-Build-Track SDK commit `cd6ed5e`
 ([SDK PR #6](https://github.com/NE-Build-Track/livepeer-python-gateway/pull/6)); that PR is
 replaced by this one. No streaming uploads or provider-specific request processing is added.

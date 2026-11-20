@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, FundRequest, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money, TopUpRequest
 from livepeer_builder.errors import AccessDenied, InvalidRequest, JobFailed, NotFound
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, FixedClock, ScriptedTransport
@@ -23,14 +23,14 @@ from tests.unit.test_costs import row
 APP = "example/echo"
 
 
-async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: str) -> BuilderEngine:
+async def allotted(make_engine: EngineFactory, admin: ActorContext, *actors: str) -> BuilderEngine:
     engine = await make_engine()
     for actor_id in actors:
-        await engine.payments.provision(
+        await engine.payments.allot(
             admin,
-            ProvisionRequest(
-                operation_ref=f"provision:default:{actor_id}", application_id="default", actor_id=actor_id,
-                amount=Money(amount=Decimal("5"), currency="USD"), grant_id="grant_1",
+            AllotRequest(
+                operation_ref=f"allot:default:{actor_id}", tenant_id="default", actor_id=actor_id,
+                amount=Money(amount=Decimal("5"), currency="USD"),
             ),
         )  # fmt: skip
     return engine
@@ -40,7 +40,7 @@ async def provisioned(make_engine: EngineFactory, admin: ActorContext, *actors: 
 async def rest(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[httpx.AsyncClient, BuilderEngine]]:
-    engine = await provisioned(make_engine, admin, "alice", "bob")
+    engine = await allotted(make_engine, admin, "alice", "bob")
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield client, engine
@@ -58,7 +58,7 @@ async def test_another_actors_operation_ref_runs_their_own_job_and_never_shows_t
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport,
 ) -> None:  # fmt: skip
-    engine = await provisioned(make_engine, admin, "alice", "bob")
+    engine = await allotted(make_engine, admin, "alice", "bob")
     transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
     alices = (await engine.jobs.run(alice, JobRequest(app=APP, operation_ref="order-1"))).job
     bobs = (await engine.jobs.run(bob, JobRequest(app=APP, operation_ref="order-1"))).job
@@ -91,12 +91,12 @@ async def test_cost_summary_recent_costs_and_allowance_leave_out_another_actors_
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, bob: ActorContext,
     transport: ScriptedTransport, usage: FakeUsageSource, clock: FixedClock,
 ) -> None:  # fmt: skip
-    engine = await provisioned(make_engine, admin, "alice", "bob")
-    await engine.payments.fund(
+    engine = await allotted(make_engine, admin, "alice", "bob")
+    await engine.payments.top_up(
         admin,
         "default",
         "bob",
-        FundRequest(amount=Money(amount=Decimal("2"), currency="USD"), operation_ref="b"),
+        TopUpRequest(amount=Money(amount=Decimal("2"), currency="USD"), operation_ref="b"),
     )
     transport.steps = [
         ScriptedTransport.ok(manifest_ids=("m-alice",)),
@@ -131,7 +131,7 @@ async def test_cost_summary_recent_costs_and_allowance_leave_out_another_actors_
 async def test_a_job_after_the_allocation_is_revoked_fails_not_provisioned_without_a_runner_call(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     await engine.payments.revoke(admin, "default", "alice")
     transport.steps = [ScriptedTransport.ok()]
     with pytest.raises(JobFailed) as failed:
@@ -140,18 +140,22 @@ async def test_a_job_after_the_allocation_is_revoked_fails_not_provisioned_witho
     assert transport.calls == []  # no payment, and no fallback to another key
 
 
-@pytest.mark.parametrize("kind", ["admin", "auditor"])
+@pytest.mark.parametrize("kind", ["clearinghouse_admin", "auditor"])
 async def test_a_revoked_admin_or_auditor_key_is_401_on_admin_routes(
     rest: tuple[httpx.AsyncClient, BuilderEngine], admin: ActorContext, kind: str
 ) -> None:
     client, engine = rest
     issued = await engine.keys.issue(admin, kind=kind, actor_id=f"{kind}-1", operation_ref=f"key-{kind}")  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {issued.token}"}
-    reads = ("/v1/admin/keys", "/v1/admin/actors", "/v1/admin/applications/default/actors/alice/allocation")
+    reads = (
+        "/v1/keys",
+        "/v1/clearinghouse/tenants/default/actors",
+        "/v1/clearinghouse/tenants/default/actors/alice/allocation",
+    )
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [200, 200, 200]
     await engine.keys.revoke(admin, issued.key.key_id)
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [401, 401, 401]
-    status = "/v1/admin/applications/default/actors/alice/allocation/status"
+    status = "/v1/clearinghouse/tenants/default/actors/alice/allocation/status"
     assert (await client.post(status, json={"status": "paused"}, headers=headers)).status_code == 401
 
 
@@ -162,7 +166,7 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_changes_noth
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager,
     caplog: pytest.LogCaptureFixture,
 ) -> None:  # fmt: skip
-    engine = await provisioned(make_engine, admin, "alice")
+    engine = await allotted(make_engine, admin, "alice")
     allocation = (await engine.store.get_actor("default", "alice")).allocation_id  # type: ignore[union-attr]
     paused = [await engine.payments.set_status(admin, "default", "alice", "paused") for _ in range(2)]
     assert [actor.status for actor in paused] == ["paused", "paused"]
@@ -173,7 +177,7 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_changes_noth
     # a retry after a lost answer gets the first answer: the revoked actor, with nothing revoked twice (D61)
     assert await engine.payments.revoke(admin, "default", "alice") == revoked
     assert await engine.store.get_actor("default", "alice") == revoked
-    with pytest.raises(NotFound):  # an actor never provisioned is still not found
+    with pytest.raises(NotFound):  # an actor never allotted is still not found
         await engine.payments.revoke(admin, "default", "nobody")
     with pytest.raises(NotFound):
         await engine.payments.set_status(admin, "default", "alice", "active")  # no un-revoking by status
@@ -193,9 +197,9 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest(
     rest: tuple[httpx.AsyncClient, BuilderEngine], admin: ActorContext
 ) -> None:
     client, engine = rest
-    as_admin = await bearer(engine, admin, "admin", "ops")
+    as_admin = await bearer(engine, admin, "clearinghouse_admin", "ops")
     key = (await engine.keys.issue(admin, kind="actor", actor_id="bob", operation_ref="k")).key
-    allocation = "/v1/admin/applications/default/actors/alice/allocation"
+    allocation = "/v1/clearinghouse/tenants/default/actors/alice/allocation"
 
     async def twice(path: str, body: dict[str, str] | None = None) -> list[int]:
         return [(await client.post(path, json=body, headers=as_admin)).status_code for _ in range(2)]
@@ -203,9 +207,9 @@ async def test_repeating_set_status_revoke_allocation_or_revoke_key_over_rest(
     assert await twice(allocation + "/status", {"status": "paused"}) == [200, 200]
     assert await twice(allocation + "/revoke") == [200, 200]  # a retry gets the first answer (D61)
     assert (await client.get(allocation, headers=as_admin)).json()["status"] == "revoked"
-    assert await twice(f"/v1/admin/keys/{key.key_id}/revoke") == [204, 204]
+    assert await twice(f"/v1/keys/{key.key_id}/revoke") == [204, 204]
     assert (
         await client.post(allocation.replace("alice", "nobody") + "/revoke", headers=as_admin)
     ).status_code == 404
-    assert (await client.post("/v1/admin/keys/lpk_unknown/revoke", headers=as_admin)).status_code == 400
-    assert (await client.get(f"/v1/admin/keys/{key.key_id}", headers=as_admin)).json()["revoked_at"]
+    assert (await client.post("/v1/keys/lpk_unknown/revoke", headers=as_admin)).status_code == 400
+    assert (await client.get(f"/v1/keys/{key.key_id}", headers=as_admin)).json()["revoked_at"]

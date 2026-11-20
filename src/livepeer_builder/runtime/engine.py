@@ -52,6 +52,7 @@ class BuilderEngine:
         self._own_authenticators = services.own_authenticators  # the deployment's, tried before API keys
         self._resources = resources or contextlib.AsyncExitStack()
         self._stopped = False
+        self._started = False  # one start() per engine (#113, C27)
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -71,14 +72,23 @@ class BuilderEngine:
         return cls(settings, services, resources)
 
     async def start(self) -> None:
-        """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops.
+        """Check the schema, resolve jobs a restart interrupted, take one discovery snapshot, then start
+        background loops.
 
-        If starting fails (a store error, or a cancellation), the engine stops: what ``create`` opened is
-        closed before the error reaches the caller, and a new engine is needed.
+        If starting fails (a schema that does not match, a store error, or a cancellation), the engine stops:
+        what ``create`` opened is closed before the error reaches the caller, and a new engine is needed.
+        A second ``start()`` is refused, and the running engine carries on (#113, C27).
         """
         if self._stopped:
             raise RuntimeError("engine is stopped; create a new one")
+        if self._started:
+            raise RuntimeError(
+                "engine is already started; stop() it, then create a new one to start again. "
+                "To serve an engine you start yourself, pass create_app(engine, manage_lifecycle=False)"
+            )
+        self._started = True
         try:
+            await self._require_current_schema()
             await self.jobs.recover_interrupted()
             await self.discovery.refresh()
         except BaseException:
@@ -97,7 +107,7 @@ class BuilderEngine:
                 "version": package_version(),
                 "api_keys": "on" if self.keys is not None else "off",
                 "own_authenticators": self._own_authenticators,
-                "grant_desk": "on" if self.payments.grants is not None else "off",
+                "tenant_desk": "on" if self.payments.tenants is not None else "off",
             },
         )
 
@@ -130,8 +140,8 @@ class BuilderEngine:
             discovery_error=snapshot.last_error,
             cost_sync_at=self.costs.last_synced_at,
             cost_sync_error=self.costs.last_error,
+            cost_sync_set_aside=self.costs.set_aside_rows,
             running_jobs=self.admission.running,
-            allocation_mode=self.payments.mode,
             version=package_version(),
         )
 
@@ -146,6 +156,24 @@ class BuilderEngine:
     async def schema_revision(self) -> str | None:
         maintenance = self.store.maintenance
         return None if maintenance is None else await maintenance.schema_revision()
+
+    async def _require_current_schema(self) -> None:
+        """With ``LPB_AUTO_MIGRATE=false``, the database must be at this package's revision, neither behind
+        nor ahead, or the engine would pay and then fail to record (#112, C8). Checked at start only, so a
+        replica already running through a rolling deploy is not stopped. Only the packaged migrations are
+        checked: a supplied store with housekeeping of its own reports revisions of its own schema, which
+        ``lpb migrate`` cannot change, and one with no ``maintenance`` reports none."""
+        if self.settings.auto_migrate:
+            return
+        # here: importing the package loads no Alembic
+        from livepeer_builder.store.maintenance import SqlMaintenance
+
+        maintenance = self.store.maintenance
+        if not isinstance(maintenance, SqlMaintenance):
+            return
+        mismatch = await maintenance.schema_mismatch()
+        if mismatch is not None:
+            raise RuntimeError(mismatch)
 
     async def _retention_loop(self) -> None:
         if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:

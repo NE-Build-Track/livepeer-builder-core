@@ -226,6 +226,15 @@ by someone other than its author (it feeds ISS-37's fresh-reviewer check).
   how `.git` arrived.
 - **Copy node's release scripts.** Rejected: Go-specific. Their design (authorize, tag check, gated publish) is reused.
 
+## Amended on 18 November 2026
+
+ISS-31 was replaced on 18 November (D82 to D86 in [m4-decisions.md](../m4-decisions.md)).
+
+- **Configuration examples.** `deploy/examples/` holds one example for each role of the engine: `both`,
+  `work` and `clearinghouse`. The `per_application` example goes, because `per_actor` is the only
+  allocation mode.
+- **Names.** The examples and the release notes use the domain language of D83.
+
 ## Open questions to lock
 
 - **Q1.** Final version `v1.0.0` (recommended: M5 is the delivery), or stay at `v0.x`?

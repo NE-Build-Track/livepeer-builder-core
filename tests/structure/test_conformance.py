@@ -5,7 +5,7 @@ member or a changed signature would only show up in a consumer. mypy checks this
 ``[tool.mypy] files``), so such a change fails the type check here; the tests run the same functions.
 """
 
-from livepeer_builder import ActorApi, AdminApi, BuilderEngine, EngineApi
+from livepeer_builder import ActorApi, BuilderEngine, ClearinghouseApi, EngineApi, WorkApi
 from livepeer_builder.testing import FakeEngine, make_engine
 
 
@@ -13,7 +13,11 @@ def engine_as_actor_api(engine: BuilderEngine) -> ActorApi:
     return engine
 
 
-def engine_as_admin_api(engine: BuilderEngine) -> AdminApi:
+def engine_as_work_api(engine: BuilderEngine) -> WorkApi:
+    return engine
+
+
+def engine_as_clearinghouse_api(engine: BuilderEngine) -> ClearinghouseApi:
     return engine
 
 
@@ -27,7 +31,12 @@ def fake_as_actor_api(fake: FakeEngine) -> ActorApi:
 
 async def test_the_engine_offers_every_role() -> None:
     async with make_engine() as engine:
-        roles = (engine_as_actor_api(engine), engine_as_admin_api(engine), engine_as_engine_api(engine))
+        roles = (
+            engine_as_actor_api(engine),
+            engine_as_work_api(engine),
+            engine_as_clearinghouse_api(engine),
+            engine_as_engine_api(engine),
+        )
         assert all(role is engine for role in roles)
 
 

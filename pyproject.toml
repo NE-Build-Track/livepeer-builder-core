@@ -20,11 +20,12 @@ dependencies = [
     "cryptography>=42",
     "aiohttp>=3.9", # adapters/sdk.py; the SDK depends on it too, but the engine imports it directly
     "yarl>=1.9", # aiohttp's URL parser; adapters/discovery_inventory.py keeps a URL only as aiohttp reads it
-    # Pin to livepeer/livepeer-python-gateway main at 2017a80 (26 October): Enforce TLS (#76),
-    # streamable runner bodies (#80), on_payment_session (#81; reports LivePaymentSession.manifest_id)
-    # and the runner-side session stop (#83; unused here). PyPI 1.0.0 lacks the callback, so this
+    # Pin to livepeer/livepeer-python-gateway main at 7dc2a07 (6 November): Enforce TLS (#76),
+    # streamable runner bodies (#80), on_payment_session (#81; reports LivePaymentSession.manifest_id),
+    # the runner-side session stop (#83; unused here) and the challenge probe before a streamed
+    # upload (#90; unused here: the engine sends a buffered body). PyPI 1.0.0 lacks the callback, so this
     # stays a git SHA until a release (tech debt T1).
-    "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@2017a80c740af5fcb0fef4ee84659af9b07fb90c",
+    "livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@7dc2a072e618fc526741ad22642e6034836edcc9",
     "pyjwt[crypto]>=2.13",
 ]
 

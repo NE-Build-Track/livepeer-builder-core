@@ -13,20 +13,20 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from livepeer_builder import EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.contracts import (
     AccessKey,
+    ActorAllocation,
     ActorContext,
-    FundRequest,
+    AllotRequest,
     GrantRecord,
     Money,
     OperationRecord,
-    ProvisionedActor,
-    ProvisionRequest,
+    TopUpRequest,
 )
 from livepeer_builder.errors import (
     AccessDenied,
-    AlreadyProvisioned,
+    AlreadyAllotted,
     InvalidRequest,
     NotFound,
     OperationConflict,
@@ -45,43 +45,42 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def provision_request(actor_id: str = "alice", amount: str = "5", *, ref: str = "") -> ProvisionRequest:
-    return ProvisionRequest(
-        application_id="default",
+def allot_request(actor_id: str = "alice", amount: str = "5", *, ref: str = "") -> AllotRequest:
+    return AllotRequest(
+        tenant_id="default",
         actor_id=actor_id,
         amount=usd(amount),
-        grant_id="grant_1",
-        operation_ref=ref or f"provision:{actor_id}",
+        operation_ref=ref or f"allot:{actor_id}",
     )
 
 
-async def test_funding_repeated_with_one_ref_is_answered_without_calling_the_provider_again(
+async def test_top_up_repeated_with_one_ref_is_answered_without_calling_the_provider_again(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    first = await engine.payments.fund(admin, "default", "alice", request)
-    again = await engine.payments.fund(admin, "default", "alice", request)  # a lost response
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    first = await engine.payments.top_up(admin, "default", "alice", request)
+    again = await engine.payments.top_up(admin, "default", "alice", request)  # a lost response
     assert again == first
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
 
 
-async def test_funding_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call(
+async def test_top_up_with_one_ref_and_another_amount_is_a_conflict_before_the_provider_call(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    await engine.payments.fund(
-        admin, "default", "alice", FundRequest(amount=usd("10"), operation_ref="topup-1")
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    await engine.payments.top_up(
+        admin, "default", "alice", TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     )
     with pytest.raises(OperationConflict) as conflict:
-        await engine.payments.fund(
-            admin, "default", "alice", FundRequest(amount=usd("11"), operation_ref="topup-1")
+        await engine.payments.top_up(
+            admin, "default", "alice", TopUpRequest(amount=usd("11"), operation_ref="topup-1")
         )
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
     assert conflict.value.job is None
-    assert conflict.value.operation is not None and conflict.value.operation.command == "fund"
+    assert conflict.value.operation is not None and conflict.value.operation.command == "top_up"
 
 
 async def test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress(
@@ -89,38 +88,38 @@ async def test_a_repeat_while_the_first_run_may_still_be_going_is_in_progress(
 ) -> None:
     """The first call's outcome is unknown (the provider timed out), so its record stays started."""
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(30)
     with pytest.raises(OperationInProgress) as early:
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     assert early.value.retry_after_s == 90  # the seconds until a repeat may resume it
     clock.advance(89)  # 119 s: younger than LPB_OPERATION_STALE_S (120 s)
     with pytest.raises(OperationInProgress) as running:
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     assert running.value.operation is not None and running.value.operation.state == "started"
     assert running.value.retry_after_s == 1
-    assert manager.calls.count("fund_allocation") == 1
+    assert manager.calls.count("top_up_allocation") == 1
 
 
 async def test_a_repeat_after_the_first_run_went_stale_resumes_it_and_applies_once(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
     engine = await make_engine()
-    actor = await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    actor = await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(120)  # LPB_OPERATION_STALE_S: the first run is presumed dead
-    funded = await engine.payments.fund(admin, "default", "alice", request)
+    funded = await engine.payments.top_up(admin, "default", "alice", request)
     assert funded.status == "active"
     assert manager.allocations[actor.allocation_id].granted == Decimal(10)
-    assert await engine.payments.fund(admin, "default", "alice", request) == funded  # done: a replay
-    assert manager.calls.count("fund_allocation") == 2  # the timed-out call and the resume
+    assert await engine.payments.top_up(admin, "default", "alice", request) == funded  # done: a replay
+    assert manager.calls.count("top_up_allocation") == 2  # the timed-out call and the resume
 
 
 async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
@@ -133,11 +132,11 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
 ) -> None:
     """Both repeats read the stale record before either takes it over; the fencing token lets one win."""
     engine = await make_engine()
-    actor = await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    actor = await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(600)
     both_read = asyncio.Barrier(2)
     resume = store.resume_operation
@@ -148,50 +147,53 @@ async def test_two_repeats_racing_to_resume_a_stale_run_resume_it_once(
 
     monkeypatch.setattr(store, "resume_operation", after_both_read)
     answers = await asyncio.gather(
-        *(engine.payments.fund(admin, "default", "alice", request) for _ in range(2)), return_exceptions=True
+        *(engine.payments.top_up(admin, "default", "alice", request) for _ in range(2)),
+        return_exceptions=True,
     )
-    assert manager.calls.count("fund_allocation") == 2  # the timed-out call and one resume
+    assert manager.calls.count("top_up_allocation") == 2  # the timed-out call and one resume
     assert manager.allocations[actor.allocation_id].granted == Decimal(10)
     # The loser answers from the record as it is now: the winner's result once done, else in progress
     # with a full stale window, since the winner restarted it now (Cursor, #76 review: it said 1 s).
-    assert any(isinstance(answer, ProvisionedActor) for answer in answers)
+    assert any(isinstance(answer, ActorAllocation) for answer in answers)
     lost = [answer for answer in answers if isinstance(answer, OperationInProgress)]
     assert [answer.retry_after_s for answer in lost] in ([], [120])
     assert lost, "the race should leave the loser in progress here: the winner is still funding"
 
 
-async def test_funding_a_grant_with_one_ref_and_another_grant_is_a_conflict(
+async def test_top_up_a_grant_with_one_ref_and_another_grant_is_a_conflict(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
+    manager.add_grant("grant_a")
+    manager.add_grant("grant_b")
     engine = await make_engine()
-    request = FundRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_a")
-    await engine.payments.fund_grant(admin, request)
+    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1")
+    await engine.payments.top_up_grant(admin, "grant_a", request)
     with pytest.raises(OperationConflict):
-        await engine.payments.fund_grant(admin, request.model_copy(update={"grant_id": "grant_b"}))
-    await engine.payments.fund_grant(admin, request)  # a lost response: answered from the ledger
-    assert [grant for grant, _, _ in manager.funded_grants] == ["grant_a"]
-    assert manager.calls.count("fund_grant") == 1
+        await engine.payments.top_up_grant(admin, "grant_b", request)
+    await engine.payments.top_up_grant(admin, "grant_a", request)  # a lost response: answered from the ledger
+    assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_a"]
+    assert manager.calls.count("top_up_grant") == 1
 
 
 async def test_a_definite_refusal_frees_the_ref_for_a_corrected_repeat(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, store: SqlStore
 ) -> None:
     """A 4xx from the provider applied nothing, so the caller may fix the request and repeat it."""
+    manager.add_grant("grant_a")
     engine = await make_engine()
-    request = FundRequest(amount=usd("10"), operation_ref="grant-topup-1", grant_id="grant_typo")
-    manager.fail_once("fund_grant", ProviderError(404, "grant not found"))
-    with pytest.raises(ProviderError):
-        await engine.payments.fund_grant(admin, request)
+    request = TopUpRequest(amount=usd("10"), operation_ref="grant-topup-1")
+    with pytest.raises(ProviderError, match="404"):  # no such grant: the provider's own refusal
+        await engine.payments.top_up_grant(admin, "grant_typo", request)
     assert await store.get_operation("default", "operator", "grant-topup-1") is None
-    await engine.payments.fund_grant(admin, request.model_copy(update={"grant_id": "grant_a"}))
-    assert [grant for grant, _, _ in manager.funded_grants] == ["grant_a"]
+    await engine.payments.top_up_grant(admin, "grant_a", request)
+    assert [grant for grant, _, _ in manager.topped_up_grants] == ["grant_a"]
 
 
 @pytest.mark.parametrize(
     ("error", "refused"),
     [
         (InvalidRequest("choose a grant"), True),
-        (NotFound("actor 'alice' is not provisioned"), True),
+        (NotFound("actor 'alice' has no allocation"), True),
         (AccessDenied("admin only"), True),
         (ProviderError(400, "bad amount"), True),
         (ProviderError(409, "idempotency key was already used with different parameters"), True),
@@ -218,16 +220,16 @@ async def test_a_rotation_that_died_before_revoking_the_old_key_is_finished_by_a
     """The new key is stored and the actor uses it, then the old key's revoke times out. The old key must
     not stay live: a resume reads it from the ledger's context, not from the actor as it is now."""
     engine = await make_engine()
-    before = await engine.payments.provision(admin, provision_request())
+    before = await engine.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is False  # the old key is still live
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
     assert manager.keys[rotated.api_key_id][2] is False
-    assert len(manager.keys) == 2  # provisioning's key and one rotation
+    assert len(manager.keys) == 2  # allotment's key and one rotation
     assert (await engine.payments.credential(alice)).token == manager.keys[rotated.api_key_id][1]
 
 
@@ -241,13 +243,13 @@ async def test_a_rotation_refused_after_its_new_key_was_stored_stays_resumable(
     stored and live). Freeing the reference would lose the old key from the ledger's context, and a repeat
     would take the new key for the old one: two live payment keys. The record stays started instead."""
     engine = await make_engine()
-    before = await engine.payments.provision(admin, provision_request())
+    before = await engine.payments.allot(admin, allot_request())
     manager.fail_once("revoke_key", ProviderError(409, "key busy"))
     with pytest.raises(ProviderError):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is False  # the old key is still live
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert manager.keys[before.api_key_id][2] is True  # revoked by the resume
     assert manager.keys[rotated.api_key_id][2] is False
     assert len(manager.keys) == 2
@@ -258,13 +260,43 @@ async def test_a_command_refused_before_any_step_applied_still_frees_its_referen
 ) -> None:
     """The other side of the rule: nothing was applied, so the caller may fix the request and repeat it."""
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderError(400, "bad amount"))
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderError(400, "bad amount"))
     with pytest.raises(ProviderError):
-        await engine.payments.fund(admin, "default", "alice", request)
-    await engine.payments.fund(admin, "default", "alice", request)  # not in progress: the record was freed
-    assert manager.calls.count("fund_allocation") == 2
+        await engine.payments.top_up(admin, "default", "alice", request)
+    await engine.payments.top_up(admin, "default", "alice", request)  # not in progress: the record was freed
+    assert manager.calls.count("top_up_allocation") == 2
+
+
+async def test_a_refusal_on_a_resumed_run_keeps_its_reference(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    store: SqlStore,
+    clock: FixedClock,
+) -> None:
+    """A resumed run follows an attempt whose outcome is unknown: the provider may have applied a call
+    that timed out, with nothing noted. So a refusal on it never frees the reference (review of #128):
+    freed, the next repeat would run as a new command, and another request could take the reference."""
+    engine = await make_engine()
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.top_up(admin, "default", "alice", request)
+    clock.advance(120)
+    manager.fail_once("top_up_allocation", ProviderError(400, "bad amount"))
+    with pytest.raises(ProviderError):
+        await engine.payments.top_up(admin, "default", "alice", request)  # resumed, and refused
+    held = await store.get_operation("default", "operator", "topup-1")
+    assert held is not None and held.state == "started"
+    other = request.model_copy(update={"amount": usd("9")})
+    with pytest.raises(OperationConflict):
+        await engine.payments.top_up(admin, "default", "alice", other)
+    clock.advance(120)
+    await engine.payments.top_up(admin, "default", "alice", request)  # the same request still resumes
+    assert manager.allocations["alloc_1"].granted == Decimal("10")
 
 
 async def test_a_rotation_resumed_after_storing_the_secret_failed_revokes_the_old_key_once(
@@ -277,7 +309,7 @@ async def test_a_rotation_resumed_after_storing_the_secret_failed_revokes_the_ol
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = await make_engine()
-    before = await engine.payments.provision(admin, provision_request())
+    before = await engine.payments.allot(admin, allot_request())
     put_secret = store.put_secret
 
     async def unavailable(*args: object) -> None:
@@ -294,9 +326,9 @@ async def test_a_rotation_resumed_after_storing_the_secret_failed_revokes_the_ol
 
     monkeypatch.setattr(manager, "revoke_key", counted)
     with pytest.raises(ConnectionError):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     assert revoked == [before.api_key_id]
     assert manager.keys[rotated.api_key_id][2] is False and len(manager.keys) == 2
     assert (await engine.payments.credential(alice)).token == manager.keys[rotated.api_key_id][1]
@@ -312,18 +344,18 @@ async def test_a_rotation_resumed_after_its_secret_was_stored_keeps_one_copy_of_
     """The secret is written, then the actor's save fails. The resume reuses that secret, recorded in the
     ledger's context, instead of writing a second copy of the live key that nothing points to."""
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request())
-    save_actor = store.save_actor
+    await engine.payments.allot(admin, allot_request())
+    set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object) -> None:
+        monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "set_actor_key", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     clock.advance(120)
-    rotated = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     async with store.engine.connect() as conn:
         refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
     assert refs == {rotated.secret_ref.ref}  # the old key's secret is deleted, and no orphan copy
@@ -341,22 +373,22 @@ async def test_a_slow_run_taken_over_by_a_resume_answers_with_the_recorded_resul
     replays the funding at the provider and records its answer; the slow run's complete is fenced off, so
     both callers get the one recorded answer and the money moved once."""
     engine = await make_engine()
-    actor = await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    actor = await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     stalled, release = asyncio.Event(), asyncio.Event()
-    fund_allocation = manager.fund_allocation
+    top_up_allocation = manager.top_up_allocation
 
     async def slow_once(*args: object) -> None:
-        monkeypatch.setattr(manager, "fund_allocation", fund_allocation)
-        await fund_allocation(*args)  # type: ignore[arg-type]
+        monkeypatch.setattr(manager, "top_up_allocation", top_up_allocation)
+        await top_up_allocation(*args)  # type: ignore[arg-type]
         stalled.set()
         await release.wait()
 
-    monkeypatch.setattr(manager, "fund_allocation", slow_once)
-    slow = asyncio.create_task(engine.payments.fund(admin, "default", "alice", request))
+    monkeypatch.setattr(manager, "top_up_allocation", slow_once)
+    slow = asyncio.create_task(engine.payments.top_up(admin, "default", "alice", request))
     await stalled.wait()
     clock.advance(120)
-    resumed = await engine.payments.fund(admin, "default", "alice", request)
+    resumed = await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(1)
     release.set()
     assert await slow == resumed
@@ -377,7 +409,7 @@ async def test_a_slow_rotation_taken_over_while_storing_its_secret_drops_its_cop
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = await make_engine()
-    before = await engine.payments.provision(admin, provision_request())
+    before = await engine.payments.allot(admin, allot_request())
     stalled, release = asyncio.Event(), asyncio.Event()
     put_secret = store.put_secret
 
@@ -388,10 +420,10 @@ async def test_a_slow_rotation_taken_over_while_storing_its_secret_drops_its_cop
         await release.wait()
 
     monkeypatch.setattr(store, "put_secret", slow_once)
-    slow = asyncio.create_task(engine.payments.rotate_key(admin, "default", "alice", "rotate-1"))
+    slow = asyncio.create_task(engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1"))
     await stalled.wait()
     clock.advance(120)
-    resumed = await engine.payments.rotate_key(admin, "default", "alice", "rotate-1")
+    resumed = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     release.set()
     assert await slow == resumed
     async with store.engine.connect() as conn:
@@ -410,18 +442,18 @@ async def test_a_slow_run_whose_resume_is_still_going_is_told_it_is_in_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     stalled, release = asyncio.Event(), asyncio.Event()
-    fund_allocation = manager.fund_allocation
+    top_up_allocation = manager.top_up_allocation
 
     async def slow(*args: object) -> None:
-        await fund_allocation(*args)  # type: ignore[arg-type]
+        await top_up_allocation(*args)  # type: ignore[arg-type]
         stalled.set()
         await release.wait()
 
-    monkeypatch.setattr(manager, "fund_allocation", slow)
-    first = asyncio.create_task(engine.payments.fund(admin, "default", "alice", request))
+    monkeypatch.setattr(manager, "top_up_allocation", slow)
+    first = asyncio.create_task(engine.payments.top_up(admin, "default", "alice", request))
     await stalled.wait()
     clock.advance(120)
     held = await store.get_operation("default", "operator", "topup-1")
@@ -459,7 +491,7 @@ async def test_a_run_that_outlives_half_the_stale_window_is_cancelled_and_left_f
     be calling Batteries when the next resume starts. Every run gets half the stale window: past it, the
     run's provider call is cancelled and its outcome is unknown, so no run is alive when a resume begins."""
     engine = await make_engine(operation_stale_s=0.4, batteries_timeout_s=0.1)  # a run gets 0.2 s
-    await engine.payments.provision(admin, provision_request(amount="0"))
+    await engine.payments.allot(admin, allot_request(amount="0"))
     cancelled = asyncio.Event()
 
     async def hangs(*args: object) -> None:
@@ -469,13 +501,13 @@ async def test_a_run_that_outlives_half_the_stale_window_is_cancelled_and_left_f
             cancelled.set()
             raise
 
-    monkeypatch.setattr(manager, "fund_allocation", hangs)
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
+    monkeypatch.setattr(manager, "top_up_allocation", hangs)
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     with pytest.raises(ProviderUnavailable, match=r"0\.2 s"):
-        await asyncio.wait_for(engine.payments.fund(admin, "default", "alice", request), timeout=2)
+        await asyncio.wait_for(engine.payments.top_up(admin, "default", "alice", request), timeout=2)
     assert cancelled.is_set()
     with pytest.raises(OperationInProgress):  # unknown outcome: the record stays started, for a resume
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
 
 
 async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
@@ -489,61 +521,63 @@ async def test_the_stale_threshold_is_configurable_and_120_s_by_default(
     }
     assert EngineSettings.from_env(shorter).operation_stale_s == 30
     engine = await make_engine(operation_stale_s=30, batteries_timeout_s=5)
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    request = FundRequest(amount=usd("10"), operation_ref="topup-1")
-    manager.fail_once("fund_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.fund(admin, "default", "alice", request)
+        await engine.payments.top_up(admin, "default", "alice", request)
     clock.advance(30)
-    assert (await engine.payments.fund(admin, "default", "alice", request)).status == "active"
+    assert (await engine.payments.top_up(admin, "default", "alice", request)).status == "active"
 
 
 async def test_one_ref_used_for_another_command_is_a_conflict(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(amount="0"))
-    await engine.payments.fund(admin, "default", "alice", FundRequest(amount=usd("10"), operation_ref="op-1"))
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    await engine.payments.top_up(
+        admin, "default", "alice", TopUpRequest(amount=usd("10"), operation_ref="op-1")
+    )
     with pytest.raises(OperationConflict):
-        await engine.payments.rotate_key(admin, "default", "alice", "op-1")
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "op-1")
     assert "create_key" not in manager.calls
 
 
-# -- provisioning (slice 4) ---------------------------------------------------------------------------------
+# -- allotment (slice 4) ---------------------------------------------------------------------------------
 
 
-def test_a_provisioning_request_needs_an_operation_ref() -> None:
+def test_a_allotment_request_needs_an_operation_ref() -> None:
     """Q4: required now, so a repeat after a lost response can never create a second allocation."""
     with pytest.raises(ValidationError, match="operation_ref"):
-        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"))  # type: ignore[call-arg]
+        AllotRequest(tenant_id="default", actor_id="alice", amount=usd("1"))  # type: ignore[call-arg]
     with pytest.raises(ValidationError, match="operation_ref"):
-        ProvisionRequest(application_id="default", actor_id="alice", amount=usd("1"), operation_ref="")
+        AllotRequest(tenant_id="default", actor_id="alice", amount=usd("1"), operation_ref="")
 
 
-async def test_provisioning_with_one_ref_and_another_body_is_a_conflict_before_any_provider_call(
+async def test_allotment_with_one_ref_and_another_body_is_a_conflict_before_any_provider_call(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision_request(ref="p-1"))
+    await engine.payments.allot(admin, allot_request(ref="p-1"))
     with pytest.raises(OperationConflict):
-        await engine.payments.provision(admin, provision_request(actor_id="bob", ref="p-1"))
+        await engine.payments.allot(admin, allot_request(actor_id="bob", ref="p-1"))
     assert manager.calls == ["create_key_for_grant"]
     with pytest.raises(OperationConflict):
-        await engine.payments.provision(admin, provision_request(amount="6", ref="p-1"))  # same actor
+        await engine.payments.allot(admin, allot_request(amount="6", ref="p-1"))  # same actor
 
 
-async def test_two_concurrent_provisions_with_one_ref_create_one_allocation(
+async def test_two_concurrent_allots_with_one_ref_create_one_allocation(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
     answers = await asyncio.gather(
-        *(engine.payments.provision(admin, provision_request()) for _ in range(2)), return_exceptions=True
+        *(engine.payments.allot(admin, allot_request()) for _ in range(2)), return_exceptions=True
     )
-    assert sorted(type(answer).__name__ for answer in answers) == ["OperationInProgress", "ProvisionedActor"]
+    assert sorted(type(answer).__name__ for answer in answers) == ["ActorAllocation", "OperationInProgress"]
     assert manager.calls == ["create_key_for_grant"] and len(manager.allocations) == 1
 
 
-async def test_a_provisioning_resumed_after_its_secret_was_stored_keeps_one_copy_of_the_key(
+async def test_a_allotment_resumed_after_its_secret_was_stored_keeps_one_copy_of_the_key(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
@@ -553,39 +587,53 @@ async def test_a_provisioning_resumed_after_its_secret_was_stored_keeps_one_copy
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = await make_engine()
-    save_actor = store.save_actor
+    allot_actor = store.allot_actor  # allotment's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "allot_actor", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.provision(admin, provision_request())
+        await engine.payments.allot(admin, allot_request())
     clock.advance(120)
-    actor = await engine.payments.provision(admin, provision_request())
+    actor = await engine.payments.allot(admin, allot_request())
     async with store.engine.connect() as conn:
         refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
     assert refs == {actor.secret_ref.ref}
     assert (await engine.payments.credential(alice)).token == manager.keys[actor.api_key_id][1]
 
 
-# -- creating a grant (slice 4, Q5) -----------------------------------------------------------------------
+# -- onboarding a tenant: its grant is created once (slice 4, Q5; #165) ------------------------------------
 
 
-async def test_creating_a_grant_twice_with_one_ref_creates_one_grant(
+def onboarded(manager: FakeAllocationManager) -> list[GrantRecord]:
+    """The grants made since the test began: every one but the ``default`` tenant's."""
+    return [grant for grant in manager.grants if grant.id != "default"]
+
+
+async def tenant_admin_keys(engine: BuilderEngine, tenant_id: str) -> list[str]:
+    return [
+        key.key_id for key in await engine.store.list_access_keys(tenant_id) if key.kind == "tenant_admin"
+    ]
+
+
+async def test_onboarding_a_tenant_twice_with_one_ref_creates_one_grant_and_one_key(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
-    first = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    again = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")  # a lost response
-    assert again == first
-    assert manager.calls.count("create_grant") == 1 and len(manager.grants) == 1
+    first = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    again = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")  # a lost response
+    assert first.admin_key is not None and again.admin_key is not None
+    assert (again.tenant_id, again.admin_key.key) == (first.tenant_id, first.admin_key.key)
+    assert first.admin_key.token is not None and again.admin_key.token is None  # shown once
+    assert manager.calls.count("create_grant") == 1 and len(onboarded(manager)) == 1
+    assert await tenant_admin_keys(engine, first.tenant_id) == [first.admin_key.key.key_id]
 
 
-async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_grant(
+async def test_an_onboarding_resumed_after_the_provider_created_the_grant_adopts_that_grant(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -595,7 +643,7 @@ async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_
     """Batteries has no idempotency key on grant creation, so the engine tags each grant it creates with
     ``metadata.lpb_operation`` and a resume lists the grants to find it."""
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     create_grant = manager.create_grant
 
@@ -606,14 +654,17 @@ async def test_a_grant_create_resumed_after_the_provider_created_it_adopts_that_
 
     monkeypatch.setattr(manager, "create_grant", answer_lost)
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
     clock.advance(120)
-    adopted = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    assert manager.grants == [adopted] and manager.calls.count("create_grant") == 1
-    assert adopted.metadata["lpb_operation"]
+    adopted = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    assert [grant.id for grant in onboarded(manager)] == [adopted.tenant_id]
+    assert manager.calls.count("create_grant") == 1 and onboarded(manager)[0].metadata["lpb_operation"]
+    # the first run never got as far as the key: this run issued it, and shows its token
+    assert adopted.admin_key is not None and adopted.admin_key.token is not None
+    assert len(await tenant_admin_keys(engine, adopted.tenant_id)) == 1
 
 
-async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_last_resume_stopped(
+async def test_an_onboarding_resumed_over_a_slow_catalog_continues_where_the_last_resume_stopped(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -625,7 +676,7 @@ async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_la
     reference never finished. The list cursor is recorded after each page, so each resume goes on from where
     the last stopped (pages before it lacked the tag, and a newer grant is always on a later page)."""
     engine = await make_engine(operation_stale_s=0.4, batteries_timeout_s=0.1)  # a run gets 0.2 s
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     for n in range(6):  # grants made by hand, before the engine's
         await manager.create_grant(f"by hand {n}", usd("1"))
@@ -638,47 +689,50 @@ async def test_a_grant_create_resumed_over_a_slow_catalog_continues_where_the_la
 
     monkeypatch.setattr(manager, "create_grant", answer_lost)
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    manager.grant_page_size, manager.grant_page_delay_s = 1, 0.08  # two pages fit in a run, seven exist
-    for _ in range(6):
+        await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    manager.grant_page_size, manager.grant_page_delay_s = 1, 0.08  # two pages fit in a run, eight exist
+    for _ in range(8):
         clock.advance(0.4)
         try:
-            adopted = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+            adopted = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
             break
         except ProviderUnavailable:  # ran out of its budget in the listing: the next resume goes on
             continue
     else:
-        pytest.fail("the resumed grant create never finished")
-    assert adopted.metadata["lpb_operation"] and len(manager.grants) == 7
+        pytest.fail("the resumed onboarding never finished")
+    assert onboarded(manager)[-1].id == adopted.tenant_id and len(onboarded(manager)) == 7
+    assert onboarded(manager)[-1].metadata["lpb_operation"]
     assert manager.calls.count("create_grant") == 7  # six by hand and the engine's one
 
 
-async def test_a_grant_create_resumed_after_the_provider_never_created_it_creates_one(
+async def test_an_onboarding_resumed_after_the_provider_never_created_the_grant_creates_one(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
     """The first run's create never reached Batteries: no grant carries the tag, so the resume creates it."""
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
     await manager.create_grant("by hand", usd("1"))
     manager.fail_once("create_grant", ProviderUnavailable("Batteries unreachable: refused"))
     with pytest.raises(ProviderUnavailable):
-        await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
+        await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
     clock.advance(120)
-    created = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    assert created.metadata["lpb_operation"] and [g.name for g in manager.grants] == ["by hand", "ops"]
+    created = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    assert [grant.name for grant in onboarded(manager)] == ["by hand", "ops"]
+    assert onboarded(manager)[-1].metadata["lpb_operation"] and onboarded(manager)[-1].id == created.tenant_id
 
 
-async def test_two_grants_with_one_name_and_different_refs_are_both_created(
+async def test_two_tenants_with_one_name_and_different_refs_are_both_onboarded(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     engine = await make_engine()
-    desk = engine.payments.grants
+    desk = engine.payments.tenants
     assert desk is not None
-    first = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-1")
-    second = await desk.create_grant(admin, "ops", usd("5"), operation_ref="grant-2")
-    assert first.id != second.id and len(manager.grants) == 2
-    assert first.metadata["lpb_operation"] != second.metadata["lpb_operation"]
+    first = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-1")
+    second = await desk.onboard(admin, "ops", usd("5"), operation_ref="grant-2")
+    assert first.tenant_id != second.tenant_id and len(onboarded(manager)) == 2
+    tags = [grant.metadata["lpb_operation"] for grant in onboarded(manager)]
+    assert tags[0] != tags[1]
 
 
 # -- engine access keys (slice 4, B4) ---------------------------------------------------------------------
@@ -760,6 +814,82 @@ async def test_a_rotation_repeat_that_looked_too_early_answers_from_the_first_ro
     assert len(await engine.keys.list_keys(admin)) == 2
 
 
+# -- a repeated key rotation is answered only to a caller the first run would have answered (#165 review) --
+
+TENANT_ADMIN_TWIN = ActorContext(actor_id="operator", tenant_id="default", credential_kind="tenant_admin")
+
+
+async def looks_too_early(store: SqlStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lost race of a rotation: the repeat finds the reference free and the key still active, and
+    the store then refuses its write because the first rotation has the reference."""
+    get_operation, get_access_key = store.get_operation, store.get_access_key
+
+    async def looked_too_early(*scope: str) -> OperationRecord | None:
+        monkeypatch.setattr(store, "get_operation", get_operation)
+        return None
+
+    async def still_active(key_id: str) -> AccessKey | None:
+        old = await get_access_key(key_id)
+        return None if old is None else old.model_copy(update={"revoked_at": None})
+
+    monkeypatch.setattr(store, "get_operation", looked_too_early)
+    monkeypatch.setattr(store, "get_access_key", still_active)
+
+
+@pytest.mark.parametrize("lost_race", [False, True], ids=["the reference is held", "the write lost the race"])
+async def test_a_rotation_repeated_under_another_tenant_reads_as_missing_and_shows_no_key(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_race: bool,
+) -> None:
+    """A clearinghouse admin may name any tenant, so the policy does not stop the repeat. The first run
+    under tenant ``two`` would have found no such key there: the repeat says the same, and never
+    answers with tenant ``one``'s replacement key."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(
+        admin, kind="auditor", actor_id="dashboard", tenant_id="one", operation_ref="key-1"
+    )
+    old = issued.key.key_id
+    rotated = await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="one")
+    if lost_race:
+        await looks_too_early(store, monkeypatch)
+    with pytest.raises(InvalidRequest, match="no active key") as missing:
+        await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="two")
+    assert rotated.key.key_id not in str(missing.value) and old in str(missing.value)
+    again = await engine.keys.rotate(admin, old, operation_ref="rotate-key-1", tenant_id="one")
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)  # its own tenant: as before
+    assert len(await engine.keys.list_keys(admin)) == 2  # the old key and one replacement
+
+
+@pytest.mark.parametrize("lost_race", [False, True], ids=["the reference is held", "the write lost the race"])
+async def test_a_rotation_repeated_by_a_caller_who_may_not_change_that_kind_of_key_is_refused(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_race: bool,
+) -> None:
+    """The ledger keys a reference by the caller's tenant and actor, not by its credential. A tenant
+    admin with the clearinghouse admin's tenant and actor id repeats the rotation of a tenant admin key:
+    a tenant admin changes no admin key, so it is 403 as its own first run would be, and the replacement
+    key is not shown."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(
+        admin, kind="tenant_admin", actor_id="second", tenant_id="default", operation_ref="key-1"
+    )
+    rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    if lost_race:
+        await looks_too_early(store, monkeypatch)
+    with pytest.raises(AccessDenied, match="tenant_admin key"):
+        await engine.keys.rotate(TENANT_ADMIN_TWIN, issued.key.key_id, operation_ref="rotate-key-1")
+    again = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    assert (again.key, again.token, again.replayed) == (rotated.key, None, True)
+
+
 async def test_no_token_or_payment_key_is_ever_stored_in_the_ledger(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, store: SqlStore
 ) -> None:
@@ -768,8 +898,8 @@ async def test_no_token_or_payment_key_is_ever_stored_in_the_ledger(
     assert engine.keys is not None
     issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
     rotated = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
-    await engine.payments.provision(admin, provision_request())
-    await engine.payments.rotate_key(admin, "default", "alice", "rotate-payment-1")
+    await engine.payments.allot(admin, allot_request())
+    await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-payment-1")
     async with store.engine.connect() as conn:
         rows = str((await conn.execute(select(t.operations))).all())
     secrets = [issued.token, rotated.token] + [secret for _, secret, _ in manager.keys.values()]
@@ -790,41 +920,41 @@ async def test_issuing_with_one_ref_and_another_body_is_a_conflict(
     assert len(await engine.keys.list_keys(admin)) == 1
 
 
-async def test_provisioning_an_actor_already_provisioned_under_a_new_ref_is_refused(
+async def test_allotment_an_actor_already_allotted_under_a_new_ref_is_refused(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """Mike, 29 October: returning the actor as if provisioned silently dropped the amount, so an operator
-    could believe it was funded. Refused with the actor (409 ``already_provisioned``); funding is ``fund``.
+    """Mike, 29 October: returning the actor as if allotted silently dropped the amount, so an operator
+    could believe it was funded. Refused with the actor (409 ``already_allotted``); funding is ``fund``.
     Nothing was applied, so the new reference stays free."""
     engine = await make_engine()
-    first = await engine.payments.provision(admin, provision_request(ref="p-1"))
-    with pytest.raises(AlreadyProvisioned) as refused:
-        await engine.payments.provision(admin, provision_request(ref="p-2"))
+    first = await engine.payments.allot(admin, allot_request(ref="p-1"))
+    with pytest.raises(AlreadyAllotted) as refused:
+        await engine.payments.allot(admin, allot_request(ref="p-2"))
     assert refused.value.actor == first and manager.calls == ["create_key_for_grant"]
-    bob = await engine.payments.provision(admin, provision_request("bob", ref="p-2"))
+    bob = await engine.payments.allot(admin, allot_request("bob", ref="p-2"))
     assert bob.actor_id == "bob"
 
 
-async def test_a_resumed_provisioning_that_never_reached_the_provider_does_not_claim_another_refs_actor(
+async def test_a_resumed_allotment_that_never_reached_the_provider_does_not_claim_another_refs_actor(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
-    """Cursor, #76 review: reference B dies before its provider call; reference A then provisions the actor
+    """Cursor, #76 review: reference B dies before its provider call; reference A then allots the actor
     with another amount. B's resume must not answer with A's actor as its own result (B's amount would be
     silently dropped): it is refused, applied nothing, and frees B's reference."""
     engine = await make_engine()
     manager.fail_once("create_key_for_grant", ProviderUnavailable("Batteries unreachable: refused"))
     with pytest.raises(ProviderUnavailable):
-        await engine.payments.provision(admin, provision_request(amount="5", ref="p-b"))
-    a = await engine.payments.provision(admin, provision_request(amount="7", ref="p-a"))
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-b"))
+    a = await engine.payments.allot(admin, allot_request(amount="7", ref="p-a"))
     clock.advance(120)
-    with pytest.raises(AlreadyProvisioned) as refused:
-        await engine.payments.provision(admin, provision_request(amount="5", ref="p-b"))
+    with pytest.raises(AlreadyAllotted) as refused:
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-b"))
     assert refused.value.actor == a
-    with pytest.raises(AlreadyProvisioned):  # freed, so not in progress: refused again at once
-        await engine.payments.provision(admin, provision_request(amount="5", ref="p-b"))
+    with pytest.raises(AlreadyAllotted):  # freed, so not in progress: refused again at once
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-b"))
 
 
-async def test_a_resumed_provisioning_that_reached_the_provider_answers_with_the_shared_allocation(
+async def test_a_resumed_allotment_that_reached_the_provider_answers_with_the_shared_allocation(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -832,29 +962,29 @@ async def test_a_resumed_provisioning_that_reached_the_provider_answers_with_the
     store: SqlStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """B got its key and stored its secret, then died before saving the actor; A then provisioned the same
+    """B got its key and stored its secret, then died before saving the actor; A then allotted the same
     actor. The provider key is actor-derived, so A got B's allocation replayed: B's command did apply, and
     its resume answers with the actor, dropping B's now unused copy of the secret."""
     engine = await make_engine()
-    save_actor = store.save_actor
+    allot_actor = store.allot_actor  # allotment's write since #115 (C4)
 
-    async def lost(actor: object) -> None:
-        monkeypatch.setattr(store, "save_actor", save_actor)
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr(store, "save_actor", lost)
+    monkeypatch.setattr(store, "allot_actor", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.provision(admin, provision_request(ref="p-b"))
-    a = await engine.payments.provision(admin, provision_request(ref="p-a"))
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    a = await engine.payments.allot(admin, allot_request(ref="p-a"))
     clock.advance(120)
-    assert await engine.payments.provision(admin, provision_request(ref="p-b")) == a
+    assert await engine.payments.allot(admin, allot_request(ref="p-b")) == a
     assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]  # one allocation, replayed
     async with store.engine.connect() as conn:
         refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
     assert refs == {a.secret_ref.ref}
 
 
-async def test_a_resumed_provisioning_that_gets_a_new_key_stores_that_keys_secret(
+async def test_a_resumed_allotment_that_gets_a_new_key_stores_that_keys_secret(
     make_engine: EngineFactory,
     admin: ActorContext,
     alice: ActorContext,
@@ -864,7 +994,7 @@ async def test_a_resumed_provisioning_that_gets_a_new_key_stores_that_keys_secre
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cursor, #76 review: the run saved the actor, then died before completing; the actor was revoked (its
-    secret deleted) before the resume. The resume re-provisions under a new provider key, so the secret on
+    secret deleted) before the resume. The resume allots again under a new provider key, so the secret on
     the record belongs to the old key: reusing it would leave the live key's secret unknown to the engine."""
     engine = await make_engine()
     complete = store.complete_operation
@@ -875,14 +1005,14 @@ async def test_a_resumed_provisioning_that_gets_a_new_key_stores_that_keys_secre
 
     monkeypatch.setattr(store, "complete_operation", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.provision(admin, provision_request())
+        await engine.payments.allot(admin, allot_request())
     await engine.payments.revoke(admin, "default", "alice")
     clock.advance(120)
-    again = await engine.payments.provision(admin, provision_request())
+    again = await engine.payments.allot(admin, allot_request())
     assert (await engine.payments.credential(alice)).token == manager.keys[again.api_key_id][1]
 
 
-async def test_a_resumed_provisioning_does_not_claim_an_actor_re_provisioned_under_another_ref(
+async def test_a_resumed_allotment_does_not_claim_an_actor_re_allotted_under_another_ref(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -891,7 +1021,7 @@ async def test_a_resumed_provisioning_does_not_claim_an_actor_re_provisioned_und
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cursor, #76 review: A saved its actor (key K1) and died before completing; the actor was revoked and
-    provisioned again under B (key K2, a new provider key since the revoke). A's retry must not answer with
+    allotted again under B (key K2, a new provider key since the revoke). A's retry must not answer with
     B's actor as its own: K2 is not A's allocation. It is refused, and A's reference is freed."""
     engine = await make_engine()
     complete = store.complete_operation
@@ -902,18 +1032,18 @@ async def test_a_resumed_provisioning_does_not_claim_an_actor_re_provisioned_und
 
     monkeypatch.setattr(store, "complete_operation", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.provision(admin, provision_request(amount="5", ref="p-a"))
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
     await engine.payments.revoke(admin, "default", "alice")
-    b = await engine.payments.provision(admin, provision_request(amount="7", ref="p-b"))
+    b = await engine.payments.allot(admin, allot_request(amount="7", ref="p-b"))
     clock.advance(120)
-    with pytest.raises(AlreadyProvisioned) as refused:
-        await engine.payments.provision(admin, provision_request(amount="5", ref="p-a"))
+    with pytest.raises(AlreadyAllotted) as refused:
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
     assert refused.value.actor == b
-    with pytest.raises(AlreadyProvisioned):  # freed, so refused again at once, not in progress
-        await engine.payments.provision(admin, provision_request(amount="5", ref="p-a"))
+    with pytest.raises(AlreadyAllotted):  # freed, so refused again at once, not in progress
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
 
 
-async def test_a_provisioning_resumed_after_its_actor_was_saved_returns_that_actor(
+async def test_a_allotment_resumed_after_its_actor_was_saved_returns_that_actor(
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -931,8 +1061,8 @@ async def test_a_provisioning_resumed_after_its_actor_was_saved_returns_that_act
 
     monkeypatch.setattr(store, "complete_operation", lost)
     with pytest.raises(ConnectionError):
-        await engine.payments.provision(admin, provision_request())
+        await engine.payments.allot(admin, allot_request())
     saved = await store.get_actor("default", "alice")
     clock.advance(120)
-    assert await engine.payments.provision(admin, provision_request()) == saved
+    assert await engine.payments.allot(admin, allot_request()) == saved
     assert manager.calls == ["create_key_for_grant"]

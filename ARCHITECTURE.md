@@ -16,7 +16,7 @@ flowchart TB
         ST["store: SQLite / PostgreSQL"]
     end
     Disc["livepeer/node livepeer-discovery<br/>(GET /discovery)"]
-    SDK["livepeer-python-gateway (pinned 2017a80)"]
+    SDK["livepeer-python-gateway (pinned 7dc2a07)"]
     Signer["livepeer/node signer"]
     Bat["clearinghouse-batteries"]
     Orch["Orchestrators + Live Runners (on the network)"]
@@ -31,7 +31,7 @@ flowchart TB
     AD -->|"management API, /v1/usage"| Bat
 ```
 
-Diagrams for the components and the key flows (authentication, provisioning, a paid job with
+Diagrams for the components and the key flows (authentication, allotment, a paid job with
 failover, cost sync, reconciliation, recovery) are in
 [docs/design-docs/architecture-diagrams.md](docs/design-docs/architecture-diagrams.md). The database ER
 diagram is generated into [docs/generated/db-schema.md](docs/generated/db-schema.md#entity-relationship-diagram). Class and
@@ -49,14 +49,14 @@ edge and prints how to fix a violation.
 | Types | `contracts/` | nothing internal |
 | Errors | `errors.py` | contracts |
 | Providers | `protocols/` | contracts, errors |
-| Facade | `api.py` (`ActorApi`, `AdminApi`, `EngineApi`) | contracts, errors, protocols |
+| Facade | `api.py` (`ActorApi`, `WorkApi`, `ClearinghouseApi`, `EngineApi`) | contracts, errors, protocols |
 | Config | `config.py` | contracts, errors |
 | Service | `services/` | contracts, errors, protocols, config, utils |
 | Repo | `store/` | contracts, errors, protocols, config, utils |
 | Adapters | `adapters/` | contracts, errors, protocols, config, utils |
 | App wiring | `runtime/` (`assembly.py` builds the parts, `engine.py` runs them) | everything above |
 | Test doubles | `testing/` (`make_engine` builds a real engine) | everything `runtime/` may, plus runtime |
-| UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn) | runtime, api, contracts, errors, config |
+| UI | `http/` (`server.py` is the stock server's composition root and the only module that imports uvicorn; the routes are [two sets](#the-two-halves)) | runtime, api, contracts, errors, config |
 | Entry points | `cli.py`, `docs_gen.py`, `docs_diagrams.py`, `__init__.py` | anything |
 
 Services never touch a database, SDK or HTTP client directly: they receive protocol implementations
@@ -68,6 +68,29 @@ discovery or transport **without patching core**.
 server import only the public API
 (`tests/structure/test_public_api.py`). Importing the root or `api` loads no heavy dependency
 (`test_import_weight.py`), and no module may import a DI container (`test_layers.py`).
+
+## The two halves
+
+The engine is one program with two halves, which meet at five payment ports (D84,
+[guide](docs/design-docs/m4-guides/iss-31-payment-configurations.md#the-engines-two-halves)). The halves
+live in `http/` and `services/`. Every module of the two is one half's or shared.
+
+| | Work half | Clearinghouse half | Shared |
+| --- | --- | --- | --- |
+| Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys, a tenant's access keys | Access, the operation ledger, health |
+| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse/tenants`, in two groups that also mount by themselves: a tenant's own routes (`mount_tenant_routes`) and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py` |
+| Facade | `WorkApi` | `ClearinghouseApi` | `EngineApi` is both |
+| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `tenants`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
+
+`create_app` mounts both sets of routes on one app. Each set is one function that adds its routes to an
+app, so a deployment can serve one half: the role setting that chooses is #169.
+
+The work half reaches payments through five ports and nothing else: signing inside `RunnerTransport`,
+`CredentialResolver`, `AllocationManager`, `AllowanceReader` and `UsageSource`. An enterprise that uses a
+payment clearinghouse runs the work half alone, with each port pointed at the clearinghouse (#168).
+`tests/structure/test_two_halves.py` enforces the seam and prints how to fix a violation: no module of
+one half imports the other, a work module names no payment protocol but the five ports, every protocol
+is classified, and each set of routes is typed against its own half of the facade.
 
 ## Providers
 
@@ -97,7 +120,7 @@ Each third-party package is confined to one module so a dependency change has on
 | --- | --- |
 | `livepeer_gateway` | `adapters/sdk.py`, `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `aiohttp` | `adapters/runner_call.py`, `adapters/signer_failures.py` |
-| `yarl` | `adapters/discovery_inventory.py` |
+| `yarl` | `adapters/discovery_inventory.py`, `adapters/runner_address.py` |
 | `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py` |
 | `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |
@@ -113,7 +136,7 @@ Each third-party package is confined to one module so a dependency change has on
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
 | Discovery | `services/discovery.py` | [engine](docs/contracts/engine.md#discovery) |
 | Jobs | `services/jobs.py`, `services/admission.py` | [engine](docs/contracts/engine.md) |
-| Payments | `services/payments.py`, `services/grants.py` (the grant desk) | [payments](docs/contracts/payments.md) |
+| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |
 | Persistence | `store/` | [persistence](docs/contracts/persistence.md) |
@@ -125,7 +148,9 @@ Each third-party package is confined to one module so a dependency change has on
   `ActorContext`. The `AccessPolicy` still applies. Walkthrough:
   [docs/guides/embedded-mode.md](docs/guides/embedded-mode.md).
 - **Service:** `lpb serve` runs the same engine behind REST. Requests are authenticated by the
-  authenticator chain. Admin routes need an admin credential. A customized service calls
+  authenticator chain. Admin routes need an admin credential: every clearinghouse route, and in the
+  work set the key routes, reconciliation and cost sync. A clearinghouse admin is an admin of every
+  tenant and a tenant admin of its own ([access](docs/contracts/access.md#defaultpolicy)). A customized service calls
   `livepeer_builder.http.server.serve` (or `build_app`, to mount it elsewhere) with its own parts
   and routes: [extending-the-engine.md](docs/design-docs/extending-the-engine.md#service-mode).
 

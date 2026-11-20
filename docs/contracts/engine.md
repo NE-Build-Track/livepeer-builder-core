@@ -654,7 +654,9 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   `LPB_MAX_CONCURRENT_JOBS_PER_APP`, shared with immediate jobs and streams), then claims the job with
   one conditional write (`queued` to `running`). A claim that finds the job gone (a cancel, the queue's
   time limit) gives the slot back. No async job runs outside the admission limits, and at most
-  `LPB_ASYNC_WORKERS` of them run at once.
+  `LPB_ASYNC_WORKERS` of them run at once. A claimed job is started even when the worker's step fails
+  after its claim (a later claim that the database refuses, for example): the step is logged and tried
+  again, and no job is left `running` with nobody running it.
 - **Oldest first**, leaving out a runner app at its per-app limit, so one busy runner app does not hold
   up the others.
 - **When.** A submit wakes the worker at once. While jobs wait it also looks every `LPB_ASYNC_POLL_S`,

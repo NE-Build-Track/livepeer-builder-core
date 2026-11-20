@@ -178,9 +178,13 @@ class AsyncJobWorker:
         try:
             while not self._draining and (room := self._room(len(claimed))) > 0:
                 ready = await self._store.queued_jobs(room, self._admission.full_apps())
-                taken = [claim for job_id, app in ready if (claim := await self._claim(job_id, app))]
-                claimed += taken
-                if not taken:  # nothing queued, or nothing that could be admitted
+                before = len(claimed)
+                for job_id, app in ready:
+                    # Noted as soon as it is made: a claim is committed and holds a slot, so one made
+                    # before a later claim failed must still be started below (#184 review).
+                    if claim := await self._claim(job_id, app):
+                        claimed.append(claim)
+                if len(claimed) == before:  # nothing queued, or nothing that could be admitted
                     break
             await self.count_queue()  # before any job starts: nothing else is writing yet
         finally:  # a claimed job runs, whatever stopped the step after its claim

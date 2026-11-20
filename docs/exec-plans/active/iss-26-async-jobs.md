@@ -42,7 +42,8 @@ From ISS-26, as amended on 13 November 2026.
   queued job on both sets of payment adapters; the client going away; the documents.
 - [x] **20 November 2026, review fixes.** A submit stores its job and tells the worker in one task the
   request's cancellation cannot stop, so a job stored just before its request was cancelled is not left
-  waiting for the next submit.
+  waiting for the next submit. A worker's step notes each claim as it is made, so a job claimed before a
+  later claim failed still runs and gives its admission slot back.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log

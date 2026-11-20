@@ -297,8 +297,9 @@ in two. The tables above are changed.
   the `reason` carries the detail.
 - **Self-hosted payments.** Both admins are the same party, so the value reads correctly there too.
 - **Failures of the clearinghouse itself**, as an enterprise's engine sees them, take the place of signer
-  failures: unreachable or not ready is `signer_unavailable` and `retry`. To be confirmed with the remote
-  adapters (#168).
+  failures: unreachable or not ready is `signer_unavailable` and `retry`, an unknown outcome is
+  `signer_unknown` and `check`, and a refusal keeps its reason. Locked on 18 November (D87). The remote
+  adapters build it (#168).
 
 ## Delivery slices
 

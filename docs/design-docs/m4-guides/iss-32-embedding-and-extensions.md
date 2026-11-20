@@ -277,6 +277,7 @@ requirement and renames the examples.
   it for them.
 - **Names.** `application_id` becomes `tenant_id` in `ActorContext`, which every embedded caller builds
   (#163).
+- **The key routes** that the keys-off check names as `/v1/admin/keys` are under `/v1/keys` (D87).
 
 ## Delivery slices
 

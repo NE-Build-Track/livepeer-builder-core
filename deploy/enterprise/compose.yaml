@@ -1,0 +1,39 @@
+# An enterprise that uses a payment clearinghouse, on one host (D82, D87): its own engine, in its `work`
+# role. Optional; not part of CI. See README.md, and ../README.md for the proofs.
+#
+# The engine runs the enterprise's jobs and sends them straight to orchestrators. It knows the
+# clearinghouse's address, its tenant admin key and its tenant's id, and nothing of Batteries or a
+# signer: there is none here. Start the clearinghouse project first: this one joins its edge network,
+# where the clearinghouse's public listener is and nothing else.
+name: lpb-enterprise
+
+services:
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/dev-stack/engine/Dockerfile
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-roles/engine:local
+    environment:
+      LPB_ROLE: work
+      LPB_ENGINE_ID: lpb-enterprise
+      # The clearinghouse's public listener: a scheme, a host and a port, and nothing after them.
+      LPB_CLEARINGHOUSE_URL: ${LPB_CLEARINGHOUSE_URL:-http://clearinghouse:8080}
+      LPB_CLEARINGHOUSE_TOKEN: ${LPB_CLEARINGHOUSE_TOKEN:?set LPB_CLEARINGHOUSE_TOKEN in .env to the tenant admin key from onboarding}
+      LPB_CLEARINGHOUSE_TENANT_ID: ${LPB_CLEARINGHOUSE_TENANT_ID:?set LPB_CLEARINGHOUSE_TENANT_ID in .env to the tenant's id from onboarding}
+      LPB_SECRET_KEY: ${LPB_SECRET_KEY:?set LPB_SECRET_KEY in .env to a key of this project's own}
+      # No LPB_DISCOVERY_URL: the clearinghouse's runner list is the default (D87).
+      LPB_DEFAULT_CURRENCY: USD
+    ports:
+      - "127.0.0.1:${ENTERPRISE_PORT:-8280}:8080"  # the engine's one listener: the work routes
+    volumes:
+      - engine-data:/data
+      - ./allot.py:/opt/enterprise/allot.py:ro
+    networks: [default, edge]
+
+networks:
+  edge:
+    external: true
+    name: lpb-clearinghouse-edge
+
+volumes:
+  engine-data:

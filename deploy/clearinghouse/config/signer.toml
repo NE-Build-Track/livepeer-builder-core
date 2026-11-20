@@ -1,0 +1,19 @@
+# livepeer/node signer (on-chain: needs a funded deposit and reserve on Arbitrum One).
+# The key file and its password file are named in compose.yaml, from the wallet's key folder.
+# The listener binds all interfaces so the engine can reach it through the batteries service; no port
+# is published.
+Listen = "unsafe@0.0.0.0:8937"
+MetricsListen = "127.0.0.1:8938"
+RPCURLFile = "/run/secrets/rpc-url"
+MaxHourlyPrice = "100"
+MaxFixedPrice = "1"
+AuthWebhookFile = "/run/secrets/webhook-url"
+AuthWebhookHeadersFile = "/run/secrets/webhook-headers"
+
+[Kafka]
+Broker = "kafka://127.0.0.1:9092"
+Topic = "livepeer-signing"
+AuthMethod = "scram-sha-512"
+UsernameFile = "/run/secrets/kafka-username"
+PasswordFile = "/run/secrets/kafka-password"
+OutboxDB = "/data/signer-events.sqlite"

@@ -1078,7 +1078,19 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Configuration | Who runs Batteries, the signer and the wallet | State |
 | --- | --- | --- |
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
-| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built but for the role setting and the two Compose projects that prove it (#169). M4 builds it as #162 to #169 |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built (M4, #162 to #169). The two Compose projects that run it on one host are in [deploy/](../../deploy/README.md) |
+
+**The engine's role says which side a deployment is** (`LPB_ROLE`, D84, #169):
+
+| `LPB_ROLE` | Configuration | Routes | The payment ports reach |
+| --- | --- | --- | --- |
+| `both`, the default | Self-hosted payments | The work routes and the clearinghouse routes | Batteries and the signer |
+| `work` | The enterprise's side of a payment clearinghouse | The work routes | The payment clearinghouse |
+| `clearinghouse` | The clearinghouse | The clearinghouse routes, on a public and a private listener | Batteries and the signer |
+
+A deployment that sets nothing new is in its `both` role, and nothing it served or wired changed. What
+each role needs, refuses and starts is in [RELIABILITY.md](../RELIABILITY.md#roles), and the routes of
+each role are in [access.md](access.md#listeners).
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
 ([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166):
@@ -1094,14 +1106,17 @@ a tenant's actors and their allocations, and a tenant's access keys and usage, a
 `/v1/clearinghouse/discovery`, and the signer's two paths at the root. The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
-engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The
+engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets; an
+engine in its `work` role serves the work routes alone, and one in its `clearinghouse` role the
+clearinghouse routes alone (#169). The
 old paths of the routes that moved are under
 [Upgrading to the work routes and the clearinghouse routes](index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
 
 ## The remote adapters
 
 An engine that uses a payment clearinghouse (#168, D84) points its payment ports at the clearinghouse in
-place of Batteries and the signer. Three settings select that, set together or not at all:
+place of Batteries and the signer. It is an engine in its `work` role: `LPB_ROLE=work` selects the
+remote adapters (#169), and three settings, set together, say which clearinghouse:
 
 | Setting | Meaning |
 | --- | --- |
@@ -1113,6 +1128,9 @@ place of Batteries and the signer. Three settings select that, set together or n
   `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` or `LPB_SIGNER_URL`: an engine that uses a
   clearinghouse holds no address or credential of Batteries or a signer. The refusal names the
   settings and echoes no value.
+- **The role and the three settings go together** (#169). `LPB_ROLE=work` without them is refused, and
+  so are they with `LPB_ROLE` unset, `both` or `clearinghouse`: the role is the one switch, and the
+  three settings alone do not turn an engine into a clearinghouse's tenant.
 - **`LPB_SECRET_KEY` is required**, as with Batteries: the engine keeps each actor's payment key.
 - **`LPB_CLEARINGHOUSE_TIMEOUT_S`** (30) bounds each request. `LPB_OPERATION_STALE_S` must be at least
   four times it, as for `LPB_BATTERIES_TIMEOUT_S`.
@@ -1285,22 +1303,24 @@ column is what the engine met at the clearinghouse's two signer paths.
 
 ### `lpb payments check`
 
-A read-only command (D87): it prints what this engine's payments need and whether each answered.
-**Every request it makes is a GET**, it builds no engine and it opens no database.
+A read-only command (D87): it prints the engine's role, what that role needs for payments and whether
+each answered (#169). **Every request it makes is a GET**, it builds no engine and it opens no database.
+An engine in its `both` or its `clearinghouse` role pays through Batteries and a signer of its own, so
+its configuration is `self_hosted`; an engine in its `work` role has the configuration `clearinghouse`.
 
 | Configuration | Probe | Request | Passes when |
 | --- | --- | --- | --- |
 | Self-hosted | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
-| Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered |
+| Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
 | Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
 | Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
 | Clearinghouse | `clearinghouse_signer` | `GET /sign-orchestrator-info` at the clearinghouse's address, with no credential | The answer is 405, as at a signer: the clearinghouse serves the signer's two paths, where the engine signs. A clearinghouse with no signer answers 404 |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings
-  themselves are refused. Nothing is sent in the last case.
-- **Output:** one JSON object on standard output: `configuration`, `ok`, `probes` (each with `name`,
+  themselves are refused, a role without what it needs included. Nothing is sent in the last case.
+- **Output:** one JSON object on standard output: `role`, `configuration`, `ok`, `probes` (each with `name`,
   `setting`, `request`, `outcome`, `status_code` and `detail`) and `tenant`. `outcome` is `ok`,
   `refused`, `unavailable`, `unexpected` or `not_configured`.
 - **Never printed:** a credential, an address, or anything the other side said. A probe names the

@@ -229,3 +229,8 @@ deploy/dev-stack/.env
 deploy/dev-stack/config/pinned-certs/
 coverage.json
 .idea/
+deploy/clearinghouse/secrets/
+deploy/clearinghouse/.env
+deploy/clearinghouse/config/discovery.toml
+deploy/enterprise/secrets/
+deploy/enterprise/.env

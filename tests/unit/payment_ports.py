@@ -6,6 +6,10 @@ engine whose ports are the remote adapters, over an in-process transport into a 
 listener (``create_app(..., listener="public")``), whose own engine has the same fakes behind it. So on
 the remote side both ends of the wire are this repository's code, and the provider that holds the money
 is the same kind of object on both sides: a test reads it to see what happened.
+
+Since #169 each engine is in the role its side has: ``local`` is the ``both`` role, the enterprise's
+engine is in its ``work`` role, and the clearinghouse in its ``clearinghouse`` role, which serves no work
+route and runs no job.
 """
 
 import contextlib
@@ -40,6 +44,8 @@ SIDES: tuple[Side, ...] = ("local", "remote")
 CLEARINGHOUSE_URL = "http://clearinghouse.test"
 GRANT_TOTAL = Decimal(100)
 OPERATOR = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
+# A clearinghouse has a private listener (#169). Nothing binds it here: the apps are called in process.
+CLEARINGHOUSE_ROLE: dict[str, object] = {"role": "clearinghouse", "http_private_port": 18081}
 PERMISSIONS = frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 
 
@@ -176,7 +182,7 @@ async def _remote(
         transport=FakeSigningTransport(),  # a clearinghouse has a signer: it serves the signer's two paths
     )
     async with contextlib.AsyncExitStack() as stack:
-        house = await stack.enter_async_context(make_engine(supply=house_supply))
+        house = await stack.enter_async_context(make_engine(supply=house_supply, **CLEARINGHOUSE_ROLE))
         assert house.payments.tenants is not None
         one = await house.payments.tenants.onboard(OPERATOR, "one", usd(100), operation_ref="onboard-one")
         two = await house.payments.tenants.onboard(OPERATOR, "two", usd(100), operation_ref="onboard-two")
@@ -204,6 +210,7 @@ async def _remote(
             allowances=remote.allowances,
         )
         settings = {
+            "role": "work",
             "clearinghouse_url": CLEARINGHOUSE_URL,
             "clearinghouse_token": token,
             "clearinghouse_tenant_id": one.tenant_id,

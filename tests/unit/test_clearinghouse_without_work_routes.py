@@ -122,6 +122,7 @@ async def test_the_discovery_reader_reads_the_runner_list_there(ports: Ports) ->
 async def test_the_payments_check_passes_there_with_every_probe(ports: Ports) -> None:
     settings = EngineSettings.model_validate(
         {
+            "role": "work",
             "clearinghouse_url": CLEARINGHOUSE_URL,
             "clearinghouse_token": ports.token,
             "clearinghouse_tenant_id": ports.tenant_id,

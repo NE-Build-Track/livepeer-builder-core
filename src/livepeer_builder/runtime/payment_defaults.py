@@ -2,9 +2,11 @@
 payments, or a payment clearinghouse.
 
 ``default_parts`` asks here for each payment part the caller did not supply, so a supplied part is never
-built. ``LPB_CLEARINGHOUSE_URL`` (with the tenant admin key and the tenant's id) selects the
-clearinghouse: every payment port then reaches it, and nothing of Batteries or a signer is built. The
-settings refuse a mix of the two (``config.py``).
+built. The engine's role chooses (``LPB_ROLE``, #169): in its ``work`` role every payment port reaches the
+clearinghouse that ``LPB_CLEARINGHOUSE_URL`` names (with the tenant admin key and the tenant's id), and
+nothing of Batteries or a signer is built; in its ``both`` and its ``clearinghouse`` role the ports reach
+Batteries and the signer. The settings refuse a role without what it needs, and a mix of the two
+(``config.py``).
 
 **Signing** is inside the runner transport, and it is the same transport either way: the gateway SDK's.
 A clearinghouse serves the signer's two paths at the root of its listener (D87), so an engine that uses
@@ -49,7 +51,8 @@ class PaymentDefaults(Protocol):
 
 
 class SelfHosted:
-    """Batteries' management API and usage feed, and the signer, as the settings name them."""
+    """An engine in its ``both`` or its ``clearinghouse`` role: Batteries' management API and usage feed,
+    and the signer, as the settings name them."""
 
     def __init__(self, settings: EngineSettings, keep: Keep) -> None:
         self._settings = settings
@@ -102,7 +105,8 @@ class SelfHosted:
 
 
 class ThroughClearinghouse:
-    """The remote adapters, over one wire to the clearinghouse, opened when the first is asked for.
+    """An engine in its ``work`` role: the remote adapters, over one wire to the clearinghouse, opened
+    when the first is asked for.
     ``actors`` and ``secrets`` are the engine's own: where it keeps each actor's allocation record and
     the payment key the clearinghouse issued for it."""
 
@@ -165,6 +169,8 @@ class ThroughClearinghouse:
 def payment_defaults(
     settings: EngineSettings, keep: Keep, actors: ActorRepo, secrets: SecretStore
 ) -> PaymentDefaults:
+    """By the role alone: ``work`` pays through a clearinghouse, and the other two roles through
+    Batteries and a signer of their own (tests/structure/test_two_halves.py)."""
     if settings.uses_clearinghouse:
         return ThroughClearinghouse(settings, keep, actors, secrets)
     return SelfHosted(settings, keep)

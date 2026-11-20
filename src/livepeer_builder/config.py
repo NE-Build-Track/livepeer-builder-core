@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from livepeer_builder.contracts import Contract, Currency, Operation
+from livepeer_builder.contracts import Contract, Currency, Operation, Role
 from livepeer_builder.contracts.common import GrantId
 
 ENV_PREFIX = "LPB_"
@@ -26,6 +26,9 @@ CLEARINGHOUSE_RUNNER_LIST = "/v1/clearinghouse/discovery"
 _CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_tenant_id")
 # What self-hosted payments sets. An engine that uses a clearinghouse holds none of them.
 _SELF_HOSTED = ("batteries_url", "batteries_token", "batteries_grants_token", "signer_url")
+# The two roles that run one half of the engine (D84, #169). The third, "both", is the default.
+_WORK_ROLE: Role = "work"
+_CLEARINGHOUSE_ROLE: Role = "clearinghouse"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
 # Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
@@ -73,6 +76,12 @@ class EngineSettings(Contract):
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
+    # Which half of the engine this deployment runs (D84, #169). "both": self-hosted payments, the work
+    # half and the clearinghouse half together. "work": an enterprise that uses a payment clearinghouse.
+    # "clearinghouse": a payment clearinghouse, which never runs jobs. The role chooses the routes that
+    # are mounted (http/listeners.py), the payment adapters (runtime/payment_defaults.py) and what the
+    # engine starts (runtime/engine.py); the settings below must agree with it.
+    role: Role = "both"
 
     # persistence
     database_url: str = DEFAULT_DATABASE_URL  # durable by default; there is no silent in-memory store
@@ -307,10 +316,54 @@ class EngineSettings(Contract):
             raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
         return self
 
+    @model_validator(mode="after")
+    def _the_settings_agree_with_the_role(self) -> "EngineSettings":
+        """The role is the one switch (D84, #169). ``work`` pays through a payment clearinghouse and so
+        names one; ``both`` and ``clearinghouse`` pay through Batteries and a signer and name none; and
+        ``clearinghouse`` has the private listener, where alone its admin's routes are served. Only
+        names are said. The half setting and the mix with self-hosted payments are refused just above."""
+        named = [_env(name) for name in _CLEARINGHOUSE if getattr(self, name) is not None]
+        if self.uses_clearinghouse:
+            if not named:
+                raise ValueError(self._work_needs_a_clearinghouse())
+            return self
+        if named:
+            why = (
+                "an engine pays through a payment clearinghouse in its work role only"
+                if self.runs_jobs
+                else "a payment clearinghouse is not a tenant of another one"
+            )
+            raise ValueError(
+                f"{', '.join(named)} cannot be set unless LPB_ROLE=work: {why}. Set LPB_ROLE=work to use "
+                "a payment clearinghouse, or remove them"
+            )
+        if not self.runs_jobs and self.http_private_port is None:
+            raise ValueError(
+                "LPB_ROLE=clearinghouse needs LPB_HTTP_PRIVATE_PORT: what only a clearinghouse admin does "
+                "(onboarding, grant top-ups, tenant status, the wallet) is served on the private "
+                "listener and nowhere else"
+            )
+        return self
+
+    def _work_needs_a_clearinghouse(self) -> str:
+        held = [_env(name) for name in _SELF_HOSTED if getattr(self, name) is not None]
+        beside = f", and cannot hold {', '.join(held)}" if held else ""
+        return (
+            f"LPB_ROLE=work needs {', '.join(map(_env, _CLEARINGHOUSE))}: an engine in its work role pays "
+            f"through a payment clearinghouse{beside}"
+        )
+
     @property
     def uses_clearinghouse(self) -> bool:
-        """Whether the payment ports reach a payment clearinghouse, and not Batteries and a signer."""
-        return self.clearinghouse_url is not None
+        """Whether the payment ports reach a payment clearinghouse, and not Batteries and a signer: the
+        ``work`` role, which alone holds the clearinghouse settings."""
+        return self.role == _WORK_ROLE
+
+    @property
+    def runs_jobs(self) -> bool:
+        """Whether the engine runs jobs: every role but ``clearinghouse``, a payment clearinghouse's,
+        which does payments only (D82)."""
+        return self.role != _CLEARINGHOUSE_ROLE
 
     @property
     def clearinghouse_runner_list_token(self) -> str | None:

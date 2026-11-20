@@ -11,10 +11,12 @@ lpb verify FILE        integrity-check a backup and print its revision
 lpb purge              apply the configured retention now
 lpb bootstrap-admin    issue the first admin key (one time; printed once)
 lpb gen-secret-key     print a new LPB_SECRET_KEY
-lpb smoke              import, migrate, start, health-check, stop, on a throwaway database (CI)
+lpb smoke              import, migrate, start, health-check, stop, on a throwaway database (CI), in the
+                       role LPB_ROLE names
 lpb serve              run the REST service (needs the [server] extra)
-lpb payments check     probe what payments need, with GET requests only: the signer and Batteries, or
-                       the payment clearinghouse (exit 0 ready, 1 a probe failed, 2 settings refused)
+lpb payments check     probe what the engine's role needs for payments, with GET requests only: the
+                       signer and Batteries, or the payment clearinghouse of an engine in its work role
+                       (exit 0 ready, 1 a probe failed, 2 settings refused)
 lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
 """
 
@@ -169,7 +171,12 @@ async def _smoke(_: argparse.Namespace) -> int:
     """The CI install check: proves the installed wheel imports, migrates, starts and stops.
 
     It never opens ``LPB_DATABASE_URL``: starting an engine there would resolve that deployment's running
-    jobs as interrupted. It migrates a throwaway SQLite file instead, removed afterwards (#112, C23)."""
+    jobs as interrupted. It migrates a throwaway SQLite file instead, removed afterwards (#112, C23).
+
+    The engine is built in the role the environment names (``LPB_ROLE``, #169), from that deployment's
+    settings, so it also proves the settings load and the role has the parts it needs. Starting it polls
+    discovery once and, outside the ``clearinghouse`` role, may read one page of usage; it writes
+    nothing anywhere but the throwaway database."""
     with tempfile.TemporaryDirectory(prefix="lpb-smoke-") as directory:
         database = f"sqlite+aiosqlite:///{Path(directory) / 'smoke.db'}"
         # Both values are valid by construction, so the copy needs no second validation.
@@ -182,7 +189,8 @@ async def _smoke(_: argparse.Namespace) -> int:
         finally:
             await engine.stop()
     ok = revision == head_revision()
-    _emit({"ok": ok, "version": health.version, "schema_revision": revision, "health": health.model_dump()})
+    report = {"ok": ok, "role": health.role, "version": health.version, "schema_revision": revision}
+    _emit(report | {"health": health.model_dump()})
     return 0 if ok else 1
 
 

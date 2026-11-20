@@ -1,0 +1,137 @@
+# A payment clearinghouse on one host (D82, D87): the engine in its `clearinghouse` role, in front of
+# Batteries and the signer. Optional; not part of CI. See README.md, and ../README.md for the proofs.
+#
+# Names. The "payment clearinghouse" is this whole project: what an enterprise's engine pays through.
+# "Batteries" is the upstream program livepeer/clearinghouse-batteries, whose binary, config keys and
+# environment variables say `clearinghouse`. Here it is always the service `batteries`.
+#
+# Only the engine's public listener is published. Batteries, the signer and discovery are published
+# nowhere, and the engine's private listener is on its own loopback: the `private` service reaches it.
+# Upstream sources are pinned to the commits in docs/references/upstream-baseline.md.
+name: lpb-clearinghouse
+
+x-batteries-image: &batteries-image ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-roles/batteries:03bc9fb
+x-node-image: &node-image ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-roles/node:eee09c4
+
+services:
+  batteries:
+    image: *batteries-image
+    build:
+      context: https://github.com/livepeer/clearinghouse-batteries.git#03bc9fb5e15b073e68986ec0261e68d7ecd9598b
+      dockerfile: examples/compose/Dockerfile
+    # The on-chain listener reports the wallet's deposit and reserve, which the wallet report reads.
+    # It needs an RPC address of its own and the wallet's public address.
+    command:
+      - serve
+      - --config-file
+      - /etc/batteries.toml
+      - --enable-onchain-listener
+      - --rpc-url-file
+      - /run/secrets/rpc-url
+      - --signer-addresses
+      - ${WALLET_ADDRESS:?set WALLET_ADDRESS in .env to the public address of the wallet the signer signs with}
+    volumes:
+      - paid-state:/data
+      - ./config/batteries.toml:/etc/batteries.toml:ro
+      - ./secrets:/run/secrets:ro
+    networks: [inside]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8081/readyz]
+      interval: 5s
+      retries: 12
+
+  signer:
+    image: *node-image
+    build:
+      context: https://github.com/livepeer/node.git#eee09c41f46d64a34bfd9ed3c9cb649536490f13
+      dockerfile: docker/Dockerfile
+    user: "0:0"  # reads the owner-only key folder and secrets whatever the host uid is
+    network_mode: service:batteries  # Kafka and the webhook listen on this namespace's loopback
+    # The signer reads its password file as exact bytes, and a password file usually ends in a newline.
+    # So the password is passed on without it, from a file in this container's memory: nothing is
+    # written to the key folder, which is read-only, or to this project.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf %s "$$(cat '/run/wallet/${WALLET_PASSWORD_FILE:?set WALLET_PASSWORD_FILE in .env to the name of the password file in WALLET_KEY_DIR}')" > /dev/shm/wallet-password
+        exec /usr/local/bin/livepeer-signer --data-dir /data/node --config /etc/signer.toml \
+          --keystore-file '/run/wallet/${WALLET_KEYSTORE_FILE:?set WALLET_KEYSTORE_FILE in .env to the name of the key file in WALLET_KEY_DIR}' \
+          --keystore-password-file /dev/shm/wallet-password
+    volumes:
+      - paid-state:/data
+      - ./config/signer.toml:/etc/signer.toml:ro
+      - ./secrets:/run/secrets:ro
+      # The wallet's key folder, read-only, from wherever it is kept: nothing is copied into this project.
+      - type: bind
+        source: ${WALLET_KEY_DIR:?set WALLET_KEY_DIR in .env to the folder that holds the wallet key and its password file}
+        target: /run/wallet
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      batteries:
+        condition: service_healthy
+
+  discovery:  # livepeer/node's stock discovery, static mode: the runner list the clearinghouse publishes
+    image: *node-image
+    build:
+      context: https://github.com/livepeer/node.git#eee09c41f46d64a34bfd9ed3c9cb649536490f13
+      dockerfile: docker/Dockerfile
+    user: "0:0"  # reads config/discovery.toml, which is owner-only on the host
+    entrypoint: ["/usr/local/bin/livepeer-discovery"]
+    command: [--config, /etc/livepeer/discovery.toml]
+    volumes:
+      # git-ignored: the orchestrators' addresses. Copy config/discovery.example.toml to it.
+      - type: bind
+        source: ./config/discovery.toml
+        target: /etc/livepeer/discovery.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [inside]
+
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/dev-stack/engine/Dockerfile
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}livepeer-builder-roles/engine:local
+    environment:
+      LPB_ROLE: clearinghouse
+      LPB_ENGINE_ID: lpb-clearinghouse
+      # The public listener (the image sets LPB_HTTP_HOST=0.0.0.0 and LPB_HTTP_PORT=8080), and the
+      # private one, which stays on this container's loopback: LPB_HTTP_PRIVATE_HOST is left at 127.0.0.1.
+      LPB_HTTP_PRIVATE_PORT: "8081"
+      LPB_SIGNER_URL: http://batteries:8937  # the signer shares the batteries network namespace
+      LPB_BATTERIES_URL: http://batteries:8081
+      LPB_BATTERIES_TOKEN: ${LPB_BATTERIES_TOKEN:?run config/init-secrets.py, which writes .env}
+      LPB_BATTERIES_GRANTS_TOKEN: ${LPB_BATTERIES_GRANTS_TOKEN:?run config/init-secrets.py, which writes .env}
+      LPB_SECRET_KEY: ${LPB_SECRET_KEY:?run config/init-secrets.py, which writes .env}
+      LPB_DISCOVERY_URL: http://discovery:8939/discovery
+      LPB_DEFAULT_CURRENCY: USD
+    ports:
+      - "127.0.0.1:${CLEARINGHOUSE_PUBLIC_PORT:-8180}:8080"  # the public listener, and nothing else
+    volumes: [engine-data:/data]
+    networks:
+      inside: {}
+      edge:
+        aliases: [clearinghouse]  # where an enterprise's engine calls it: http://clearinghouse:8080
+    depends_on: [signer, discovery]
+
+  # How a clearinghouse admin reaches the private listener: a curl in the engine's own network
+  # namespace, where 127.0.0.1:8081 is that listener. Not started by `up`:
+  #   docker compose run --rm private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants
+  private:
+    image: *batteries-image  # for its curl; nothing of Batteries runs here
+    profiles: [admin]
+    network_mode: service:engine
+    entrypoint: [curl, -sS]
+
+networks:
+  inside: {}  # the engine, Batteries with the signer, and discovery
+  edge:
+    name: lpb-clearinghouse-edge  # the engine alone is on it; an enterprise project joins it
+
+volumes:
+  engine-data:
+  paid-state:

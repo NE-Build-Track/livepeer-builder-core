@@ -6,7 +6,8 @@ touches the HTTP client, sends no body and follows no redirect, so a credential 
 setting names and to no other. ``tests/unit/test_payments_check.py`` records every request and reads
 this file to hold that.
 
-A self-hosted engine probes:
+The engine's role says what is probed (``LPB_ROLE``, #169), and the report names it. An engine that
+pays through Batteries and a signer of its own, in its ``both`` or its ``clearinghouse`` role, probes:
 
 - **the signer**, at the root of ``LPB_SIGNER_URL`` as the SDK reads it (scheme, host and port). The
   signer's identity call is not a GET, so it cannot be made here. ``GET /sign-orchestrator-info`` is
@@ -16,9 +17,11 @@ A self-hosted engine probes:
   wallet is funded, or that it is ready: only a payment, or the signer's own ``/readyz`` on its metrics
   listener, says those;
 - **Batteries** with the engine's credential: ``GET /v1/usage?limit=1``, the read cost sync makes;
-- **Batteries** with the grants credential, when one is set: ``GET /v1/grants?limit=1``.
+- **Batteries** with the grants credential, when one is set: ``GET /v1/grants?limit=1``. An engine in
+  its ``clearinghouse`` role cannot onboard a tenant without that credential, so there the probe is
+  always made, and says so when the credential is not set.
 
-An engine that uses a payment clearinghouse probes the clearinghouse with its tenant admin key: its
+An engine in its ``work`` role probes the payment clearinghouse it uses with its tenant admin key: its
 grant (who it is there), one page of its usage, and the runner list when that is its discovery address.
 It also asks, with no credential, whether the clearinghouse serves the signer's identity path, where the
 engine signs: the same GET a signer is asked, and the same 405. Every one is a clearinghouse route: no
@@ -87,9 +90,10 @@ async def _get(
 
 async def _self_hosted(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentCheck:
     probes = [await _signer(settings, client), await _batteries(settings, client)]
-    if settings.batteries_grants_token is not None:
+    # optional for self-hosted payments; a clearinghouse onboards its tenants with it
+    if settings.batteries_grants_token is not None or not settings.runs_jobs:
         probes.append(await _batteries_grants(settings, client))
-    return _checked("self_hosted", probes)
+    return _checked(settings, "self_hosted", probes)
 
 
 async def _signer(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentProbe:
@@ -143,7 +147,9 @@ async def _batteries_grants(settings: EngineSettings, client: httpx.AsyncClient)
         return _probe(
             name, "LPB_BATTERIES_URL", None, "not_configured", _NOT_SET.format(setting="LPB_BATTERIES_URL")
         )
-    token = settings.batteries_grants_token.get_secret_value() if settings.batteries_grants_token else ""
+    if settings.batteries_grants_token is None:
+        return _probe(name, setting, None, "not_configured", _NOT_SET.format(setting=setting))
+    token = settings.batteries_grants_token.get_secret_value()
     return await _batteries_list(settings, client, name, setting, "/v1/grants", token)
 
 
@@ -193,7 +199,7 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     ]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
         probes.append(await _runner_list(client, settings.discovery_url, headers))
-    return _checked("clearinghouse", probes, grant)
+    return _checked(settings, "clearinghouse", probes, grant)
 
 
 async def _tenant_grant(
@@ -328,9 +334,13 @@ def _probe(
 
 
 def _checked(
-    configuration: PaymentConfiguration, probes: list[PaymentProbe], tenant: TenantGrant | None = None
+    settings: EngineSettings,
+    configuration: PaymentConfiguration,
+    probes: list[PaymentProbe],
+    tenant: TenantGrant | None = None,
 ) -> PaymentCheck:
     return PaymentCheck(
+        role=settings.role,
         configuration=configuration,
         ok=all(probe.outcome == "ok" for probe in probes),
         probes=tuple(probes),

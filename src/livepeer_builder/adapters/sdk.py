@@ -215,17 +215,44 @@ class SdkRunnerTransport:
         credential: str | None,
         on_signed: OnSigned | None = None,
     ) -> RunnerReply:
+        return await self._call(runner, request, credential, on_signed, None)
+
+    async def call_bounded(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+        *,
+        max_bytes: int,
+    ) -> RunnerReply:
+        """``call`` for a reply nobody waits for (``BoundedRunnerTransport``, ISS-26): the reply is read
+        in pieces, measured whole, and kept only when it is at most ``max_bytes``. The job's
+        ``timeout_s`` bounds the read as it bounds ``call``."""
+        return await self._call(runner, request, credential, on_signed, max_bytes)
+
+    async def _call(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None,
+        max_bytes: int | None,
+    ) -> RunnerReply:
         events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
         paid = self._request(runner, request, credential, events)
-        status, body, content_type = await paid.respond(request.timeout_s)
+        status, body, content_type = await paid.respond(request.timeout_s, max_bytes)
         return RunnerReply(
             status_code=status,
-            content=body,
+            content=body.content,
             content_type=content_type or _JSON,
-            data=json_object(body, content_type),
+            # a kept reply is parsed when its owner reads it back, never here for nobody (jobs.result)
+            data=json_object(body.content, content_type) if max_bytes is None else None,
             manifest_ids=events.ids,
             payment_sent=events.signed,
             timings=events.timer.timings,
+            size_bytes=body.size_bytes,
+            sha256=body.sha256,
         )
 
     async def open(

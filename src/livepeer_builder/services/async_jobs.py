@@ -238,10 +238,12 @@ class AsyncJobWorker:
     async def _work(self, claim: "Claimed") -> None:
         """Run one claimed job to its end. The job's end is in its record, so nothing is raised here
         but a cancellation."""
-        job, slot = claim.job, claim.slot
+        job, slot, limit = claim.job, claim.slot, self.limits.result_max_bytes
         attempts: list[Attempt] = []
         try:
-            await self._dispatcher.dispatch(job, claim.actor, claim.request, attempts, keep=self._keep)
+            await self._dispatcher.dispatch(
+                job, claim.actor, claim.request, attempts, keep=self._keep, keep_bytes=limit
+            )
         except JobFailed:
             pass  # recorded on the job, where its owner reads it
         except asyncio.CancelledError as stopped:
@@ -264,13 +266,18 @@ class AsyncJobWorker:
         """The end of an async job a runner answered: its bytes are stored in the transaction that ends
         it. A reply over ``result_max_bytes`` is not stored: the job fails ``result_not_stored`` and keeps
         the reply's size and hash, with no location. The runner was paid for an answer nobody can read,
-        which the cost reports as ``failed_after_payment`` (D69 (4))."""
-        size, limit = len(reply.content), self.limits.result_max_bytes
+        which the cost reports as ``failed_after_payment`` (D69 (4)).
+
+        A transport that read the reply with that bound (``BoundedRunnerTransport``) says how long all of
+        it was and what it hashed to, and holds none of a reply that was over. Any other transport read
+        it whole, and it is measured here."""
+        limit = self.limits.result_max_bytes
+        size = len(reply.content) if reply.size_bytes is None else reply.size_bytes
         shape = ResultRef(
             storage="stored",
             content_type=reply.content_type,
             size_bytes=size,
-            sha256=hashlib.sha256(reply.content).hexdigest(),
+            sha256=reply.sha256 or hashlib.sha256(reply.content).hexdigest(),
         )
         if size > limit:
             failure = Failure(

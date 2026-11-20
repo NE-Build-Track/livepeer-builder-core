@@ -118,8 +118,9 @@ SHARED = {
     "http/unprocessable.py",
 }
 
-# The five ports. Signing has no protocol of its own: it happens inside the runner transport.
-SIGNING_INSIDE = {"RunnerTransport", "StreamingRunnerTransport", "RunnerStream"}
+# The five ports. Signing has no protocol of its own: it happens inside the runner transport, which may
+# also stream a reply (D33) or read one with a bound for an async job (ISS-26): the same call and payment.
+SIGNING_INSIDE = {"RunnerTransport", "StreamingRunnerTransport", "BoundedRunnerTransport", "RunnerStream"}
 PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceReader", "UsageSource"}
 # Payment protocols that are not ports: where payment keys and allocation records are kept. The work
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds

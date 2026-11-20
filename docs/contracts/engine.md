@@ -702,6 +702,16 @@ transaction that ends the job fails: no bytes are stored, and the job ends as an
 lost its end does, `runner_error` and `uncertain` when it was paid. It is never `succeeded` without its
 bytes.
 
+**What the worker holds of an answer.** `LPB_ASYNC_RESULT_MAX_BYTES` also bounds the memory an async
+job's answer takes. The worker hands the limit to a transport that is a `BoundedRunnerTransport`
+(`call_bounded` beside `call`; the SDK transport is one). That transport reads the answer in pieces as it
+arrives, counts and hashes all of it, and keeps the pieces only while the answer is within the limit: an
+answer that grows past it is read to its end, none of it is kept, and the job ends `result_not_stored`
+with the `size_bytes` and `sha256` of the whole answer. The job's `timeout_s` bounds that read as it
+bounds any call. A transport without `call_bounded` is called with `call`, which reads the whole answer
+before the limit is applied, as every transport did before. An immediate job is always read whole: its
+caller waits for all of it.
+
 **What is stored, and for how long.** A queued job's request is kept until the job ends, in the same
 transaction that ends it. A stored result is kept until `expires_at`, and the job's record until
 `LPB_RETENTION_JOBS_DAYS` purges it ([persistence.md](persistence.md#retention)). Neither is encrypted

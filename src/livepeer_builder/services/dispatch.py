@@ -37,6 +37,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import JobFailed, NotProvisioned, RunnerCallError
 from livepeer_builder.protocols import (
+    BoundedRunnerTransport,
     Clock,
     CredentialResolver,
     JobRepo,
@@ -85,6 +86,8 @@ class Dispatcher:
         self._clock = clock
         self._stream_limits = stream_limits or StreamLimits()
         self._max_paid_attempts = max_paid_attempts  # D55
+        # Decided once, as streaming is (D33): only a transport with call_bounded reads with a bound.
+        self._bounded = transport if isinstance(transport, BoundedRunnerTransport) else None
 
     async def check_allocation(self, actor: ActorContext) -> None:
         """Raise ``NotProvisioned`` for an actor with no allocation to pay from. An async job is checked
@@ -183,17 +186,19 @@ class Dispatcher:
         attempts: list[Attempt],
         *,
         keep: KeepResult | None = None,
+        keep_bytes: int | None = None,
     ) -> JobResult:
         """Run ``job`` on the runners that can do it, until one answers or none is left. ``keep`` ends a
         succeeded job in place of the default, which records the shape of a result returned inline: the
-        async worker stores the bytes there (ISS-26)."""
+        async worker stores the bytes there (ISS-26). ``keep_bytes`` is the most of a reply ``keep`` has
+        a use for: a transport that can (``BoundedRunnerTransport``) then holds no more of it."""
         candidates, credential = await self._candidates(job, actor, request, attempts)
         last: RunnerCallError | None = None
         for number, runner in enumerate(candidates, start=1):
             await self._start_attempt(job, number, runner, credential, attempts)
             recorder = SignedSessionRecorder(self._store, attempts)
             try:
-                reply = await self._transport.call(runner, request, credential.token, on_signed=recorder)
+                reply = await self._call(runner, request, credential.token, recorder, keep_bytes)
             except RunnerCallError as error:
                 failed = await self._attempt_failed(job, attempts, error, runner, candidates)
                 if failed is not None:
@@ -218,6 +223,20 @@ class Dispatcher:
                 data=reply.data,
             )
         raise await self._exhausted(job, attempts, cast(RunnerCallError, last))
+
+    async def _call(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        token: str | None,
+        recorder: SignedSessionRecorder,
+        keep_bytes: int | None,
+    ) -> RunnerReply:
+        if keep_bytes is None or self._bounded is None:  # an immediate job, or a transport that reads whole
+            return await self._transport.call(runner, request, token, on_signed=recorder)
+        return await self._bounded.call_bounded(
+            runner, request, token, on_signed=recorder, max_bytes=keep_bytes
+        )
 
     async def open(
         self,

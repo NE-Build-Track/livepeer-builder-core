@@ -52,6 +52,11 @@ classDiagram
         +async call(runner, request, credential, on_signed) RunnerReply
         +async open(runner, request, credential, on_signed) RunnerStream
     }
+    class BoundedRunnerTransport {
+        <<interface>>
+        +async call(runner, request, credential, on_signed) RunnerReply
+        +async call_bounded(runner, request, credential, on_signed, max_bytes) RunnerReply
+    }
     class RunnerStream {
         <<interface>>
         +content_type str
@@ -209,6 +214,7 @@ classDiagram
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
+    BoundedRunnerTransport <|.. SdkRunnerTransport
     RunnerStream <|.. SdkRunnerStream
     SignerForwarder <|.. SdkRunnerTransport
     CredentialResolver <|.. PaymentsService
@@ -252,6 +258,7 @@ classDiagram
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
+| `BoundedRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
 | `SignerForwarder` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |

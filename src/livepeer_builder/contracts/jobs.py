@@ -268,6 +268,10 @@ class RunnerReply(Contract):
     manifest_ids: tuple[str, ...]  # one per signed session, in signing order
     payment_sent: bool
     timings: CallTimings | None = None
+    # Set by ``BoundedRunnerTransport.call_bounded`` (ISS-26): the size and SHA-256 of the runner's
+    # whole reply. ``content`` is then all of it, or empty when it was longer than the caller keeps.
+    size_bytes: int | None = Field(default=None, ge=0)
+    sha256: str | None = None
 
 
 class JobResult(Contract):

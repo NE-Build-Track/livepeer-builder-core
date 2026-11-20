@@ -43,7 +43,9 @@ From ISS-26, as amended on 13 November 2026.
 - [x] **20 November 2026, review fixes.** A submit stores its job and tells the worker in one task the
   request's cancellation cannot stop, so a job stored just before its request was cancelled is not left
   waiting for the next submit. A worker's step notes each claim as it is made, so a job claimed before a
-  later claim failed still runs and gives its admission slot back.
+  later claim failed still runs and gives its admission slot back. `LPB_ASYNC_RESULT_MAX_BYTES` bounds
+  what a worker holds of a reply, not only what is stored: the reply is read in pieces through the new
+  optional `BoundedRunnerTransport`.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log
@@ -61,6 +63,13 @@ From ISS-26, as amended on 13 November 2026.
   back to the queue; the queue's limit is counted before the insert (T45); results retention alone
   purges first one interval after start, so the default settings add no write at start; `start()`
   counts the queue before the worker's loop runs. Source: the guide's rules, applied; for Mike's review.
+- **20 November 2026, review of #184.** The result limit is applied while the reply is read. The bound
+  reaches the transport through an optional protocol, `BoundedRunnerTransport` (`call_bounded`), as
+  streaming reached it through `open` (D33): `RunnerTransport` and `call` are unchanged, a supplied
+  transport without it is called as before, and an immediate job is read whole. `RunnerReply` gains
+  `size_bytes` and `sha256`, optional. A reply over the limit is still read to its end, so the job
+  keeps the true size and hash (D69 (4)). The submit's shield adds no idle query. Source: the review,
+  applied; for Mike's review.
 - **19 November 2026, not built.** No worker lease (T44): #112 left the detection of a second engine to
   ISS-26's leases, and the locked guide builds none. No events feed (ISS-46) and no provider request id
   (ISS-48); their seams are kept. Source: the guide and D64.

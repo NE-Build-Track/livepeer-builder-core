@@ -47,6 +47,7 @@ from livepeer_gateway.remote_signer import (
 )
 
 from livepeer_builder.adapters.call_timer import CallTimer
+from livepeer_builder.adapters.reply_body import ReplyBody, read_reply
 from livepeer_builder.adapters.runner_address import as_built, origin
 from livepeer_builder.adapters.runner_content_type import content_type_as_sent, headers_as_sent
 from livepeer_builder.adapters.runner_price import max_price, no_ceiling, payment_type
@@ -181,12 +182,12 @@ class PaidRequest:
         self._max_price = max_price(rate) if signer_url is not None else None
         self.identifying = False  # waiting on /sign-orchestrator-info: nothing signed, no runner asked
 
-    async def respond(self, timeout_s: float) -> tuple[int, bytes, str]:
+    async def respond(self, timeout_s: float, max_bytes: int | None = None) -> tuple[int, ReplyBody, str]:
         async with self._session(aiohttp.ClientTimeout(total=timeout_s)) as session:
             with translated(self._events):
                 response, funding = await self._timed_answer(session)
                 try:
-                    body = await response.read()
+                    body = await read_reply(response, max_bytes)  # whole, or in pieces with a bound
                 finally:
                     await stop_funding(funding)
                     response.release()

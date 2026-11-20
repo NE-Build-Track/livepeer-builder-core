@@ -189,6 +189,7 @@ state outside `succeeded`/`failed`/`uncertain` as running).
 | --- | --- |
 | `contracts/jobs.py` | Comments un-reserved; `ResultRef.expires_at`; `Job.started_at`; `result_not_stored` |
 | `api.py` | `JobsApi.submit` |
+| `protocols/__init__.py`, `adapters/reply_body.py`, `adapters/sdk.py` (#184 review) | `BoundedRunnerTransport`, optional: `call_bounded` reads an async job's reply in pieces and keeps at most `LPB_ASYNC_RESULT_MAX_BYTES` of it; `RunnerReply.size_bytes`, `sha256` |
 | `errors.py` | Reuse `OperationConflict`, `NoCapacity`; add `ResultExpired` (410), `JobNotFinished` (409) |
 | `protocols/__init__.py` | `JobRepo`: `enqueue_job(job, fingerprint, request, actor)`, `claim_job`, `requeue_unstarted`, `finish_job_with_result`, `read_result`, `queued_stats`; `finish_job` gains the state guard |
 | `store/schema.py`, a new migration (numbered when written: #114 and #115 add migrations first) | `lpb_job_requests`, `lpb_job_results`; `lpb_jobs.started_at`, `claims` |

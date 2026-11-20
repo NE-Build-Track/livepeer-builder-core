@@ -180,6 +180,28 @@ class StreamingRunnerTransport(RunnerTransport, Protocol):
     ) -> RunnerStream: ...
 
 
+@runtime_checkable
+class BoundedRunnerTransport(RunnerTransport, Protocol):
+    """A transport that can also read a reply without holding all of it. Optional, as ``open`` is: the
+    async worker uses it when the transport has it, and calls ``call`` when it has not (ISS-26).
+
+    ``call_bounded`` is ``call`` for a reply nobody waits for: the same request, payment, ``on_signed``
+    and errors. It reads the reply in pieces, and its ``RunnerReply`` has the ``size_bytes`` and
+    ``sha256`` of all of it. ``content`` is the whole reply when that is at most ``max_bytes``, and empty
+    when it is longer: the transport then never held more than ``max_bytes`` of it. ``data`` is ``None``.
+    """
+
+    async def call_bounded(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+        *,
+        max_bytes: int,
+    ) -> RunnerReply: ...
+
+
 # -- payments (docs/contracts/payments.md) ----------------------------------------------------------
 
 

@@ -137,11 +137,13 @@ class KeyService:
     ) -> IssuedKey:
         """Replace an active key at once (D44): the old token stops working in the same transaction that
         stores the new one and its ledger record (D57). Same kind, actor, tenant and permissions;
-        ``label`` renames it. A repeat of ``operation_ref`` gets the new key back, without its token."""
+        ``label`` renames it. A repeat of ``operation_ref`` gets the new key back, without its token,
+        when the first run would have answered this caller under the tenant it names."""
         self._check_scope(admin, tenant_id)
         OPERATION_REPLAYED.set(False)
         request = {"key_id": key_id, "label": label}
-        replay = await self._replayed(admin, operation_ref, ledger.fingerprint("rotate_access_key", request))
+        fingerprint = ledger.fingerprint("rotate_access_key", request)
+        replay = await self._rotation_replayed(admin, key_id, tenant_id, operation_ref, fingerprint)
         if replay is not None:
             return replay
         old = await self._store.get_access_key(key_id)
@@ -153,7 +155,7 @@ class KeyService:
         )
         record = ledger.done(admin, "rotate_access_key", operation_ref, request, _public(key), key.created_at)
         if not await self._store.rotate_access_key(key_id, key, token_hash(token), key.created_at, record):
-            replay = await self._replayed(admin, operation_ref, record.fingerprint)
+            replay = await self._rotation_replayed(admin, key_id, tenant_id, operation_ref, fingerprint)
             if replay is None:
                 raise InvalidRequest(f"no active key {key_id!r}")  # revoked or rotated meanwhile
             return replay  # another request took the reference just now
@@ -184,14 +186,15 @@ class KeyService:
         scope = ResourceRef(kind="key", tenant_id=admin.tenant_id if tenant_id is None else tenant_id)
         self._policy.check(admin, Operation.ADMIN_KEYS, scope)
 
-    def _check_key(self, admin: ActorContext, key: AccessKey) -> None:
+    def _check_key(self, admin: ActorContext, key: AccessKey, named: str | None = None) -> None:
         """The key as read: another tenant's reads as missing (D44), and one of a kind the caller may
-        not change is refused (a tenant admin changes no admin key, #165)."""
+        not change is refused (a tenant admin changes no admin key, #165). ``named`` is the key id the
+        command named, when ``key`` is that key's recorded replacement."""
         owned = ResourceRef(kind="key", tenant_id=key.tenant_id, id=key.key_id)
         try:
             self._policy.check(admin, Operation.ADMIN_KEYS, owned)
         except AccessDenied as denied:
-            raise InvalidRequest(f"no active key {key.key_id!r}") from denied
+            raise InvalidRequest(f"no active key {named or key.key_id!r}") from denied
         self._policy.check(
             admin, Operation.ADMIN_KEYS, owned.model_copy(update={"credential_kind": key.kind})
         )
@@ -203,6 +206,25 @@ class KeyService:
         if held is None:
             return None
         return IssuedKey(key=ledger.repeat(held, fingerprint, _KEY), token=None, replayed=True)
+
+    async def _rotation_replayed(
+        self, admin: ActorContext, key_id: str, tenant_id: str | None, operation_ref: str, fingerprint: str
+    ) -> IssuedKey | None:
+        """The answer to a repeated rotation, for a caller the first run would have answered (#165
+        review). The record is found by the caller's tenant and actor, and it holds the replacement key,
+        which has the tenant and the kind of the key it replaced. So the repeat is checked as the first
+        run checked the key it read, but for being active: under another tenant than the one the
+        command names the key reads as missing, and a caller who may not change a key of that kind is
+        refused. Neither is shown the replacement."""
+        replay = await self._replayed(admin, operation_ref, fingerprint)
+        if replay is None:
+            return None
+        OPERATION_REPLAYED.set(False)  # until the caller is known to be answered from the record
+        if tenant_id not in (None, replay.key.tenant_id):
+            raise InvalidRequest(f"no active key {key_id!r}")
+        self._check_key(admin, replay.key, named=key_id)
+        OPERATION_REPLAYED.set(True)
+        return replay
 
     async def _taken(self, admin: ActorContext, record: OperationRecord) -> IssuedKey:
         """The store refused the key because another request took the reference just now: answer from it."""

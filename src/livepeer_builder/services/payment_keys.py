@@ -8,7 +8,7 @@ what a command does when another command wrote the actor first (#115, C4).
 
 from livepeer_builder.contracts import ActorAllocation, NewAllocationKey, SecretRef
 from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound
-from livepeer_builder.protocols import AllocationManager, SecretStore
+from livepeer_builder.protocols import AllocationManager, SecretStore, WritableSecretStore
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
 
@@ -39,6 +39,47 @@ class PaymentKeys:
             await self._secrets.delete(ref)
             raise
         return ref
+
+    async def require_writable(
+        self, run: RunningOperation, sent_as: str, holder: ActorAllocation | None = None
+    ) -> None:
+        """In the step that mints a key, just before the provider is called: a store that says it cannot
+        keep the new key refuses the command (#112, C2). A store without the optional ``writable`` check
+        is not asked. A run with nothing more to store is not refused (``_key_is_stored``): a repeat of a
+        finished command never reaches this step, and a resume goes on to finish."""
+        if self._key_is_stored(run, sent_as, holder):
+            return
+        if isinstance(self._secrets, WritableSecretStore) and not await self._secrets.writable():
+            # only a fresh run knows that nothing was sent: a resumed one follows an unknown outcome
+            sent = (
+                "an earlier attempt may have reached the payment provider; repeat this request when the "
+                "store can write"
+                if run.resumed
+                else "nothing was sent to the payment provider"
+            )
+            raise InvalidRequest(
+                "the secret store cannot store a new payment key now (the built-in store needs "
+                f"LPB_SECRET_KEY); {sent}"
+            )
+
+    @staticmethod
+    def _key_is_stored(run: RunningOperation, sent_as: str, holder: ActorAllocation | None) -> bool:
+        """Whether the key of the provider call about to be sent (``sent_as``, its idempotency key) is
+        stored already. A record that notes the call its secret came from (``new_secret_sent_as``) answers
+        by that note alone: a stored secret from another provider call excuses nothing, since a resume
+        after a revoke or a second allotment, or under another ``LPB_ENGINE_ID``, sends a new one, whose key
+        is not stored yet. Only a record without the note, written before it existed, is answered by the
+        actor (``holder``, in a rotation): when it holds the key and secret the record notes, the provider
+        call is still sent, replays that key, and leaves nothing to store."""
+        ref = run.context.get("new_secret_ref")
+        if ref is None:
+            return False
+        noted = run.context.get("new_secret_sent_as")
+        if noted is not None:
+            return noted == sent_as
+        if holder is None:
+            return False
+        return (holder.api_key_id, holder.secret_ref.ref) == (run.context.get("new_secret_key_id"), ref)
 
     async def shared(self, actor: ActorAllocation, own: SecretRef) -> ActorAllocation:
         """The actor holding the key this allotment got. Another reference may have saved it with its

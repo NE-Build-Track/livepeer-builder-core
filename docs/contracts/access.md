@@ -77,7 +77,8 @@ class AccessPolicy(Protocol):
   its tenant's grant and cannot enlarge it:
   - **In its own tenant** it does what an admin does: allot, top up, pause and revoke allocations,
     rotate payment keys, issue and manage keys that are not admin keys, read its grant, its actors and
-    their allocations, and, on the work set, read every actor's jobs and costs and reconcile.
+    their allocations, its usage and the clearinghouse's runner list (#166), and, on the work set, read
+    every actor's jobs and costs and reconcile.
   - **Another tenant** is `AccessDenied`, whatever the operation: 403 for a tenant a route or a body
     names, before any lookup or provider call. Another tenant's record found by its id alone (a job, a
     key under `/v1/keys`) reads as missing, as for anyone ([Answers](#answers)).
@@ -91,7 +92,8 @@ class AccessPolicy(Protocol):
   - In this release a tenant admin credential is an engine key of kind `tenant_admin`. Mapping an
     identity provider's role to it is ISS-33.
 - **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
-  `events.read`, across every actor of its own tenant. Every write is `AccessDenied`, and so is any
+  `events.read`, across every actor of its own tenant. Its tenant's usage and the clearinghouse's runner
+  list are `admin.read` (#166). Every write is `AccessDenied`, and so is any
   record of another tenant. It is for a dashboard or an audit reader that must not move money. An
   engine key can be issued as `auditor`, and a JWT is one with `LPB_JWT_ADMIN_READ_SCOPE`.
 - **Everyone else** needs the operation's permission, and may touch only resources owned by their own
@@ -335,6 +337,11 @@ Both are generic: no enterprise logic lives in the engine.
   clearinghouse admin key exists, and only when engine API keys are on. There is no network
   bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
   only a clearinghouse admin issues another.
+- **Payment keys (#166):** a payment key (`lpp_`) is no access key. It asks a clearinghouse for one
+  actor's payments and nothing else, at the signer's two paths (`POST /sign-orchestrator-info`,
+  `POST /generate-live-payment`): as a bearer on any other route it gets what no credential gets, 401.
+  Those two paths do not go through the authenticator chain: a payment key is the one credential there,
+  and an access key or a JWT is 401 ([payments.md](payments.md#signing-through-a-clearinghouse)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 
@@ -351,6 +358,7 @@ Both are generic: no enterprise logic lives in the engine.
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
 | Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
 | Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
+| Payment key (`lpp_`, #166) | A clearinghouse's engine, when it allots the actor's allocation | The enterprise's engine, where it keeps a Batteries key today; the clearinghouse keeps the hash | The tenant's admin: `rotate-payment-key` (the old one stops at once) / `revoke` |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 
 ## Example standalone flow

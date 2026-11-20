@@ -36,8 +36,9 @@ from fastapi import FastAPI
 
 from livepeer_builder import api, protocols
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
+from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
-from livepeer_builder.protocols import conditional_writes
+from livepeer_builder.protocols import clearinghouse, conditional_writes, persistence
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.jobs import JobService
 
@@ -67,10 +68,15 @@ WORK = {
 CLEARINGHOUSE = {
     "services/actor_writes.py",
     "services/grants.py",
+    "services/issued_payment_keys.py",
     "services/payment_keys.py",
+    "services/payment_signing.py",  # the key swap: a payment key for the actor's Batteries key
     "services/payments.py",
+    "services/runner_list.py",  # the list a clearinghouse publishes: it reaches no work module
+    "services/tenant_usage.py",
     "services/tenants.py",
     "http/clearinghouse.py",
+    "http/signing.py",  # the signer's two paths, called with a payment key
 }
 # What both halves use: access (policy, access keys, who signed in), the operation ledger, and the app
 # that mounts the sets. A shared module may be imported by either half.
@@ -99,12 +105,20 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # Payment protocols that are not ports: where payment keys and allocation records are kept. The work
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
 # both: a work module asks for the narrow repo it needs (JobRepo, CostRepo).
+# PaymentKeyRepo is where a clearinghouse keeps the payment keys it issues (#166): the work half is
+# handed one through CredentialResolver and never looks one up. TenantUsageSource is how a clearinghouse
+# reads one tenant's usage at the provider: the work half reads usage through UsageSource.
+# SignerForwarder hands a signer call to the signer with an actor's Batteries key, for a clearinghouse
+# (#166): the work half signs inside RunnerTransport and never forwards another engine's call.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
     "SecretRepo",
     "ActorRepo",
     "ActorCommandRepo",
+    "PaymentKeyRepo",
+    "TenantUsageSource",
+    "SignerForwarder",
     "EngineStore",
 }
 NOT_PAYMENTS = {
@@ -112,6 +126,7 @@ NOT_PAYMENTS = {
     "Authenticator",
     "AccessPolicy",
     "DiscoverySource",
+    "DiscoveryDocumentSource",
     "SelectionPolicy",
     "KeyRepo",
     "JobRepo",
@@ -205,7 +220,7 @@ def protocol_names(relative: str) -> set[str]:
 def declared_protocols() -> set[str]:
     return {
         name
-        for module in (protocols, conditional_writes)
+        for module in (protocols, clearinghouse, conditional_writes, persistence)
         for name, value in vars(module).items()
         if isinstance(value, type)
         and getattr(value, "_is_protocol", False)
@@ -296,7 +311,12 @@ def test_each_set_of_routes_is_typed_against_its_own_half() -> None:
     """Each set is one function that adds its routes to an app, so a deployment can mount one set. Typed
     against its half, mypy refuses a work route that calls a clearinghouse command, and the other way
     round."""
-    for mount, half in ((mount_work_routes, api.WorkApi), (mount_clearinghouse_routes, api.ClearinghouseApi)):
+    sets = (
+        (mount_work_routes, api.WorkApi),
+        (mount_clearinghouse_routes, api.ClearinghouseApi),
+        (mount_signing_routes, api.ClearinghouseApi),  # the signer's two paths: the clearinghouse half's
+    )
+    for mount, half in sets:
         hints = typing.get_type_hints(mount)
         assert hints == {"app": FastAPI, "engine": half, "return": type(None)}, (
             f"{mount.__name__}(app, engine) takes engine: {half.__name__}, the facade of its half "

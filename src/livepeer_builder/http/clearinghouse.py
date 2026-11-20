@@ -1,6 +1,7 @@
-"""The clearinghouse half's routes, all under ``/v1/clearinghouse/tenants``: tenants and their grants,
-a tenant's actors and their allocations (allot, top up, status, revoke, rotate the payment key), and a
-tenant's access keys.
+"""The clearinghouse half's routes. Under ``/v1/clearinghouse/tenants``: tenants and their grants, a
+tenant's actors and their allocations (allot, top up, status, revoke, rotate the payment key), a tenant's
+access keys and its usage. Beside them, ``/v1/clearinghouse/discovery``: the runner list the clearinghouse
+publishes (#166).
 
 One unit, mounted by itself or beside the work set (D84). It is typed against ``ClearinghouseApi``, so it
 cannot run a job. Routes are thin: each authenticates, then makes one engine call, and authorization
@@ -9,7 +10,8 @@ policy, and another tenant's admin is refused there (403) before any lookup or p
 
 The set is two groups, each one function, so a deployment can serve them on different listeners (#167):
 
-- ``mount_tenant_routes``: what a tenant's own admin or auditor calls, for its own tenant;
+- ``mount_tenant_routes``: what a tenant's own admin or auditor calls, for its own tenant, and the
+  runner list, which any of them reads;
 - ``mount_clearinghouse_admin_routes``: what only a clearinghouse admin does (onboarding, the tenant
   list, a grant's top-up and a tenant's status).
 
@@ -19,6 +21,7 @@ A tenant's id is its grant's id (D83): no route or body takes a separate grant i
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Path, Query, Response
+from fastapi.responses import JSONResponse
 
 from livepeer_builder.api import ClearinghouseApi
 from livepeer_builder.contracts import (
@@ -28,11 +31,13 @@ from livepeer_builder.contracts import (
     AllocationStatus,
     AllotRequest,
     IssuedKey,
+    KeyedAllocation,
     KnownActor,
     OnboardedTenant,
     TenantGrant,
     TenantState,
     TopUpRequest,
+    UsagePage,
 )
 from livepeer_builder.contracts.common import StoredText
 from livepeer_builder.http.auth import actor_dependency
@@ -45,19 +50,23 @@ from livepeer_builder.http.bodies import (
     TenantKeyBody,
     TenantStatusBody,
 )
-from livepeer_builder.http.params import GrantTenantId, PathId
+from livepeer_builder.http.params import GrantTenantId, PathId, QueryId
 from livepeer_builder.http.replies import replay, replayed
+from livepeer_builder.http.signing import mount_signing_routes
 
 TENANTS = "/v1/clearinghouse/tenants"
 TENANT = TENANTS + "/{tenant_id}"
 ALLOCATION = TENANT + "/actors/{actor_id}/allocation"
 KEYS = TENANT + "/keys"
+DISCOVERY = "/v1/clearinghouse/discovery"
 
 
 def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
-    """Add the clearinghouse half's routes to ``app``: both groups."""
+    """Add the clearinghouse half's routes to ``app``: both groups, and the signer's two paths, which an
+    enterprise's engine calls with a payment key (``http/signing.py``, #166)."""
     mount_tenant_routes(app, engine)
     mount_clearinghouse_admin_routes(app, engine)
+    mount_signing_routes(app, engine)
 
 
 def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
@@ -101,7 +110,8 @@ def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> 
 
 def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     """Add what a tenant's admin or auditor calls for its own tenant: its grant, its actors and their
-    allocations, and its access keys. A clearinghouse admin calls them for any tenant."""
+    allocations, its usage and its access keys. A clearinghouse admin calls them for any tenant. With
+    them, the clearinghouse's runner list, which any credential of a tenant reads."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     if engine.payments.tenants is not None:  # reading a grant needs the tenant desk
@@ -111,6 +121,41 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         async def get_grant(actor: Actor, tenant_id: GrantTenantId) -> TenantGrant:
             """The grant's total, its unallocated balance and its status."""
             return await desk.grant(actor, tenant_id)
+
+    if engine.runner_list is not None:  # needs a discovery source that holds the document it read
+        runner_list = engine.runner_list
+
+        @app.get(
+            DISCOVERY,
+            responses={
+                200: {"description": "The livepeer/node `/discovery` document the clearinghouse last read."},
+                503: {"description": "The clearinghouse has read no runner list yet."},
+            },
+        )
+        async def discovery(actor: Actor) -> Response:
+            """The clearinghouse's runner list, in livepeer/node's discovery format: what an enterprise's
+            engine reads as its ``LPB_DISCOVERY_URL``. The document is served as the clearinghouse read
+            it. Any credential of a tenant may read it."""
+            document = runner_list.document(actor)
+            if document is None:  # never an empty list for an unknown one: a reader would empty its catalog
+                unread = {"error": "the clearinghouse has read no runner list yet"}
+                return JSONResponse(unread, status_code=503, headers={"Retry-After": "5"})
+            return Response(content=document, media_type="application/json")
+
+    if engine.payments.usage is not None:  # needs a source that reads one tenant's usage
+        usage = engine.payments.usage
+
+        @app.get(TENANT + "/usage")
+        async def tenant_usage(
+            actor: Actor,
+            tenant_id: GrantTenantId,
+            cursor: QueryId = None,
+            limit: Annotated[int, Query(ge=1, le=1000)] = 1000,
+        ) -> UsagePage:
+            """One page of the tenant's payment records, oldest first: the payment provider's usage rows
+            for the tenant's grant, and none of another tenant's. ``cursor`` is the last page's
+            ``next_cursor``, which is empty on the last page."""
+            return await usage.page(actor, tenant_id, cursor, limit)
 
     @app.get(TENANT + "/actors")
     async def list_actors(
@@ -136,7 +181,9 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         actor_id: Annotated[StoredText, Path()],
         body: AllotBody,
         response: Response,
-    ) -> ActorAllocation:
+    ) -> KeyedAllocation:
+        """Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment
+        key, whose token is shown once."""
         request = AllotRequest(
             tenant_id=tenant_id,
             actor_id=actor_id,
@@ -165,7 +212,8 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     @app.post(ALLOCATION + "/rotate-payment-key")
     async def rotate_payment_key(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
-    ) -> ActorAllocation:
+    ) -> KeyedAllocation:
+        """Replace the actor's payment key, and the Batteries key behind it. The old one stops at once."""
         rotated = await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, body.operation_ref)
         return replay(response, rotated)
 

@@ -114,6 +114,7 @@ async def test_tenants_are_onboarded_and_listed_over_rest(api) -> None:  # type:
     five = {"amount": "5", "currency": "USD"}
     assert (await client.get(TENANTS, headers=admin)).json()[-1] == {
         "tenant_id": tenant_id, "name": "ops", "status": "active", "total": five, "unallocated": five,
+        "spent": {"amount": "0", "currency": "USD"},
     }  # fmt: skip
 
 
@@ -652,7 +653,10 @@ async def test_replayed_allotment_and_onboarding_say_so(api) -> None:  # type: i
     body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "p1"}
     first = await client.post(ALLOCATION, json=body, headers=admin)
     again = await client.post(ALLOCATION, json=body, headers=admin)
-    assert (again.status_code, again.json()) == (first.status_code, first.json()) == (201, first.json())
+    assert (again.status_code, first.status_code) == (201, 201)
+    # the same allocation; the payment key's token is in the first answer only (#166)
+    assert first.json()["payment_key"]["token"].startswith("lpp_")
+    assert again.json() == first.json() | {"payment_key": {"token": None, "replayed": True}}
     assert again.headers.get("Idempotent-Replayed") == "true"
     tenant = {"name": "ops", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "g1"}
     first = await client.post(TENANTS, json=tenant, headers=admin)
@@ -673,7 +677,7 @@ async def test_allotment_an_actor_already_allotted_is_409_already_allotted(api) 
     first = await client.post(ALLOCATION, json=body, headers=admin)
     refused = await client.post(ALLOCATION, json=body | {"operation_ref": "p2"}, headers=admin)
     assert refused.status_code == 409 and refused.json()["code"] == "already_allotted"
-    assert refused.json()["actor"] == first.json()
+    assert refused.json()["actor"] == {k: v for k, v in first.json().items() if k != "payment_key"}
     assert "Idempotent-Replayed" not in refused.headers
 
 

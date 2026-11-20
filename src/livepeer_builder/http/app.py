@@ -24,6 +24,7 @@ from livepeer_builder.contracts import EngineHealth
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyAllotted,
+    CursorMismatch,
     EngineError,
     InvalidRequest,
     JobFailed,
@@ -159,6 +160,11 @@ def _install_error_handlers(app: FastAPI, engine: WorkApi | ClearinghouseApi) ->
     @app.exception_handler(AlreadyAllotted)
     async def _allotted(_: Request, exc: AlreadyAllotted) -> Response:
         return problem(409, str(exc), code="already_allotted", actor=exc.actor.model_dump(mode="json"))
+
+    @app.exception_handler(CursorMismatch)
+    async def _cursor(_: Request, exc: CursorMismatch) -> Response:
+        """A usage cursor the provider refuses for this tenant: the caller's to fix, by reading again."""
+        return problem(400, str(exc), code="cursor_mismatch")
 
     @app.exception_handler(NoCapacity)
     async def _capacity(_: Request, exc: NoCapacity) -> Response:

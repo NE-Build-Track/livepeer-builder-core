@@ -78,13 +78,15 @@ TenantStatus = Literal["active", "paused"]  # what an admin sets; a grant is nev
 class TenantGrant(Contract):
     """A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's
     id. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation
-    larger than it."""
+    larger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked
+    ones included (#166)."""
 
     tenant_id: str
     name: str
     status: str  # the provider's word: active or paused (draft or closed for a grant made elsewhere)
     total: Money
     unallocated: Money
+    spent: Money
 
 
 class OnboardedTenant(Contract):
@@ -120,6 +122,45 @@ class ActorAllocation(Contract):
     created_at: datetime
     updated_at: datetime
     label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
+
+
+class IssuedPaymentKey(Contract):
+    """An actor's payment key, as the command that issued it answers (D87, #166). The clearinghouse keeps
+    the key's hash and never the key, so the token is in the answer of the run that issued the key and
+    nowhere else. A repeat of the command's reference, or a run that found the key already issued,
+    answers ``token: null`` and ``replayed: true``, as issuing an access key does."""
+
+    token: str | None  # ``lpp_...``, shown once
+    replayed: bool = False
+
+
+class KeyedAllocation(ActorAllocation):
+    """The answer to allotting an allocation and to rotating its payment key: the allocation, and the
+    payment key the command issued for its actor. An enterprise's engine presents that key when it asks
+    the clearinghouse to sign a payment for the actor, and stores it where it stores a Batteries key
+    today. ``payment_key`` is ``None`` when the store keeps no payment keys (a supplied store without
+    ``PaymentKeyRepo``)."""
+
+    payment_key: IssuedPaymentKey | None = None
+
+    @property
+    def allocation(self) -> ActorAllocation:
+        """The allocation as the store keeps it and every read returns it: without the payment key."""
+        return ActorAllocation.model_validate(self.model_dump(exclude={"payment_key"}))
+
+
+SignerCall = Literal["sign-orchestrator-info", "generate-live-payment"]
+"""The two calls the gateway SDK makes to a signer, by the path of each: who the signer is, which signs
+no payment, and one payment."""
+
+
+class SignerAnswer(Contract):
+    """What a signer answered one call with, as it answered (#166): the status, the body as bytes and its
+    content type. Nothing of it is parsed: a clearinghouse hands it back to the engine that asked."""
+
+    status_code: int
+    content: bytes
+    content_type: str = ""
 
 
 class SeenActor(Contract):

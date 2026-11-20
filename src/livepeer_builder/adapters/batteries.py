@@ -1,6 +1,7 @@
 """Clearinghouse Batteries: management API (AllocationManager) and usage feed (UsageSource).
 
-The only module that knows the Batteries wire format. Baseline: livepeer/clearinghouse-batteries
+With ``batteries_usage_rows.py``, which reads one usage item, the only module that knows the Batteries
+wire format. Baseline: livepeer/clearinghouse-batteries
 v0.0.3, ``03bc9fb`` (docs/references/upstream-baseline.md). Every route needs the least-privilege
 management credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant the engine
 names. It has no ``grants.*``: creating, reading and pausing a grant use the grants credential
@@ -10,14 +11,14 @@ names. It has no ``grants.*``: creating, reading and pausing a grant use the gra
 import asyncio
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
 
 import httpx
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
+from livepeer_builder.adapters.batteries_usage_rows import decimal_or_none, read_usage_item
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
@@ -25,23 +26,16 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     NewAllocationKey,
-    SetAsideReason,
     SetAsideUsage,
     TenantGrant,
     UsagePage,
     UsageRow,
 )
-from livepeer_builder.contracts.costs import set_aside_record, unstorable_field, unstorable_reason
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _GRANTS = "/v1/grants"
-_USAGE_STATUSES = frozenset({"applied", "quarantined", "ignored", "duplicate"})
-_NO_FEE = ("", "[error]")  # what Batteries serves, with null, for a fee it has not or could not convert
-# A usage item's text fields: Batteries serves each as a string or null
-_USAGE_TEXT = (
-    "event_id", "manifest_id", "allocation_id", "payment_session_id", "request_id", "pipeline", "currency"
-)  # fmt: skip
+_NOTHING_HELD = (Decimal(0), Decimal(0))  # a grant with no allocation: nothing allotted, nothing spent
 
 
 def batteries_http_client(base_url: str, token: str, *, timeout_s: float) -> httpx.AsyncClient:
@@ -140,23 +134,25 @@ class BatteriesClient:
     async def read_grant(self, grant_id: str) -> TenantGrant:
         """The grant, with what is left of it to allot (``tenant_grant``): two reads, the grant first."""
         grant = await self._request("GET", f"/v1/grants/{segment(grant_id)}")
-        return tenant_grant(grant, (await self._allotted(grant_id)).get(grant_id, Decimal(0)))
+        return tenant_grant(grant, (await self._allotted(grant_id)).get(grant_id, _NOTHING_HELD))
 
     async def grant_balances(self) -> list[TenantGrant]:
         """Every grant with its unallocated balance, oldest first."""
         grants = await self._pages(_GRANTS, {})
         allotted = await self._allotted(None)
-        return [tenant_grant(grant, allotted.get(_required(grant, "id"), Decimal(0))) for grant in grants]
+        return [tenant_grant(grant, allotted.get(_required(grant, "id"), _NOTHING_HELD)) for grant in grants]
 
     async def set_grant_status(self, grant_id: str, status: str) -> None:
         await self._request("PATCH", f"/v1/grants/{segment(grant_id)}/status", json={"status": status})
 
-    async def _allotted(self, grant_id: str | None) -> dict[str, Decimal]:
-        """What the allocations of each grant hold, by grant; of one grant when it is named."""
-        held: dict[str, Decimal] = {}
+    async def _allotted(self, grant_id: str | None) -> dict[str, tuple[Decimal, Decimal]]:
+        """What the allocations of each grant hold and what they have spent, by grant; of one grant when
+        it is named. One read of the allocations gives both (#166)."""
+        held: dict[str, tuple[Decimal, Decimal]] = {}
         for item in await self._pages("/v1/allocations", {"grant_id": grant_id} if grant_id else {}):
             grant = _required(item, "grant_id")
-            held[grant] = held.get(grant, Decimal(0)) + _amount(item, "allocated")
+            allocated, spent = held.get(grant, _NOTHING_HELD)
+            held[grant] = (allocated + _amount(item, "allocated"), spent + _amount(item, "spent"))
         return held
 
     async def _pages(self, path: str, filters: dict[str, str]) -> list[dict[str, Any]]:
@@ -198,7 +194,8 @@ class BatteriesClient:
 
 
 class BatteriesUsageSource:
-    """UsageSource over ``GET /v1/usage``. The cursor is opaque and bound to its filters."""
+    """UsageSource, and TenantUsageSource, over ``GET /v1/usage``. The cursor is opaque and bound to its
+    filters."""
 
     def __init__(
         self,
@@ -218,7 +215,16 @@ class BatteriesUsageSource:
             await self._client.aclose()
 
     async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
-        params = {**self._filters, "limit": str(limit)}
+        return await self._page(self._filters, cursor, limit)
+
+    async def tenant_page(self, tenant_id: str, cursor: str | None, limit: int = 1000) -> UsagePage:
+        """One tenant's rows (``TenantUsageSource``, #166): Batteries' own ``grant_id`` filter, with the
+        tenant's id as the grant's (D83). Batteries keeps a row when the payment session it was charged
+        to belongs to an allocation of that grant; a row with no session is in the unfiltered list only."""
+        return await self._page({"grant_id": tenant_id}, cursor, limit)
+
+    async def _page(self, filters: dict[str, str], cursor: str | None, limit: int) -> UsagePage:
+        params = {**filters, "limit": str(limit)}
         if cursor:
             params["cursor"] = cursor
         try:
@@ -274,95 +280,6 @@ def list_page(body: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     return items, next_cursor
 
 
-def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
-    """The item as a usage row, or the record that sets it aside when it cannot be read or stored (#114,
-    C13): one such item no longer fails its page, which the sync would read again on every pass. The
-    record's content is the item as received."""
-    reason = _unreadable(item)
-    if reason is None:
-        try:
-            row = usage_row_from_item(item)
-        except ValidationError:  # the backstop: whatever the checks miss, the row never fails its page
-            reason = "unreadable_row"
-        else:
-            field = unstorable_field(row)
-            if field is None:
-                return row
-            reason = unstorable_reason(field)
-    return set_aside_record(
-        reason,
-        item,
-        row_id=_row_id(item),
-        fee_eth=_decimal(item.get("computed_fee_eth")),
-        fee_usd=_decimal(item.get("computed_fee_usd")),
-    )
-
-
-def _unreadable(item: dict[str, Any]) -> SetAsideReason | None:
-    """Why the item is no usage row, as a short code; None when it is one. Each value is judged as it was
-    received, so the value checked is the value stored: nothing is turned into text first."""
-    status = item.get("status")
-    if _row_id(item) is None:
-        return "missing_id"
-    if not isinstance(status, str) or status not in _USAGE_STATUSES:
-        return "unknown_status"
-    if _created_at(item) is None:
-        return "unreadable_created_at"
-    for name in _USAGE_TEXT:
-        if not isinstance(item.get(name), str | None):
-            return unstorable_reason(name)  # no text: the column would keep its Python form
-    fees = (item.get("computed_fee_eth"), item.get("computed_fee_usd"))
-    return "unreadable_fee" if any(_unreadable_fee(fee) for fee in fees) else None
-
-
-def _unreadable_fee(value: Any) -> bool:
-    """Whether a fee is stated and is no finite decimal: ``NaN``, ``Infinity``, or no number at all. Such
-    a fee is never read as no fee, which an applied row would then cost."""
-    if value is None or value in _NO_FEE:
-        return False
-    amount = _decimal(value)
-    return amount is None or not amount.is_finite()
-
-
-def _row_id(item: dict[str, Any]) -> str | None:
-    """The row's id as text: a non-empty string, or a whole number as its digits."""
-    value = item.get("id")
-    usable = isinstance(value, str | int) and not isinstance(value, bool) and value != ""
-    return str(value) if usable else None
-
-
-def _created_at(item: dict[str, Any]) -> datetime | None:
-    """``created_at_ms`` as a time, or None when it is absent, not a JSON number (a string of digits and
-    ``true`` are not), or past what a clock holds."""
-    value = item.get("created_at_ms")
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    try:
-        return datetime.fromtimestamp(value / 1000, tz=UTC)
-    except (ValueError, OverflowError, OSError):
-        return None
-
-
-def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
-    status = item.get("status")
-    if status not in _USAGE_STATUSES:
-        raise ProviderError(200, f"unknown usage status {status!r}")
-    return UsageRow(
-        id=str(item["id"]),
-        event_id=_text(item.get("event_id")),
-        status=status,
-        manifest_id=_text(item.get("manifest_id")),
-        allocation_id=_text(item.get("allocation_id")),
-        payment_session_id=_text(item.get("payment_session_id")),
-        request_id=_text(item.get("request_id")),
-        pipeline=_text(item.get("pipeline")),
-        computed_fee_eth=_decimal(item.get("computed_fee_eth")),
-        computed_fee_usd=_decimal(item.get("computed_fee_usd")),
-        currency=_text(item.get("currency")),
-        created_at=_created_at(item),
-    )
-
-
 def grant_from_item(item: dict[str, Any]) -> GrantRecord:
     """A grant as Batteries serves it, in a list or alone: ``id`` a non-empty string, and ``name``,
     ``status``, ``currency``, the total and ``metadata`` strings where present. Any other object is an
@@ -380,21 +297,26 @@ def grant_from_item(item: dict[str, Any]) -> GrantRecord:
     )
 
 
-def tenant_grant(item: dict[str, Any], allotted: Decimal) -> TenantGrant:
+def tenant_grant(item: dict[str, Any], held: tuple[Decimal, Decimal]) -> TenantGrant:
     """A grant as Batteries serves it, as the tenant whose id it is. Batteries serves a grant's total and
     no unallocated balance (v0.0.3, ``internal/store/manage.go``, ``listQuery``), so that is the total
     less ``allotted``, what the grant's allocations hold: each one's ``allocated`` amount, which a revoke
     lowers by what it returns. The grant is read first: an allotment made between the two reads is
     counted and a top-up is not yet, so the difference is held at zero, below which the provider never
-    lets the balance go. A figure to show, never one the engine refuses by."""
+    lets the balance go. A figure to show, never one the engine refuses by.
+
+    ``held`` is what the grant's allocations hold and what they have spent. The second is the tenant's
+    payment usage (#166): Batteries serves ``spent_<currency>`` on each allocation, a revoked one too."""
     currency: Currency = "USD" if _optional(item, "currency").lower() == "usd" else "ETH"
     total = _amount(item, "total")
+    allotted, spent = held
     return TenantGrant(
         tenant_id=_required(item, "id"),
         name=_optional(item, "name"),
         status=_optional(item, "status"),
         total=Money(amount=total, currency=currency),
         unallocated=Money(amount=max(total - allotted, Decimal(0)), currency=currency),
+        spent=Money(amount=spent, currency=currency),
     )
 
 
@@ -403,7 +325,7 @@ def _amount(item: dict[str, Any], name: str) -> Decimal:
     engine cannot read (#114, C21), never a zero."""
     key = f"{name}_{_optional(item, 'currency').lower() or 'usd'}"
     value = item.get(key)
-    amount = _decimal(value) if isinstance(value, str) else None
+    amount = decimal_or_none(value) if isinstance(value, str) else None
     if amount is None or not amount.is_finite():
         raise ProviderError(200, f"Batteries answered with no usable {key}")
     return amount
@@ -482,19 +404,5 @@ def _new_key(body: dict[str, Any]) -> NewAllocationKey:
 
 
 def _money(value: Any, currency: Currency) -> Money | None:
-    amount = _decimal(value)
+    amount = decimal_or_none(value)
     return None if amount is None else Money(amount=amount, currency=currency)
-
-
-def _text(value: str | None) -> str | None:
-    """A usage item's text field: Batteries serves ``""`` where it has none."""
-    return value or None
-
-
-def _decimal(value: Any) -> Decimal | None:
-    if value is None or value in _NO_FEE:
-        return None
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None

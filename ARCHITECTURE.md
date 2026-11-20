@@ -77,10 +77,10 @@ live in `http/` and `services/`. Every module of the two is one half's or shared
 
 | | Work half | Clearinghouse half | Shared |
 | --- | --- | --- | --- |
-| Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys, a tenant's access keys | Access, the operation ledger, health |
-| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse/tenants`, in two groups that also mount by themselves: a tenant's own routes (`mount_tenant_routes`) and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py` |
+| Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys, a tenant's access keys and usage, the runner list it publishes | Access, the operation ledger, health |
+| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse/tenants`, and the runner list at `/v1/clearinghouse/discovery` (#166), in two groups that also mount by themselves: a tenant's own routes (`mount_tenant_routes`) and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165); and `http/signing.py` (`mount_signing_routes`): the signer's two paths at the root, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each called with a payment key (#166) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py` |
 | Facade | `WorkApi` | `ClearinghouseApi` | `EngineApi` is both |
-| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `tenants`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
+| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `issued_payment_keys`, `payment_signing`, `tenants`, `tenant_usage`, `runner_list`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
 
 `create_app` mounts both sets of routes on one app. Each set is one function that adds its routes to an
 app, so a deployment can serve one half: the role setting that chooses is #169.
@@ -106,6 +106,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |
 | `EngineStore` (+ repos) | `SqlStore` | — (one store; two databases) |
+| `PaymentKeyRepo`, `TenantUsageSource`, `DiscoveryDocumentSource`, `SignerForwarder` (optional, #166) | `SqlStore`, `BatteriesUsageSource`, `HttpDiscoverySource`, `SdkRunnerTransport` | keep the payment keys a clearinghouse issues, read one tenant's usage, hold the discovery document a clearinghouse serves, or hand a signer call to the signer for a clearinghouse. A supplied part without one runs without what it serves |
 | `EventFeed`, `SessionManager` | reserved (raise 501) | — events held in M3 (D60); sessions in M4 |
 
 How to replace each default with an enterprise implementation, with class diagrams and runnable
@@ -121,7 +122,7 @@ Each third-party package is confined to one module so a dependency change has on
 | `livepeer_gateway` | `adapters/sdk.py`, `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `aiohttp` | `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `yarl` | `adapters/discovery_inventory.py`, `adapters/runner_address.py` |
-| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py` |
+| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py`, `adapters/signer_forward.py` (`adapters/batteries_usage_rows.py`, which reads one Batteries usage item, holds no client) |
 | `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |
@@ -134,9 +135,9 @@ Each third-party package is confined to one module so a dependency change has on
 | Domain | Service | Contract doc |
 | --- | --- | --- |
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
-| Discovery | `services/discovery.py` | [engine](docs/contracts/engine.md#discovery) |
+| Discovery | `services/discovery.py`; `services/runner_list.py` (the list a clearinghouse serves) | [engine](docs/contracts/engine.md#discovery), [discovery](docs/contracts/discovery.md#the-clearinghouses-runner-list) |
 | Jobs | `services/jobs.py`, `services/admission.py` | [engine](docs/contracts/engine.md) |
-| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
+| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/issued_payment_keys.py` (the payment keys a clearinghouse issues), `services/payment_signing.py` (the key swap behind the signer's two paths), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/tenant_usage.py` (a tenant's payment records), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |
 | Persistence | `store/` | [persistence](docs/contracts/persistence.md) |

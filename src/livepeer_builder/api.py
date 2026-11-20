@@ -16,8 +16,9 @@ The engine has two halves (D84), and the facade follows them:
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
 (the transport can stream), ``keys`` (engine API keys are on), ``payments.tenants`` (the tenant desk
-is on). Check for ``None`` before use; never probe with ``hasattr``. Members are read-only properties so
-a wider protocol can narrow a member it combines.
+is on), ``payments.usage`` (the usage source reads one tenant's records), ``runner_list`` (the discovery
+source holds the document it read). Check for ``None`` before use; never probe with ``hasattr``. Members
+are read-only properties so a wider protocol can narrow a member it combines.
 """
 
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
@@ -41,17 +42,21 @@ from livepeer_builder.contracts import (
     JobCost,
     JobRequest,
     JobResult,
+    KeyedAllocation,
     KnownActor,
     Money,
     Offering,
     OnboardedTenant,
     Reconciliation,
     Runner,
+    SignerAnswer,
+    SignerCall,
     SyncReport,
     TenantGrant,
     TenantState,
     TenantStatus,
     TopUpRequest,
+    UsagePage,
 )
 from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
@@ -230,8 +235,27 @@ class TenantsApi(Protocol):
     ) -> TenantState: ...
 
 
+class TenantUsageApi(Protocol):
+    """A tenant's payment records: present only with a usage source that reads one tenant's
+    (``TenantUsageSource``, as the Batteries source does)."""
+
+    async def page(
+        self, reader: ActorContext, tenant_id: str, cursor: str | None = None, limit: int = 1000
+    ) -> UsagePage: ...
+
+
+class PaymentSigningApi(Protocol):
+    """A clearinghouse's signing for the engines of its tenants: present only when the runner transport
+    forwards a signer call (``SignerForwarder``, as the SDK transport with a signer does)."""
+
+    async def payer(self, authorization: str | None) -> ActorAllocation: ...
+    async def forward(
+        self, call: SignerCall, payer: ActorAllocation, body: bytes, content_type: str
+    ) -> SignerAnswer: ...
+
+
 class PaymentsAdminApi(Protocol):
-    async def allot(self, admin: ActorContext, request: AllotRequest) -> ActorAllocation: ...
+    async def allot(self, admin: ActorContext, request: AllotRequest) -> KeyedAllocation: ...
     async def top_up(
         self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
     ) -> ActorAllocation: ...
@@ -240,7 +264,7 @@ class PaymentsAdminApi(Protocol):
     ) -> ActorAllocation: ...
     async def rotate_payment_key(
         self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
-    ) -> ActorAllocation: ...
+    ) -> KeyedAllocation: ...
     async def revoke(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
     async def top_up_grant(self, admin: ActorContext, tenant_id: str, request: TopUpRequest) -> None: ...
     async def list_actors(
@@ -255,17 +279,30 @@ class PaymentsAdminApi(Protocol):
     async def get_actor(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
     @property
     def tenants(self) -> TenantsApi | None: ...
+    @property
+    def usage(self) -> TenantUsageApi | None: ...
+    @property
+    def signing(self) -> PaymentSigningApi | None: ...
+
+
+class RunnerListApi(Protocol):
+    """The clearinghouse's runner list: present only when the discovery source holds the livepeer/node
+    document it read (``DiscoveryDocumentSource``, as the HTTP reader does)."""
+
+    def document(self, reader: ActorContext) -> bytes | None: ...
 
 
 class ClearinghouseApi(Protocol):
-    """The clearinghouse half: tenants and their grants, allotment and top-ups, and a tenant's access
-    keys. It runs no job. Like the work half, it authenticates its callers, reports health and has the
-    engine's lifecycle."""
+    """The clearinghouse half: tenants and their grants, allotment and top-ups, a tenant's access keys
+    and usage, and the runner list it publishes. It runs no job. Like the work half, it authenticates
+    its callers, reports health and has the engine's lifecycle."""
 
     @property
     def payments(self) -> PaymentsAdminApi: ...
     @property
     def keys(self) -> KeysApi | None: ...
+    @property
+    def runner_list(self) -> RunnerListApi | None: ...
     @property
     def authenticator(self) -> Authenticator: ...
     def health(self) -> EngineHealth: ...
@@ -299,9 +336,12 @@ __all__ = [
     "JobStreamApi",
     "JobsApi",
     "KeysApi",
+    "PaymentSigningApi",
     "PaymentsAdminApi",
     "PaymentsApi",
+    "RunnerListApi",
     "StreamingApi",
+    "TenantUsageApi",
     "TenantsApi",
     "WorkApi",
 ]

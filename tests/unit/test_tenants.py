@@ -209,7 +209,7 @@ async def test_the_tenants_id_is_the_grants_id_and_no_route_takes_a_separate_gra
     grant = (await house.client.get(house.one.path("/grant"), headers=house.one.admin)).json()
     assert grant == {
         "tenant_id": house.one.id, "name": "one", "status": "active",
-        "total": usd("100"), "unallocated": usd("95"),
+        "total": usd("100"), "unallocated": usd("95"), "spent": usd("0"),
     }  # fmt: skip
     # no request of any route has a grant id: not in a path, a query string or a body
     schema = create_app(house.engine, manage_lifecycle=False).openapi()
@@ -565,7 +565,8 @@ async def test_an_allocation_allotted_from_another_grant_before_165_stays_on_tha
     # the record as a release before #165 left it: the tenant's free name, and the grant beside it
     async with store.engine.begin() as conn:
         await conn.execute(update(t.actors).where(t.actors.c.actor_id == "alice").values(tenant_id="default"))
-    assert (await store.get_actor("default", "alice")) == alice.model_copy(update={"tenant_id": "default"})
+    record = alice.allocation.model_copy(update={"tenant_id": "default"})
+    assert (await store.get_actor("default", "alice")) == record
     topped = await engine.payments.top_up(
         admin, "default", "alice", TopUpRequest(amount=five, operation_ref="t")
     )

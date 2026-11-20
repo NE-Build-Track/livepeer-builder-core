@@ -10,7 +10,7 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [payments.md](payments.md): allocations, allotment, units, cost classification | ISS-04 | Implemented for self-hosted payments; the payment clearinghouse (D82) is M4 work (ISS-31) |
 | [events.md](events.md): versioned event feed | ISS-02 | Defined; held in M3 (D60) |
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
-| [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process |
+| [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process; a clearinghouse's engine serves the document it read (#166) |
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
 
@@ -164,3 +164,54 @@ key it has not seen:
 **What keeps its name.** `ActorAllocation.grant_id` (the grant an allocation was allotted from: the
 tenant's id for every allocation allotted from now on), `LPB_BATTERIES_GRANTS_TOKEN`,
 `EngineSupply.grants_manager`, the permission strings, and the words Batteries uses on its own API.
+
+## Upgrading to payment keys, a tenant's usage and the runner list
+
+On 19 November 2026 the clearinghouse gained what an enterprise's engine needs from it (D87, #166): a
+payment key for each actor, the signer's two paths that take one, the tenant's usage and the runner list.
+Two answers gained a field, one contract gained a required field, and four routes are new. No path, body
+or status code of an existing route changed.
+
+| What | Before | Now |
+| --- | --- | --- |
+| The answer to allotting an allocation | `201` `ActorAllocation` | `201` `KeyedAllocation`: every field of `ActorAllocation` where it was, and `payment_key`, `{token, replayed}`. The token (`lpp_...`) is shown once |
+| The answer to rotating a payment key | `200` `ActorAllocation` | `200` `KeyedAllocation`. The rotation still rotates the Batteries key, and now replaces the payment key too: the old one stops at once |
+| Allot and rotate, in embedded mode | `payments.allot`, `payments.rotate_payment_key` return `ActorAllocation` | They return `KeyedAllocation`, which is an `ActorAllocation`. It no longer compares equal to the stored record: compare `.allocation` |
+| `TenantGrant` (the tenant list, the grant read) | `tenant_id`, `name`, `status`, `total`, `unallocated` | and `spent`, required: what the tenant's allocations have spent |
+| A tenant's payment records | not served | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` (`UsagePage`); `engine.payments.usage` |
+| The clearinghouse's runner list | not served | `GET /v1/clearinghouse/discovery`, livepeer/node's document; `engine.runner_list` |
+| Signing a payment for another engine | not served | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, at the root, each with a payment key, on an engine with a signer (`LPB_SIGNER_URL`); `engine.payments.signing` |
+| A usage cursor the provider refuses, over REST | `CursorMismatch` had no status of its own | 400, `code: cursor_mismatch` |
+| The facade | `PaymentsAdminApi`, `ClearinghouseApi` | `PaymentsAdminApi.usage` (`TenantUsageApi \| None`), `PaymentsAdminApi.signing` (`PaymentSigningApi \| None`), `ClearinghouseApi.runner_list` (`RunnerListApi \| None`) |
+| The `AllocationManager` port | `read_grant` and `grant_balances` return a `TenantGrant` | The same, and each states `spent` |
+| Optional protocols | | `PaymentKeyRepo` (a store), `TenantUsageSource` (a usage source), `DiscoveryDocumentSource` (a discovery source), `SignerForwarder` (a runner transport). A supplied part without one runs without what it serves |
+| `FakeUsageSource` (`livepeer_builder.testing`) | `page` | and `tenant_page`, with `grant_of`, a map from an allocation to the grant it was allotted from |
+| The signer behind a clearinghouse, in a test | | `FakeSigningTransport` (`livepeer_builder.testing`): a scripted transport that also forwards signer calls and records each as a `ForwardedSignerCall` |
+| The published schema | | The two signer paths, with the security scheme `PaymentKey`. `lpb gen-docs` builds its engine with a signer address so they are in it |
+| Root exports | | `KeyedAllocation`, `IssuedPaymentKey`, `UsagePage`, `UsageRow`, `SetAsideUsage`, `SignerAnswer`, `SignerCall`, and the errors `SignerNotReached` and `SignerOutcomeUnknown` |
+
+**Before you start the new release:**
+
+- **Migrate.** `lpb migrate` applies revision 0015, or the engine does at start with `LPB_AUTO_MIGRATE`
+  ([persistence.md](persistence.md#migrations)). It adds one table and changes no other.
+- **Nothing to finish first.** No command hashes or sends anything it did not before, so a command
+  recorded before the upgrade is replayed or resumed as it was.
+- **Existing allocations have no payment key.** With self-hosted payments none is needed. At a
+  clearinghouse, rotate an actor's payment key to issue its first
+  ([payments.md](payments.md#payment-keys)).
+- **A supplied `AllocationManager`** states `spent` on the `TenantGrant` it returns, or building one
+  fails.
+- **Move the clients.** A client that reads the allocation from the two answers keeps working. One that
+  refuses unknown fields is generated again from the OpenAPI document.
+- **An engine with a signer serves two more paths, at the root.** A deployment whose proxy publishes the
+  engine publishes `POST /sign-orchestrator-info` and `POST /generate-live-payment` with it. They answer
+  a payment key only. With self-hosted payments nothing calls them, and a proxy may leave them out.
+
+**What a repeat gets.** The repeat of an allotment or a rotation recorded before the upgrade is answered
+from its record, with `payment_key` `{"token": null, "replayed": true}`: no key is issued by a replay.
+An allotment still `started` at the upgrade and resumed after it issues the actor's first payment key
+and shows it.
+
+**What keeps its name.** `PaymentKey`, what the work half's `CredentialResolver` returns: the key the
+runner call presents, which with self-hosted payments is the Batteries key. `pipeline` on a usage row,
+Batteries' word for the capability. The route and the command `rotate-payment-key`.

@@ -11,7 +11,6 @@ from livepeer_builder.testing.fake_engine import FakeEngine
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.fakes import (
     FakeAllocationManager,
-    FakeUsageSource,
     FixedClock,
     MemorySecretStore,
     ScriptedStream,
@@ -21,6 +20,8 @@ from livepeer_builder.testing.fakes import (
     runner,
 )
 from livepeer_builder.testing.scripts import Fails, Raises, Reply
+from livepeer_builder.testing.signer import FakeSigningTransport, ForwardedSignerCall
+from livepeer_builder.testing.usage import FakeUsageSource
 
 __all__ = [
     "FAKE_DISCOVERY_URL",
@@ -29,8 +30,10 @@ __all__ = [
     "FakeDiscoveryService",
     "FakeEngine",
     "FakeJobStream",
+    "FakeSigningTransport",
     "FakeUsageSource",
     "FixedClock",
+    "ForwardedSignerCall",
     "MemorySecretStore",
     "Raises",
     "Reply",

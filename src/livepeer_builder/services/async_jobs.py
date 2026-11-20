@@ -82,6 +82,7 @@ class AsyncJobWorker:
         self._clock = clock
         self.limits = limits or AsyncLimits()
         self._running: set[asyncio.Task[None]] = set()
+        self._claimed: set[UUID] = set()  # the jobs this worker claimed and has not ended
         self._wake = asyncio.Event()
         self._draining = False
         self._loop: asyncio.Task[object] | None = None  # the task running ``run``, for ``drain``
@@ -224,7 +225,11 @@ class AsyncJobWorker:
             _LOG.warning("queued jobs expired", extra={"event": "jobs.queue_expired", "count": ended})
 
     async def _claim(self, job_id: UUID, app: str) -> "Claimed | None":
-        """A slot first, then the claim. ``None`` when there is no slot for this app, or the job is gone."""
+        """A slot first, then the claim. ``None`` when there is no slot for this app, or the job is gone.
+
+        A claim that raises may still have been written: its commit comes before its answer, and a
+        cancelled step stops waiting in between. ``_unclaimed`` then resolves the job and gives the slot
+        back, in a task the cancellation cannot stop."""
         slot = contextlib.AsyncExitStack()
         try:
             await slot.enter_async_context(self._admission.admit(app))
@@ -232,13 +237,33 @@ class AsyncJobWorker:
             return None
         try:
             claimed = await self._store.claim_job(job_id, self._clock.now())
-        except BaseException:
-            await run_shielded(slot.aclose())
+        except BaseException as stopped:
+            await run_shielded(self._unclaimed(job_id, slot, stopped))
             raise
         if claimed is None:
             await slot.aclose()
             return None
+        self._claimed.add(job_id)
         return Claimed(*claimed, slot)
+
+    async def _unclaimed(self, job_id: UUID, slot: contextlib.AsyncExitStack, stopped: BaseException) -> None:
+        """A claim whose answer never came. This worker is the only one that claims, so a job it finds
+        ``running`` here and does not hold is that claim's, with nobody to run it. Nothing went out for
+        it: it is resolved as a job stopped before its first attempt is (``_stopped``), back to the queue
+        while it has claims left. A job this worker holds was claimed by another step and is left alone:
+        it is running. A failure here is logged, not raised: what stopped the claim is what the step
+        reports, and a restart resolves a job this could not reach."""
+        try:
+            job = None if job_id in self._claimed else await self._store.get_job(job_id)
+            if job is not None and job.state == "running":
+                await self._stopped(job, [], stopped)
+        except Exception:
+            _LOG.exception(
+                "could not resolve a claim that was cut short",
+                extra={"event": "jobs.async_unclaim_failed", "job_id": str(job_id)},
+            )
+        finally:
+            await slot.aclose()
 
     def _start(self, claim: "Claimed") -> asyncio.Task[None]:
         task = asyncio.create_task(self._work(claim), name="lpb-async-job")
@@ -268,6 +293,7 @@ class AsyncJobWorker:
             await run_shielded(self._dispatcher.close_after_error(job, attempts, error))
             _LOG.exception("async job failed", extra={"event": "jobs.async_failed", "job_id": str(job.id)})
         finally:
+            self._claimed.discard(job.id)
             await run_shielded(slot.aclose())
 
     async def _stopped(self, job: Job, attempts: list[Attempt], stopped: BaseException) -> None:

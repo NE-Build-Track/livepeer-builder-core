@@ -413,7 +413,7 @@ route of an immediate job answers 410, not 501.
 | `make_engine` (testing) | | `async_workers=1`; step the worker with `await engine.jobs.worker.run_once()` |
 | `lpb purge`, `BuilderEngine.purge()` | `jobs_deleted`, `usage_rows_deleted` | and `results_deleted` |
 | Background loops | | `lpb-async-jobs`, in the `both` and `work` roles |
-| The log | | `jobs.async_step_failed`, `jobs.async_failed`, `jobs.async_drained`, `jobs.queue_expired`, `jobs.finish_missed`; `jobs.recovered` gains `requeued` |
+| The log | | `jobs.async_step_failed`, `jobs.async_failed`, `jobs.async_unclaim_failed`, `jobs.async_drained`, `jobs.queue_expired`, `jobs.finish_missed`; `jobs.recovered` gains `requeued` |
 
 **Before you start the new release:**
 

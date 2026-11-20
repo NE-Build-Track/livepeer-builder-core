@@ -762,6 +762,12 @@ cancels the rest: one stopped before its first attempt goes back to the queue, a
 cancelled immediate job does, `uncertain` when it may have paid. `stop()` returns once every end is
 written.
 
+A claim is committed before the worker has its answer. A step that is cancelled in between, or whose
+claim fails after its commit, does not leave the job `running` with nobody running it: nothing went out
+for it, so it is resolved at once as a job stopped before its first attempt is, back to `queued` while it
+was claimed fewer than 3 times, then `failed`. If that write fails too it is logged
+(`jobs.async_unclaim_failed`), and the next start resolves the job as the table says.
+
 ### Polling
 
 Polling is the only way to learn that a job ended (D69 (7)): `GET /v1/jobs/{id}` carries `Retry-After: 1`

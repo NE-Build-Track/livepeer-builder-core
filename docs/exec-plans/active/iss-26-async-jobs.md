@@ -49,7 +49,9 @@ From ISS-26, as amended on 13 November 2026.
 - [x] **20 November 2026, review fixes, second pass.** A count of the queue is kept only if nothing newer
   is known when its answer arrives, so one that was being read while a job was queued no longer stores an
   empty queue over that job. A woken loop looks at the queue once whatever the count says: a submit and
-  the end of a job are each a reason by themselves.
+  the end of a job are each a reason by themselves. A step cancelled while its claim was being written
+  resolves that job at once (back to the queue, or `failed` after its third claim) instead of leaving it
+  `running` until a restart; the admission slot was never lost there.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log

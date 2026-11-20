@@ -177,8 +177,22 @@ served here, for any tenant.
 | `GET /v1/clearinghouse/wallet` | The deposit and reserve, the total of unspent grants, and the signer's readiness |
 
 **Work half.** The job, offering, runner, cost and allowance routes keep their paths. Reconciliation and
-cost sync move here from `/v1/admin`, as `GET /v1/costs/reconciliation` and `POST /v1/costs/sync`. The
-access keys of an enterprise's own engine are under `/v1/keys`.
+cost sync move here from `/v1/admin`, and the access keys of an enterprise's own engine get routes of
+their own. These are the admin routes of the work half. Each takes an admin credential of the engine that
+serves it, and an actor's or a service's key is 403. The engine's first admin key is of kind
+`clearinghouse_admin` in every role (`lpb bootstrap-admin`), so on an enterprise's own engine that key is
+the clearinghouse admin of this table. On an engine with two listeners, a clearinghouse admin credential
+is accepted on the private one only.
+
+| Route | Who may call it | What it does |
+| --- | --- | --- |
+| `GET /v1/costs/reconciliation` | `admin.read` on the tenant named: a clearinghouse admin for any tenant, a tenant admin or an auditor for its own | Compares what the provider says one allocation spent with the engine's cost records. `tenant_id` is required; `actor_id` names the actor and `allocation_id` an earlier allocation of that actor |
+| `POST /v1/costs/sync` | `admin.costs`: a clearinghouse admin only. A tenant admin and an auditor are 403, because a sync reads the usage of every tenant | Runs one cost sync now, without waiting for the background sync |
+| `POST /v1/keys` | `admin.keys` on the tenant the body names: a clearinghouse admin for any tenant and kind, a tenant admin for its own tenant and for no admin kind | Issues an access key and returns its token once |
+| `GET /v1/keys`, `GET /v1/keys/{key_id}` | `admin.read`: a clearinghouse admin for every tenant's keys, a tenant admin or an auditor for its own tenant's | Lists the access keys, or reads one. Never a token |
+| `POST /v1/keys/{key_id}/rotate`, `POST /v1/keys/{key_id}/revoke` | `admin.keys` on the key's tenant and kind, as for issuing: a tenant admin changes no admin key, and another tenant's key reads as missing | Replaces a key at once, or revokes it |
+
+The `/v1/keys` routes exist only while engine API keys are on.
 
 The names follow D83. The eight paths that began as proposals are locked (D87): payments, usage,
 discovery, tenant status, both sets of key routes, reconciliation and cost sync.

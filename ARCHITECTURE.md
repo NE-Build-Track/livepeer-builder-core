@@ -123,7 +123,7 @@ Each third-party package is confined to one module so a dependency change has on
 | `livepeer_gateway` | `adapters/sdk.py`, `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `aiohttp` | `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `yarl` | `adapters/discovery_inventory.py`, `adapters/runner_address.py` |
-| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py`, `adapters/signer_forward.py` (`adapters/batteries_usage_rows.py`, which reads one Batteries usage item, holds no client) |
+| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py`, `adapters/signer_forward.py`, `adapters/clearinghouse_wire.py` (the one module that calls a payment clearinghouse's routes, #168) and `adapters/payment_probes.py` (`lpb payments check`, GET requests only). `adapters/batteries_usage_rows.py`, which reads one Batteries usage item, and `adapters/clearinghouse.py`, the remote adapters, hold no client |
 | `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |

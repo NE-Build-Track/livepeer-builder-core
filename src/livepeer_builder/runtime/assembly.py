@@ -28,8 +28,10 @@ from livepeer_builder.config import EngineSettings
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
+    AllowanceReader,
     Authenticator,
     Clock,
+    CredentialResolver,
     DiscoveryDocumentSource,
     DiscoverySource,
     EngineStore,
@@ -45,6 +47,7 @@ from livepeer_builder.protocols import (
     TenantUsageSource,
     UsageSource,
 )
+from livepeer_builder.runtime.payment_defaults import payment_defaults
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.discovery import DiscoveryService, MostCapacityFirst
@@ -105,6 +108,10 @@ class EngineParts:
     secret_store: SecretStore
     events: EventFeed
     sessions: SessionManager
+    # The two payment ports the engine answers from its own records unless it is given others (#168):
+    # None is the engine's own, the payment key in its secret store and the allowance at its provider.
+    credentials: CredentialResolver | None = None
+    allowances: AllowanceReader | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +131,8 @@ class EngineSupply:
     secret_store: SecretStore | _Unset = UNSET
     events: EventFeed | _Unset = UNSET
     sessions: SessionManager | _Unset = UNSET
+    credentials: CredentialResolver | _Unset | None = UNSET
+    allowances: AllowanceReader | _Unset | None = UNSET
 
 
 Decorate = Callable[[EngineParts], EngineParts]
@@ -148,90 +157,32 @@ async def default_parts(
 ) -> EngineParts:
     """Build every part that was not supplied. Resources go on ``stack`` the moment they open.
 
-    The default adapters and the SQL store are imported here, not at module level, so importing the
-    package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
+    The default adapters and the SQL store are imported where they are built, not at module level, so
+    importing the package loads no database, HTTP, crypto or SDK library
+    (tests/structure/test_import_weight.py).
     """
-    from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-    from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
-    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
-    from livepeer_builder.store import SqlStore
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource
 
     supply = supply or EngineSupply()
-    clock = supply.clock if not isinstance(supply.clock, _Unset) else SystemClock()
-    policy = supply.policy if not isinstance(supply.policy, _Unset) else DefaultPolicy()
+    clock = _supplied(supply.clock, SystemClock)
+    policy = _supplied(supply.policy, DefaultPolicy)
+    store = await _sql_store(settings, stack) if isinstance(supply.store, _Unset) else supply.store
+    api_keys = _supplied(supply.api_keys, lambda: _engine_keys(settings, store))
+    authenticators = _supplied(supply.authenticators, lambda: _own_authenticators(settings, stack))
+    secret_store = _supplied(supply.secret_store, lambda: _built_in_secret_store(settings, store, clock))
 
-    store: EngineStore
-    if isinstance(supply.store, _Unset):
-        sql = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
-        own(stack, sql, sql.close)
-        store = sql
-    else:
-        store = supply.store
-
-    if isinstance(supply.api_keys, _Unset):
-        api_keys = ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
-    else:
-        api_keys = supply.api_keys
-
-    authenticators: tuple[Authenticator, ...]
-    if not isinstance(supply.authenticators, _Unset):
-        authenticators = supply.authenticators
-    elif "jwt" in settings.auth:
-        from livepeer_builder.adapters.jwt import jwt_authenticator
-
-        bearer = jwt_authenticator(settings)
-        own(stack, bearer, bearer.aclose)
-        authenticators = (bearer,)
-    else:
-        authenticators = ()
-
-    secret_store: SecretStore
-    if isinstance(supply.secret_store, _Unset):
-        database = (
-            EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
-            if settings.secret_key
-            else None
-        )
-        secret_store = RoutingSecretStore(database)
-    else:
-        secret_store = supply.secret_store
-
-    token = settings.batteries_token.get_secret_value() if settings.batteries_token else None
-    allocation_manager: AllocationManager | None
-    if not isinstance(supply.allocation_manager, _Unset):
-        allocation_manager = supply.allocation_manager
-    elif settings.batteries_url and token:
-        client = BatteriesClient(settings.batteries_url, token, timeout_s=settings.batteries_timeout_s)
-        own(stack, client, client.aclose)
-        allocation_manager = client
-    else:
-        allocation_manager = None
-
-    grants_token = (
-        settings.batteries_grants_token.get_secret_value() if settings.batteries_grants_token else None
+    # Each payment part the caller did not supply: Batteries and the signer, or a payment clearinghouse
+    # (runtime/payment_defaults.py). Asked for one by one, so a supplied part is never built.
+    defaults = payment_defaults(
+        settings, lambda resource, close: own(stack, resource, close), store, secret_store
     )
-    grants_manager: AllocationManager | None
-    if not isinstance(supply.grants_manager, _Unset):
-        grants_manager = supply.grants_manager
-    elif settings.batteries_url and grants_token:
-        desk = BatteriesClient(settings.batteries_url, grants_token, timeout_s=settings.batteries_timeout_s)
-        own(stack, desk, desk.aclose)
-        grants_manager = desk
-    else:
-        grants_manager = None  # the grant desk is off; the engine token cannot list or create grants
+    allocation_manager = _supplied(supply.allocation_manager, defaults.allocation_manager)
+    grants_manager = _supplied(supply.grants_manager, defaults.grants_manager)
+    usage_source = _supplied(supply.usage_source, defaults.usage_source)
 
-    usage_source: UsageSource | None
-    if not isinstance(supply.usage_source, _Unset):
-        usage_source = supply.usage_source
-    elif settings.batteries_url and token:
-        usage = BatteriesUsageSource(settings.batteries_url, token, timeout_s=settings.batteries_timeout_s)
-        own(stack, usage, usage.aclose)
-        usage_source = usage
-    else:
-        usage_source = None
-
-    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source.
-    http_source = HttpDiscoverySource(settings.discovery_url)
+    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
+    # carries the tenant admin key only when the address is the clearinghouse's runner list (D87).
+    http_source = HttpDiscoverySource(settings.discovery_url, bearer=settings.clearinghouse_runner_list_token)
     own(stack, http_source, http_source.aclose)
     discovery_source: DiscoverySource = http_source
 
@@ -242,19 +193,59 @@ async def default_parts(
         authenticators=authenticators,
         api_keys=api_keys,
         discovery_source=discovery_source,
-        transport=(
-            supply.transport
-            if not isinstance(supply.transport, _Unset)
-            else SdkRunnerTransport(settings.signer_url, settings.max_payment_challenge_retries)
-        ),
-        selection=supply.selection if not isinstance(supply.selection, _Unset) else MostCapacityFirst(),
+        transport=_supplied(supply.transport, defaults.transport),
+        selection=_supplied(supply.selection, MostCapacityFirst),
         allocation_manager=allocation_manager,
         grants_manager=grants_manager,
         usage_source=usage_source,
         secret_store=secret_store,
-        events=supply.events if not isinstance(supply.events, _Unset) else ReservedEventFeed(),
-        sessions=supply.sessions if not isinstance(supply.sessions, _Unset) else ReservedSessions(),
+        events=_supplied(supply.events, ReservedEventFeed),
+        sessions=_supplied(supply.sessions, ReservedSessions),
+        credentials=_supplied(supply.credentials, defaults.credentials),
+        allowances=_supplied(supply.allowances, defaults.allowances),
     )
+
+
+def _supplied[T](part: T | _Unset, default: Callable[[], T]) -> T:
+    """The part the caller supplied, or its default, which is built only when none was supplied."""
+    return default() if isinstance(part, _Unset) else part
+
+
+async def _sql_store(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> EngineStore:
+    from livepeer_builder.store import SqlStore
+
+    sql = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
+    own(stack, sql, sql.close)
+    return sql
+
+
+def _engine_keys(settings: EngineSettings, store: EngineStore) -> ApiKeys | None:
+    return ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
+
+
+def _own_authenticators(
+    settings: EngineSettings, stack: contextlib.AsyncExitStack
+) -> tuple[Authenticator, ...]:
+    """The deployment's own authenticators when it supplies none: the JWT bearer, with LPB_AUTH=jwt."""
+    built: list[Authenticator] = []
+    if "jwt" in settings.auth:
+        from livepeer_builder.adapters.jwt import jwt_authenticator
+
+        bearer = jwt_authenticator(settings)
+        own(stack, bearer, bearer.aclose)
+        built.append(bearer)
+    return tuple(built)
+
+
+def _built_in_secret_store(settings: EngineSettings, store: EngineStore, clock: Clock) -> SecretStore:
+    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
+
+    database = (
+        EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
+        if settings.secret_key
+        else None
+    )
+    return RoutingSecretStore(database)
 
 
 @dataclass(frozen=True)
@@ -303,16 +294,21 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
+    # An engine that uses a clearinghouse is not one (#168): it signs at the clearinghouse with the same
+    # transport a clearinghouse forwards with, and offers neither of the two things below to anybody.
+    clearinghouse_transport = None if settings.uses_clearinghouse else parts.transport
     wallet: Wallet | None = None
     # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
     # and the transport asks the signer it pays through
-    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
-        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(clearinghouse_transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, clearinghouse_transport, parts.policy)
     forwarder: SignerForwarder | None = None
     # Otherwise the signer's two paths are not served (#166): a transport that forwards no signer call,
     # or one that does not pay, which has no signer to forward to.
-    if isinstance(parts.transport, SignerForwarder) and getattr(parts.transport, "pays", True):
-        forwarder = parts.transport
+    if isinstance(clearinghouse_transport, SignerForwarder) and getattr(
+        clearinghouse_transport, "pays", True
+    ):
+        forwarder = clearinghouse_transport
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -326,14 +322,17 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         wallet=wallet,
         forwarder=forwarder,
         currency=settings.default_currency,
+        allowances=parts.allowances,
     )
+    if settings.uses_clearinghouse:  # it is handed its actors' payment keys and issues none (#168)
+        payments.issue_no_payment_keys()
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
     jobs = JobService(
         parts.store,
         discovery,
         parts.transport,
         parts.selection,
-        payments,
+        parts.credentials or payments,
         parts.policy,
         admission,
         parts.clock,

@@ -37,7 +37,14 @@ from livepeer_builder.contracts.discovery import (
     Runner,
     RunnerGPU,
 )
-from livepeer_builder.contracts.health import EngineHealth, PurgeReport
+from livepeer_builder.contracts.health import (
+    EngineHealth,
+    PaymentCheck,
+    PaymentConfiguration,
+    PaymentProbe,
+    ProbeOutcome,
+    PurgeReport,
+)
 from livepeer_builder.contracts.jobs import (
     Attempt,
     AttemptOutcome,
@@ -67,6 +74,7 @@ from livepeer_builder.contracts.operations import (
 )
 from livepeer_builder.contracts.payments import (
     ActorAllocation,
+    AllocationRead,
     AllocationStatus,
     AllotRequest,
     Allowance,
@@ -101,6 +109,7 @@ __all__ = [
     "AccessKey",
     "ActorAllocation",
     "ActorContext",
+    "AllocationRead",
     "AllocationStatus",
     "AllotRequest",
     "Allowance",
@@ -149,10 +158,14 @@ __all__ = [
     "OperationRecord",
     "OperationRef",
     "OperationState",
+    "PaymentCheck",
+    "PaymentConfiguration",
     "PaymentKey",
+    "PaymentProbe",
     "PaymentReason",
     "PaymentState",
     "PriceInfo",
+    "ProbeOutcome",
     "PurgeReport",
     "Reconciliation",
     "ResourceRef",

@@ -41,6 +41,15 @@ Baseline livepeer/node `eee09c4` (v1.0.7; was `f45d83f`, 10 commits after v1.0.6
   signature over it, so an answer says the signer is reachable and holds the key. The signer's own
   `/readyz` (payer funds, the price policy and the event producer) is on its metrics listener,
   `127.0.0.1:8938` by default (`signer/app.go`), which the engine is given no address for (T34).
+- **Reachability, asked with a GET (#168):** `lpb payments check` sends no request that is not a GET,
+  so it cannot make the identity call. At the pin the signer's main port registers three routes
+  (`signer/service.go`, `newService`): `POST /sign-orchestrator-info`, `POST /generate-live-payment`
+  and `GET /discover-orchestrators`. Go's `ServeMux` answers a path registered for another method
+  with 405 and an `Allow` header, so `GET /sign-orchestrator-info` is 405 at a signer and 404 at
+  most other servers. The check asks that: a 405 says an HTTP server is at the address and has the
+  signer's identity route, and no more. `GET /discover-orchestrators` is not used: when the signer
+  has read no orchestrator yet it refreshes its discovery first, which calls orchestrators. This is
+  read from the signer's code at the pin and has not been run against a live signer.
 - **Discovery:** the engine does not use the signer for discovery, and the signer contacts no
   orchestrator (D63; T12 is resolved). It only signs.
 - **Event fields:** `auth_id`, `manifest_id`, `session_id` (state ID), `sequence_number`,

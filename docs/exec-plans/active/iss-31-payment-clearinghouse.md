@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P5 are built and in review. P6 to P8 follow in order.
+- **Progress:** P1 to P7 are built and in review. P8 follows.
 
 ## Goal
 
@@ -52,7 +52,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   review: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180).
 - [ ] **P6 (#167).** A public and a private listener. Built and in review:
   [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
-- [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`.
+- [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`. Built and in
+  review: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
 
 Each pull request ticks its own line here in the same change.
@@ -92,3 +93,24 @@ Each pull request ticks its own line here in the same change.
   each currency over every grant; the deposit and reserve are Batteries' own on-chain listener's, which
   a deployment must turn on; "ready" is the signer's identity call. Source: D82, D84 and the guide; where
   they are silent the stricter or the plainer reading was built, for Mike's review.
+- **19 November 2026, P7, first part.** Everything of #168 that does not depend on the payments route
+  is built, and signing is left as one seam. Where the guide is silent: the port names an allocation
+  and the routes an actor, so an allocation manager may be asked for one actor (`AllocationsByActor`),
+  with no member of the port changed; the engine's idempotency key is the route's `operation_ref`; a
+  payment key whose answer was lost is put right by a rotation; the tenant's id is a third setting,
+  `LPB_CLEARINGHOUSE_TENANT_ID`, until `GET /v1/me` exists; the allowance is read through
+  `GET /v1/allowance`, since the allocation route answers no amounts (T36); and `lpb payments check`
+  asks the signer `GET /sign-orchestrator-info`, whose 405 says the route is there. Source: D84, D87 and
+  the guide's "The remote adapters: each port and its route"; the rest for Mike's review.
+- **19 November 2026, P7, second part.** Mike decided the two points the first part left. (1) D87
+  point 3 is amended: a clearinghouse serves the signer's two paths at its root, so an enterprise's
+  engine signs with the unmodified SDK's transport pointed at the clearinghouse, with the actor's payment
+  key, and `LPB_CLEARINGHOUSE_URL` is a scheme, a host and a port. (2) The allocation route answers the
+  allocation's amounts, and the remote adapters read the allowance there (T36, closed). Built where
+  those are silent: a trailing slash on the address is taken off; the route's `allowance` is `null`
+  when the provider cannot be read, and the record is still answered; only the clearinghouse's own 503
+  with `signer_not_reached` is read as "nothing was sent", and a self-hosted engine reads no code (T39,
+  closed); an engine that uses a clearinghouse serves neither the signer's two paths nor a wallet
+  report; an allocation an actor no longer holds still cannot be read through a clearinghouse (T40).
+  Source: Mike (the two decisions, as dated notes on #168); the rest for his review.
+

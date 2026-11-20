@@ -17,8 +17,15 @@ from pydantic import (
 )
 
 from livepeer_builder.contracts import Contract, Currency, Operation
+from livepeer_builder.contracts.common import GrantId
 
 ENV_PREFIX = "LPB_"
+# The clearinghouse's runner list, after its address: what an enterprise's engine reads by default (D87).
+CLEARINGHOUSE_RUNNER_LIST = "/v1/clearinghouse/discovery"
+# What selects a payment clearinghouse: set together or not at all (D84, #168).
+_CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_tenant_id")
+# What self-hosted payments sets. An engine that uses a clearinghouse holds none of them.
+_SELF_HOSTED = ("batteries_url", "batteries_token", "batteries_grants_token", "signer_url")
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
 # Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
@@ -43,6 +50,19 @@ def _reserved(scope: str, prefix: str) -> bool:
     """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
     with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
     return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
+
+
+def _env(name: str) -> str:
+    return ENV_PREFIX + name.upper()
+
+
+def _runner_list_by_default(values: dict[str, Any]) -> dict[str, Any]:
+    """``values`` with the clearinghouse's runner list as the discovery address, when a clearinghouse is
+    named and no discovery address is (D87). An address that cannot be read is left for its validator."""
+    address = values.get("clearinghouse_url")
+    if values.get("discovery_url") or not isinstance(address, str) or not address.strip():
+        return values
+    return {**values, "discovery_url": address.strip().rstrip("/") + CLEARINGHOUSE_RUNNER_LIST}
 
 
 class EngineSettings(Contract):
@@ -93,6 +113,13 @@ class EngineSettings(Contract):
     batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
+    # An engine that uses a payment clearinghouse (D84, #168): its address, the tenant admin key and the
+    # tenant's id, which is its grant's id (D83). Set together or not at all, and never with the
+    # Batteries or signer settings: the payment ports then reach the clearinghouse and nothing else.
+    clearinghouse_url: str | None = None
+    clearinghouse_token: SecretStr | None = None  # the tenant admin key; sent as a bearer, never logged
+    clearinghouse_tenant_id: GrantId | None = None
+    clearinghouse_timeout_s: float = Field(default=30.0, gt=0)  # each request to the clearinghouse
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
     operation_stale_s: float = Field(default=120.0, gt=0)
 
@@ -155,6 +182,42 @@ class EngineSettings(Contract):
         if not parts.hostname:
             raise ValueError("signer_url needs a host, as http(s)://host[:port] or host:port")
         return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clearinghouse_runner_list_is_the_default(cls, values: Any) -> Any:
+        return _runner_list_by_default(values) if isinstance(values, dict) else values
+
+    @field_validator("clearinghouse_url")
+    @classmethod
+    def _clearinghouse_url_is_an_origin(cls, value: str | None) -> str | None:
+        """A scheme, a host and an optional port, and nothing after them. The engine signs at the
+        clearinghouse through the gateway SDK, which keeps that much of a signer's address and drops the
+        rest: with a path, the tenant's routes would be called under it and the signer's two paths at
+        the root. Error text and logs quote the address, so it carries no userinfo either: the tenant
+        admin key is a header. A trailing slash alone names no path and is taken off. The value is not
+        echoed."""
+        if value is None:
+            return None
+        value = value.strip()
+        try:
+            parts = urlsplit(value)
+            valid = (
+                parts.scheme in ("http", "https")
+                and bool(parts.hostname)
+                and parts.path in ("", "/")
+                and not any(mark in value for mark in "@?#")
+                and not any(char.isspace() for char in value)
+            )
+        except ValueError:  # an unclosed IPv6 literal, for example
+            valid = False
+        if not valid:
+            raise ValueError(
+                "LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, with no "
+                "path, query, fragment or userinfo, such as https://clearinghouse.example: the signer's "
+                "two paths are called at its root"
+            )
+        return f"{parts.scheme}://{parts.netloc}"
 
     @field_validator("discovery_url")
     @classmethod
@@ -220,6 +283,45 @@ class EngineSettings(Contract):
         if self.operation_stale_s < 4 * self.batteries_timeout_s:
             raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_BATTERIES_TIMEOUT_S")
         return self
+
+    @model_validator(mode="after")
+    def _a_clearinghouse_is_whole_and_alone(self) -> "EngineSettings":
+        """A half setting, or a clearinghouse beside self-hosted payments, is refused before the engine
+        starts (#168). Only names are said: three of these settings are secrets."""
+        named = [name for name in _CLEARINGHOUSE if getattr(self, name) is not None]
+        if not named:
+            return self
+        if len(named) < len(_CLEARINGHOUSE):
+            missing = ", ".join(_env(name) for name in _CLEARINGHOUSE if name not in named)
+            raise ValueError(
+                f"{', '.join(map(_env, _CLEARINGHOUSE))} are set together or not at all; missing: {missing}"
+            )
+        mixed = [_env(name) for name in _SELF_HOSTED if getattr(self, name) is not None]
+        if mixed:
+            raise ValueError(
+                f"{', '.join(mixed)} cannot be set with LPB_CLEARINGHOUSE_URL: an engine that uses a "
+                "payment clearinghouse reaches Batteries and the signer through it, and holds no address "
+                "or credential of theirs"
+            )
+        if self.operation_stale_s < 4 * self.clearinghouse_timeout_s:  # as for Batteries, just above
+            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
+        return self
+
+    @property
+    def uses_clearinghouse(self) -> bool:
+        """Whether the payment ports reach a payment clearinghouse, and not Batteries and a signer."""
+        return self.clearinghouse_url is not None
+
+    @property
+    def clearinghouse_runner_list_token(self) -> str | None:
+        """The tenant admin key, when the discovery address is the clearinghouse's runner list, which
+        needs it (D87); otherwise ``None``. The address must be that route exactly, scheme, host, port
+        and path: the key is sent to no other."""
+        if self.clearinghouse_url is None or self.clearinghouse_token is None:
+            return None
+        if self.discovery_url != self.clearinghouse_url + CLEARINGHOUSE_RUNNER_LIST:
+            return None
+        return self.clearinghouse_token.get_secret_value()
 
     @model_validator(mode="after")
     def _two_listeners_have_two_addresses(self) -> "EngineSettings":
@@ -295,12 +397,14 @@ class EngineSettings(Contract):
         fills fields the environment leaves unset, by field name: the CLI commands that serve nothing give
         ``discovery_url`` one (#112, C23)."""
         source = os.environ if env is None else env
-        values: dict[str, Any] = dict(defaults or {})
+        values: dict[str, Any] = {}
         for name in cls.model_fields:
             raw = source.get(ENV_PREFIX + name.upper())
             if raw is not None and raw != "":
                 values[name] = raw
-        return cls.model_validate(values)
+        # before the caller's defaults: a clearinghouse's runner list comes before a command's stand-in
+        values = _runner_list_by_default(values)
+        return cls.model_validate(dict(defaults or {}) | values)
 
     @classmethod
     def database_url_from_env(cls, env: Mapping[str, str] | None = None) -> str:

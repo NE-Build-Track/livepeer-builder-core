@@ -255,3 +255,48 @@ existing route changed, and no credential is refused that was accepted. There is
 
 **What a later release changes.** The `clearinghouse` role of ISS-31 (#169) will require the private
 listener. Until then two listeners are a deployment's choice.
+
+## Upgrading to an engine that uses a payment clearinghouse
+
+On 19 November 2026 the engine gained the remote adapters of the payment ports and
+`lpb payments check` (D84, D87, #168). A deployment that sets nothing new runs self-hosted payments as
+before, and there is no migration. One route's answer gained a field (the allocation read, below). An
+engine that uses a clearinghouse signs there with the gateway SDK's transport and its actors' payment
+keys ([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghouse)).
+
+| What | Before | Now |
+| --- | --- | --- |
+| Settings | | `LPB_CLEARINGHOUSE_URL` (a scheme, a host and an optional port, and nothing after them), `LPB_CLEARINGHOUSE_TOKEN` and `LPB_CLEARINGHOUSE_TENANT_ID`, set together or not at all, and `LPB_CLEARINGHOUSE_TIMEOUT_S` (30). Refused at startup beside `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` or `LPB_SIGNER_URL` ([payments.md](payments.md#the-remote-adapters)) |
+| `LPB_DISCOVERY_URL` | Required | Required unless `LPB_CLEARINGHOUSE_URL` is set: it then defaults to the clearinghouse's runner list, and the reader carries the tenant admin key there |
+| `EngineSettings.from_env(defaults=...)` | A default fills a field the environment leaves unset | The same, except that with a clearinghouse set the discovery address is its runner list before any default |
+| `EngineSupply`, `EngineParts` | | `credentials` (`CredentialResolver`) and `allowances` (`AllowanceReader`). Unset, or `None`: the engine's own records, as before |
+| Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id)`. A supplied manager without it is called as before |
+| Errors | | `ProviderOutcomeUnknown`, a `ProviderUnavailable` (503): a command left and no answer says whether it applied |
+| Adapters | | `ClearinghouseAllocations`, `ClearinghouseAllowances`, `ClearinghouseUsage`, `ClearinghouseCredentials` (`livepeer_builder.adapters.clearinghouse`) |
+| `SdkRunnerTransport` | `SdkRunnerTransport(signer_url, max_payment_challenge_retries)` | and `signer_is_clearinghouse` (false unless said): the address is a clearinghouse's, whose `signer_not_reached` is then read as `signer_unavailable`. The engine says it from its settings |
+| A job met by a clearinghouse that could not reach its signer, while signing | | `failed`, `payment` / `signer_unavailable`, nothing paid. Every other 5xx while signing is `uncertain`, as with a signer |
+| An engine that uses a clearinghouse | | Serves neither the signer's two paths nor the wallet report: `payments.signing` and `payments.wallet` are `None` |
+| `HttpDiscoverySource` | `HttpDiscoverySource(discovery_url, *, client, timeout_s)` | and `bearer`, a credential for the discovery address |
+| CLI | | `lpb payments check`: exit 0, 1 or 2 ([payments.md](payments.md#lpb-payments-check)) |
+| `livepeer_builder.runtime` | | `check_payments(settings)` |
+| Root exports | | `PaymentCheck`, `PaymentProbe`, `ProviderOutcomeUnknown`, `AllocationRead` |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation` | The allocation's record (`ActorAllocation`) | `AllocationRead`: every field of the record where it was, and `allowance`, what `GET /v1/allowance` answers for that actor, or `null` when the provider could not be read ([payments.md](payments.md#allowance)) |
+| The facade | `PaymentsAdminApi` | `PaymentsAdminApi.get_allocation`, which a caller's own implementation of the facade must state. `get_actor` still returns the record alone |
+| An allotment's answer at an engine that uses a clearinghouse | | `payment_key: null`: the engine issues none of its own and shows the clearinghouse's to nobody |
+
+**Before you start the new release:**
+
+- **Nothing, for self-hosted payments.** Leave the clearinghouse settings unset.
+- **To use a clearinghouse,** set the three settings from what the clearinghouse admin handed over at
+  onboarding (the address of the public listener, the tenant admin key and the tenant's id), keep
+  `LPB_SECRET_KEY`, and unset every Batteries and signer setting. The address is a scheme, a host and
+  an optional port: a path is refused, because the signer's two paths are called at its root. Run
+  `lpb payments check`.
+- **A caller's own implementation of `PaymentsAdminApi`** states `get_allocation`.
+- **A reader of the allocation route** that refuses a field it does not know meets `allowance`.
+- **Put every actor in the tenant.** `LPB_JWT_TENANT_ID` or the tenant claim, the `tenant_id` of the
+  access keys the engine issues, and the `ActorContext` an embedding app builds all carry the tenant's
+  id at the clearinghouse. An actor in another tenant is refused there.
+- **Allot each actor again.** An actor allotted with self-hosted payments holds a Batteries key, which
+  is never sent to a clearinghouse: its jobs fail `not_provisioned`. Nothing is rewritten (T30).
+- **A caller's own allocation manager** changes nothing.

@@ -84,7 +84,8 @@ class RefusesManifest(Protocol):
 class PaymentEvents:
     """Sessions of one call. ``unknown`` is ``payment_unknown``: the signer was asked and may have charged."""
 
-    def __init__(self, on_signed: OnSigned | None = None) -> None:
+    def __init__(self, on_signed: OnSigned | None = None, *, clearinghouse: bool = False) -> None:
+        self.clearinghouse = clearinghouse  # the signer's two paths are a payment clearinghouse's (#168)
         self.signed = False
         self.unknown = False
         self.manifest_ids: list[str] = []
@@ -111,7 +112,7 @@ class PaymentEvents:
     async def note_failure(self, manifest_id: str, error: Exception) -> None:
         """A refusal, or a request that never reached the signer (Q3), makes the stored manifest
         ``unpaid``. Anything else leaves it ``unknown``: the signer may have charged."""
-        if not refused_by_signer(error):
+        if not refused_by_signer(error, clearinghouse=self.clearinghouse):
             self.unknown = True
             return
         callback = self._on_signed
@@ -466,7 +467,9 @@ def translated(events: PaymentEvents, prefix: str = "") -> Iterator[None]:
 
 def signer_error(error: LivepeerGatewayError, events: PaymentEvents) -> RunnerCallError:
     """The engine's account of a signer failure (``signer_failures.classify``, D58)."""
-    kind, message, status, reason = classify(error, unknown=events.unknown)
+    kind, message, status, reason = classify(
+        error, unknown=events.unknown, clearinghouse=events.clearinghouse
+    )
     return events.error(kind, message, status_code=status, reason=reason)
 
 

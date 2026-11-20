@@ -87,6 +87,10 @@ classDiagram
         +async top_up_allocation(allocation_id, amount, idempotency_key) None
         +async top_up_grant(grant_id, amount, idempotency_key) None
     }
+    class AllocationsByActor {
+        <<interface>>
+        +for_actor(tenant_id, actor_id) AllocationManager
+    }
     class UsageSource {
         <<interface>>
         +async page(cursor, limit) UsagePage
@@ -174,6 +178,10 @@ classDiagram
     class AuthenticatorChain
     class BatteriesClient
     class BatteriesUsageSource
+    class ClearinghouseAllocations
+    class ClearinghouseAllowances
+    class ClearinghouseCredentials
+    class ClearinghouseUsage
     class DefaultPolicy
     class EncryptedDbSecretStore
     class HttpDiscoverySource
@@ -204,12 +212,17 @@ classDiagram
     RunnerStream <|.. SdkRunnerStream
     SignerForwarder <|.. SdkRunnerTransport
     CredentialResolver <|.. PaymentsService
+    CredentialResolver <|.. ClearinghouseCredentials
     AllocationManager <|.. BatteriesClient
+    AllocationManager <|.. ClearinghouseAllocations
+    AllocationsByActor <|.. ClearinghouseAllocations
     UsageSource <|.. BatteriesUsageSource
+    UsageSource <|.. ClearinghouseUsage
     TenantUsageSource <|.. BatteriesUsageSource
     EscrowSource <|.. BatteriesClient
     SignerProbe <|.. SdkRunnerTransport
     AllowanceReader <|.. PaymentsService
+    AllowanceReader <|.. ClearinghouseAllowances
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
     ActorCommandRepo <|.. SqlStore
@@ -242,12 +255,17 @@ classDiagram
 | `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
 | `SignerForwarder` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
+| `CredentialResolver` | `ClearinghouseCredentials` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
+| `AllocationManager` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
+| `AllocationsByActor` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
+| `UsageSource` | `ClearinghouseUsage` | `livepeer_builder.adapters.clearinghouse` |
 | `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `EscrowSource` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `SignerProbe` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
+| `AllowanceReader` | `ClearinghouseAllowances` | `livepeer_builder.adapters.clearinghouse` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |
 | `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |

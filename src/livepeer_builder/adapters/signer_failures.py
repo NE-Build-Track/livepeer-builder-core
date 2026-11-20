@@ -6,7 +6,17 @@ phase failed.
 
 Builders read the engine's words only (``signer_message``): the SDK's text carries the signer URL and up
 to 2,000 characters of the signer's body, so it goes to the log.
+
+An engine that uses a payment clearinghouse makes the same two calls at the clearinghouse (#168), and
+its failures are classified the same way (D87): a refusal keeps its reason, and a 5xx while signing is
+an unknown outcome, whoever made it. A clearinghouse can say one thing a signer cannot: that it could not
+reach its own signer, so nothing was sent (503 with ``code: signer_not_reached``). That alone is read as
+``signer_unavailable``, and only when the engine was told the address is a clearinghouse's
+(``clearinghouse=True``): livepeer/node's signer never sends the code, so at a signer's address it
+proves nothing, and the safe reading of a 5xx stays "it may have charged".
 """
+
+import json
 
 import aiohttp
 from livepeer_gateway.errors import (
@@ -33,13 +43,17 @@ _REFUSAL_REASONS: dict[int, PaymentReason] = {
     402: "allowance_exhausted",
 }
 _REFUSED = {"not_authorized": "not authorized", "allowance_exhausted": "allowance exhausted"}
+# What a clearinghouse answers, with a 503, when it could not reach its own signer: nothing was sent
+# (http/signing.py; tests/unit/test_clearinghouse_signing_failures.py holds the two to each other).
+NOT_REACHED_CODE = "signer_not_reached"
 
 
 def classify(
-    error: LivepeerGatewayError, *, unknown: bool
+    error: LivepeerGatewayError, *, unknown: bool, clearinghouse: bool = False
 ) -> tuple[AttemptOutcome, str, int | None, PaymentReason | None]:
     """A signer failure as ``(kind, message, status_code, reason)``. ``unknown``: the signer was asked
-    and gave no validated answer, so it may have charged (``payment_unknown``, D53).
+    and gave no validated answer, so it may have charged (``payment_unknown``, D53). ``clearinghouse``:
+    the call went to a payment clearinghouse, whose own "nothing was sent" is read.
 
     A refresh past the retry budget is unpaid ``payment_refused``, like a 400.
     """
@@ -51,6 +65,8 @@ def classify(
         status = error.status_code
         kind = "payment_refused" if status in _ORCHESTRATOR_SPECIFIC_SIGNER_STATUSES else "payment"
         reason = _REFUSAL_REASONS.get(status)
+        if clearinghouse and clearinghouse_sent_nothing(error):
+            reason = "signer_unavailable"
     elif isinstance(error, _PAYMENT_ERRORS):
         kind = "payment"
     elif never_reached_signer(error):  # nothing was signed, and every runner shares the signer (Q3)
@@ -60,13 +76,28 @@ def classify(
     return kind, signer_message(error, reason, unknown=unknown), status, reason
 
 
-def refused_by_signer(error: BaseException) -> bool:
-    """The signer did not sign: a refusal, an expired challenge, or a request that never reached it."""
+def refused_by_signer(error: BaseException, *, clearinghouse: bool = False) -> bool:
+    """The signer did not sign: a refusal, an expired challenge, or a request that never reached it. At a
+    clearinghouse (``clearinghouse``), also its own word that it sent its signer nothing."""
     if isinstance(error, (SignerRefreshRequired, SkipPaymentCycle)):
         return True
     if isinstance(error, LivepeerHTTPError):
-        return error.status_code in _SIGNER_REFUSALS
+        return error.status_code in _SIGNER_REFUSALS or (clearinghouse and clearinghouse_sent_nothing(error))
     return never_reached_signer(error)
+
+
+def clearinghouse_sent_nothing(error: LivepeerHTTPError) -> bool:
+    """A clearinghouse's answer that it could not reach its own signer, so nothing was sent and nothing
+    signed: a 503 whose body is a JSON object with ``code`` ``signer_not_reached`` at its top
+    (``http/signing.py``). Nothing else is this: not another 5xx with the code, not a 503 without it,
+    which a proxy in front of a clearinghouse makes by itself, perhaps after the signer signed."""
+    if error.status_code != 503:
+        return False
+    try:
+        body = json.loads(error.body)
+    except (TypeError, ValueError, RecursionError):  # not JSON, or nested past the decoder's depth
+        return False
+    return isinstance(body, dict) and body.get("code") == NOT_REACHED_CODE
 
 
 def never_reached_signer(error: BaseException) -> bool:

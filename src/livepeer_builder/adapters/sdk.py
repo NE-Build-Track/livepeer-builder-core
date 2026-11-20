@@ -14,6 +14,7 @@ import logging
 import httpx
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
 from livepeer_gateway.remote_signer import get_signer_info
+from pydantic import SecretStr
 
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_address import runner_address
@@ -39,6 +40,7 @@ from livepeer_builder.errors import SignerNotReached
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
+_JSON = "application/json"  # what the discovery reader asks for, and a runner's default content type
 # The SDK's identity call without its cache, which remembers a signer for the life of the process: a
 # probe has to ask the signer, not the memory of one (tests/unit/test_signer_probe.py).
 _ask_signer_identity = get_signer_info.__wrapped__
@@ -56,7 +58,9 @@ def memory_discovery_client(body: bytes) -> httpx.AsyncClient:
 
 class HttpDiscoverySource:
     """Reads ``GET LPB_DISCOVERY_URL`` as livepeer/node's ``/discovery`` contract (D63). Sends no
-    credentials; the signer is not involved in discovery (#45).
+    credentials; the signer is not involved in discovery (#45). The one exception is ``bearer``: the
+    tenant admin key of an engine whose discovery address is its clearinghouse's runner list, which needs
+    one (D87, #168). It goes to the discovery address only, since no redirect is followed.
 
     The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
@@ -70,8 +74,10 @@ class HttpDiscoverySource:
         *,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
+        bearer: str | None = None,
     ) -> None:
         self._discovery_url = discovery_url
+        self._bearer = SecretStr(bearer) if bearer else None  # never a plain attribute, never in a repr
         self._client = client or httpx.AsyncClient(
             timeout=timeout_s
         )  # one per source: polls reuse its connection
@@ -102,7 +108,10 @@ class HttpDiscoverySource:
         return runners
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
-        request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
+        headers = {"Accept": _JSON}
+        if self._bearer is not None:
+            headers["Authorization"] = f"Bearer {self._bearer.get_secret_value()}"
+        request = client.build_request("GET", self._discovery_url, headers=headers)
         response = await client.send(request, stream=True, follow_redirects=False)
         async with contextlib.aclosing(response):
             response.raise_for_status()  # the status decides first: an error's body is not read
@@ -121,9 +130,18 @@ class SdkRunnerTransport:
     ``get_payment`` (D53).
     """
 
-    def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
+    def __init__(
+        self,
+        signer_url: str | None,
+        max_payment_challenge_retries: int = 3,
+        *,
+        signer_is_clearinghouse: bool = False,
+    ) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
+        # Whether the address is a payment clearinghouse's, which serves the signer's two paths (#168). A
+        # clearinghouse can say it sent its signer nothing; a signer never does (signer_failures.py).
+        self._signer_is_clearinghouse = signer_is_clearinghouse
         self._forwarder = HttpSignerForwarder(signer_url) if signer_url is not None else None
 
     @property
@@ -178,7 +196,7 @@ class SdkRunnerTransport:
             body=request.raw_body
             if request.raw_body is not None
             else json.dumps({} if request.payload is None else request.payload).encode(),
-            content_type=request.content_type or "application/json",
+            content_type=request.content_type or _JSON,
             headers=request.headers,
             return_http_errors=request.return_http_errors,
             app=runner.app,
@@ -197,13 +215,13 @@ class SdkRunnerTransport:
         credential: str | None,
         on_signed: OnSigned | None = None,
     ) -> RunnerReply:
-        events = PaymentEvents(on_signed)
+        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
         paid = self._request(runner, request, credential, events)
         status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
             status_code=status,
             content=body,
-            content_type=content_type or "application/json",
+            content_type=content_type or _JSON,
             data=json_object(body, content_type),
             manifest_ids=events.ids,
             payment_sent=events.signed,
@@ -223,7 +241,7 @@ class SdkRunnerTransport:
         keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
         validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        events = PaymentEvents(on_signed)
+        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
         paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):

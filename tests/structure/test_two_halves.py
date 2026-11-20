@@ -67,6 +67,7 @@ WORK = {
 # Tenants, grants, allocations, payment keys, signing and usage.
 CLEARINGHOUSE = {
     "services/actor_writes.py",
+    "services/allocation_read.py",  # an allocation with its amounts, for a tenant's admin (#168)
     "services/grants.py",
     "services/issued_payment_keys.py",
     "services/payment_keys.py",
@@ -113,6 +114,10 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # EscrowSource and SignerProbe are what the wallet report reads (#167): the wallet's deposit and reserve at
 # the provider, and whether the signer answers. They are the clearinghouse half's, for its admin: the work
 # half pays through the signer inside RunnerTransport and has no use for either.
+# AllocationsByActor is how an allocation manager is told which actor a command is about (#168): a
+# payment clearinghouse's routes name the actor, and AllocationManager names an allocation's id. It adds
+# no way to reach payments: PaymentsService asks it of the manager it already holds, and the manager it
+# returns is an AllocationManager.
 # SignerForwarder hands a signer call to the signer with an actor's Batteries key, for a clearinghouse
 # (#166): the work half signs inside RunnerTransport and never forwards another engine's call.
 BEHIND_THE_PORTS = {
@@ -121,6 +126,7 @@ BEHIND_THE_PORTS = {
     "SecretRepo",
     "ActorRepo",
     "ActorCommandRepo",
+    "AllocationsByActor",
     "PaymentKeyRepo",
     "TenantUsageSource",
     "EscrowSource",

@@ -111,6 +111,16 @@ class ProviderUnavailable(EngineError):
     """The payment provider or its usage feed cannot be reached or is not configured (503)."""
 
 
+class ProviderOutcomeUnknown(ProviderUnavailable):
+    """A command was sent to the payment provider and no answer says whether it was applied (503; D87,
+    #168): the answer was lost, timed out, or was a server error. It may have been applied. Repeat the
+    same request under the same ``operation_ref``: the operation ledger kept the reference, and the
+    provider answers the repeat from its own record. Under a new reference it could apply twice.
+
+    A ``ProviderUnavailable``, so callers that catch that keep working. That one alone says nothing
+    was applied when a clearinghouse raises it."""
+
+
 class ProviderError(EngineError):
     """The payment provider answered with an error status."""
 

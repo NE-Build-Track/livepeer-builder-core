@@ -32,6 +32,7 @@ from livepeer_builder.contracts import (
     AccessKey,
     ActorAllocation,
     ActorContext,
+    AllocationRead,
     AllocationStatus,
     AllotRequest,
     Allowance,
@@ -286,6 +287,7 @@ class PaymentsAdminApi(Protocol):
         limit: int = 500,
     ) -> list[KnownActor]: ...
     async def get_actor(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
+    async def get_allocation(self, admin: ActorContext, tenant_id: str, actor_id: str) -> AllocationRead: ...
     @property
     def tenants(self) -> TenantsApi | None: ...
     @property

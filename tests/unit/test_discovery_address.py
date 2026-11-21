@@ -70,6 +70,21 @@ def test_from_env_takes_no_defaults_and_the_cli_holds_no_stand_in_address() -> N
     assert not hasattr(cli, "NO_DISCOVERY_URL")
 
 
+def test_a_value_for_what_the_environment_leaves_unset_goes_under_it_and_is_validated() -> None:
+    """What replaces ``from_env(defaults=)`` (docs/contracts/index.md): a mapping with the caller's values
+    under the environment's. Every rule of the settings runs on them, which a ``model_copy`` skips
+    (review of #188)."""
+    environment = {"LPB_SIGNER_URL": "https://signer.example"}
+    ours = {"LPB_SIGNER_URL": "https://ours.example", "LPB_HTTP_PORT": "9090"}
+    settings = EngineSettings.from_env(ours | environment)
+    assert (settings.signer_url, settings.http_port) == ("https://signer.example", 9090)
+    unset = {"LPB_HTTP_PORT": "8081"}  # an environment that leaves the signer URL unset
+    with pytest.raises(ValidationError, match="signer_url must not carry userinfo"):
+        EngineSettings.from_env({"LPB_SIGNER_URL": f"https://signer:{CREDENTIAL}@signer.example"} | unset)
+    unchecked = settings.model_copy(update={"signer_url": f"https://signer:{CREDENTIAL}@signer.example"})
+    assert unchecked.signer_url is not None and CREDENTIAL in unchecked.signer_url  # no rule ran
+
+
 def test_settings_with_the_address_give_it_to_an_engine_about_to_start() -> None:
     address = "http://discovery:8939/discovery"
     assert EngineSettings(discovery_url=address).require_discovery_url() == address

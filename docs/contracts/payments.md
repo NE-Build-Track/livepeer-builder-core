@@ -491,7 +491,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
     reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A
     resumed onboarding that has no tenant id noted reads the grants page by page, oldest first, and adopts
     the one carrying its tag instead of creating a second. It records the list cursor after each page, so a
-    resume that runs out of its budget in a slow catalog leaves the next one to go on from there; pages
+    resume that runs out of its budget in a slow catalog leaves the next one to go on from there, and
+    with the cursor the earlier cursor it compares each new one with, so a list that goes round (A, B, A)
+    is found even when every resume reads only a page or two (#158); pages
     already read lacked the tag, and a grant created later is on a later page. A list answer the engine
     cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114
     (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`,

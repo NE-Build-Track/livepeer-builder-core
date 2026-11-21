@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Coroutine
 from datetime import UTC, datetime
 from typing import Any
@@ -48,8 +49,22 @@ class CursorTrail:
     (Brent's cycle detection). So a cycle of any length is found after a few turns of it, and a list
     that only advances is never refused."""
 
-    def __init__(self, start: str | None) -> None:
-        self._mark, self._steps, self._span = start or "", 0, 1  # the cursor the first page is asked with
+    def __init__(self, start: str | None, kept: str | None = None) -> None:
+        """A trail from ``start``, the cursor the first page is asked with. A reader that goes on where
+        an earlier one stopped (a resumed search) passes what that one's ``keep()`` returned, and is on
+        the same trail: one that began again with every reader would never see a cursor come back when
+        each reads a page or two. With nothing usable kept, the trail starts here."""
+        self._mark, self._steps, self._span = start or "", 0, 1
+        try:
+            mark, steps, span = json.loads(kept or "")
+        except (ValueError, TypeError, RecursionError):
+            return
+        if isinstance(mark, str) and type(steps) is int and type(span) is int and 0 <= steps < span:
+            self._mark, self._steps, self._span = mark, steps, span
+
+    def keep(self) -> str:
+        """The trail as text, to record beside the cursor a later reader goes on from."""
+        return json.dumps([self._mark, self._steps, self._span])
 
     def repeats(self, cursor: str) -> bool:
         """Whether ``cursor``, which a page just named as the next one, is the mark: asking with it

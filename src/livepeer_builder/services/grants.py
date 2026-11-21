@@ -29,9 +29,10 @@ async def tagged_grant(manager: AllocationManager, run: RunningOperation, tag: s
     catalog leaves the next one less to read. Pages already read lacked the tag, and a grant created
     later is always on a later page (Batteries lists oldest first). A page that names a cursor the
     search was already at (the one it was asked with, or an earlier one) fails the search as an unknown
-    outcome: following it would never end."""
+    outcome: following it would never end. The trail that finds such a cursor is recorded with the
+    cursor, so a search that every resume cuts short after a page or two still finds it."""
     cursor = run.context.get("grant_list_cursor")
-    trail = CursorTrail(cursor)
+    trail = CursorTrail(cursor, run.context.get("grant_list_trail"))
     while True:
         page = await manager.grant_page(cursor)
         for grant in page.grants:
@@ -42,4 +43,4 @@ async def tagged_grant(manager: AllocationManager, run: RunningOperation, tag: s
         if trail.repeats(page.next_cursor):
             raise ProviderError(200, "the grant list's cursor did not advance")
         cursor = page.next_cursor
-        await run.remember(grant_list_cursor=cursor)
+        await run.remember(grant_list_cursor=cursor, grant_list_trail=trail.keep())

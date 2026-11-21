@@ -2,7 +2,7 @@
 
 **Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82 and D83 (18 November 2026) · **Code:**
 `contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
-`services/costs.py`, `adapters/batteries.py`
+`services/costs.py`, `adapters/batteries.py`, `adapters/batteries_usage.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.

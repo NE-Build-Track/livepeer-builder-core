@@ -90,3 +90,31 @@ async def test_the_rest_service_answers_an_undecodable_management_answer_with_50
         listed = await http.get("/v1/clearinghouse/tenants")
     assert listed.status_code == 502
     assert "did not decode" in listed.json()["error"]
+
+
+DEEP = "[" * 100_000 + "]" * 100_000
+DEEP_METADATA = {
+    "a deep list": DEEP,
+    "a deep value under the engine's own key": '{"lpb_operation": ' + DEEP + "}",
+}
+
+
+@pytest.mark.parametrize("metadata", DEEP_METADATA.values(), ids=DEEP_METADATA)
+async def test_a_grant_whose_metadata_is_json_nested_past_the_decoder_is_a_grant_the_engine_did_not_tag(
+    metadata: str,
+) -> None:
+    """``metadata`` is the creator's own text. Reading it raised ``RecursionError``, a 500 from every grant
+    list; text that is not JSON already read as no tag, and so does a number past the digit limit."""
+    grant = {"id": "g1", "name": "ops", "status": "active", "currency": "usd", "total_usd": "10"}
+    tagged = grant | {"id": "g2", "metadata": '{"lpb_operation": "k1"}'}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/grants/g1":
+            return httpx.Response(200, json=grant | {"metadata": metadata})
+        return httpx.Response(200, json={"items": [grant | {"metadata": metadata}, tagged]})
+
+    client = BatteriesClient(BASE, "t", client=batteries(handle))
+    listed = await client.list_grants()
+    assert [(item.id, item.metadata) for item in listed] == [("g1", {}), ("g2", {"lpb_operation": "k1"})]
+    page = await client.grant_page(None)
+    assert [item.metadata for item in page.grants] == [{}, {"lpb_operation": "k1"}]

@@ -434,7 +434,8 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
   JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
   (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
-  not create. The same holds for every value a command's result is built from: the `id` a grant create
+  not create, and so is `metadata` whose JSON is nested deeper than the decoder reads (before #158 that
+  one answered 500 from every grant list). The same holds for every value a command's result is built from: the `id` a grant create
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with

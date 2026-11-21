@@ -339,10 +339,11 @@ def _optional(body: dict[str, Any], key: str) -> str:
 
 
 def _metadata(raw: str) -> dict[str, str]:
-    """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {}."""
+    """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {},
+    and so does JSON the decoder cannot read (nested past its depth, a number past its digit limit)."""
     try:
         parsed = json.loads(raw) if raw else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return {}
     if not isinstance(parsed, dict):
         return {}

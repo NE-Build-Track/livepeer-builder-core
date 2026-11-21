@@ -604,6 +604,28 @@ async def test_a_redirected_usage_page_reads_as_unavailable(status: int) -> None
     assert source_failure(refused.value) == "unavailable"  # as a redirect from the discovery source (C7)
 
 
+async def test_a_resumed_grant_create_reads_past_a_grant_whose_metadata_is_nested_past_the_decoder(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock
+) -> None:
+    """#158: another creator's grant with deeply nested JSON as its metadata raised ``RecursionError``
+    in the search, so the resume was a 500 on every try. Such a grant has no tag: the search goes on to
+    its own."""
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    other = GRANT | {"id": "grant_0", "metadata": "[" * 100_000 + "]" * 100_000}
+    batteries.list_answers = [{"items": [other, batteries.grants[0]], "next_cursor": ""}]
+    adopted = await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert (adopted.tenant_id, len(batteries.grants)) == ("grant_1", 1)
+
+
 # -- #158: a cursor that comes back after other pages (A, B, A) ---------------------------------------
 
 CYCLES: dict[str, dict[str, str]] = {

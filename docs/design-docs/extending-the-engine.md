@@ -181,9 +181,9 @@ This block is the tested example: `scripts/check_docs.py` fails if it drifts fro
 `tests/unit/test_extension_examples.py`. Then:
 
 ```python
-engine = await BuilderEngine.create(
-    EngineSettings.from_env(), supply=enterprise_supply(), decorate=enterprise_decorations
-)
+settings = EngineSettings.from_env()
+settings.require_discovery_url()  # refuse before the database is opened and migrated
+engine = await BuilderEngine.create(settings, supply=enterprise_supply(), decorate=enterprise_decorations)
 await engine.start()
 ```
 

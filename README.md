@@ -47,6 +47,7 @@ async def quick_start(
     settings: EngineSettings, supply: EngineSupply | None = None, decorate: Decorate | None = None
 ) -> JobCost:
     """Run one paid job for a customer and read what it cost. ``supply`` replaces parts and ``decorate`` wraps them."""
+    settings.require_discovery_url()  # an engine does not start without it: refuse before the database is opened
     async with await BuilderEngine.create(settings, supply=supply, decorate=decorate) as engine:
         actor = ActorContext(
             actor_id="customer-42",
@@ -58,7 +59,8 @@ async def quick_start(
 ```
 
 Run it with `asyncio.run(quick_start(EngineSettings.from_env()))`. `async with` starts the engine and
-stops it, closing what it opened. This block is tested (`tests/unit/test_readme_example.py`).
+stops it, closing what it opened. `create` opens the database and migrates it, so the address the
+engine needs to start is asked for first. This block is tested (`tests/unit/test_readme_example.py`).
 
 The customer needs an allocation before its first job: an admin allots one, once
 ([embedded-mode.md](docs/guides/embedded-mode.md#3-allot-before-paid-work)). A job for an actor

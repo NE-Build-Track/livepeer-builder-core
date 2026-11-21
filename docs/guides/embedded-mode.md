@@ -254,7 +254,8 @@ Health is `engine.health()`, not `GET /readyz`.
 1. Install `livepeer-builder` (add `[postgres]` only if the store is PostgreSQL).
 2. Set `LPB_*` and generate `LPB_SECRET_KEY` with `lpb gen-secret-key`.
 3. Run `lpb migrate` (or rely on `auto_migrate`).
-4. Construct `BuilderEngine.create(settings)`, then `await engine.start()` once per process.
+4. Call `settings.require_discovery_url()`, construct `BuilderEngine.create(settings)`, then
+   `await engine.start()` once per process.
 5. Map each authenticated user to an `ActorContext` with the permissions they need.
 6. Allot an allocation to that actor with an admin `ActorContext` before the first paid job.
 7. Call `engine.discovery`, `engine.jobs`, `engine.costs`, `engine.payments` in your request

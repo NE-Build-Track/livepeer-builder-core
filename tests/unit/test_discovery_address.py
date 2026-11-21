@@ -78,6 +78,10 @@ def test_a_value_for_what_the_environment_leaves_unset_goes_under_it_and_is_vali
     ours = {"LPB_SIGNER_URL": "https://ours.example", "LPB_HTTP_PORT": "9090"}
     settings = EngineSettings.from_env(ours | environment)
     assert (settings.signer_url, settings.http_port) == ("https://signer.example", 9090)
+    # An empty variable is unset, and it hides the caller's value: the setting's own default is read.
+    assert EngineSettings.from_env(ours | {"LPB_HTTP_PORT": ""}).http_port == 8080
+    kept = ours | {name: value for name, value in {"LPB_HTTP_PORT": ""}.items() if value}
+    assert EngineSettings.from_env(kept).http_port == 9090
     unset = {"LPB_HTTP_PORT": "8081"}  # an environment that leaves the signer URL unset
     with pytest.raises(ValidationError, match="signer_url must not carry userinfo"):
         EngineSettings.from_env({"LPB_SIGNER_URL": f"https://signer:{CREDENTIAL}@signer.example"} | unset)

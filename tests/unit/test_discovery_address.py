@@ -48,6 +48,12 @@ def test_settings_without_the_address_are_read() -> None:
     assert EngineSettings.from_env({}).discovery_url is None
 
 
+def test_an_address_given_as_none_in_code_is_unset() -> None:
+    """An embedder that passes what it read, set or not."""
+    assert EngineSettings(discovery_url=None).discovery_url is None
+    assert EngineSettings.model_validate({"discovery_url": None}).discovery_url is None
+
+
 def test_an_empty_address_in_the_environment_reads_as_unset() -> None:
     assert EngineSettings.from_env({"LPB_DISCOVERY_URL": ""}).discovery_url is None
 

@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from livepeer_builder import BuilderEngine, EngineSettings, cli
+from livepeer_builder import BuilderEngine, EngineSettings, cli, generate_secret_key
 from livepeer_builder.contracts import Job
 from livepeer_builder.store import SqlStore, create_engine, upgrade
 from livepeer_builder.testing import FixedClock
@@ -218,6 +218,29 @@ def test_engine_commands_that_never_allot_need_no_secret_key(
     for command in ("smoke", "serve"):
         with pytest.raises(ValueError, match="LPB_SECRET_KEY is required with a payment provider"):
             run(command)
+
+
+def test_engine_commands_that_never_allot_use_the_secret_key_that_is_set(
+    db: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key for this run only is a stand-in for a key that is not set, never for one that is."""
+    built: list[EngineSettings] = []
+    create = BuilderEngine.create
+
+    async def recording_create(settings: EngineSettings) -> BuilderEngine:
+        built.append(settings)
+        return await create(settings)
+
+    monkeypatch.setattr(BuilderEngine, "create", recording_create)
+    configured = generate_secret_key()
+    monkeypatch.setenv("LPB_SECRET_KEY", configured)
+    assert run("purge") == 0
+    monkeypatch.delenv("LPB_SECRET_KEY")
+    assert run("purge") == 0
+    capsys.readouterr()
+    with_key, without = (settings.secret_key for settings in built)
+    assert with_key is not None and with_key.get_secret_value() == configured
+    assert without is not None and without.get_secret_value() != configured
 
 
 def test_gen_docs_writes_then_checks(db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

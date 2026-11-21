@@ -8,6 +8,7 @@ polls, whatever its discovery source is, and ``serve`` refuses before it opens a
 import dataclasses
 import inspect
 import traceback
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -15,9 +16,9 @@ from pydantic import ValidationError
 
 from livepeer_builder import BuilderEngine, EngineParts, EngineSettings, EngineSupply, cli
 from livepeer_builder.contracts import Job, Runner
-from livepeer_builder.http import create_app, serve
+from livepeer_builder.http import build_app, create_app, serve
 from livepeer_builder.protocols import DiscoverySource
-from livepeer_builder.store import SqlStore
+from livepeer_builder.store import SqlStore, head_revision
 from livepeer_builder.testing import FixedClock, runner
 from tests.unit.test_runtime import record_closes, running_loops
 
@@ -188,13 +189,8 @@ async def test_the_http_lifespan_refuses_without_the_address_and_closes_what_cre
     assert len(closed) == 1
 
 
-async def test_serve_refuses_without_the_address_before_it_opens_anything(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``serve`` always starts its engine, so it asks first: no store is opened or migrated, no engine is
-    built and no server runs. The stock server's own failed start would exit with uvicorn's code."""
-    import uvicorn
-
+def record_connects(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Spy on SqlStore.connect: the databases that were opened, and migrated when the settings say so."""
     opened: list[str] = []
     connect = SqlStore.connect
 
@@ -202,11 +198,48 @@ async def test_serve_refuses_without_the_address_before_it_opens_anything(
         opened.append(url)
         return await connect(url, **options)
 
+    monkeypatch.setattr(SqlStore, "connect", recording_connect)
+    return opened
+
+
+async def test_serve_refuses_without_the_address_before_it_opens_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``serve`` always starts its engine, so it asks first: no store is opened or migrated, no engine is
+    built and no server runs. The stock server's own failed start would exit with uvicorn's code."""
+    import uvicorn
+
     async def never(self: uvicorn.Server) -> None:
         pytest.fail("the server must not run without the address")
 
-    monkeypatch.setattr(SqlStore, "connect", recording_connect)
+    opened = record_connects(monkeypatch)
     monkeypatch.setattr(uvicorn.Server, "serve", never)
     with pytest.raises(ValueError, match=REFUSAL):
         await serve(no_address())
     assert opened == []
+
+
+async def test_build_app_refuses_without_the_address_before_it_opens_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its app starts the engine in its lifespan, always. ``create`` opens the database and migrates it,
+    so the refusal comes before ``create``, not when the host enters the lifespan (review of #188)."""
+    opened = record_connects(monkeypatch)
+    with pytest.raises(ValueError, match=REFUSAL):
+        await build_app(no_address())
+    assert opened == []
+
+
+async def test_create_opens_and_migrates_the_database_before_start_can_refuse(tmp_path: Path) -> None:
+    """What an application that starts its own engine must know (review of #188): ``create`` builds with
+    no address, for the commands that never start, so by the time ``start()`` refuses, the database is
+    at this package's revision. Asking the settings before ``create`` refuses first."""
+    database = tmp_path / "engine.db"
+    settings = no_address(database_url=f"sqlite+aiosqlite:///{database}")
+    with pytest.raises(ValueError, match=REFUSAL):
+        settings.require_discovery_url()
+    assert not database.exists()
+    engine = await BuilderEngine.create(settings)
+    assert await engine.schema_revision() == head_revision()
+    with pytest.raises(ValueError, match=REFUSAL):
+        await engine.start()

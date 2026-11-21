@@ -27,6 +27,7 @@ from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FixedClock
+from livepeer_builder.utils import CursorTrail
 from tests.conftest import EngineFactory
 
 USD = Money(amount=Decimal("2.5"), currency="USD")
@@ -601,3 +602,284 @@ async def test_a_redirected_usage_page_reads_as_unavailable(status: int) -> None
     with pytest.raises(ProviderError) as refused:
         await source.page(None)
     assert source_failure(refused.value) == "unavailable"  # as a redirect from the discovery source (C7)
+
+
+async def test_a_resumed_grant_create_reads_past_a_grant_whose_metadata_is_nested_past_the_decoder(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock
+) -> None:
+    """#158: another creator's grant with deeply nested JSON as its metadata raised ``RecursionError``
+    in the search, so the resume was a 500 on every try. Such a grant has no tag: the search goes on to
+    its own."""
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    other = GRANT | {"id": "grant_0", "metadata": "[" * 100_000 + "]" * 100_000}
+    batteries.list_answers = [{"items": [other, batteries.grants[0]], "next_cursor": ""}]
+    adopted = await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert (adopted.tenant_id, len(batteries.grants)) == ("grant_1", 1)
+
+
+# -- #158: a cursor that comes back after other pages (A, B, A) ---------------------------------------
+
+CYCLES: dict[str, dict[str, str]] = {
+    "two pages": {"": "A", "A": "B", "B": "A"},
+    "three pages": {"": "A", "A": "B", "B": "C", "C": "A"},
+    "a cycle after a run of pages": {
+        "": "p1", "p1": "p2", "p2": "p3", "p3": "A", "A": "B", "B": "C", "C": "D", "D": "E", "E": "A",
+    },
+}  # fmt: skip
+
+
+def circling(route: dict[str, str], asked: list[str | None], usage: bool = False) -> httpx.AsyncClient:
+    """A Batteries whose list names the next cursor by ``route``, with one item a page. It goes away after
+    forty pages, so a loop that never ends fails its test instead of hanging it."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        asked.append(cursor)
+        if len(asked) > 40:
+            raise httpx.ConnectError("the list never ended")
+        item = USAGE_ITEM | {"id": f"u-{cursor}"} if usage else GRANT | {"id": f"g-{cursor}"}
+        return httpx.Response(200, json={"items": [item], "next_cursor": route[cursor or ""]})
+
+    return httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+
+
+@pytest.mark.parametrize("route", CYCLES.values(), ids=CYCLES)
+async def test_a_grant_list_whose_cursor_comes_back_after_other_pages_is_a_provider_error(
+    route: dict[str, str],
+) -> None:
+    """#114 (C21) caught a page that names the cursor it was asked with. A cursor that came back after
+    other pages was followed without end."""
+    asked: list[str | None] = []
+    client = BatteriesClient(BASE, "t", client=circling(route, asked))
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await client.list_grants()
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert len(asked) <= 3 * len(route)  # found within a few turns of the cycle, however long the list
+    if len(route) == 3:
+        assert asked == [None, "A", "B"]  # the page asked with B named A, where the list had been
+
+
+@pytest.mark.parametrize("route", CYCLES.values(), ids=CYCLES)
+async def test_a_usage_feed_whose_cursor_comes_back_after_other_pages_fails_the_sync_and_stores_each_row_once(
+    store: SqlStore, route: dict[str, str]
+) -> None:
+    asked: list[str | None] = []
+    worker = CostSyncWorker(BatteriesUsageSource(BASE, "t", client=circling(route, asked, usage=True)), store)
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await worker.sync_once()
+    assert worker.source_error is refused.value and source_failure(refused.value) == "invalid_answer"
+    assert len(asked) <= 3 * len(route)
+    first = len(asked)
+    with pytest.raises(ProviderError, match="did not advance"):  # the next pass starts inside the cycle
+        await worker.sync_once()
+    assert len(asked) - first <= 3 * len(route)
+    async with store.engine.connect() as conn:
+        stored = sorted((await conn.execute(select(t.usage_rows.c.id))).scalars())
+    assert stored == sorted({f"u-{cursor}" for cursor in asked})  # a page read twice stores nothing twice
+
+
+async def test_the_rest_service_answers_a_list_that_goes_round_with_502(make_engine: EngineFactory) -> None:
+    desk = BatteriesClient(BASE, "t", client=circling(CYCLES["two pages"], []))
+    usage = BatteriesUsageSource(BASE, "t", client=circling(CYCLES["two pages"], [], usage=True))
+    engine = await make_engine(supply=EngineSupply(grants_manager=desk, usage_source=usage))
+    key = await engine.keys.bootstrap_admin()
+    async with rest(engine, key.token) as http:
+        listed = await http.get("/v1/clearinghouse/tenants")
+        synced = await http.post("/v1/costs/sync")
+    assert (listed.status_code, synced.status_code) == (502, 502)
+
+
+async def test_a_resumed_grant_create_over_a_list_that_goes_round_is_an_unknown_outcome(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock
+) -> None:
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    round_and_round = [{"items": [], "next_cursor": "A"}, {"items": [], "next_cursor": "B"}] * 10
+    batteries.list_answers = list(round_and_round)  # then the real list
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert not definite_refusal(refused.value)
+    assert len(batteries.list_answers) == 17  # three pages asked: the third named A again
+    assert len(batteries.grants) == 1  # never "no such grant"
+    with pytest.raises(OperationInProgress):  # the reference is still held
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+
+
+@pytest.mark.parametrize("lead", [0, 1, 2, 7, 50])
+@pytest.mark.parametrize("length", [1, 2, 3, 8, 33])
+def test_a_cursor_trail_finds_a_cycle_of_any_length_and_keeps_two_cursors(lead: int, length: int) -> None:
+    cursors = [f"lead-{n}" for n in range(lead)] + [f"cycle-{n}" for n in range(length)]
+    trail = CursorTrail(None)
+    for step in range(4 * (lead + length) + 4):
+        position = step if step < lead + length else lead + (step - lead) % length
+        if trail.repeats(cursors[position]):
+            break
+    else:
+        pytest.fail("the cycle was not found")
+    assert step >= lead + length  # never before a cursor has in fact come back
+    assert set(vars(trail)) == {
+        "_asked",
+        "_mark",
+        "_steps",
+        "_span",
+    }  # two cursors and two counts, whatever the list
+
+
+def test_a_cursor_trail_reports_no_repeat_in_a_list_that_only_advances() -> None:
+    trail = CursorTrail("resumed-here")
+    assert not any(trail.repeats(f"c{n}") for n in range(10_000))
+    assert CursorTrail("c1").repeats("c1")  # the page asked with c1 named c1
+
+
+async def test_a_grant_search_cut_short_on_every_resume_still_finds_a_list_that_goes_round(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock
+) -> None:
+    """Review of #189: a resume goes on from the cursor the last one recorded, and a slow catalog ends
+    each resume after a page or two. A trail that started again with every resume never saw a cursor
+    come back (A, B, A needs three pages), so the search walked the cycle for as long as it was resumed.
+    The trail is recorded with the cursor."""
+    batteries = GrantDesk()
+    listed = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal listed
+        if request.method == "GET" and request.url.path == "/v1/grants":
+            listed += 1
+            if listed % 3 == 0:  # the third page of every resume never answers: two pages a resume
+                raise httpx.ReadTimeout("no answer")
+        return batteries.handle(request)
+
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+    batteries.list_answers = [{"items": [], "next_cursor": "A"}, {"items": [], "next_cursor": "B"}] * 10
+
+    clock.advance(120)
+    with pytest.raises(ProviderUnavailable):  # pages A and B, then cut short
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    clock.advance(120)
+    with pytest.raises(ProviderError, match="did not advance") as refused:  # asked with B, it names A again
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert not definite_refusal(refused.value)
+    assert listed == 4  # two pages and the one cut short, then the one page that named A again
+    assert len(batteries.grants) == 1  # never "no such grant"
+    with pytest.raises(OperationInProgress):  # the reference is still held
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+
+
+@pytest.mark.parametrize("lead", [0, 1, 2, 7, 50])
+@pytest.mark.parametrize("length", [1, 2, 3, 8, 33])
+def test_a_cursor_trail_kept_and_taken_up_again_after_every_page_finds_the_cycle_at_the_same_page(
+    lead: int, length: int
+) -> None:
+    cursors = [f"lead-{n}" for n in range(lead)] + [f"cycle-{n}" for n in range(length)]
+
+    def at(step: int) -> str:
+        return cursors[step if step < lead + length else lead + (step - lead) % length]
+
+    def pages_until_found(resumed: bool) -> int:
+        trail = CursorTrail(None)
+        for step in range(4 * (lead + length) + 4):
+            if trail.repeats(at(step)):
+                return step
+            if resumed:  # another reader goes on from the cursor and what the trail kept
+                trail = CursorTrail(at(step), trail.keep())
+        pytest.fail("the cycle was not found")
+
+    assert pages_until_found(resumed=True) == pages_until_found(resumed=False)
+
+
+@pytest.mark.parametrize("kept", [None, "", "not JSON", "[]", '["A", "x", 2]', '{"mark": "A"}', "[1, 2, 3]"])
+def test_a_cursor_trail_with_nothing_usable_kept_starts_at_its_cursor(kept: str | None) -> None:
+    """A record from before the trail was kept has none: the search then starts a trail where it is."""
+    trail = CursorTrail("c1", kept)
+    assert not trail.repeats("c2") and trail.repeats("c2")  # the mark moved to c2 after one page
+
+
+# -- #158, review of #189: a cursor that does not advance is refused at once, however far the list got ---
+
+
+def stuck_after(pages: int) -> dict[str, str]:
+    """A list that advances ``pages`` pages, c1 to c<pages>, and then names the cursor it was asked with."""
+    route = {"": "c1"} | {f"c{n}": f"c{n + 1}" for n in range(1, pages)}
+    return route | {f"c{pages}": f"c{pages}"}
+
+
+ADVANCED = [1, 2, 3, 9, 17, 100]
+
+
+@pytest.mark.parametrize("pages", [n for n in ADVANCED if n <= 17])
+@pytest.mark.parametrize("usage", [False, True], ids=["the grant list", "the usage feed"])
+async def test_a_page_that_names_its_own_cursor_is_refused_without_being_asked_for_again(
+    store: SqlStore, pages: int, usage: bool
+) -> None:
+    """#114 (C21) refused such a page the first time it was read. With the trail alone it was read again,
+    up to as many times as the list had pages, until the trail's one kept cursor came round to it: each
+    a provider call, and in cost sync a page of rows applied again."""
+    asked: list[str | None] = []
+    client = circling(stuck_after(pages), asked, usage)
+    read = (
+        CostSyncWorker(BatteriesUsageSource(BASE, "t", client=client), store).sync_once()
+        if usage
+        else BatteriesClient(BASE, "t", client=client).list_grants()
+    )
+    with pytest.raises(ProviderError, match="did not advance"):
+        await read
+    assert asked == [None, *(f"c{n}" for n in range(1, pages + 1))]  # the stuck page once, and no more
+
+
+@pytest.mark.parametrize("pages", [2, 9, 17])
+async def test_a_resumed_grant_search_refuses_a_page_that_names_its_own_cursor_the_first_time_it_reads_it(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock, pages: int
+) -> None:
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    advancing = [{"items": [], "next_cursor": f"c{n}"} for n in range(1, pages + 1)]
+    spare = 50  # more answers of the stuck page than any reader should ask for
+    batteries.list_answers = [*advancing, *([{"items": [], "next_cursor": f"c{pages}"}] * spare)]
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert not definite_refusal(refused.value)
+    assert len(batteries.list_answers) == spare - 1  # the page asked with c<pages> was read once
+    assert len(batteries.grants) == 1
+
+
+@pytest.mark.parametrize("pages", ADVANCED)
+def test_a_cursor_trail_reports_the_cursor_it_was_last_given_at_once(pages: int) -> None:
+    trail = CursorTrail(None)
+    assert not any(trail.repeats(f"c{n}") for n in range(1, pages + 1))
+    assert trail.repeats(f"c{pages}")  # the page asked with it named it: no further page is needed
+    mark, steps, span = json.loads(trail.keep())  # the kept form is what it was: no fourth value
+    assert isinstance(mark, str) and (type(steps), type(span)) == (int, int)
+    resumed = CursorTrail(f"c{pages}", trail.keep())  # a reader that goes on from that cursor
+    assert resumed.repeats(f"c{pages}")
+    assert CursorTrail(f"c{pages}").repeats(f"c{pages}")  # and one with no trail kept at all

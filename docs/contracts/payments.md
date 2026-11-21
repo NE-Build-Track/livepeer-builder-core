@@ -2,7 +2,7 @@
 
 **Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82 and D83 (18 November 2026) · **Code:**
 `contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
-`services/costs.py`, `adapters/batteries.py`
+`services/costs.py`, `adapters/batteries.py`, `adapters/batteries_usage.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.
@@ -411,7 +411,11 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   run never frees the reference either (#112): the attempt it follows ended in an unknown outcome, and
   a provider call that timed out may have been applied with nothing noted. The record stays `started`,
   another request on that reference is still 409 `operation_conflict`, and the same request resumes
-  again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below.
+  again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below. A provider error
+  an admin command answers with ("provider HTTP 409: ...") carries Batteries' own error text: the `error`
+  of its JSON body, else the body as text, and at most 4096 characters of either, the limit a runner's
+  or a signer's error body has (`BODY_LIMIT`). Before #158 it was the whole body, whatever its size, in
+  the answer and in the log.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
   answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
   nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
@@ -421,21 +425,33 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is
   now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
   is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
-  with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
+  with an unknown outcome (as `cost_sync_error` it is `unavailable`). An answer whose content encoding
+  does not decode (it says `gzip` over a body that is not) is a `ProviderError` with the answer's own
+  status, from a management call as from the usage feed: a refusal when that status is a 4xx other than
+  408, an unknown outcome otherwise. Before #158 a management call answered 500 for one. A malformed page
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,
   and the grant list (`GET /v1/clearinghouse/tenants` since #165) and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
-  comes back after other pages) is not detected. A grant, in a list or read alone,
+  comes back after other pages: A, B, A) is that `ProviderError` too, from the same three readers (#158):
+  before, it was followed without end. A cursor that does not advance is refused at once, the first
+  time its page is read. A longer cycle is found after at most a few turns of it and not always at its
+  first repeat, because the engine keeps one earlier cursor to compare with, not every cursor; pages
+  read twice meanwhile store no usage row twice. A grant, in a list or read alone,
   must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
   JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
   (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
-  not create. The same holds for every value a command's result is built from: the `id` a grant create
+  not create, and so is `metadata` whose JSON is nested deeper than the decoder reads (before #158 that
+  one raised out of a resumed onboarding's search of the grants, a 500 on every try). The same holds for every value a command's result is built from: the `id` a grant create
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with
-  `allocation_id: "None"`), and an answer that lacked the key answered 500. The error does not quote the
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. An allocation's `allocated`,
+  `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
+  (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or
+  `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is; before #158
+  it answered 500 from `GET /v1/allowance` and from reconciliation. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
@@ -476,7 +492,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
     reference>}` (Batteries stores metadata as text, so the tag is sent as a JSON object in that string). A
     resumed onboarding that has no tenant id noted reads the grants page by page, oldest first, and adopts
     the one carrying its tag instead of creating a second. It records the list cursor after each page, so a
-    resume that runs out of its budget in a slow catalog leaves the next one to go on from there; pages
+    resume that runs out of its budget in a slow catalog leaves the next one to go on from there, and
+    with the cursor the earlier cursor it compares each new one with, so a list that goes round (A, B, A)
+    is found even when every resume reads only a page or two (#158); pages
     already read lacked the tag, and a grant created later is on a later page. A list answer the engine
     cannot read fails the resume as an unknown outcome and never counts as "no such grant": before #114
     (C21), a 2xx page with no `items` read as an empty last page, and a list item that was no grant (`{}`,
@@ -631,11 +649,11 @@ records it and moves the cursor:
 
 | Reason | The row |
 | --- | --- |
-| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a whole number; a whole number is kept as its digits) |
+| `missing_id` | has no `id` (absent, `null`, empty, blank, or not a string or a whole number; a whole number is kept as its digits). Blank is white space alone (`"  "`), which was stored as the row's id before #158. An id with text in it is stored as received: nothing is trimmed |
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
 | `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
-| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
-| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
+| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a decimal string as Batteries writes one: digits, then a point and digits when the fee has a fraction, after a minus sign when it is negative (`"0.000000039"`, `"7"`, `"-0.25"`). So not `NaN` or `Infinity`, not something that is no number at all (`"abc"`, `"0,5"`, `true`, an object), and since #158 not a form only Python's decimal reader takes: an exponent (`"1e999999"`, `"3.9e-8"`), a digit separator (`"1_000"`), digits of another script, padded text, a plus sign, `".5"` or `"5."`. A JSON number (`0.1`, `5`) is no fee either: a fee is text, and the engine turns no number into text. Before #158 each of these was read as a number and stored, and two fees like `"1e999999"` could not be added up. `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
+| `unreadable_row` | is one the JSON decoder's own limits refuse: an integer of more than 4300 digits, or a field nested deeper than the decoder reads (#158). Nothing of such a row is read, its id and its fees included: it is recorded under a digest of its text, with no fee, and the log line carries the start of that text. Before, it failed its whole page on every pass. Also a row that passes the checks above and is still refused by the usage row's own type (a backstop: no known row reaches it), and the code for another `UsageSource` whose row fits no other reason |
 | `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
 Each value is judged as it was received, and that value is the one stored: apart from a whole-number
@@ -644,7 +662,7 @@ Each value is judged as it was received, and that value is the one stored: apart
 The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
 where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
 `computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
-that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
+the engine does not read (`unreadable_fee`, above), or longer than the column, is recorded as `null`. A row with no id the
 table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
 differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
 A row is recorded, counted and logged once, however often its page is read again; the first record of
@@ -662,7 +680,8 @@ process, `rows_set_aside` still counts it, and `cost_sync_set_aside` stays `null
 A set-aside row is in no job's cost and not in `unattributed`: if it was a charge, reconciliation is
 not `balanced` until an operator accounts for it. Nothing reads the table yet; `lpb costs verify`
 (ISS-35) will name these rows ([T29](../exec-plans/tech-debt-tracker.md)). A usage page whose item is
-not a JSON object still fails the page.
+not a JSON object still fails the page, and so does a page that is not JSON or whose own envelope
+(`items`, `next_cursor`) the engine cannot read: only an item is ever set aside.
 
 **`JobCost.fees` and `JobCost.billable`.** `fees` is what every attempt of the job cost the allocation.
 `billable` is only the `delivered` attempts' fees: what the enterprise bills its user for. A job that

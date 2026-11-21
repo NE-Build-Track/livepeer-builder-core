@@ -12,11 +12,12 @@ import httpx
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.adapters.batteries import BatteriesClient
+from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource, error_message
 from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.errors import ProviderError
 from livepeer_builder.http import create_app
 from livepeer_builder.services.ledger import definite_refusal
+from livepeer_builder.utils import BODY_LIMIT
 from tests.conftest import EngineFactory
 
 USD = Money(amount=Decimal("2.5"), currency="USD")
@@ -178,3 +179,53 @@ async def test_the_rest_service_answers_an_allowance_that_is_no_finite_number_wi
             "/v1/costs/reconciliation", params={"tenant_id": "default", "actor_id": "alice"}
         )
     assert (allowance.status_code, reconciled.status_code) == (502, 502)
+
+
+LONG_ERRORS = {
+    "text that is not JSON": ("<html>" + "x" * 100_000).encode(),
+    "an error text": b'{"error": "' + b"y" * 100_000 + b'"}',
+    "JSON with no error text": b"[" + b'"z",' * 30_000 + b'"z"]',
+}
+
+
+@pytest.mark.parametrize("body", LONG_ERRORS.values(), ids=LONG_ERRORS)
+@pytest.mark.parametrize("status", [400, 502])
+async def test_a_provider_s_error_text_is_kept_up_to_the_limit_an_error_body_has(
+    body: bytes, status: int
+) -> None:
+    """The whole body was the error's text, whatever its size: it went into the 502 a caller reads and
+    into the log. A runner's and a signer's error body were cut at ``BODY_LIMIT`` already."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(status, content=body)
+
+    text = error_message(httpx.Response(status, content=body))
+    assert len(text) == BODY_LIMIT and text[:1] in ("<", "y", "[")  # its start, as the provider wrote it
+    with pytest.raises(ProviderError) as refused:
+        await BatteriesClient(BASE, "t", client=batteries(handle)).top_up_grant("g1", USD, "idem-1")
+    assert (refused.value.status_code, refused.value.message) == (status, text)
+    with pytest.raises(ProviderError) as failed:
+        await BatteriesUsageSource(BASE, "t", client=batteries(handle)).page(None)
+    assert (failed.value.status_code, failed.value.message) == (status, text)
+
+
+def test_a_provider_s_short_error_text_is_kept_whole() -> None:
+    assert error_message(httpx.Response(409, json={"error": "idempotency key reused"})) == (
+        "idempotency key reused"
+    )
+    assert error_message(httpx.Response(503, text="x" * BODY_LIMIT)) == "x" * BODY_LIMIT
+
+
+async def test_the_rest_service_s_502_for_a_provider_error_is_bounded(make_engine: EngineFactory) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(500, content=b"x" * 1_000_000)
+
+    desk = BatteriesClient(BASE, "t", client=batteries(handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=desk))
+    key = await engine.keys.bootstrap_admin()
+    async with rest(engine, key.token) as http:
+        listed = await http.get("/v1/clearinghouse/tenants")
+    assert listed.status_code == 502
+    assert len(listed.json()["error"]) < BODY_LIMIT + 100  # the status prefix and the text

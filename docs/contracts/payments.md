@@ -411,7 +411,11 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   run never frees the reference either (#112): the attempt it follows ended in an unknown outcome, and
   a provider call that timed out may have been applied with nothing noted. The record stays `started`,
   another request on that reference is still 409 `operation_conflict`, and the same request resumes
-  again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below.
+  again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below. A provider error
+  an admin command answers with ("provider HTTP 409: ...") carries Batteries' own error text: the `error`
+  of its JSON body, else the body as text, and at most 4096 characters of either, the limit a runner's
+  or a signer's error body has (`BODY_LIMIT`). Before #158 it was the whole body, whatever its size, in
+  the answer and in the log.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
   answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
   nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as

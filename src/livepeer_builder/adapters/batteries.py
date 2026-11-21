@@ -32,6 +32,7 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
+from livepeer_builder.utils import BODY_LIMIT
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _GRANTS = "/v1/grants"
@@ -371,14 +372,16 @@ def segment(value: str) -> str:
 
 
 def error_message(response: httpx.Response) -> str:
-    """The provider's own words for an error status: its ``error`` text, else the body as text."""
+    """The provider's own words for an error status: its ``error`` text, else the body as text. At most
+    ``BODY_LIMIT`` characters of either, as of a runner's or a signer's error body: the text is in the
+    answer a caller reads and in the log."""
     try:
         body = response.json()
     except (ValueError, RecursionError):  # as in json_object; a number past the digit limit is one too
-        return response.text
+        body = None
     if isinstance(body, dict) and isinstance(body.get("error"), str):
-        return str(body["error"])
-    return response.text
+        return str(body["error"])[:BODY_LIMIT]
+    return response.text[:BODY_LIMIT]
 
 
 def _amount_fields(amount: Money) -> dict[str, str]:

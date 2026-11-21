@@ -23,7 +23,8 @@ import asyncio
 import json
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,28 @@ def _emit(payload: Any) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
+@asynccontextmanager
+async def _open_store() -> AsyncIterator[SqlStore]:
+    """The store at ``LPB_DATABASE_URL``, as it is: not migrated here, and closed on the way out. The
+    store-only commands read that setting and nothing else."""
+    store = await SqlStore.connect(_database_url(), migrate=False)
+    try:
+        yield store
+    finally:
+        await store.close()
+
+
+@asynccontextmanager
+async def _built_engine(settings: EngineSettings) -> AsyncIterator[BuilderEngine]:
+    """An engine built from ``settings`` and not started, stopped on the way out: what it opened is
+    closed, whether or not the command started it."""
+    engine = await BuilderEngine.create(settings)
+    try:
+        yield engine
+    finally:
+        await engine.stop()
+
+
 def _database_url() -> str:
     """The store-only commands read this setting and nothing else."""
     return EngineSettings.database_url_from_env()
@@ -96,20 +119,14 @@ def _settings_that_allot_nothing() -> EngineSettings:
 
 
 async def _migrate(_: argparse.Namespace) -> None:
-    store = await SqlStore.connect(_database_url(), migrate=False)
-    try:
+    async with _open_store() as store:
         await upgrade(store.engine)
         _emit({"revision": await current_revision(store.engine)})
-    finally:
-        await store.close()
 
 
 async def _revision(_: argparse.Namespace) -> int:
-    store = await SqlStore.connect(_database_url(), migrate=False)
-    try:
+    async with _open_store() as store:
         current, head = await current_revision(store.engine), head_revision()
-    finally:
-        await store.close()
     _emit({"database": current, "package_head": head, "up_to_date": current == head})
     return 0 if current == head else 2
 
@@ -132,22 +149,16 @@ async def _verify(args: argparse.Namespace) -> None:
 
 
 async def _purge(_: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(_settings_that_allot_nothing())
-    try:
+    async with _built_engine(_settings_that_allot_nothing()) as engine:
         _emit((await engine.purge()).model_dump())
-    finally:
-        await engine.stop()
 
 
 async def _bootstrap(args: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(_settings_that_allot_nothing())
-    try:
+    async with _built_engine(_settings_that_allot_nothing()) as engine:
         if engine.keys is None:
             raise SystemExit("API keys are disabled in this deployment")
         issued = await engine.keys.bootstrap_admin(args.label)
         _emit({"key_id": issued.key.key_id, "token": issued.token, "note": "shown once; store it now"})
-    finally:
-        await engine.stop()
 
 
 async def _gen_secret_key(_: argparse.Namespace) -> None:
@@ -174,13 +185,10 @@ async def _smoke(_: argparse.Namespace) -> int:
                 "discovery_url": configured.discovery_url or "http://127.0.0.1:9/discovery",
             }
         )
-        engine = await BuilderEngine.create(settings)
-        try:
+        async with _built_engine(settings) as engine:
             await engine.start()
             health = engine.health()
             revision = await engine.schema_revision()
-        finally:
-            await engine.stop()
     ok = revision == head_revision()
     _emit({"ok": ok, "version": health.version, "schema_revision": revision, "health": health.model_dump()})
     return 0 if ok else 1

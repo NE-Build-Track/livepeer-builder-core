@@ -724,7 +724,7 @@ async def test_a_resumed_grant_create_over_a_list_that_goes_round_is_an_unknown_
 
 @pytest.mark.parametrize("lead", [0, 1, 2, 7, 50])
 @pytest.mark.parametrize("length", [1, 2, 3, 8, 33])
-def test_a_cursor_trail_finds_a_cycle_of_any_length_and_keeps_one_cursor(lead: int, length: int) -> None:
+def test_a_cursor_trail_finds_a_cycle_of_any_length_and_keeps_two_cursors(lead: int, length: int) -> None:
     cursors = [f"lead-{n}" for n in range(lead)] + [f"cycle-{n}" for n in range(length)]
     trail = CursorTrail(None)
     for step in range(4 * (lead + length) + 4):
@@ -734,7 +734,12 @@ def test_a_cursor_trail_finds_a_cycle_of_any_length_and_keeps_one_cursor(lead: i
     else:
         pytest.fail("the cycle was not found")
     assert step >= lead + length  # never before a cursor has in fact come back
-    assert set(vars(trail)) == {"_mark", "_steps", "_span"}  # one cursor and two counts, whatever the list
+    assert set(vars(trail)) == {
+        "_asked",
+        "_mark",
+        "_steps",
+        "_span",
+    }  # two cursors and two counts, whatever the list
 
 
 def test_a_cursor_trail_reports_no_repeat_in_a_list_that_only_advances() -> None:
@@ -810,3 +815,71 @@ def test_a_cursor_trail_with_nothing_usable_kept_starts_at_its_cursor(kept: str 
     """A record from before the trail was kept has none: the search then starts a trail where it is."""
     trail = CursorTrail("c1", kept)
     assert not trail.repeats("c2") and trail.repeats("c2")  # the mark moved to c2 after one page
+
+
+# -- #158, review of #189: a cursor that does not advance is refused at once, however far the list got ---
+
+
+def stuck_after(pages: int) -> dict[str, str]:
+    """A list that advances ``pages`` pages, c1 to c<pages>, and then names the cursor it was asked with."""
+    route = {"": "c1"} | {f"c{n}": f"c{n + 1}" for n in range(1, pages)}
+    return route | {f"c{pages}": f"c{pages}"}
+
+
+ADVANCED = [1, 2, 3, 9, 17, 100]
+
+
+@pytest.mark.parametrize("pages", [n for n in ADVANCED if n <= 17])
+@pytest.mark.parametrize("usage", [False, True], ids=["the grant list", "the usage feed"])
+async def test_a_page_that_names_its_own_cursor_is_refused_without_being_asked_for_again(
+    store: SqlStore, pages: int, usage: bool
+) -> None:
+    """#114 (C21) refused such a page the first time it was read. With the trail alone it was read again,
+    up to as many times as the list had pages, until the trail's one kept cursor came round to it: each
+    a provider call, and in cost sync a page of rows applied again."""
+    asked: list[str | None] = []
+    client = circling(stuck_after(pages), asked, usage)
+    read = (
+        CostSyncWorker(BatteriesUsageSource(BASE, "t", client=client), store).sync_once()
+        if usage
+        else BatteriesClient(BASE, "t", client=client).list_grants()
+    )
+    with pytest.raises(ProviderError, match="did not advance"):
+        await read
+    assert asked == [None, *(f"c{n}" for n in range(1, pages + 1))]  # the stuck page once, and no more
+
+
+@pytest.mark.parametrize("pages", [2, 9, 17])
+async def test_a_resumed_grant_search_refuses_a_page_that_names_its_own_cursor_the_first_time_it_reads_it(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock, pages: int
+) -> None:
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    advancing = [{"items": [], "next_cursor": f"c{n}"} for n in range(1, pages + 1)]
+    spare = 50  # more answers of the stuck page than any reader should ask for
+    batteries.list_answers = [*advancing, *([{"items": [], "next_cursor": f"c{pages}"}] * spare)]
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert not definite_refusal(refused.value)
+    assert len(batteries.list_answers) == spare - 1  # the page asked with c<pages> was read once
+    assert len(batteries.grants) == 1
+
+
+@pytest.mark.parametrize("pages", ADVANCED)
+def test_a_cursor_trail_reports_the_cursor_it_was_last_given_at_once(pages: int) -> None:
+    trail = CursorTrail(None)
+    assert not any(trail.repeats(f"c{n}") for n in range(1, pages + 1))
+    assert trail.repeats(f"c{pages}")  # the page asked with it named it: no further page is needed
+    mark, steps, span = json.loads(trail.keep())  # the kept form is what it was: no fourth value
+    assert isinstance(mark, str) and (type(steps), type(span)) == (int, int)
+    resumed = CursorTrail(f"c{pages}", trail.keep())  # a reader that goes on from that cursor
+    assert resumed.repeats(f"c{pages}")
+    assert CursorTrail(f"c{pages}").repeats(f"c{pages}")  # and one with no trail kept at all

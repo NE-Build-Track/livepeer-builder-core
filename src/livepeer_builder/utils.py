@@ -41,20 +41,23 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
 
 
 class CursorTrail:
-    """Whether a list read page by page comes back to a cursor it was at, in constant memory.
+    """Whether a list read page by page names a cursor it was already at, in constant memory.
 
-    Each page names the next cursor, and a provider whose cursors go round (A, B, A) would be read
-    without end. Remembering every cursor would grow with the list. This keeps one, the mark, and
-    compares each next cursor with it; the mark moves to the current cursor after 1, 2, 4, 8... pages
-    (Brent's cycle detection). So a cycle of any length is found after a few turns of it, and a list
-    that only advances is never refused."""
+    Each page names the next cursor. A page that names the cursor it was asked with would be asked for
+    again without end, and so would a provider whose cursors go round (A, B, A). Remembering every
+    cursor would grow with the list. This keeps two: the cursor the page was asked with, so a cursor
+    that does not advance is found at once, and one earlier cursor, the mark, which moves to the
+    current cursor after 1, 2, 4, 8... pages (Brent's cycle detection), so a longer cycle is found after
+    at most a few turns of it. A list that only advances is never refused."""
 
     def __init__(self, start: str | None, kept: str | None = None) -> None:
         """A trail from ``start``, the cursor the first page is asked with. A reader that goes on where
-        an earlier one stopped (a resumed search) passes what that one's ``keep()`` returned, and is on
-        the same trail: one that began again with every reader would never see a cursor come back when
-        each reads a page or two. With nothing usable kept, the trail starts here."""
-        self._mark, self._steps, self._span = start or "", 0, 1
+        an earlier one stopped (a resumed search) passes the cursor it goes on from and what that
+        one's ``keep()`` returned, and is on the same trail: one that began again with every reader
+        would never see a cursor come back when each reads a page or two. With nothing usable kept,
+        the trail starts here."""
+        self._asked = start or ""
+        self._mark, self._steps, self._span = self._asked, 0, 1
         try:
             mark, steps, span = json.loads(kept or "")
         except (ValueError, TypeError, RecursionError):
@@ -63,14 +66,17 @@ class CursorTrail:
             self._mark, self._steps, self._span = mark, steps, span
 
     def keep(self) -> str:
-        """The trail as text, to record beside the cursor a later reader goes on from."""
+        """The trail as text, to record beside the cursor a later reader goes on from. That cursor is
+        the one the next page is asked with, so it is not kept twice."""
         return json.dumps([self._mark, self._steps, self._span])
 
     def repeats(self, cursor: str) -> bool:
-        """Whether ``cursor``, which a page just named as the next one, is the mark: asking with it
-        would read pages already read. Call it once for each next cursor, in order."""
-        if cursor == self._mark:
+        """Whether ``cursor``, which a page just named as the next one, is the cursor that page was asked
+        with or the mark: asking with it would read pages already read. Call it once for each next
+        cursor, in order."""
+        if cursor in (self._asked, self._mark):
             return True
+        self._asked = cursor
         self._steps += 1
         if self._steps == self._span:
             self._mark, self._steps, self._span = cursor, 0, self._span * 2

@@ -31,7 +31,11 @@ async def build_app(
 
     The engine lives as long as the app's lifespan, which starts and stops it, so run that lifespan (any
     ASGI server does). To hold the engine yourself, use ``BuilderEngine.create`` and ``create_app``.
+
+    Without ``LPB_DISCOVERY_URL`` it refuses here, as ``serve`` does: the lifespan would refuse to start
+    the engine (D63, #154), after ``create`` had opened the database and migrated it.
     """
+    settings.require_discovery_url()
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:
         return _app(engine, settings, extend)
@@ -47,9 +51,13 @@ async def serve(
     decorate: Decorate | None = None,
     extend: Extend | None = None,
 ) -> None:
-    """Run the service. The engine is stopped even when the server never starts (a taken port)."""
+    """Run the service. The engine is stopped even when the server never starts (a taken port).
+
+    Without ``LPB_DISCOVERY_URL`` it refuses here, before the store is opened or migrated: the engine it
+    is about to start would refuse (D63, #154), and ``create`` opens the database and migrates it."""
     import uvicorn
 
+    settings.require_discovery_url()
     configure_logging(json_lines=settings.log_json)
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:

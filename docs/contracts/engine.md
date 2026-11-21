@@ -13,7 +13,8 @@ drift. Times are UTC. Money is `Decimal`. Engine IDs are UUIDs.
 `DiscoveryService` keeps a snapshot of advertised runners from its `DiscoverySource`. It is refreshed every
 `discovery_interval_s` and counts as stale after three missed intervals. The source is
 `HttpDiscoverySource`, which reads livepeer/node's `/discovery` contract from `LPB_DISCOVERY_URL`
-([discovery.md](discovery.md)). That URL is required. The signer only signs; it is not a discovery source
+([discovery.md](discovery.md)). An engine does not start without that URL; settings without it are read
+([discovery.md](discovery.md#what-the-engine-reads)). The signer only signs; it is not a discovery source
 (D43, superseded by D63 except for that). An enterprise changes which runners are visible by wrapping the
 source through `decorate`.
 

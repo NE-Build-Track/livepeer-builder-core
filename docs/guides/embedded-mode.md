@@ -47,9 +47,16 @@ Your app authenticates the human. The engine never sees that credential. It only
 ```python
 from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, JobRequest
 
-engine = await BuilderEngine.create(EngineSettings.from_env())
+settings = EngineSettings.from_env()
+settings.require_discovery_url()  # refuse before the database is opened and migrated
+engine = await BuilderEngine.create(settings)
 await engine.start()
 ```
+
+An engine does not start without `LPB_DISCOVERY_URL`, and settings without it are read (#154).
+`create` opens the database, and migrates it when `LPB_AUTO_MIGRATE` is `true`, before `start()` can
+refuse. `require_discovery_url()` raises the same refusal first, so a deployment with no address fails
+with its database untouched.
 
 `create` wires the defaults: SQLite or PostgreSQL store, `DefaultPolicy`, engine API keys (present
 but unused on this path), discovery from `LPB_DISCOVERY_URL`, SDK transport, Batteries, and the encrypted
@@ -209,7 +216,8 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
 
 Your process is the process that holds the engine. There is no separate `lpb serve`. You still:
 
-- Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it),
+- Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it, and
+  `start()` refuses, naming the variable; settings without it are read),
   `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
   `EngineSettings`. `LPB_BATTERIES_GRANTS_TOKEN` only turns on the tenant desk
   (`engine.payments.tenants`); an application that never onboards or lists tenants leaves it unset.
@@ -246,7 +254,8 @@ Health is `engine.health()`, not `GET /readyz`.
 1. Install `livepeer-builder` (add `[postgres]` only if the store is PostgreSQL).
 2. Set `LPB_*` and generate `LPB_SECRET_KEY` with `lpb gen-secret-key`.
 3. Run `lpb migrate` (or rely on `auto_migrate`).
-4. Construct `BuilderEngine.create(settings)`, then `await engine.start()` once per process.
+4. Call `settings.require_discovery_url()`, construct `BuilderEngine.create(settings)`, then
+   `await engine.start()` once per process.
 5. Map each authenticated user to an `ActorContext` with the permissions they need.
 6. Allot an allocation to that actor with an admin `ActorContext` before the first paid job.
 7. Call `engine.discovery`, `engine.jobs`, `engine.costs`, `engine.payments` in your request

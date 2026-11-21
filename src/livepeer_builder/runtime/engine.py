@@ -72,11 +72,13 @@ class BuilderEngine:
         return cls(settings, services, resources)
 
     async def start(self) -> None:
-        """Check the schema, resolve jobs a restart interrupted, take one discovery snapshot, then start
-        background loops.
+        """Check the discovery address and the schema, resolve jobs a restart interrupted, take one
+        discovery snapshot, then start background loops.
 
-        If starting fails (a schema that does not match, a store error, or a cancellation), the engine stops:
-        what ``create`` opened is closed before the error reaches the caller, and a new engine is needed.
+        An engine does not start without ``LPB_DISCOVERY_URL`` (D63), whatever its discovery source is:
+        the refusal comes before anything is polled or written (#154). If starting fails (no address, a
+        schema that does not match, a store error, or a cancellation), the engine stops: what ``create``
+        opened is closed before the error reaches the caller, and a new engine is needed.
         A second ``start()`` is refused, and the running engine carries on (#113, C27).
         """
         if self._stopped:
@@ -88,6 +90,7 @@ class BuilderEngine:
             )
         self._started = True
         try:
+            self.settings.require_discovery_url()
             await self._require_current_schema()
             await self.jobs.recover_interrupted()
             await self.discovery.refresh()

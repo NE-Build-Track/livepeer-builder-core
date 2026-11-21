@@ -36,7 +36,6 @@ def settings(**values: object) -> EngineSettings:
     base: dict[str, object] = {
         "database_url": MEMORY,
         "log_json": False,
-        "discovery_url": "http://127.0.0.1:9/discovery",
     }
     return EngineSettings.model_validate({**base, **values})
 
@@ -295,7 +294,7 @@ async def test_api_keys_carry_the_realm_into_the_challenge(store: SqlStore) -> N
 
 async def test_async_with_starts_and_stops_the_engine(store: SqlStore, clock: FixedClock) -> None:
     engine = await BuilderEngine.create(
-        settings(),
+        settings(discovery_url="http://127.0.0.1:9/discovery"),  # it starts, so it needs an address
         supply=EngineSupply(store=store, clock=clock),
     )
     async with engine as started:
@@ -322,7 +321,7 @@ async def test_start_logs_the_authentication_and_tenant_desk_modes(
     store: SqlStore, clock: FixedClock, caplog: pytest.LogCaptureFixture
 ) -> None:
     engine = await BuilderEngine.create(
-        settings(),
+        settings(discovery_url="http://127.0.0.1:9/discovery"),  # it starts, so it needs an address
         supply=EngineSupply(
             store=store,
             clock=clock,

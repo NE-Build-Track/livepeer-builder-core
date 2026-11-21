@@ -24,7 +24,8 @@ from typing import Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.config import EngineSettings
+from livepeer_builder.config import DISCOVERY_URL_REQUIRED, EngineSettings
+from livepeer_builder.contracts import Runner
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
@@ -121,6 +122,15 @@ class EngineSupply:
 Decorate = Callable[[EngineParts], EngineParts]
 
 
+class NoDiscoveryAddress:
+    """The discovery source of an engine built without ``LPB_DISCOVERY_URL`` (#154): it has no address
+    to read. ``lpb purge`` and ``lpb bootstrap-admin`` build such an engine and never start it; ``start()``
+    refuses it before anything polls (D63). Asked anyway, it gives no answer, in the refusal's words."""
+
+    async def fetch(self) -> tuple[Runner, ...]:  # NOSONAR - async by protocol (DiscoverySource)
+        raise RuntimeError(DISCOVERY_URL_REQUIRED)
+
+
 def own(stack: contextlib.AsyncExitStack, resource: object, close: Callable[[], Awaitable[None]]) -> None:
     """Register ``close`` on ``stack``; a failure is logged, never raised, so the rest still close."""
 
@@ -144,7 +154,7 @@ async def default_parts(
     package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
     """
     from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-    from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
+    from livepeer_builder.adapters.sdk import SdkRunnerTransport
     from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
     from livepeer_builder.store import SqlStore
 
@@ -222,18 +232,13 @@ async def default_parts(
     else:
         usage_source = None
 
-    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source.
-    http_source = HttpDiscoverySource(settings.discovery_url)
-    own(stack, http_source, http_source.aclose)
-    discovery_source: DiscoverySource = http_source
-
     return EngineParts(
         store=store,
         clock=clock,
         policy=policy,
         authenticators=authenticators,
         api_keys=api_keys,
-        discovery_source=discovery_source,
+        discovery_source=_discovery_source(settings, stack),
         transport=(
             supply.transport
             if not isinstance(supply.transport, _Unset)
@@ -247,6 +252,18 @@ async def default_parts(
         events=supply.events if not isinstance(supply.events, _Unset) else ReservedEventFeed(),
         sessions=supply.sessions if not isinstance(supply.sessions, _Unset) else ReservedSessions(),
     )
+
+
+def _discovery_source(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> DiscoverySource:
+    """Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. Without
+    the address there is nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource  # here: see default_parts
+
+    if settings.discovery_url is None:
+        return NoDiscoveryAddress()
+    http_source = HttpDiscoverySource(settings.discovery_url)
+    own(stack, http_source, http_source.aclose)
+    return http_source
 
 
 @dataclass(frozen=True)

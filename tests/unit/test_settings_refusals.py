@@ -32,7 +32,6 @@ CREDENTIALS: dict[str, Any] = {
     "database_url": f"postgresql+asyncpg://engine:{CREDENTIAL}@db.invalid/engine",
 }
 DISCOVERY = "http://127.0.0.1:9/discovery"
-ABSENT = object()  # a setting the case leaves out
 EXTRA = "Extra inputs are not permitted"
 SIGNER_URL_REFUSED = "Value error, signer_url must not carry userinfo, a query or a fragment"
 STALE_WINDOW_REFUSED = (
@@ -41,11 +40,17 @@ STALE_WINDOW_REFUSED = (
 # The model validator that hides what was given (config.py). Every other must run inside it.
 REDACTION = "_a_refusal_holds_no_value"
 
-BUILT_IN_CODE: dict[str, Callable[[dict[str, Any]], EngineSettings]] = {
-    "EngineSettings(...)": lambda given: EngineSettings(**given),
-    "model_validate": EngineSettings.model_validate,
-    "model_validate_json": lambda given: EngineSettings.model_validate_json(json.dumps(given)),
-}
+
+def built_in_code(model: type[EngineSettings]) -> dict[str, Callable[[dict[str, Any]], EngineSettings]]:
+    """Each way code builds settings from values it holds."""
+    return {
+        f"{model.__name__}(...)": lambda given: model(**given),
+        "model_validate": model.model_validate,
+        "model_validate_json": lambda given: model.model_validate_json(json.dumps(given)),
+    }
+
+
+BUILT_IN_CODE = built_in_code(EngineSettings)
 # What each case changes in valid settings that hold credentials, and the refusal's (type, loc, msg).
 REFUSED_IN_CODE = [
     pytest.param(
@@ -94,11 +99,6 @@ REFUSED_IN_CODE = [
         ),
         id="the rule on a JWT's tenant",
     ),
-    pytest.param(
-        {"discovery_url": ABSENT},
-        ("missing", ("discovery_url",), "Field required"),
-        id="a required setting missing",
-    ),
 ]
 ENVIRONMENT = {"LPB_DISCOVERY_URL": DISCOVERY} | {
     f"LPB_{name.upper()}": value for name, value in CREDENTIALS.items()
@@ -123,11 +123,6 @@ REFUSED_FROM_ENV = [
         ("value_error", (), STALE_WINDOW_REFUSED),
         id="a whole-settings rule",
     ),
-    pytest.param(
-        {"LPB_DISCOVERY_URL": ""},  # an empty variable is unset
-        ("missing", ("discovery_url",), "Field required"),
-        id="a required setting missing",
-    ),
 ]
 
 
@@ -147,7 +142,6 @@ def test_settings_refused_in_code_carry_no_value_given(
     build: Callable[[dict[str, Any]], EngineSettings], change: dict[str, Any], expected: tuple[Any, ...]
 ) -> None:
     given = {"discovery_url": DISCOVERY, **CREDENTIALS, **change}
-    given = {name: value for name, value in given.items() if value is not ABSENT}
     error = refusal(lambda: build(given))
     assert carried(error, CREDENTIAL) == []
     assert described(error) == [expected]
@@ -161,6 +155,56 @@ def test_settings_refused_from_the_environment_carry_no_value_given(
     error = refusal(lambda: EngineSettings.from_env(environment))
     assert carried(error, CREDENTIAL) == []
     assert described(error) == [expected]
+
+
+class WithRequired(EngineSettings):
+    """Settings with a required setting. ``EngineSettings`` has had none since #154: the discovery
+    address, the one it had, is asked for when the engine starts. Pydantic's refusal of a missing
+    setting holds every setting given, so the form stays pinned here for a setting required later."""
+
+    required_setting: str
+
+
+MISSING = ("missing", ("required_setting",), "Field required")
+WITH_REQUIRED = built_in_code(WithRequired)
+
+
+@pytest.mark.parametrize("build", WITH_REQUIRED.values(), ids=WITH_REQUIRED.keys())
+def test_a_required_setting_missing_in_code_carries_no_value_given(
+    build: Callable[[dict[str, Any]], EngineSettings],
+) -> None:
+    given = {"discovery_url": DISCOVERY, **CREDENTIALS}
+    error = refusal(lambda: build(given))
+    assert carried(error, CREDENTIAL) == []
+    assert described(error) == [MISSING]
+
+
+@pytest.mark.parametrize("change", [{}, {"LPB_REQUIRED_SETTING": ""}], ids=["unset", "empty"])
+def test_a_required_setting_missing_from_the_environment_carries_no_value_given(
+    change: dict[str, str],
+) -> None:
+    """An empty variable is unset, so a required setting given as one is missing."""
+    environment = ENVIRONMENT | change
+    error = refusal(lambda: WithRequired.from_env(environment))
+    assert carried(error, CREDENTIAL) == []
+    assert described(error) == [MISSING]
+
+
+@pytest.mark.parametrize("build", BUILT_IN_CODE.values(), ids=BUILT_IN_CODE.keys())
+def test_settings_without_the_discovery_address_are_read_in_code(
+    build: Callable[[dict[str, Any]], EngineSettings],
+) -> None:
+    """#154: no refusal. The address is checked when the engine starts (tests/unit/test_discovery_address.py)."""
+    assert build(dict(CREDENTIALS)).discovery_url is None
+
+
+@pytest.mark.parametrize("change", [{}, {"LPB_DISCOVERY_URL": ""}], ids=["unset", "empty"])
+def test_settings_without_the_discovery_address_are_read_from_the_environment(
+    change: dict[str, str],
+) -> None:
+    """An empty ``LPB_DISCOVERY_URL`` is unset, as every empty variable is."""
+    environment = {name: value for name, value in ENVIRONMENT.items() if name != "LPB_DISCOVERY_URL"}
+    assert EngineSettings.from_env(environment | change).discovery_url is None
 
 
 def test_every_refusal_of_a_build_is_in_one_error_and_each_names_its_setting() -> None:

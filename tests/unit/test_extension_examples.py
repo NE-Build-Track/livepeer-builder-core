@@ -209,7 +209,6 @@ async def enterprise_engine(store: SqlStore, clock: FixedClock):  # type: ignore
         EngineSettings(
             database_url="sqlite+aiosqlite:///:memory:",
             log_json=False,
-            discovery_url="http://discovery.test/discovery",
         ),
         supply=under_test,
         decorate=decorate,

@@ -37,6 +37,11 @@ _ORDINARY_SCOPE = (
     "a scope ordinary tokens carry (an operation's name or a standard scope, as written or after "
     "LPB_JWT_SCOPE_PREFIX)"
 )
+# What an engine asked to start without LPB_DISCOVERY_URL is told (#154).
+DISCOVERY_URL_REQUIRED = (
+    "LPB_DISCOVERY_URL is required to start the engine: it reads its runners from that address, as "
+    "livepeer/node's /discovery contract (such as http://discovery:8939/discovery), and has no built-in list"
+)
 
 
 def _reserved(scope: str, prefix: str) -> bool:
@@ -63,9 +68,10 @@ class EngineSettings(Contract):
 
     # network
     signer_url: str | None = None
-    # Required. GET this URL for the livepeer/node /discovery contract (D63). The engine does not start
-    # without it, and it does not fall back to a built-in list.
-    discovery_url: str
+    # GET this URL for the livepeer/node /discovery contract (D63). The engine does not start without it,
+    # and it does not fall back to a built-in list. Settings without it are read: start() checks it, so a
+    # command that builds an engine and never starts it needs none (#154, require_discovery_url).
+    discovery_url: str | None = None
     discovery_interval_s: float = Field(default=15.0, gt=0)
     # How old an orchestrator-stamped rate may be before its offering is stale (D62 (3)). D63: the reader
     # keeps price_info as advertised, and this age is catalog policy.
@@ -153,7 +159,9 @@ class EngineSettings(Contract):
 
     @field_validator("discovery_url")
     @classmethod
-    def _http_discovery_url(cls, value: str) -> str:
+    def _http_discovery_url(cls, value: str | None) -> str | None:
+        if value is None:  # unset: only an engine that starts needs it (require_discovery_url)
+            return None
         # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
         value = value.strip()  # urlsplit ignores padding; httpx refuses a newline and sends a space as %20
         # A failed refresh's error quotes this URL in the log (/readyz shows only a code, #113 C7);
@@ -273,15 +281,22 @@ class EngineSettings(Contract):
         # Raised here, outside the except block, so the refusal does not chain the error that holds them.
         raise ValidationError.from_exception_data(title, [_without_input(detail) for detail in details])
 
+    def require_discovery_url(self) -> str:
+        """The discovery address, for an engine about to start. ``BuilderEngine.start()`` asks before
+        anything polls, and ``serve`` before it opens anything: an engine does not start without the
+        address (D63), whatever its discovery source is. Reading settings does not ask (#154), so the
+        commands that build an engine and never start it need none. The refusal is not pydantic's: it
+        holds no setting."""
+        if self.discovery_url is None:
+            raise ValueError(DISCOVERY_URL_REQUIRED)
+        return self.discovery_url
+
     @classmethod
-    def from_env(
-        cls, env: Mapping[str, str] | None = None, *, defaults: Mapping[str, Any] | None = None
-    ) -> "EngineSettings":
-        """Build settings from ``LPB_<FIELD>`` variables; unset variables keep their defaults. ``defaults``
-        fills fields the environment leaves unset, by field name: the CLI commands that serve nothing give
-        ``discovery_url`` one (#112, C23)."""
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "EngineSettings":
+        """Build settings from ``LPB_<FIELD>`` variables; unset variables keep their defaults, and an
+        empty variable is unset."""
         source = os.environ if env is None else env
-        values: dict[str, Any] = dict(defaults or {})
+        values: dict[str, Any] = {}
         for name in cls.model_fields:
             raw = source.get(ENV_PREFIX + name.upper())
             if raw is not None and raw != "":

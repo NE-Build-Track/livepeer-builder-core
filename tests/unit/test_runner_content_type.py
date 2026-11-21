@@ -360,3 +360,32 @@ async def test_a_supplied_transport_s_content_type_a_header_holds_is_kept_as_rep
         assert stream.content_type == reported
         assert [chunk async for chunk in stream] == [b"data: a\n\n"]
     assert stream.job.result is not None and stream.job.result.content_type == reported
+
+
+@pytest.mark.parametrize(
+    ("header_runner", "pair"),
+    [(line, pair) for line, pair in HEADERS],
+    ids=HEADER_IDS,
+    indirect=["header_runner"],
+)
+async def test_a_job_stream_s_headers_are_the_transport_s_pairs_with_no_lone_surrogate(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    header_runner: Runner,
+    pair: tuple[str, str],
+) -> None:
+    """``JobStream.headers`` is what an embedded caller reads, through the engine (#158): the SDK
+    transport's pairs as they are, so every one can be logged, stored and sent on."""
+    engine = await make_engine(
+        runners=(header_runner,), supply=EngineSupply(transport=SdkRunnerTransport(None))
+    )
+    amount = Money(amount=Decimal(5), currency="USD")
+    await engine.payments.allot(
+        admin, AllotRequest(operation_ref="p1", tenant_id="default", actor_id="alice", amount=amount)
+    )
+    async with await engine.jobs.streaming.stream(alice, JobRequest(app=APP)) as stream:
+        headers = stream.headers
+        assert [chunk async for chunk in stream] == [b"hello"]
+    assert pair in headers and ("Content-Type", "application/json") in headers
+    assert json.dumps(headers, ensure_ascii=False).encode()

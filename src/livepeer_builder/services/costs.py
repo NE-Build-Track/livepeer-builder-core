@@ -21,6 +21,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -171,10 +172,23 @@ class CostService:
         self.set_aside_rows: int | None = None  # every usage row left out so far, as of the last sync
 
     async def sync_once(self) -> SyncReport:
+        """One sync, for the background loop and for an admin's ``sync_now`` alike. A failure is raised
+        and noted for health either way (#158): the code in ``last_error``, the text in the log (#113, C7)."""
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
         try:
-            report, new_rows = await self._worker.sync_once()
+            return await self._sync(self._worker)
+        except Exception as exc:
+            code: FailureCode = source_failure(exc) if self._worker.source_error is exc else STORE_ERROR
+            self.last_error = code
+            _LOG.warning(
+                "cost sync failed", extra={"event": "costs.sync_failed", "code": code, "error": str(exc)}
+            )
+            raise
+
+    async def _sync(self, worker: CostSyncWorker) -> SyncReport:
+        try:
+            report, new_rows = await worker.sync_once()
         except Exception:  # the pages before the failure may have set rows aside: the table has them
             self.set_aside_rows = await count_set_aside(self._store, self.set_aside_rows)
             raise
@@ -196,16 +210,8 @@ class CostService:
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             if self._worker is not None:
-                try:
+                with contextlib.suppress(Exception):  # keep syncing: sync_once noted the failure
                     await self.sync_once()
-                except Exception as exc:  # keep syncing; health shows a code, the log the text (#113, C7)
-                    from_source = self._worker.source_error is exc
-                    code: FailureCode = source_failure(exc) if from_source else STORE_ERROR
-                    self.last_error = code
-                    _LOG.warning(
-                        "cost sync failed",
-                        extra={"event": "costs.sync_failed", "code": code, "error": str(exc)},
-                    )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self._interval_s)
             except TimeoutError:

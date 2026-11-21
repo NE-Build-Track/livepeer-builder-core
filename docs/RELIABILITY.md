@@ -87,6 +87,12 @@ The codes are a closed set in the contract (`SourceFailureCode` for `discovery_e
 adapters decide the code where they read the answer; a supplied source's failure is read by its
 exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
 
+`cost_sync_error` is the outcome of the last cost sync, whoever started it: the background loop, or an
+admin with `POST /v1/costs/sync`. A sync that fails sets the code and writes `costs.sync_failed`, and
+the next one that works clears it. Before #158 a failed `POST /v1/costs/sync` answered its error (502
+or 503) and left the code as it was, so `/readyz` showed no error until the loop's next pass failed too.
+A request refused before any sync (403, or 503 from an engine with no usage source) sets nothing.
+
 `scripts/live_probe.py` checks a running stack over REST: access, revocation and one repeated top-up
 (D61). Name the stack with `LPB_PROBE_URL` and `LPB_PROBE_ADMIN_KEY`; it spends only with `--yes` and
 `LPB_PROBE_FUND_ACTOR`, at most a few cents. See [m3-traceability](product-specs/m3-traceability.md#live-probe).

@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -203,7 +203,7 @@ async def test_a_summary_with_no_start_that_ends_in_the_first_30_days_of_year_1_
     ``OverflowError`` (#158). An ``end`` with no offset is read the same way."""
     async with side() as engine:
         for end in (datetime(1, 1, 15, tzinfo=UTC), datetime(1, 1, 30, 23, 59, 59), datetime.min):
-            with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00 or later"):
+            with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
                 await engine.costs.summary(ALICE, None, end)
         first = await engine.costs.summary(ALICE, None, datetime(1, 1, 31, tzinfo=UTC))
         stated = await engine.costs.summary(
@@ -211,6 +211,29 @@ async def test_a_summary_with_no_start_that_ends_in_the_first_30_days_of_year_1_
         )
     assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
     assert stated.end == datetime(1, 1, 15, tzinfo=UTC)
+
+
+async def test_a_default_summary_window_is_judged_by_the_instant_of_end_whatever_its_offset(
+    side: Side,
+) -> None:
+    """Review of #187: the window was measured in ``end``'s own offset. ``0001-01-31T00:00+01:00`` passed,
+    and its start, ``0001-01-01T00:00+01:00``, is before year 1 in UTC: an ``OverflowError`` where the
+    window is normalized. ``0001-01-30T20:00-05:00`` is ``0001-01-31T01:00Z`` and was refused."""
+    ahead, behind = timezone(timedelta(hours=1)), timezone(timedelta(hours=-5))
+    async with side() as engine:
+        for end in (
+            datetime(1, 1, 31, tzinfo=ahead),
+            datetime(1, 1, 1, tzinfo=timezone(timedelta(hours=14))),
+        ):
+            with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
+                await engine.costs.summary(ALICE, None, end)
+        late_enough = await engine.costs.summary(ALICE, None, datetime(1, 1, 30, 20, tzinfo=behind))
+        first = await engine.costs.summary(ALICE, None, datetime(1, 1, 31, 1, tzinfo=ahead))
+    assert (late_enough.start, late_enough.end) == (
+        datetime(1, 1, 1, 1, tzinfo=UTC),
+        datetime(1, 1, 31, 1, tzinfo=UTC),
+    )
+    assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
 
 
 async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -> None:

@@ -156,7 +156,7 @@ async def test_a_summary_whose_default_start_utc_cannot_hold_is_400_naming_end(
     client, admin = api
     answer = await client.get("/v1/costs/summary", params={"end": end}, headers=admin)
     assert answer.status_code == 400, answer.text
-    assert answer.json() == {"error": "end: must be 0001-01-31T00:00:00 or later when no start is given"}
+    assert answer.json() == {"error": "end: must be 0001-01-31T00:00:00Z or later when no start is given"}
 
 
 async def test_the_first_end_with_a_default_start_and_an_earlier_end_with_its_own_start_still_answer(

@@ -132,6 +132,14 @@ A summary with no `start` starts 30 days before its `end`. An `end` before `0001
 such start, so with no `start` it is a 400 that names `end` (`InvalidRequest` in process), after the
 permission check; it was a 500 (#158). The same `end` with its own `start` is read as before.
 
+**A 422 repeats the input it refused, as JSON every client reads.** Its body is FastAPI's: `detail` lists
+each refused field with its `loc`, `msg`, `type` and `input`. Two inputs cannot be repeated as they came.
+A lone surrogate is written as the escape it came in as (`"\ud800"`; #113, C26). A `NaN` or an infinity,
+which the engine's JSON reader takes as a number and JSON has no number for, is written as a string of its
+token: `"NaN"`, `"Infinity"` or `"-Infinity"` (#158). `POST /v1/jobs` with
+`{"app":"example/echo","timeout_s":NaN}` answers 422 with `"input":"NaN"`; it was a 500, because the 422
+could not be written. Every other 422 is byte for byte what FastAPI sends.
+
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |

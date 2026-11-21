@@ -1,7 +1,9 @@
 """``lpb``: operator commands (docs/RELIABILITY.md#operations). ``migrate``, ``revision``, ``backup`` and
 ``restore`` read only ``LPB_DATABASE_URL``; ``purge``, ``bootstrap-admin``, ``smoke`` and ``serve`` read the
-LPB_* settings, and only ``serve`` requires ``LPB_DISCOVERY_URL`` (#112, C23). With a payment provider,
-``purge`` and ``bootstrap-admin``, which never allot, do not require ``LPB_SECRET_KEY`` (#106 review).
+LPB_* settings. Only an engine that starts needs ``LPB_DISCOVERY_URL``, so only ``serve`` requires it:
+``purge`` and ``bootstrap-admin`` build an engine and never start it, and ``smoke`` starts one at an
+address of its own (#112, C23; #154). With a payment provider, ``purge`` and ``bootstrap-admin``, which
+never allot, do not require ``LPB_SECRET_KEY`` (#106 review).
 
 lpb migrate            apply packaged migrations (production runs this before start)
 lpb revision           show the database revision and the package head
@@ -24,6 +26,8 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+from pydantic import SecretStr
 
 from livepeer_builder import EngineError, EngineSettings, generate_secret_key
 from livepeer_builder.runtime import BuilderEngine, package_version
@@ -70,11 +74,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-# Commands that build an engine but serve nothing need no discovery address. Without LPB_DISCOVERY_URL they
-# get this one: purge and bootstrap-admin never poll it, and smoke's one poll is refused (#112, C23).
-NO_DISCOVERY_URL = "http://127.0.0.1:9/discovery"
-
-
 def _emit(payload: Any) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
@@ -84,18 +83,16 @@ def _database_url() -> str:
     return EngineSettings.database_url_from_env()
 
 
-def _engine_settings(**stand_ins: Any) -> EngineSettings:
-    """The LPB_* settings for an engine that serves nothing: the discovery address is optional, and so is
-    each setting ``stand_ins`` gives a value for the environment leaves unset."""
-    return EngineSettings.from_env(defaults={"discovery_url": NO_DISCOVERY_URL, **stand_ins})
-
-
 def _settings_that_allot_nothing() -> EngineSettings:
-    """purge and bootstrap-admin never allot, so they keep no payment key. Without LPB_SECRET_KEY they get a
-    key for this run only, as they get a discovery address, and the engine's check that a payment
-    provider's keys can be kept is met (#106 review). smoke gets none: it proves the engine starts as
-    serve would."""
-    return _engine_settings(secret_key=generate_secret_key())
+    """The LPB_* settings for purge and bootstrap-admin. They never allot, so they keep no payment key:
+    without LPB_SECRET_KEY they get a key for this run only, and the engine's check that a payment
+    provider's keys can be kept is met (#106 review). They never start the engine either, so they need no
+    discovery address and get none (#154). smoke gets no key: it proves the engine starts as serve would."""
+    settings = EngineSettings.from_env()
+    if settings.secret_key is not None:
+        return settings
+    # A new key is valid by construction, so the copy needs no second validation.
+    return settings.model_copy(update={"secret_key": SecretStr(generate_secret_key())})
 
 
 async def _migrate(_: argparse.Namespace) -> None:
@@ -161,11 +158,22 @@ async def _smoke(_: argparse.Namespace) -> int:
     """The CI install check: proves the installed wheel imports, migrates, starts and stops.
 
     It never opens ``LPB_DATABASE_URL``: starting an engine there would resolve that deployment's running
-    jobs as interrupted. It migrates a throwaway SQLite file instead, removed afterwards (#112, C23)."""
+    jobs as interrupted. It migrates a throwaway SQLite file instead, removed afterwards (#112, C23).
+
+    An engine does not start without a discovery address (D63). Without ``LPB_DISCOVERY_URL`` smoke
+    starts its engine at an address nothing listens on: its one poll is refused, and the engine starts
+    as it does when discovery is down (#154)."""
     with tempfile.TemporaryDirectory(prefix="lpb-smoke-") as directory:
         database = f"sqlite+aiosqlite:///{Path(directory) / 'smoke.db'}"
-        # Both values are valid by construction, so the copy needs no second validation.
-        settings = _engine_settings().model_copy(update={"database_url": database, "auto_migrate": True})
+        configured = EngineSettings.from_env()
+        # Each value is valid by construction, so the copy needs no second validation.
+        settings = configured.model_copy(
+            update={
+                "database_url": database,
+                "auto_migrate": True,
+                "discovery_url": configured.discovery_url or "http://127.0.0.1:9/discovery",
+            }
+        )
         engine = await BuilderEngine.create(settings)
         try:
             await engine.start()

@@ -47,9 +47,13 @@ async def serve(
     decorate: Decorate | None = None,
     extend: Extend | None = None,
 ) -> None:
-    """Run the service. The engine is stopped even when the server never starts (a taken port)."""
+    """Run the service. The engine is stopped even when the server never starts (a taken port).
+
+    Without ``LPB_DISCOVERY_URL`` it refuses here, before the store is opened or migrated: the engine it
+    is about to start would refuse (D63, #154), and nothing should be opened for that."""
     import uvicorn
 
+    settings.require_discovery_url()
     configure_logging(json_lines=settings.log_json)
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:

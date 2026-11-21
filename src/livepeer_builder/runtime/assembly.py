@@ -24,7 +24,8 @@ from typing import Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.config import EngineSettings
+from livepeer_builder.config import DISCOVERY_URL_REQUIRED, EngineSettings
+from livepeer_builder.contracts import Runner
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
@@ -119,6 +120,15 @@ class EngineSupply:
 
 
 Decorate = Callable[[EngineParts], EngineParts]
+
+
+class NoDiscoveryAddress:
+    """The discovery source of an engine built without ``LPB_DISCOVERY_URL`` (#154): it has no address
+    to read. ``lpb purge`` and ``lpb bootstrap-admin`` build such an engine and never start it; ``start()``
+    refuses it before anything polls (D63). Asked anyway, it gives no answer, in the refusal's words."""
+
+    async def fetch(self) -> tuple[Runner, ...]:  # NOSONAR - async by protocol (DiscoverySource)
+        raise RuntimeError(DISCOVERY_URL_REQUIRED)
 
 
 def own(stack: contextlib.AsyncExitStack, resource: object, close: Callable[[], Awaitable[None]]) -> None:
@@ -222,10 +232,13 @@ async def default_parts(
     else:
         usage_source = None
 
-    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source.
-    http_source = HttpDiscoverySource(settings.discovery_url)
-    own(stack, http_source, http_source.aclose)
-    discovery_source: DiscoverySource = http_source
+    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. Without
+    # the address there is nothing to read: the engine is built, and start() refuses it (#154).
+    discovery_source: DiscoverySource = NoDiscoveryAddress()
+    if settings.discovery_url is not None:
+        http_source = HttpDiscoverySource(settings.discovery_url)
+        own(stack, http_source, http_source.aclose)
+        discovery_source = http_source
 
     return EngineParts(
         store=store,

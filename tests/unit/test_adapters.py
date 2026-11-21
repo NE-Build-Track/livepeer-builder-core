@@ -378,9 +378,13 @@ def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
             )
 
 
-def test_discovery_url_is_required() -> None:
-    with pytest.raises(ValidationError):
-        EngineSettings()
+def test_discovery_url_is_required_to_start_an_engine_not_to_read_settings() -> None:
+    """#154: settings without it are read. The engine asks for it when it starts (D63)."""
+    settings = EngineSettings()
+    assert settings.discovery_url is None
+    with pytest.raises(ValueError, match="LPB_DISCOVERY_URL is required to start the engine") as refused:
+        settings.require_discovery_url()
+    assert not isinstance(refused.value, ValidationError)
 
 
 @pytest.mark.parametrize(

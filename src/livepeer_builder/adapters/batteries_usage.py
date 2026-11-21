@@ -8,6 +8,7 @@ names the route; this module reads no HTTP.
 import json
 import re
 import secrets
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -62,28 +63,35 @@ def page_past_the_decoder(content: bytes) -> tuple[dict[str, Any], list[SetAside
 
 
 def _without_items_past_the_decoder(text: str, marker: str) -> tuple[str, list[str]]:
-    """``text`` with each such item replaced by ``{marker: n}``, and the items' texts. An item is an
-    object directly in a list that is directly in the page's object, found by counting brackets outside
-    strings: no recursion, whatever the nesting."""
-    open_brackets: list[str] = []
+    """``text`` with each such item replaced by ``{marker: n}``, and the items' texts."""
     parts: list[str] = []
     cut: list[str] = []
-    copied, start = 0, -1
+    copied = 0
+    for start, end in _item_spans(text):
+        if _past_the_decoder(text[start:end]):
+            parts += [text[copied:start], json.dumps({marker: len(cut)})]
+            cut.append(text[start:end])
+            copied = end
+    return "".join([*parts, text[copied:]]), cut
+
+
+def _item_spans(text: str) -> Iterator[tuple[int, int]]:
+    """Where each item of a page starts and ends. An item is an object directly in a list that is
+    directly in the page's object, found by counting brackets outside strings: no recursion, whatever
+    the nesting."""
+    open_brackets: list[str] = []
+    start = -1
     for token in _TOKEN.finditer(text):
         bracket = token.group()
-        if bracket in "[{":
+        if bracket in ("[", "{"):
             if bracket == "{" and open_brackets == ["{", "["]:
                 start = token.start()
             open_brackets.append(bracket)
-        elif bracket in "]}" and open_brackets:
+        elif bracket in ("]", "}") and open_brackets:
             open_brackets.pop()
             if start >= 0 and len(open_brackets) == 2:
-                if _past_the_decoder(text[start : token.end()]):
-                    parts += [text[copied:start], json.dumps({marker: len(cut)})]
-                    cut.append(text[start : token.end()])
-                    copied = token.end()
+                yield start, token.end()
                 start = -1
-    return "".join([*parts, text[copied:]]), cut
 
 
 def _past_the_decoder(item: str) -> bool:

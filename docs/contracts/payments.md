@@ -433,7 +433,10 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,
   and the grant list (`GET /v1/clearinghouse/tenants` since #165) and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
-  comes back after other pages) is not detected. A grant, in a list or read alone,
+  comes back after other pages: A, B, A) is that `ProviderError` too, from the same three readers (#158):
+  before, it was followed without end. The engine keeps one earlier cursor to compare with, not every
+  cursor, so a cycle is found after a few turns of it and not always at its first repeat; pages read
+  twice meanwhile store no usage row twice. A grant, in a list or read alone,
   must have a non-empty string `id`, and its `name`, `status`, `currency`, total and `metadata` must be
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
   JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text

@@ -27,6 +27,7 @@ from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FixedClock
+from livepeer_builder.utils import CursorTrail
 from tests.conftest import EngineFactory
 
 USD = Money(amount=Decimal("2.5"), currency="USD")
@@ -601,3 +602,120 @@ async def test_a_redirected_usage_page_reads_as_unavailable(status: int) -> None
     with pytest.raises(ProviderError) as refused:
         await source.page(None)
     assert source_failure(refused.value) == "unavailable"  # as a redirect from the discovery source (C7)
+
+
+# -- #158: a cursor that comes back after other pages (A, B, A) ---------------------------------------
+
+CYCLES: dict[str, dict[str, str]] = {
+    "two pages": {"": "A", "A": "B", "B": "A"},
+    "three pages": {"": "A", "A": "B", "B": "C", "C": "A"},
+    "a cycle after a run of pages": {
+        "": "p1", "p1": "p2", "p2": "p3", "p3": "A", "A": "B", "B": "C", "C": "D", "D": "E", "E": "A",
+    },
+}  # fmt: skip
+
+
+def circling(route: dict[str, str], asked: list[str | None], usage: bool = False) -> httpx.AsyncClient:
+    """A Batteries whose list names the next cursor by ``route``, with one item a page. It goes away after
+    forty pages, so a loop that never ends fails its test instead of hanging it."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        asked.append(cursor)
+        if len(asked) > 40:
+            raise httpx.ConnectError("the list never ended")
+        item = USAGE_ITEM | {"id": f"u-{cursor}"} if usage else GRANT | {"id": f"g-{cursor}"}
+        return httpx.Response(200, json={"items": [item], "next_cursor": route[cursor or ""]})
+
+    return httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+
+
+@pytest.mark.parametrize("route", CYCLES.values(), ids=CYCLES)
+async def test_a_grant_list_whose_cursor_comes_back_after_other_pages_is_a_provider_error(
+    route: dict[str, str],
+) -> None:
+    """#114 (C21) caught a page that names the cursor it was asked with. A cursor that came back after
+    other pages was followed without end."""
+    asked: list[str | None] = []
+    client = BatteriesClient(BASE, "t", client=circling(route, asked))
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await client.list_grants()
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert len(asked) <= 3 * len(route)  # found within a few turns of the cycle, however long the list
+    if len(route) == 3:
+        assert asked == [None, "A", "B"]  # the page asked with B named A, where the list had been
+
+
+@pytest.mark.parametrize("route", CYCLES.values(), ids=CYCLES)
+async def test_a_usage_feed_whose_cursor_comes_back_after_other_pages_fails_the_sync_and_stores_each_row_once(
+    store: SqlStore, route: dict[str, str]
+) -> None:
+    asked: list[str | None] = []
+    worker = CostSyncWorker(BatteriesUsageSource(BASE, "t", client=circling(route, asked, usage=True)), store)
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await worker.sync_once()
+    assert worker.source_error is refused.value and source_failure(refused.value) == "invalid_answer"
+    assert len(asked) <= 3 * len(route)
+    first = len(asked)
+    with pytest.raises(ProviderError, match="did not advance"):  # the next pass starts inside the cycle
+        await worker.sync_once()
+    assert len(asked) - first <= 3 * len(route)
+    async with store.engine.connect() as conn:
+        stored = sorted((await conn.execute(select(t.usage_rows.c.id))).scalars())
+    assert stored == sorted({f"u-{cursor}" for cursor in asked})  # a page read twice stores nothing twice
+
+
+async def test_the_rest_service_answers_a_list_that_goes_round_with_502(make_engine: EngineFactory) -> None:
+    desk = BatteriesClient(BASE, "t", client=circling(CYCLES["two pages"], []))
+    usage = BatteriesUsageSource(BASE, "t", client=circling(CYCLES["two pages"], [], usage=True))
+    engine = await make_engine(supply=EngineSupply(grants_manager=desk, usage_source=usage))
+    key = await engine.keys.bootstrap_admin()
+    async with rest(engine, key.token) as http:
+        listed = await http.get("/v1/clearinghouse/tenants")
+        synced = await http.post("/v1/costs/sync")
+    assert (listed.status_code, synced.status_code) == (502, 502)
+
+
+async def test_a_resumed_grant_create_over_a_list_that_goes_round_is_an_unknown_outcome(
+    make_engine: EngineFactory, admin: ActorContext, clock: FixedClock
+) -> None:
+    batteries = GrantDesk()
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(batteries.handle))
+    engine = await make_engine(supply=EngineSupply(grants_manager=BatteriesClient(BASE, "t", client=client)))
+    desk = engine.payments.tenants
+    assert desk is not None
+    usd = Money(amount=Decimal(5), currency="USD")
+    with pytest.raises(ProviderUnavailable):
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")  # created; the answer is lost
+
+    clock.advance(120)
+    round_and_round = [{"items": [], "next_cursor": "A"}, {"items": [], "next_cursor": "B"}] * 10
+    batteries.list_answers = list(round_and_round)  # then the real list
+    with pytest.raises(ProviderError, match="did not advance") as refused:
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+    assert not definite_refusal(refused.value)
+    assert len(batteries.list_answers) == 17  # three pages asked: the third named A again
+    assert len(batteries.grants) == 1  # never "no such grant"
+    with pytest.raises(OperationInProgress):  # the reference is still held
+        await desk.onboard(admin, "ops", usd, operation_ref="grant-1")
+
+
+@pytest.mark.parametrize("lead", [0, 1, 2, 7, 50])
+@pytest.mark.parametrize("length", [1, 2, 3, 8, 33])
+def test_a_cursor_trail_finds_a_cycle_of_any_length_and_keeps_one_cursor(lead: int, length: int) -> None:
+    cursors = [f"lead-{n}" for n in range(lead)] + [f"cycle-{n}" for n in range(length)]
+    trail = CursorTrail(None)
+    for step in range(4 * (lead + length) + 4):
+        position = step if step < lead + length else lead + (step - lead) % length
+        if trail.repeats(cursors[position]):
+            break
+    else:
+        pytest.fail("the cycle was not found")
+    assert step >= lead + length  # never before a cursor has in fact come back
+    assert set(vars(trail)) == {"_mark", "_steps", "_span"}  # one cursor and two counts, whatever the list
+
+
+def test_a_cursor_trail_reports_no_repeat_in_a_list_that_only_advances() -> None:
+    trail = CursorTrail("resumed-here")
+    assert not any(trail.repeats(f"c{n}") for n in range(10_000))
+    assert CursorTrail("c1").repeats("c1")  # the page asked with c1 named c1

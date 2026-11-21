@@ -65,6 +65,7 @@ from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
 from livepeer_builder.services.reconciliation import PaidAttempts, current_allocation
 from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
+from livepeer_builder.utils import CursorTrail
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -95,14 +96,14 @@ class CostSyncWorker:
         cursor = checkpoint.resume_cursor if checkpoint and checkpoint.filters == self._filters else None
         pages = rows_seen = set_aside = 0
         new_rows: list[UsageRow] = []
-        restarted = False
+        restarted, trail = False, CursorTrail(cursor)
         while True:
             try:
-                page = await self._page(cursor)
+                page = await self._page(cursor, trail)
             except CursorMismatch:
                 if restarted:
                     raise
-                restarted, cursor = True, None
+                restarted, cursor, trail = True, None, CursorTrail(None)
                 await self._store.apply_usage((), SyncCheckpoint(resume_cursor=None, filters=self._filters))
                 continue
             rows, aside = sort_page(page)  # a row the engine cannot read or store never stops the sync
@@ -120,10 +121,10 @@ class CostSyncWorker:
                 return report, new_rows
             cursor = page.next_cursor
 
-    async def _page(self, cursor: str | None) -> UsagePage:
+    async def _page(self, cursor: str | None, trail: CursorTrail) -> UsagePage:
         try:
             page = await self._source.page(cursor, limit=1000)
-            if page.next_cursor and page.next_cursor == cursor:  # asking again would never end
+            if page.next_cursor and trail.repeats(page.next_cursor):  # following it would never end
                 raise ProviderError(200, "the usage cursor did not advance")
             return page
         except Exception as error:

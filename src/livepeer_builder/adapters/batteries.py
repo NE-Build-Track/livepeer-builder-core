@@ -32,7 +32,7 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
-from livepeer_builder.utils import BODY_LIMIT
+from livepeer_builder.utils import BODY_LIMIT, CursorTrail
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _GRANTS = "/v1/grants"
@@ -155,15 +155,15 @@ class BatteriesClient:
         return held
 
     async def _pages(self, path: str, filters: dict[str, str]) -> list[dict[str, Any]]:
-        """Every item of a list. A page that answers the cursor it was asked with is an answer the
-        engine cannot read: asking again would never end."""
+        """Every item of a list. A page that names a cursor the list was already at (the one it was asked
+        with, or an earlier one: A, B, A) is an answer the engine cannot read: the list would never end."""
         items: list[dict[str, Any]] = []
-        cursor = ""
+        cursor, trail = "", CursorTrail(None)
         while True:
             params = {**filters, "limit": "1000"} | ({"cursor": cursor} if cursor else {})
             page, following = list_page(await self._request("GET", path, params=params))
             items += page
-            if following == cursor and cursor:
+            if following and trail.repeats(following):
                 raise ProviderError(200, "Batteries answered a list whose cursor did not advance")
             if not following:
                 return items

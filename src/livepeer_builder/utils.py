@@ -37,3 +37,26 @@ def spawn_shielded[T](work: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
     _SHIELDED.add(task)
     task.add_done_callback(_SHIELDED.discard)
     return task
+
+
+class CursorTrail:
+    """Whether a list read page by page comes back to a cursor it was at, in constant memory.
+
+    Each page names the next cursor, and a provider whose cursors go round (A, B, A) would be read
+    without end. Remembering every cursor would grow with the list. This keeps one, the mark, and
+    compares each next cursor with it; the mark moves to the current cursor after 1, 2, 4, 8... pages
+    (Brent's cycle detection). So a cycle of any length is found after a few turns of it, and a list
+    that only advances is never refused."""
+
+    def __init__(self, start: str | None) -> None:
+        self._mark, self._steps, self._span = start or "", 0, 1  # the cursor the first page is asked with
+
+    def repeats(self, cursor: str) -> bool:
+        """Whether ``cursor``, which a page just named as the next one, is the mark: asking with it
+        would read pages already read. Call it once for each next cursor, in order."""
+        if cursor == self._mark:
+            return True
+        self._steps += 1
+        if self._steps == self._span:
+            self._mark, self._steps, self._span = cursor, 0, self._span * 2
+        return False

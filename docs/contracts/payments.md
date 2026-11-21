@@ -427,8 +427,8 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
   with an unknown outcome (as `cost_sync_error` it is `unavailable`). An answer whose content encoding
   does not decode (it says `gzip` over a body that is not) is a `ProviderError` with the answer's own
-  status, from a management call as from the usage feed: a refusal when that status is a 4xx, an unknown
-  outcome otherwise. Before #158 a management call answered 500 for one. A malformed page
+  status, from a management call as from the usage feed: a refusal when that status is a 4xx other than
+  408, an unknown outcome otherwise. Before #158 a management call answered 500 for one. A malformed page
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,
@@ -442,7 +442,7 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
   (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
   not create, and so is `metadata` whose JSON is nested deeper than the decoder reads (before #158 that
-  one answered 500 from every grant list). The same holds for every value a command's result is built from: the `id` a grant create
+  one raised out of a resumed onboarding's search of the grants, a 500 on every try). The same holds for every value a command's result is built from: the `id` a grant create
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with

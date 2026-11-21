@@ -23,10 +23,17 @@ still does not start without it (D63).
 | What | Before | Now | What an embedder does |
 | --- | --- | --- | --- |
 | `EngineSettings.discovery_url` | `str`, required | `str \| None`, `None` when unset | Code that reads it handles `None`, or calls `settings.require_discovery_url()`, which returns the address or raises |
-| Settings without the address | `EngineSettings(...)` and `EngineSettings.from_env()` raise pydantic's `ValidationError` (`discovery_url`: field required) | They are read. `BuilderEngine.create` builds the engine. `start()` raises a `ValueError` that names `LPB_DISCOVERY_URL`, before anything is polled or written, and stops the engine | An application that relied on reading settings to fail without the address checks `settings.discovery_url` itself, or lets `start()` refuse |
+| Settings without the address | `EngineSettings(...)` and `EngineSettings.from_env()` raise pydantic's `ValidationError` (`discovery_url`: field required), before any database is opened | They are read. `BuilderEngine.create` builds the engine: it opens the database, and migrates it when `LPB_AUTO_MIGRATE` is `true`. `start()` raises a `ValueError` that names `LPB_DISCOVERY_URL`, before it polls or writes anything, and stops the engine | An application that relied on reading settings to fail without the address checks `settings.discovery_url` itself, or lets `start()` refuse. One that starts its own engine calls `settings.require_discovery_url()` before `create` |
 | `EngineSettings.from_env` | Takes `defaults=` | Takes the environment only | Build the settings, then `model_copy(update=...)` for a value the environment leaves unset |
-| `lpb serve` without the address | Exits with code 1, `ValidationError` | Exits with code 1, `ValueError` naming the variable, before the database is opened | Nothing |
+| `lpb serve`, `serve` and `build_app` without the address | `lpb serve` exits with code 1, `ValidationError` | They raise the `ValueError` naming the variable before the database is opened; `lpb serve` exits with code 1 | Nothing |
 | `lpb purge`, `lpb bootstrap-admin` without the address | Run, with a placeholder address they never polled | Run, with no address | Nothing |
+
+**Before you start the new release:** an application that builds its engine with
+`BuilderEngine.create` and then starts it should call `settings.require_discovery_url()` first. Without
+that call, a deployment that lost its address migrates the database to this release's revision and
+then refuses to start, and the release before it does not start on that revision
+([embedded mode](../guides/embedded-mode.md#1-construct-and-start-the-engine-once)). `lpb serve`,
+`serve` and `build_app` make the call themselves.
 
 A malformed address is refused when settings are read, as before, and an empty `LPB_DISCOVERY_URL` is
 unset, as before. An engine whose `decorate` stage replaces the discovery source still needs the

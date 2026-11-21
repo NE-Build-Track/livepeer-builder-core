@@ -206,6 +206,9 @@ The same engine serves both integration modes: call it in-process with your own 
   To hold the engine yourself, build it with `BuilderEngine.create` and pass it to
   `livepeer_builder.http.create_app`. Logging is left to the host.
 
+Both refuse without `LPB_DISCOVERY_URL` before they build the engine, so the database is not opened or
+migrated for an engine that would not start (#154).
+
 `extend(app, engine)` receives the app and the engine, so a router gets the engine as an argument
 rather than from `app.state`. `actor_dependency(engine)` is the dependency the built-in routes use:
 an extra endpoint that depends on it gets the same authenticators, and the same 401 for a missing

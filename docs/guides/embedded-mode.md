@@ -47,9 +47,16 @@ Your app authenticates the human. The engine never sees that credential. It only
 ```python
 from livepeer_builder import ActorContext, BuilderEngine, EngineSettings, JobRequest
 
-engine = await BuilderEngine.create(EngineSettings.from_env())
+settings = EngineSettings.from_env()
+settings.require_discovery_url()  # refuse before the database is opened and migrated
+engine = await BuilderEngine.create(settings)
 await engine.start()
 ```
+
+An engine does not start without `LPB_DISCOVERY_URL`, and settings without it are read (#154).
+`create` opens the database, and migrates it when `LPB_AUTO_MIGRATE` is `true`, before `start()` can
+refuse. `require_discovery_url()` raises the same refusal first, so a deployment with no address fails
+with its database untouched.
 
 `create` wires the defaults: SQLite or PostgreSQL store, `DefaultPolicy`, engine API keys (present
 but unused on this path), discovery from `LPB_DISCOVERY_URL`, SDK transport, Batteries, and the encrypted

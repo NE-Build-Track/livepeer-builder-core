@@ -154,7 +154,7 @@ async def default_parts(
     package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
     """
     from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-    from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
+    from livepeer_builder.adapters.sdk import SdkRunnerTransport
     from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
     from livepeer_builder.store import SqlStore
 
@@ -232,21 +232,13 @@ async def default_parts(
     else:
         usage_source = None
 
-    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. Without
-    # the address there is nothing to read: the engine is built, and start() refuses it (#154).
-    discovery_source: DiscoverySource = NoDiscoveryAddress()
-    if settings.discovery_url is not None:
-        http_source = HttpDiscoverySource(settings.discovery_url)
-        own(stack, http_source, http_source.aclose)
-        discovery_source = http_source
-
     return EngineParts(
         store=store,
         clock=clock,
         policy=policy,
         authenticators=authenticators,
         api_keys=api_keys,
-        discovery_source=discovery_source,
+        discovery_source=_discovery_source(settings, stack),
         transport=(
             supply.transport
             if not isinstance(supply.transport, _Unset)
@@ -260,6 +252,18 @@ async def default_parts(
         events=supply.events if not isinstance(supply.events, _Unset) else ReservedEventFeed(),
         sessions=supply.sessions if not isinstance(supply.sessions, _Unset) else ReservedSessions(),
     )
+
+
+def _discovery_source(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> DiscoverySource:
+    """Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. Without
+    the address there is nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource  # here: see default_parts
+
+    if settings.discovery_url is None:
+        return NoDiscoveryAddress()
+    http_source = HttpDiscoverySource(settings.discovery_url)
+    own(stack, http_source, http_source.aclose)
+    return http_source
 
 
 @dataclass(frozen=True)

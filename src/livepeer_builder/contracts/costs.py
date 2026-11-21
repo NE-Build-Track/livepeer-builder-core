@@ -115,17 +115,18 @@ def unstorable_reason(field: str) -> SetAsideReason:
 
 def set_aside_record(
     reason: SetAsideReason,
-    content: Mapping[str, object],
+    content: Mapping[str, object] | str,
     *,
     row_id: str | None,
     fee_eth: Decimal | None,
     fee_usd: Decimal | None,
 ) -> SetAsideUsage:
-    """The record of one row left out. ``content`` is the row as received; it must be JSON data.
+    """The record of one row left out. ``content`` is the row as received: JSON data, or the row's own
+    text when it could not be decoded.
 
     The same content always gets the same id, so a page read again records nothing twice. A fee is kept
     when it is a finite number and the table can hold its digits."""
-    raw = json.dumps(content, sort_keys=True, default=str)
+    raw = content if isinstance(content, str) else json.dumps(content, sort_keys=True, default=str)
     kept_id = row_id if row_id and storable_text(row_id) else None
     return SetAsideUsage(
         id=kept_id or "sha256:" + hashlib.sha256(raw.encode()).hexdigest(),

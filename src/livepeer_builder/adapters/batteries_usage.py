@@ -5,6 +5,9 @@ when it does not. Each value is judged as it was received. ``adapters/batteries.
 names the route; this module reads no HTTP.
 """
 
+import json
+import re
+import secrets
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -21,6 +24,75 @@ _NO_FEE = ("", "[error]")  # what Batteries serves, with null, for a fee it has 
 _USAGE_TEXT = (
     "event_id", "manifest_id", "allocation_id", "payment_session_id", "request_id", "pipeline", "currency"
 )  # fmt: skip
+# A JSON string, or one bracket: enough to find where each item of a page starts and ends without decoding it
+_TOKEN = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]', re.DOTALL)
+
+
+def page_past_the_decoder(content: bytes) -> tuple[dict[str, Any], list[SetAsideUsage]] | None:
+    """A usage page the JSON decoder refused, read without the items its own limits refuse: an integer
+    past its digit limit, or nesting past its depth (#158). One such item failed its page on every pass,
+    before any row was read. The answer is the page's object with those items left out, and the record
+    that sets each aside: ``unreadable_row``, under a digest of the item's text, which is its content.
+    Nothing of such an item is read, its id and its fees included.
+
+    None when that is not why the page was refused: it is not UTF-8 or not JSON, or what the decoder
+    cannot read is no object in the page's ``items``. Such a page is still no page."""
+    try:
+        text = content.decode()
+    except UnicodeDecodeError:
+        return None
+    marker = secrets.token_hex(16)  # a key no item has: it marks where an item was cut out
+    kept, cut = _without_items_past_the_decoder(text, marker)
+    try:
+        body = json.loads(kept) if cut else None
+    except (ValueError, RecursionError):
+        return None
+    items = body.get("items") if isinstance(body, dict) else None
+    if not isinstance(body, dict) or not isinstance(items, list):
+        return None
+    marked = [isinstance(item, dict) and marker in item for item in items]
+    if sum(marked) != len(cut):  # something cut was no item of this page
+        return None
+    body["items"] = [item for item, cut_here in zip(items, marked, strict=True) if not cut_here]
+    return body, [
+        set_aside_record("unreadable_row", item, row_id=None, fee_eth=None, fee_usd=None) for item in cut
+    ]
+
+
+def _without_items_past_the_decoder(text: str, marker: str) -> tuple[str, list[str]]:
+    """``text`` with each such item replaced by ``{marker: n}``, and the items' texts. An item is an
+    object directly in a list that is directly in the page's object, found by counting brackets outside
+    strings: no recursion, whatever the nesting."""
+    open_brackets: list[str] = []
+    parts: list[str] = []
+    cut: list[str] = []
+    copied, start = 0, -1
+    for token in _TOKEN.finditer(text):
+        bracket = token.group()
+        if bracket in "[{":
+            if bracket == "{" and open_brackets == ["{", "["]:
+                start = token.start()
+            open_brackets.append(bracket)
+        elif bracket in "]}" and open_brackets:
+            open_brackets.pop()
+            if start >= 0 and len(open_brackets) == 2:
+                if _past_the_decoder(text[start : token.end()]):
+                    parts += [text[copied:start], json.dumps({marker: len(cut)})]
+                    cut.append(text[start : token.end()])
+                    copied = token.end()
+                start = -1
+    return "".join([*parts, text[copied:]]), cut
+
+
+def _past_the_decoder(item: str) -> bool:
+    """Whether ``item`` is refused by the decoder's limits and not for being no JSON."""
+    try:
+        json.loads(item)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):  # the digit limit of an integer, the depth of the nesting
+        return True
+    return False
 
 
 def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:

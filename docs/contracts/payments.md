@@ -650,7 +650,7 @@ records it and moves the cursor:
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
 | `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
 | `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
-| `unreadable_row` | passes the checks above and is still refused by the usage row's own type. A backstop: no known row reaches it. Also the code for another `UsageSource` whose row fits no other reason |
+| `unreadable_row` | is one the JSON decoder's own limits refuse: an integer of more than 4300 digits, or a field nested deeper than the decoder reads (#158). Nothing of such a row is read, its id and its fees included: it is recorded under a digest of its text, with no fee, and the log line carries the start of that text. Before, it failed its whole page on every pass. Also a row that passes the checks above and is still refused by the usage row's own type (a backstop: no known row reaches it), and the code for another `UsageSource` whose row fits no other reason |
 | `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
 Each value is judged as it was received, and that value is the one stored: apart from a whole-number
@@ -677,7 +677,8 @@ process, `rows_set_aside` still counts it, and `cost_sync_set_aside` stays `null
 A set-aside row is in no job's cost and not in `unattributed`: if it was a charge, reconciliation is
 not `balanced` until an operator accounts for it. Nothing reads the table yet; `lpb costs verify`
 (ISS-35) will name these rows ([T29](../exec-plans/tech-debt-tracker.md)). A usage page whose item is
-not a JSON object still fails the page.
+not a JSON object still fails the page, and so does a page that is not JSON or whose own envelope
+(`items`, `next_cursor`) the engine cannot read: only an item is ever set aside.
 
 **`JobCost.fees` and `JobCost.billable`.** `fees` is what every attempt of the job cost the allocation.
 `billable` is only the `delivered` attempts' fees: what the enterprise bills its user for. A job that

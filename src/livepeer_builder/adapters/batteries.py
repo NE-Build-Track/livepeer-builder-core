@@ -18,7 +18,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import SecretStr
 
-from livepeer_builder.adapters.batteries_usage import read_usage_item
+from livepeer_builder.adapters.batteries_usage import page_past_the_decoder, read_usage_item
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
@@ -235,8 +235,16 @@ class BatteriesUsageSource:
             raise CursorMismatch(message)
         if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
-        items, next_cursor = list_page(json_object(response))  # which refuses a redirect (#113, C7)
-        read = [read_usage_item(item) for item in items]
+        unread: list[SetAsideUsage] = []
+        try:
+            body = json_object(response)  # which refuses a redirect (#113, C7)
+        except ProviderError:
+            salvaged = page_past_the_decoder(response.content) if response.is_success else None
+            if salvaged is None:
+                raise
+            body, unread = salvaged  # without the items the decoder's own limits refuse (#158)
+        items, next_cursor = list_page(body)
+        read = [*unread, *(read_usage_item(item) for item in items)]
         return UsagePage(
             items=tuple(row for row in read if isinstance(row, UsageRow)),
             set_aside=tuple(row for row in read if isinstance(row, SetAsideUsage)),

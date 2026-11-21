@@ -180,8 +180,14 @@ class BatteriesClient:
         try:
             # One deadline for the whole call: httpx times each phase separately, and the operation ledger's
             # stale window is counted in whole calls (D57).
-            async with asyncio.timeout(self._timeout_s):
-                response = await self._client.request(method, path, json=json, headers=headers, params=params)
+            async with (
+                asyncio.timeout(self._timeout_s),
+                self._client.stream(method, path, json=json, headers=headers, params=params) as response,
+            ):
+                try:
+                    await response.aread()
+                except httpx.DecodingError as exc:  # no TransportError: it answered, as in the usage feed
+                    raise ProviderError(response.status_code, f"the body did not decode: {exc}") from exc
         except TimeoutError as exc:
             raise ProviderUnavailable(f"Batteries call timed out after {self._timeout_s:g} s") from exc
         except httpx.TransportError as exc:

@@ -421,7 +421,10 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   500, and a page with no `items` read as an empty last page. An empty 2xx body was read as `{}`; it is
   now refused too, since Batteries answers every management route with a JSON object. A redirect (3xx)
   is no answer either, whatever its body: the engine follows none, and it is the same `ProviderError`
-  with an unknown outcome (as `cost_sync_error` it is `unavailable`). A malformed page
+  with an unknown outcome (as `cost_sync_error` it is `unavailable`). An answer whose content encoding
+  does not decode (it says `gzip` over a body that is not) is a `ProviderError` with the answer's own
+  status, from a management call as from the usage feed: a refusal when that status is a 4xx, an unknown
+  outcome otherwise. Before #158 a management call answered 500 for one. A malformed page
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search and cost sync alike: before, the engine asked for that page again without end,

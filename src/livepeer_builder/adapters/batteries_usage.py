@@ -21,8 +21,8 @@ _USAGE_STATUSES = frozenset({"applied", "quarantined", "ignored", "duplicate"})
 _NO_FEE = ("", "[error]")  # what Batteries serves, with null, for a fee it has not or could not convert
 # A fee as Batteries writes one (v0.0.3, ``internal/units/eth.go``, ``UnitsToDecimal``): digits, then a
 # point and digits when it has a fraction, after a minus sign when it is negative. No exponent, whatever
-# the size, and ASCII digits only (``[0-9]``, where ``\d`` takes every script's).
-_FEE = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
+# the size, and ASCII digits only: without ``re.ASCII``, ``\d`` takes every script's digits.
+_FEE = re.compile(r"-?\d+(?:\.\d+)?", re.ASCII)
 # A usage item's text fields: Batteries serves each as a string or null
 _USAGE_TEXT = (
     "event_id", "manifest_id", "allocation_id", "payment_session_id", "request_id", "pipeline", "currency"

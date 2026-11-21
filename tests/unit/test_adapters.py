@@ -290,7 +290,6 @@ async def test_no_secret_comes_from_settings(store: SqlStore, clock: FixedClock)
 def test_settings_from_environment() -> None:
     settings = EngineSettings.from_env(
         {
-            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
             "LPB_DEFAULT_CURRENCY": "ETH",
             "LPB_MAX_CONCURRENT_JOBS": "3",
             "LPB_BATTERIES_TOKEN": "token_x",
@@ -299,9 +298,7 @@ def test_settings_from_environment() -> None:
     assert settings.default_currency == "ETH" and settings.max_concurrent_jobs == 3
     assert settings.batteries_token is not None and "token_x" not in repr(settings)
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
-    ignored = EngineSettings.from_env(
-        {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_GRANT_ID": "grant_old"}
-    )
+    ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
     assert "grant_id" not in ignored.model_dump()
 
 
@@ -315,9 +312,8 @@ REMOVED_WITH_PER_APPLICATION = {
 def test_the_allocation_mode_and_shared_key_variables_name_no_setting() -> None:
     """``per_actor`` is the only allocation mode (D82, #162). An environment that still sets the removed
     variables starts the same engine as one that does not: no shared key is read, so none can pay."""
-    plain = {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery"}
-    leftover = EngineSettings.from_env(plain | REMOVED_WITH_PER_APPLICATION)
-    assert leftover == EngineSettings.from_env(plain)
+    leftover = EngineSettings.from_env(REMOVED_WITH_PER_APPLICATION)
+    assert leftover == EngineSettings.from_env({})
     assert "lpg_shared" not in repr(leftover.model_dump())
 
 
@@ -330,7 +326,7 @@ def test_a_removed_payment_setting_given_in_code_is_refused_and_not_echoed(name:
     an embedder may log: its text, ``errors()``, ``json()`` or its traceback (#162 review; every kind of
     refusal is in tests/unit/test_settings_refusals.py)."""
     value = "lpg_shared"
-    given = {"discovery_url": "http://127.0.0.1:9/discovery", name: value}
+    given = {name: value}
     with pytest.raises(ValidationError) as refused:
         EngineSettings.model_validate(given)  # not the value itself: the traceback quotes this line
     (error,) = refused.value.errors()
@@ -339,7 +335,7 @@ def test_a_removed_payment_setting_given_in_code_is_refused_and_not_echoed(name:
 
 
 def test_tuning_values_are_settings_with_todays_defaults() -> None:
-    defaults = EngineSettings(discovery_url="http://127.0.0.1:9/discovery")
+    defaults = EngineSettings()
     assert (defaults.stream_open_grace_s, defaults.batteries_timeout_s, defaults.retention_interval_s) == (
         5.0,
         30.0,
@@ -347,7 +343,6 @@ def test_tuning_values_are_settings_with_todays_defaults() -> None:
     )
     tuned = EngineSettings.from_env(
         {
-            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
             "LPB_STREAM_OPEN_GRACE_S": "0.5",
             "LPB_BATTERIES_TIMEOUT_S": "7",
             "LPB_RETENTION_INTERVAL_S": "60",
@@ -360,22 +355,15 @@ def test_tuning_values_are_settings_with_todays_defaults() -> None:
     )
     for field in ("stream_open_grace_s", "batteries_timeout_s", "retention_interval_s"):
         with pytest.raises(ValidationError):
-            EngineSettings.model_validate({field: 0, "discovery_url": "http://127.0.0.1:9/discovery"})
+            EngineSettings.model_validate({field: 0})
 
 
 def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
-    assert EngineSettings(discovery_url="http://127.0.0.1:9/discovery").max_paid_attempts == 2  # D55
-    assert (
-        EngineSettings.from_env(
-            {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_MAX_PAID_ATTEMPTS": "3"}
-        ).max_paid_attempts
-        == 3
-    )
+    assert EngineSettings().max_paid_attempts == 2  # D55
+    assert EngineSettings.from_env({"LPB_MAX_PAID_ATTEMPTS": "3"}).max_paid_attempts == 3
     for value in (0, 11):
         with pytest.raises(ValidationError):
-            EngineSettings.model_validate(
-                {"max_paid_attempts": value, "discovery_url": "http://127.0.0.1:9/discovery"}
-            )
+            EngineSettings.model_validate({"max_paid_attempts": value})
 
 
 def test_discovery_url_is_required_to_start_an_engine_not_to_read_settings() -> None:

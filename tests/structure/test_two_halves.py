@@ -47,6 +47,7 @@ GUIDE = "docs/design-docs/m4-guides/iss-31-payment-configurations.md"
 # Network capabilities, runner choice, the runner call, streaming, job records and the cost of each job.
 WORK = {
     "services/admission.py",
+    "services/cost_window.py",
     "services/costs.py",
     "services/discovery.py",
     "services/evidence.py",

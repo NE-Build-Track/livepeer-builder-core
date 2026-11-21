@@ -142,3 +142,31 @@ async def test_a_summary_s_window_is_answered_in_utc_however_it_was_written(
         "2026-01-01T00:00:00Z",
         "2026-02-01T00:00:00Z",
     )
+
+
+# #158: with no ``start`` a summary starts 30 days before its ``end``. An ``end`` in the first 30 days
+# UTC holds has no such start, and the subtraction overflowed: a 500.
+NO_START_FOR = ["0001-01-01T00:00:00Z", "0001-01-15T00:00:00Z", "0001-01-30T23:59:59.999999Z"]
+
+
+@pytest.mark.parametrize("end", NO_START_FOR, ids=["the first time", "day 15", "the last microsecond"])
+async def test_a_summary_whose_default_start_utc_cannot_hold_is_400_naming_end(
+    api: tuple[httpx.AsyncClient, dict[str, str]], end: str
+) -> None:
+    client, admin = api
+    answer = await client.get("/v1/costs/summary", params={"end": end}, headers=admin)
+    assert answer.status_code == 400, answer.text
+    assert answer.json() == {"error": "end: must be 0001-01-31T00:00:00 or later when no start is given"}
+
+
+async def test_the_first_end_with_a_default_start_and_an_earlier_end_with_its_own_start_still_answer(
+    api: tuple[httpx.AsyncClient, dict[str, str]],
+) -> None:
+    client, admin = api
+    first = await client.get("/v1/costs/summary", params={"end": "0001-01-31T00:00:00Z"}, headers=admin)
+    assert first.status_code == 200, first.text
+    assert (first.json()["start"], first.json()["end"]) == ("0001-01-01T00:00:00Z", "0001-01-31T00:00:00Z")
+    window = {"start": "0001-01-01T00:00:00Z", "end": "0001-01-15T00:00:00Z"}
+    stated = await client.get("/v1/costs/summary", params=window, headers=admin)
+    assert stated.status_code == 200, stated.text
+    assert (stated.json()["start"], stated.json()["end"]) == (window["start"], window["end"])

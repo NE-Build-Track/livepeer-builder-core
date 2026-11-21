@@ -196,6 +196,23 @@ async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) ->
             engine.discovery.runners(no_discover, APP)
 
 
+async def test_a_summary_with_no_start_that_ends_in_the_first_30_days_of_year_1_is_refused(
+    side: Side,
+) -> None:
+    """Its start, 30 days before ``end``, is a time no datetime holds: the subtraction raised
+    ``OverflowError`` (#158). An ``end`` with no offset is read the same way."""
+    async with side() as engine:
+        for end in (datetime(1, 1, 15, tzinfo=UTC), datetime(1, 1, 30, 23, 59, 59), datetime.min):
+            with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00 or later"):
+                await engine.costs.summary(ALICE, None, end)
+        first = await engine.costs.summary(ALICE, None, datetime(1, 1, 31, tzinfo=UTC))
+        stated = await engine.costs.summary(
+            ALICE, datetime.min.replace(tzinfo=UTC), datetime(1, 1, 15, tzinfo=UTC)
+        )
+    assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
+    assert stated.end == datetime(1, 1, 15, tzinfo=UTC)
+
+
 async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -> None:
     """Before any usage arrives a paid job is pending on both sides, and ``by_app`` names each app it
     ran with the same fees (D60). The window and the scope are the engine's."""

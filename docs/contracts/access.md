@@ -128,6 +128,10 @@ converted to UTC when the request is parsed. One that UTC cannot hold, because i
 year 1 or after year 9999 (`0001-01-01T00:00:00+14:00`), is a 422 at the same point; it was a 500. The
 same test fails when a route declares a plain `datetime` query parameter.
 
+A summary with no `start` starts 30 days before its `end`. An `end` before `0001-01-31T00:00:00Z` has no
+such start, so with no `start` it is a 400 that names `end` (`InvalidRequest` in process), after the
+permission check; it was a 500 (#158). The same `end` with its own `start` is read as before.
+
 | Route | Permission |
 | --- | --- |
 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |

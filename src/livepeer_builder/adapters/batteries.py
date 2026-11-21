@@ -357,9 +357,9 @@ def allowance_from_body(body: dict[str, Any]) -> Allowance:
     return Allowance(
         allocation_id=_required(body, "id"),
         status=_optional(body, "status"),
-        granted=_money(body.get(f"allocated_{suffix}"), currency),
-        spent=_money(body.get(f"spent_{suffix}"), currency),
-        available=_money(body.get(f"available_{suffix}"), currency),
+        granted=_money(body, f"allocated_{suffix}", currency),
+        spent=_money(body, f"spent_{suffix}", currency),
+        available=_money(body, f"available_{suffix}", currency),
     )
 
 
@@ -393,8 +393,13 @@ def _new_key(body: dict[str, Any]) -> NewAllocationKey:
     )
 
 
-def _money(value: Any, currency: Currency) -> Money | None:
-    amount = _decimal(value)
+def _money(body: dict[str, Any], key: str, currency: Currency) -> Money | None:
+    """An allocation's amount, or None where the answer states none or the engine reads none: unknown,
+    never zero. A stated amount that is no finite number (``NaN``, ``Infinity``) is an answer the engine
+    cannot read, as a grant's total is (``_amount``): ``Money`` holds no such amount."""
+    amount = _decimal(body.get(key))
+    if amount is not None and not amount.is_finite():
+        raise ProviderError(200, f"Batteries answered with no usable {key}")
     return None if amount is None else Money(amount=amount, currency=currency)
 
 

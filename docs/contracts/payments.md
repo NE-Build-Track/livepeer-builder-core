@@ -439,7 +439,11 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with
-  `allocation_id: "None"`), and an answer that lacked the key answered 500. The error does not quote the
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. An allocation's `allocated`,
+  `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
+  (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or
+  `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is; before #158
+  it answered 500 from `GET /v1/allowance` and from reconciliation. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.

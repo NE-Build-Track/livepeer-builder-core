@@ -13,7 +13,7 @@ import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient
-from livepeer_builder.contracts import Money
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.errors import ProviderError
 from livepeer_builder.http import create_app
 from livepeer_builder.services.ledger import definite_refusal
@@ -118,3 +118,63 @@ async def test_a_grant_whose_metadata_is_json_nested_past_the_decoder_is_a_grant
     assert [(item.id, item.metadata) for item in listed] == [("g1", {}), ("g2", {"lpb_operation": "k1"})]
     page = await client.grant_page(None)
     assert [item.metadata for item in page.grants] == [{}, {"lpb_operation": "k1"}]
+
+
+ALLOCATION = {
+    "id": "a1", "status": "active", "currency": "usd",
+    "allocated_usd": "5", "spent_usd": "1.25", "available_usd": "3.75",
+}  # fmt: skip
+NOT_FINITE = ["NaN", "sNaN", "Infinity", "-Infinity"]
+
+
+def allocation_desk(allocation: dict[str, object]) -> httpx.AsyncClient:
+    """A Batteries that issues one key and reads its allocation back as ``allocation``."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "k1", "allocation_id": "a1", "api_key": "lpg_k1_x"})
+        return httpx.Response(200, json=allocation)
+
+    return batteries(handle)
+
+
+@pytest.mark.parametrize("amount", NOT_FINITE)
+@pytest.mark.parametrize("field", ["allocated_usd", "spent_usd", "available_usd"])
+async def test_an_allocation_read_with_an_amount_that_is_no_finite_number_is_a_provider_error(
+    field: str, amount: str
+) -> None:
+    """``Money`` takes no ``NaN``: its pydantic ``ValidationError`` left the adapter, a 500. A grant's
+    total that is no finite number was a ``ProviderError`` already (#114, C21)."""
+    client = BatteriesClient(BASE, "t", client=allocation_desk(ALLOCATION | {field: amount}))
+    with pytest.raises(ProviderError, match=f"no usable {field}") as refused:
+        await client.read_allocation("a1")
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert amount not in str(refused.value)  # the body is not quoted
+
+
+async def test_an_allocation_read_still_gives_each_amount_and_none_for_one_batteries_did_not_state() -> None:
+    stated = await BatteriesClient(BASE, "t", client=allocation_desk(ALLOCATION)).read_allocation("a1")
+    assert (stated.granted, stated.spent, stated.available) == (
+        Money(amount=Decimal(5), currency="USD"),
+        Money(amount=Decimal("1.25"), currency="USD"),
+        Money(amount=Decimal("3.75"), currency="USD"),
+    )
+    unstated = ALLOCATION | {"allocated_usd": None, "spent_usd": "", "available_usd": "[error]"}
+    unknown = await BatteriesClient(BASE, "t", client=allocation_desk(unstated)).read_allocation("a1")
+    assert (unknown.granted, unknown.spent, unknown.available) == (None, None, None)  # unknown, not zero
+
+
+async def test_the_rest_service_answers_an_allowance_that_is_no_finite_number_with_502(
+    make_engine: EngineFactory, admin: ActorContext
+) -> None:
+    desk = BatteriesClient(BASE, "t", client=allocation_desk(ALLOCATION | {"spent_usd": "NaN"}))
+    engine = await make_engine(supply=EngineSupply(allocation_manager=desk))
+    request = AllotRequest(operation_ref="allot-alice", tenant_id="default", actor_id="alice", amount=USD)
+    await engine.payments.allot(admin, request)
+    key = await engine.keys.bootstrap_admin()
+    async with rest(engine, key.token) as http:
+        allowance = await http.get("/v1/allowance", params={"actor_id": "alice"})
+        reconciled = await http.get(
+            "/v1/costs/reconciliation", params={"tenant_id": "default", "actor_id": "alice"}
+        )
+    assert (allowance.status_code, reconciled.status_code) == (502, 502)

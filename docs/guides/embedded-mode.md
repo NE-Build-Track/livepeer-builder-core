@@ -209,7 +209,8 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
 
 Your process is the process that holds the engine. There is no separate `lpb serve`. You still:
 
-- Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it),
+- Set `LPB_DATABASE_URL`, `LPB_DISCOVERY_URL` (required: the engine does not start without it, and
+  `start()` refuses, naming the variable; settings without it are read),
   `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_SECRET_KEY` ([RELIABILITY.md](../RELIABILITY.md#configuration)), or pass the same values as an
   `EngineSettings`. `LPB_BATTERIES_GRANTS_TOKEN` only turns on the tenant desk
   (`engine.payments.tenants`); an application that never onboards or lists tenants leaves it unset.

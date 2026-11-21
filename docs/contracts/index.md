@@ -14,6 +14,24 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
 
+## Upgrading to the discovery address checked at start (#154)
+
+On 21 November 2026 the check that an engine has a discovery address moved from reading settings to
+starting the engine. Nothing changes for a deployment that sets `LPB_DISCOVERY_URL`, and an engine
+still does not start without it (D63).
+
+| What | Before | Now | What an embedder does |
+| --- | --- | --- | --- |
+| `EngineSettings.discovery_url` | `str`, required | `str \| None`, `None` when unset | Code that reads it handles `None`, or calls `settings.require_discovery_url()`, which returns the address or raises |
+| Settings without the address | `EngineSettings(...)` and `EngineSettings.from_env()` raise pydantic's `ValidationError` (`discovery_url`: field required) | They are read. `BuilderEngine.create` builds the engine. `start()` raises a `ValueError` that names `LPB_DISCOVERY_URL`, before anything is polled or written, and stops the engine | An application that relied on reading settings to fail without the address checks `settings.discovery_url` itself, or lets `start()` refuse |
+| `EngineSettings.from_env` | Takes `defaults=` | Takes the environment only | Build the settings, then `model_copy(update=...)` for a value the environment leaves unset |
+| `lpb serve` without the address | Exits with code 1, `ValidationError` | Exits with code 1, `ValueError` naming the variable, before the database is opened | Nothing |
+| `lpb purge`, `lpb bootstrap-admin` without the address | Run, with a placeholder address they never polled | Run, with no address | Nothing |
+
+A malformed address is refused when settings are read, as before, and an empty `LPB_DISCOVERY_URL` is
+unset, as before. An engine whose `decorate` stage replaces the discovery source still needs the
+address to start, as it did before ([discovery.md](discovery.md#what-the-engine-reads)).
+
 ## Upgrading to the M4 hardening (#112 to #115)
 
 - **An empty `operation_ref` is refused** (#113, C19). A job or session request that sends

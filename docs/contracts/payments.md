@@ -646,10 +646,10 @@ records it and moves the cursor:
 
 | Reason | The row |
 | --- | --- |
-| `missing_id` | has no `id` (absent, `null`, empty, or not a string or a whole number; a whole number is kept as its digits) |
+| `missing_id` | has no `id` (absent, `null`, empty, blank, or not a string or a whole number; a whole number is kept as its digits). Blank is white space alone (`"  "`), which was stored as the row's id before #158. An id with text in it is stored as received: nothing is trimmed |
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
 | `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
-| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a finite decimal number: `NaN`, `Infinity`, or no number at all (`"abc"`, `"0,5"`, `true`, an object). `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
+| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a decimal string as Batteries writes one: digits, then a point and digits when the fee has a fraction, after a minus sign when it is negative (`"0.000000039"`, `"7"`, `"-0.25"`). So not `NaN` or `Infinity`, not something that is no number at all (`"abc"`, `"0,5"`, `true`, an object), and since #158 not a form only Python's decimal reader takes: an exponent (`"1e999999"`, `"3.9e-8"`), a digit separator (`"1_000"`), digits of another script, padded text, a plus sign, `".5"` or `"5."`. A JSON number (`0.1`, `5`) is no fee either: a fee is text, and the engine turns no number into text. Before #158 each of these was read as a number and stored, and two fees like `"1e999999"` could not be added up. `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
 | `unreadable_row` | is one the JSON decoder's own limits refuse: an integer of more than 4300 digits, or a field nested deeper than the decoder reads (#158). Nothing of such a row is read, its id and its fees included: it is recorded under a digest of its text, with no fee, and the log line carries the start of that text. Before, it failed its whole page on every pass. Also a row that passes the checks above and is still refused by the usage row's own type (a backstop: no known row reaches it), and the code for another `UsageSource` whose row fits no other reason |
 | `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
@@ -659,7 +659,7 @@ Each value is judged as it was received, and that value is the one stored: apart
 The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
 where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
 `computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
-that is not a finite number, or longer than the column, is recorded as `null`. A row with no id the
+the engine does not read (`unreadable_fee`, above), or longer than the column, is recorded as `null`. A row with no id the
 table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
 differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
 A row is recorded, counted and logged once, however often its page is read again; the first record of

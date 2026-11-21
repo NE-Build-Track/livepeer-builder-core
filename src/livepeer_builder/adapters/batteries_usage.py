@@ -9,10 +9,8 @@ import json
 import re
 import secrets
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
-
-from pydantic import ValidationError
 
 from livepeer_builder.contracts import SetAsideReason, SetAsideUsage, UsageRow
 from livepeer_builder.contracts.costs import set_aside_record, unstorable_field, unstorable_reason
@@ -20,6 +18,10 @@ from livepeer_builder.errors import ProviderError
 
 _USAGE_STATUSES = frozenset({"applied", "quarantined", "ignored", "duplicate"})
 _NO_FEE = ("", "[error]")  # what Batteries serves, with null, for a fee it has not or could not convert
+# A fee as Batteries writes one (v0.0.3, ``internal/units/eth.go``, ``UnitsToDecimal``): digits, then a
+# point and digits when it has a fraction, after a minus sign when it is negative. No exponent, whatever
+# the size, and ASCII digits only (``[0-9]``, where ``\d`` takes every script's).
+_FEE = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
 # A usage item's text fields: Batteries serves each as a string or null
 _USAGE_TEXT = (
     "event_id", "manifest_id", "allocation_id", "payment_session_id", "request_id", "pipeline", "currency"
@@ -103,7 +105,9 @@ def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
     if reason is None:
         try:
             row = usage_row_from_item(item)
-        except ValidationError:  # the backstop: whatever the checks miss, the row never fails its page
+        except ValueError:
+            # The backstop: whatever the checks miss, the row never fails its page. The row type's
+            # ``ValidationError`` is a ``ValueError``, and so is a fee ``_fee`` does not read.
             reason = "unreadable_row"
         else:
             field = unstorable_field(row)
@@ -114,8 +118,8 @@ def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:
         reason,
         item,
         row_id=_row_id(item),
-        fee_eth=_decimal(item.get("computed_fee_eth")),
-        fee_usd=_decimal(item.get("computed_fee_usd")),
+        fee_eth=_kept_fee(item.get("computed_fee_eth")),
+        fee_usd=_kept_fee(item.get("computed_fee_usd")),
     )
 
 
@@ -137,19 +141,40 @@ def _unreadable(item: dict[str, Any]) -> SetAsideReason | None:
 
 
 def _unreadable_fee(value: Any) -> bool:
-    """Whether a fee is stated and is no finite decimal: ``NaN``, ``Infinity``, or no number at all. Such
-    a fee is never read as no fee, which an applied row would then cost."""
+    """Whether a fee is stated and is not one the engine reads (``_fee``). Such a fee is never read as no
+    fee, which an applied row would then cost."""
+    try:
+        _fee(value)
+    except ValueError:
+        return True
+    return False
+
+
+def _fee(value: Any) -> Decimal | None:
+    """The fee an item states, exactly: None when it states none (``null``, ``""``, ``"[error]"``), and a
+    ``ValueError`` for one that is not as Batteries writes a fee, which is never guessed at (#158).
+    Python's ``Decimal`` reads far more than that: an exponent (``"1e999999"`` was stored, and two such
+    fees could not be added), ``"1_000"``, digits of other scripts, padded text. And a JSON number is no
+    text: it went through ``str()``, as a text field's once did (#114, C13)."""
     if value is None or value in _NO_FEE:
-        return False
-    amount = _decimal(value)
-    return amount is None or not amount.is_finite()
+        return None
+    if not isinstance(value, str) or not _FEE.fullmatch(value):
+        raise ValueError("not a fee as Batteries writes one")
+    return Decimal(value)
+
+
+def _kept_fee(value: Any) -> Decimal | None:
+    """The fee for a set-aside row's record: the one the engine reads, else none."""
+    return None if _unreadable_fee(value) else _fee(value)
 
 
 def _row_id(item: dict[str, Any]) -> str | None:
-    """The row's id as text: a non-empty string, or a whole number as its digits."""
+    """The row's id as text: a string that is not blank (empty, or white space alone), as received, or a
+    whole number as its digits."""
     value = item.get("id")
-    usable = isinstance(value, str | int) and not isinstance(value, bool) and value != ""
-    return str(value) if usable else None
+    if isinstance(value, str):
+        return value if value.strip() else None
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _created_at(item: dict[str, Any]) -> datetime | None:
@@ -177,8 +202,8 @@ def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
         payment_session_id=_text(item.get("payment_session_id")),
         request_id=_text(item.get("request_id")),
         pipeline=_text(item.get("pipeline")),
-        computed_fee_eth=_decimal(item.get("computed_fee_eth")),
-        computed_fee_usd=_decimal(item.get("computed_fee_usd")),
+        computed_fee_eth=_fee(item.get("computed_fee_eth")),
+        computed_fee_usd=_fee(item.get("computed_fee_usd")),
         currency=_text(item.get("currency")),
         created_at=_created_at(item),
     )
@@ -187,12 +212,3 @@ def usage_row_from_item(item: dict[str, Any]) -> UsageRow:
 def _text(value: str | None) -> str | None:
     """A usage item's text field: Batteries serves ``""`` where it has none."""
     return value or None
-
-
-def _decimal(value: Any) -> Decimal | None:
-    if value is None or value in _NO_FEE:
-        return None
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None

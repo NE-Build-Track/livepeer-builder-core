@@ -548,3 +548,81 @@ async def test_a_usage_page_that_is_malformed_still_fails_whatever_its_items(nam
     with pytest.raises(ProviderError) as refused:
         await raw_batteries(STILL_NO_PAGE[name]).page(None)
     assert refused.value.status_code == 200
+
+
+# -- #158: a fee is the decimal string Batteries writes, and an id is not blank ------------------------
+
+NOT_A_FEE_AS_BATTERIES_WRITES_ONE: dict[str, Any] = {
+    "an exponent past any amount": "1e999999",
+    "a small exponent": "3.9e-8",
+    "a digit separator": "1_000",
+    "full-width digits": "\uff11\uff12",
+    "digits of another script": "\u0663",
+    "padding": " 0.5 ",
+    "a line break after it": "0.5\n",
+    "a plus sign": "+0.5",
+    "no digit before the point": ".5",
+    "no digit after the point": "5.",
+    "a JSON fraction": 0.1,
+    "a JSON whole number": 5,
+    "a JSON number past a float": 1e400,
+}
+
+
+@pytest.mark.parametrize("field", ["computed_fee_eth", "computed_fee_usd"])
+@pytest.mark.parametrize("name", NOT_A_FEE_AS_BATTERIES_WRITES_ONE)
+async def test_a_fee_that_is_not_a_plain_decimal_string_sets_the_row_aside_and_is_never_guessed_at(
+    make_engine: EngineFactory, store: SqlStore, name: str, field: str
+) -> None:
+    """Python's ``Decimal`` reads more than Batteries writes: ``"1e999999"`` was stored as given (two such
+    rows could not be added up), ``"1_000"`` and padded text were read as numbers, and a JSON number went
+    through ``str()``. Batteries serves a fee as text: digits, a point, and a minus sign when it is negative."""
+    bad = item("u-bad", **{field: NOT_A_FEE_AS_BATTERIES_WRITES_ONE[name]})
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([item("u1"), bad, item("u2")])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (2, 1)
+    assert await stored_ids(store) == ["u1", "u2"]
+    kept = (None, "0.25") if field == "computed_fee_eth" else ("0.5", None)  # the fee it could read
+    assert await set_aside(store) == [("u-bad", "unreadable_fee", *kept)]
+
+
+FEES_BATTERIES_WRITES = {
+    "a whole number": ("7", Decimal(7)),
+    "zero": ("0", Decimal(0)),
+    "one wei": ("0.000000000000000001", Decimal("0.000000000000000001")),
+    "eighteen decimal places": ("0.000000039028439697", Decimal("0.000000039028439697")),
+    "a large fee": ("123456789012345678901234567890.5", Decimal("123456789012345678901234567890.5")),
+    "a negative amount": ("-0.25", Decimal("-0.25")),
+}
+
+
+@pytest.mark.parametrize("name", FEES_BATTERIES_WRITES)
+async def test_every_fee_batteries_writes_is_still_read_exactly(name: str) -> None:
+    """``internal/units/eth.go`` (v0.0.3): digits, then a point and up to 18 more when the amount has a
+    fraction, and a minus sign for a negative one. No exponent, whatever the size."""
+    text, amount = FEES_BATTERIES_WRITES[name]
+    page = await batteries([item("u1", computed_fee_eth=text, computed_fee_usd=text)]).page(None)
+    [row] = page.items
+    assert (row.computed_fee_eth, row.computed_fee_usd, page.set_aside) == (amount, amount, ())
+
+
+BLANK_IDS = {"spaces": "  ", "a tab": "\t", "a line break": "\n", "a no-break space": "\u00a0"}
+
+
+@pytest.mark.parametrize("row_id", BLANK_IDS.values(), ids=BLANK_IDS)
+async def test_a_usage_row_whose_id_is_blank_has_no_id(
+    make_engine: EngineFactory, store: SqlStore, row_id: str
+) -> None:
+    """An id of spaces was stored as the row's id. It is no id, as ``""`` is none."""
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([item(row_id), item("u1")])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (1, 1)
+    assert await stored_ids(store) == ["u1"]
+    [(key, reason, fee_eth, fee_usd)] = await set_aside(store)
+    assert key.startswith("sha256:") and (reason, fee_eth, fee_usd) == ("missing_id", "0.5", "0.25")
+
+
+async def test_an_id_with_text_in_it_is_stored_as_received() -> None:
+    """Nothing is trimmed: the id stored is the id Batteries served."""
+    page = await batteries([item(" u 1 "), item("AZqk3vX7cQK1m0Jf9d2hLw")]).page(None)
+    assert ([row.id for row in page.items], page.set_aside) == ([" u 1 ", "AZqk3vX7cQK1m0Jf9d2hLw"], ())

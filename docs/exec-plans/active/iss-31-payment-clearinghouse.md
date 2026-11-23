@@ -11,8 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P5 are merged into `releases/m4`. P6 is built and in review. P7 and P8 follow in
-  order.
+- **Progress:** P1 to P5 are merged into `releases/m4`. P6 and P7 are built and in review. P8 follows.
 
 ## Goal
 
@@ -58,8 +57,9 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186).
 - [ ] **P6 (#167).** A public and a private listener. Built and in review:
   [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
-- [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`. Built and in
-  review: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
+- [ ] **P7 (#168).** Remote adapters for the payment ports that reach the clearinghouse, the payment keys
+  an enterprise's engine is handed, and `lpb payments check`. Built and in review:
+  [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
 
 Each pull request ticks its own line here in the same change.
@@ -146,3 +146,19 @@ Each pull request ticks its own line here in the same change.
   engine (`deliver_allocation_keys=False`), on one listener or two: there is no role setting yet, and
   the engine behind a listener runs jobs. Handing keys to the caller is the `clearinghouse` role's
   (#169). Source: the amended ticket; the `False` on both listeners is for Mike's review.
+- **23 November 2026, P7, carried forward.** The direct-signer design is merged into P7's branch, and
+  what the two entries of 19 November built on the withdrawn design is taken out: signing through the
+  clearinghouse, the reading of `signer_not_reached`, the `lpp_` key and its resolver. An enterprise's
+  engine now signs at `LPB_SIGNER_URL`, the clearinghouse's published signer, which is set beside the
+  clearinghouse settings and no longer refused there; the remote `AllocationManager` returns the key an
+  allotment or a rotation hands over, and the engine's ordinary commands store it in its own secret
+  store; `CredentialResolver` is the engine's own. Built where the amended decisions are silent, for
+  Mike's review: an answer without a key is a refusal at the engine and saves no actor; a lost rotation
+  is replaced by a rotation under a new reference, and a lost allotment, of which the engine has no
+  record, by a revoke at the clearinghouse and a new allotment; an allotment's reference at the
+  clearinghouse folds in the admin's `operation_ref`, so that second allotment is a new command there;
+  `revoke_key` reads the allocation and replaces the key only when the allocation still holds it; a
+  rotation the engine resumes after it stored the key finishes from its own copy; the clearinghouse's
+  address stays a scheme, a host and a port; and `lpb payments check` probes the signer at
+  `LPB_SIGNER_URL`, beside the clearinghouse. Source: Mike's amendments of 19 and 23 November 2026 (D85
+  point 1, D87 points 1 and 3) and #168 as amended.

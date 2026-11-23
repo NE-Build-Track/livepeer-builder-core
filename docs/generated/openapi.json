@@ -186,6 +186,15 @@
             "title": "Created At",
             "type": "string"
           },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
           "currency": {
             "enum": [
               "USD",

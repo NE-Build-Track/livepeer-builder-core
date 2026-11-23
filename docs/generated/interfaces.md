@@ -85,7 +85,7 @@ classDiagram
     }
     class AllocationsByActor {
         <<interface>>
-        +for_actor(tenant_id, actor_id) AllocationManager
+        +for_actor(tenant_id, actor_id, operation_ref) AllocationManager
     }
     class UsageSource {
         <<interface>>
@@ -170,7 +170,6 @@ classDiagram
     class BatteriesUsageSource
     class ClearinghouseAllocations
     class ClearinghouseAllowances
-    class ClearinghouseCredentials
     class ClearinghouseUsage
     class DefaultPolicy
     class EncryptedDbSecretStore
@@ -201,7 +200,6 @@ classDiagram
     StreamingRunnerTransport <|.. SdkRunnerTransport
     RunnerStream <|.. SdkRunnerStream
     CredentialResolver <|.. PaymentsService
-    CredentialResolver <|.. ClearinghouseCredentials
     AllocationManager <|.. BatteriesClient
     AllocationManager <|.. ClearinghouseAllocations
     AllocationsByActor <|.. ClearinghouseAllocations
@@ -242,7 +240,6 @@ classDiagram
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
-| `CredentialResolver` | `ClearinghouseCredentials` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `AllocationManager` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationsByActor` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |

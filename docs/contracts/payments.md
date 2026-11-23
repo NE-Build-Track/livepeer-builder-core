@@ -493,8 +493,15 @@ key and pays with it is #168.
   allotted, funded or minted twice, and the answer carries that key with `resumed: true` and
   `replayed: false`, without `Idempotent-Replayed`. An allotment whose first run had already saved the
   actor still sends that call, only to be handed the key again.
-- **Two allotments of one actor under two references** get one allocation and one key from Batteries
-  ([an allotment that another command overtook](#allotment)). Both answers carry that key.
+- **Two delivering allotments of one actor under two references,** at the provider at the same moment,
+  get one allocation and one key from Batteries. Each answer carries that key only while the actor
+  still holds it. The allotment that did not write the row answers from the actor as stored, by the
+  table under [an allotment that another command overtook](#allotment): an actor rotated or allotted
+  again since is 409 `already_allotted`, and one revoked since is answered as the revoked actor, or 404,
+  with no key. For either allotment, the answer of an actor that has moved past the key carries none
+  (next). An allotment under a new reference that begins after the actor is allotted is 409
+  `already_allotted`, and when the allotment that wrote the row stored the key (`allot`), the other
+  one's answer has `replayed: true` and no key.
 - **Never the key of an allocation the actor has moved past.** Just before it answers, a delivering
   command reads the actor again (`delivered()`). The answer carries the key only while the actor is not
   `revoked` and still holds the allocation, the key and the receipt the answer names. An actor that was

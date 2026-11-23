@@ -84,7 +84,12 @@ like a source checkout. Version table: `lpb_alembic_version`.
   downgrade drops the column and keeps every row
   (`tests/store/test_credential_custody_migration.py`). No revision creates `lpb_payment_keys`: the
   migration that did was never released, and it is deleted, not undone by a later revision (Mike, 23
-  November 2026). A database that ran it is recreated.
+  November 2026). A database that ran it is recreated, and the revision check does not find it. The
+  withdrawn migration was numbered 0015 too, so a database that stopped there records the head
+  revision: the engine starts without a refusal, `lpb revision` reports it current and `lpb migrate`
+  changes nothing, yet it has `lpb_payment_keys` and no `lpb_actors.credential_custody`. Look at the
+  tables, not the revision: a database that has `lpb_payment_keys`, or lacks
+  `lpb_actors.credential_custody`, is recreated.
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

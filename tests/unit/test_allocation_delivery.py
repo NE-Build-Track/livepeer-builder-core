@@ -482,6 +482,43 @@ async def test_a_resumed_delivery_sends_the_provider_the_request_its_first_run_s
     assert manager.calls.count("create_key_for_grant") == 2  # the repeat is answered from the record
 
 
+@pytest.mark.parametrize("noted", [True, False], ids=["label-noted", "recorded-before-the-label-was-noted"])
+async def test_a_delivery_resumed_after_its_row_was_saved_and_the_person_renamed_sends_the_first_name(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    noted: bool,
+) -> None:
+    """The first run saved the actor and its answer was lost; the person then signs in under another
+    name. The resume asks the provider to replay the key, and names the allocation as the first run did:
+    by the label its record noted, or, for a record written before the label was noted, by the label
+    the actor was saved with."""
+    engine = await make_engine()
+
+    async def sign_in(name: str) -> None:
+        seen = SeenActor(
+            tenant_id="default", actor_id="alice", name=name, first_seen_at=clock.now(), last_seen_at=clock.now()
+        )  # fmt: skip
+        await store.save_sighting(seen)
+
+    await sign_in("Alice Example")
+    given = provider_answers(manager, monkeypatch, "create_key_for_grant")
+    lose_once(monkeypatch, store, "allot_actor", apply=True)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot_for_delivery(admin, allot_request())
+    if not noted:
+        await note_as_an_earlier_release(store, REFS["allot"], "sent_label")
+    await sign_in("Alice E. Example")
+    clock.advance(STALE_S)
+    resumed = await allot_delivered(engine, admin, allot_request())
+    assert resumed.resumed and resumed.label == "Alice Example"
+    assert key_of(resumed) == given[0] and given == [given[0]] * 2  # replayed, so the same name was sent
+    assert len(manager.keys) == 1 and len(manager.allocations) == 1
+
+
 async def test_two_allotments_of_one_actor_both_carry_the_key_the_provider_gave_both(
     make_engine: EngineFactory,
     admin: ActorContext,

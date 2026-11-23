@@ -308,6 +308,17 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit top-up.
+- **A resume names the allocation as the first run did.** An allotment is saved with a label: the
+  request's `label`, else the name the person last signed in with (D48), else none. Batteries is sent
+  that label as the allocation's name, or `{tenant_id}/{actor_id}` when there is none. The label is
+  noted in the command's record as the record begins, before the provider call (`sent_label` in its
+  context), and every run of the command sends the noted one and saves the actor with it, whatever the
+  person's sign-in name is by then. It matters because Batteries replays a saved success only to the
+  request it was first given: another name under the first run's idempotency key is its 409, every
+  time. So a person who signs in for the first time, or under a new name, between a run that funded
+  the allocation and the resume that saves the actor does not stop the resume. A record written before
+  the label was noted has none, and its resume reads the name again: it finishes when the name is
+  what the first run sent, and is refused by Batteries (409) when it is not, keeping its reference.
 - **One command never undoes another on the same actor (#115, C4).** `allot`, `top_up`, `set_status`,
   `revoke` and `rotate_payment_key` read the actor, call the provider, then write. Each writes only its own
   columns, with its condition in the SQL statement:

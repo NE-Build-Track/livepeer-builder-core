@@ -73,6 +73,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient, ClearinghouseAllocations),
     "AllocationsByActor": (ClearinghouseAllocations,),
+    "OneKeyPerAllocation": (ClearinghouseAllocations,),
     "UsageSource": (BatteriesUsageSource, ClearinghouseUsage),
     "TenantUsageSource": (BatteriesUsageSource,),
     "EscrowSource": (BatteriesClient,),

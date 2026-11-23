@@ -28,9 +28,6 @@ _CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_ten
 # own engine reaches Batteries (D85 point 1). ``signer_url`` is not among them: such an engine signs at
 # the clearinghouse's published signer itself, and is told its address as any paying engine is.
 _BATTERIES = ("batteries_url", "batteries_token", "batteries_grants_token")
-# The two roles that run one half of the engine (D84, #169). The third, "both", is the default.
-_WORK_ROLE: Role = "work"
-_CLEARINGHOUSE_ROLE: Role = "clearinghouse"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
 # Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
@@ -78,11 +75,9 @@ class EngineSettings(Contract):
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
-    # Which half of the engine this deployment runs (D84, #169). "both": self-hosted payments, the work
-    # half and the clearinghouse half together. "work": an enterprise that uses a payment clearinghouse.
-    # "clearinghouse": a payment clearinghouse, which never runs jobs. The role chooses the routes that
-    # are mounted (http/listeners.py), the payment adapters (runtime/payment_defaults.py) and what the
-    # engine starts (runtime/engine.py); the settings below must agree with it.
+    # Which half of the engine this deployment runs (D84, #169): "both" for self-hosted payments, "work"
+    # for an enterprise that uses a payment clearinghouse, "clearinghouse" for one, which never runs jobs.
+    # It chooses the routes, the payment adapters and what starts; the settings below must agree with it.
     role: Role = "both"
 
     # persistence
@@ -131,7 +126,8 @@ class EngineSettings(Contract):
     clearinghouse_url: str | None = None
     clearinghouse_token: SecretStr | None = None  # the tenant admin key; sent as a bearer, never logged
     clearinghouse_tenant_id: GrantId | None = None
-    clearinghouse_timeout_s: float = Field(default=30.0, gt=0)  # each request to the clearinghouse
+    # each request to the clearinghouse. Six of them fit in the default stale window, as the rule below asks
+    clearinghouse_timeout_s: float = Field(default=20.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
     operation_stale_s: float = Field(default=120.0, gt=0)
 
@@ -298,8 +294,9 @@ class EngineSettings(Contract):
     @model_validator(mode="after")
     def _a_clearinghouse_is_whole_and_alone(self) -> "EngineSettings":
         """A half setting, or a clearinghouse beside a Batteries setting, is refused before the engine
-        starts (#168). Only names are said: three of these settings are secrets. ``LPB_SIGNER_URL`` is
-        no part of this rule: it is the clearinghouse's signer, set or unset as on any engine."""
+        starts (#168), and so is a stale window shorter than six timeouts of a clearinghouse call. Only
+        names are said: three of these settings are secrets. ``LPB_SIGNER_URL`` is no part of this rule:
+        it is the clearinghouse's signer, set or unset as on any engine."""
         named = [name for name in _CLEARINGHOUSE if getattr(self, name) is not None]
         if not named:
             return self
@@ -315,17 +312,27 @@ class EngineSettings(Contract):
                 "own engine reaches Batteries, and an engine that uses a payment clearinghouse holds no "
                 "address or credential of it"
             )
-        if self.operation_stale_s < 4 * self.clearinghouse_timeout_s:  # as for Batteries, just above
-            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
+        # As for Batteries, just above: the ledger cancels a run at half the stale window, and the longest
+        # command must fit in that half. Through the remote adapters that is three calls, each under one
+        # deadline of the timeout: a rotation that another rotation overtook in the engine reads the
+        # allocation, sends the rotation, and reads which key the allocation takes (OneKeyPerAllocation).
+        # Every other command makes one or two, and none writes after its second call: a read that is cut
+        # short leaves nothing in flight, and the resume asks again. 3 calls in the half, so 6 timeouts
+        # in the whole window, where Batteries' two calls make four.
+        if self.operation_stale_s < 6 * self.clearinghouse_timeout_s:
+            raise ValueError(
+                "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S: a command "
+                "is cancelled at half the stale window, and the longest one makes three calls to the "
+                "clearinghouse"
+            )
         return self
 
     @model_validator(mode="after")
     def _the_settings_agree_with_the_role(self) -> "EngineSettings":
-        """The role is the one switch (D84, #169). ``work`` uses a payment clearinghouse and so names
-        one; ``both`` and ``clearinghouse`` reach Batteries themselves and name none; and
-        ``clearinghouse`` has the private listener, where alone its admin's routes are served. Only
-        names are said. The half setting and the mix with a Batteries setting are refused just above.
-        ``LPB_SIGNER_URL`` is no part of this rule either: every role may name a signer."""
+        """The role is the one switch (D84, #169). ``work`` names a payment clearinghouse; ``both`` and
+        ``clearinghouse`` reach Batteries themselves and name none; and ``clearinghouse`` has the private
+        listener, where alone its admin's routes are served. Only names are said. ``LPB_SIGNER_URL`` is
+        no part of this rule either: every role may name a signer."""
         named = [_env(name) for name in _CLEARINGHOUSE if getattr(self, name) is not None]
         if self.uses_clearinghouse:
             if not named:
@@ -360,15 +367,14 @@ class EngineSettings(Contract):
     @property
     def uses_clearinghouse(self) -> bool:
         """Whether allotment, the allowance and usage reach a payment clearinghouse, and not Batteries:
-        the ``work`` role, which alone holds the clearinghouse settings. The engine signs at
-        ``signer_url`` either way."""
-        return self.role == _WORK_ROLE
+        the ``work`` role alone. The engine signs at ``signer_url`` either way."""
+        return self.role == "work"
 
     @property
     def runs_jobs(self) -> bool:
         """Whether the engine runs jobs: every role but ``clearinghouse``, a payment clearinghouse's,
         which does payments only (D82)."""
-        return self.role != _CLEARINGHOUSE_ROLE
+        return self.role != "clearinghouse"
 
     @property
     def clearinghouse_runner_list_token(self) -> str | None:

@@ -53,7 +53,7 @@ def test_the_three_settings_select_a_clearinghouse() -> None:
     assert settings.clearinghouse_tenant_id == "grant_7"
     assert settings.clearinghouse_token is not None
     assert settings.clearinghouse_token.get_secret_value() == TOKEN
-    assert settings.clearinghouse_timeout_s == 30.0
+    assert settings.clearinghouse_timeout_s == 20.0
 
 
 @pytest.mark.parametrize("missing", sorted(THREE))
@@ -210,11 +210,38 @@ def test_a_command_that_serves_nothing_still_reads_the_clearinghouse_runner_list
 # -- the operation ledger's stale window ----------------------------------------------------------------
 
 
-def test_a_resume_never_starts_while_a_clearinghouse_call_may_be_in_flight() -> None:
-    """As for Batteries (D57): a command is resumed only after a window four times one call's deadline."""
-    message = refused(WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "40"})
-    assert "LPB_OPERATION_STALE_S" in message and "LPB_CLEARINGHOUSE_TIMEOUT_S" in message
-    slow = EngineSettings.from_env(
-        WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "40", "LPB_OPERATION_STALE_S": "160"}
+def test_the_longest_command_at_a_clearinghouse_fits_in_half_the_stale_window() -> None:
+    """The ledger cancels a run at half ``LPB_OPERATION_STALE_S`` (D57). The longest command through the
+    remote adapters makes three calls, each within ``LPB_CLEARINGHOUSE_TIMEOUT_S``: a rotation that
+    another one overtook reads the allocation, rotates, and reads which key the allocation takes
+    (``tests/unit/test_clearinghouse_handed_keys.py`` counts them). Three calls in half the window is six
+    timeouts in the whole of it. Batteries' rule is four, for two calls."""
+    message = refused(WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "40"})  # 6 x 40 = 240 > 120
+    assert "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S" in message
+    assert "half the stale window" in message and "three calls" in message
+    assert "40" not in message and "120" not in message  # the rule's arithmetic, never the values given
+
+    # at the boundary: three whole calls fit in exactly half the window, and not in less
+    exact = EngineSettings.from_env(
+        WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "40", "LPB_OPERATION_STALE_S": "240"}
     )
-    assert slow.clearinghouse_timeout_s == 40.0
+    assert exact.operation_stale_s / 2 == 3 * exact.clearinghouse_timeout_s
+    # each of these is refused by this rule, and not by the role's: the engine is in its work role
+    rule = "LPB_OPERATION_STALE_S must be at least six times"
+    assert rule in refused(WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "40", "LPB_OPERATION_STALE_S": "239.9"})
+    assert rule in refused(
+        WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "40", "LPB_OPERATION_STALE_S": "160"}
+    )  # four was not enough
+    assert rule in refused(WORK | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "20.1"})
+
+
+def test_the_default_timeout_and_the_default_stale_window_fit_the_rule_exactly() -> None:
+    """An engine that sets the three settings and nothing else starts: 6 x 20 s is the 120 s window."""
+    settings = EngineSettings.from_env(WORK)
+    assert (settings.clearinghouse_timeout_s, settings.operation_stale_s) == (20.0, 120.0)
+    assert settings.operation_stale_s == 6 * settings.clearinghouse_timeout_s
+
+
+def test_the_stale_window_rule_of_a_clearinghouse_binds_no_engine_without_one() -> None:
+    settings = EngineSettings.from_env(DISCOVERY | {"LPB_CLEARINGHOUSE_TIMEOUT_S": "100"})
+    assert settings.uses_clearinghouse is False and settings.operation_stale_s == 120.0

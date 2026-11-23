@@ -16,6 +16,7 @@ from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
 from livepeer_gateway.remote_signer import get_signer_info
 from pydantic import SecretStr
 
+from livepeer_builder.adapters.clean_errors import bare, raised
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_address import runner_address
 from livepeer_builder.adapters.runner_call import (
@@ -57,6 +58,11 @@ class HttpDiscoverySource:
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
     client; it fails the refresh. A 2xx whose content encoding does not decode is a ``ValueError``, as
     a body that is not JSON is. There is no size cap (D63).
+
+    A read that carried ``bearer`` fails with an error that leads to no key (#168 review): the kind and
+    the words the reader always raised, as a new error that holds no request, chains none that does,
+    and was never in a frame that held one (``_read``). Without ``bearer`` nothing is held back, and the
+    HTTP client's own error is raised as before.
     """
 
     def __init__(
@@ -87,16 +93,25 @@ class HttpDiscoverySource:
         return self._document
 
     async def fetch(self) -> tuple[Runner, ...]:
-        try:
-            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
-            async with asyncio.timeout(self._timeout_s):
-                body = await self._body(self._client)
-        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
-            message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
-            raise TimeoutError(message) from error
+        body = raised(await self._read())
         runners = read_inventory(body)
         self._document = body  # kept only once it read: the document the snapshot is built from
         return runners
+
+    async def _read(self) -> bytes | Exception:
+        """The document as it was served, or the error the read came to. The error is returned, for
+        ``raised``, and never raised from here: this frame's callee holds the request, whose headers
+        carry ``bearer``, and the HTTP client's own errors hold it too."""
+        try:
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
+            async with asyncio.timeout(self._timeout_s):
+                return await self._body(self._client)
+        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
+            slow = TimeoutError(f"no inventory from {self._discovery_url} within {self._timeout_s:g}s")
+            slow.__cause__ = error if self._bearer is None else bare(error)
+            return slow
+        except Exception as error:
+            return error if self._bearer is None else _without_the_request(error)
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
         headers = {"Accept": _JSON}
@@ -111,6 +126,21 @@ class HttpDiscoverySource:
             except httpx.DecodingError as error:  # httpx's is no ValueError; an unreadable 2xx is one (C7)
                 message = f"the inventory from {self._discovery_url} did not decode: {error}"
                 raise ValueError(message) from error
+
+
+def _without_the_request(error: Exception) -> Exception:
+    """The error of a read that carried a credential, as a new error of the same kind and words that
+    holds no request. An error status keeps its status and the address it was asked at, on an answer and
+    a request made here, with no header of the ones that were sent and no body. What the error chained
+    is kept by its kind alone."""
+    if isinstance(error, httpx.HTTPStatusError):
+        asked = httpx.Request(error.request.method, error.request.url)
+        answered = httpx.Response(error.response.status_code, request=asked)
+        return httpx.HTTPStatusError(str(error), request=asked, response=answered)
+    fresh = bare(error)
+    if error.__cause__ is not None:
+        fresh.__cause__ = bare(error.__cause__)
+    return fresh
 
 
 async def signer_readiness(signer_url: str | None) -> SignerReadiness:

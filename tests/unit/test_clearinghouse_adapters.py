@@ -8,6 +8,7 @@
 - What only a clearinghouse admin does is refused in the engine, and nothing is sent.
 - A tenant admin key reaches its own tenant and no other.
 - Ending one key: ``revoke_key``, at a clearinghouse that has no route for it.
+- A command the clearinghouse applied to another allocation than the one it named is never a success.
 
 The key an allotment or a rotation hands over, and what the engine does without one, is
 ``test_clearinghouse_handed_keys.py``.
@@ -28,7 +29,7 @@ from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations, Cl
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest, UsageRow
 from livepeer_builder.errors import AccessDenied, InvalidRequest, ProviderError, ProviderOutcomeUnknown
-from livepeer_builder.protocols import ActorRepo, AllocationManager, AllocationsByActor
+from livepeer_builder.protocols import ActorRepo, AllocationManager, AllocationsByActor, OneKeyPerAllocation
 from livepeer_builder.services.grants import idempotency_key
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.testing import FixedClock, MemorySecretStore
@@ -251,6 +252,160 @@ async def test_an_allocation_no_actor_holds_now_cannot_be_read(ports: Ports) -> 
     assert unknown.value.status_code == 404 and len(ports.requests) == sent
 
 
+# -- the allocation the clearinghouse acted on --------------------------------------------------------------
+#
+# The routes name an actor and take no allocation id, so a command is applied to whichever allocation the
+# actor holds when it arrives. The adapter's read before the command proves what was held then, and no
+# more: a revoke and a new allotment at the clearinghouse can land in between. Each route answers the
+# allocation it acted on, and the adapter reads it.
+
+
+def reallotted_meanwhile(ports: Ports, monkeypatch: pytest.MonkeyPatch, ending: str) -> list[ActorAllocation]:
+    """Before the adapter's next command whose path ends so reaches the clearinghouse, the actor is
+    revoked there and allotted again, by another holder of the tenant admin key: the command arrives
+    after the adapter's own read saw the first allocation. The new allocation is appended to the list."""
+    wire = ports.manager._wire  # type: ignore[attr-defined]
+    original = wire.write
+    there: list[ActorAllocation] = []
+
+    async def write(path: str, body: Any = None) -> Any:
+        if path.endswith(ending):
+            monkeypatch.setattr(wire, "write", original)
+            await house(ports).payments.revoke(OPERATOR, ports.tenant_id, "alice")
+            again = allot_request(ports, ref="by-another-holder", amount="9")
+            there.append(await house(ports).payments.allot_for_delivery(OPERATOR, again))
+        return await original(path, body)
+
+    monkeypatch.setattr(wire, "write", write)
+    return there
+
+
+def acted_elsewhere(error: ProviderError, named: str, acted_on: str) -> None:
+    """The error of a command the clearinghouse applied to another allocation: no refusal, so its
+    reference stays held, and plain about which allocation was named, which was acted on, and that the
+    engine recorded nothing."""
+    assert not definite_refusal(error) and error.status_code == 200
+    assert (
+        f"allocation {acted_on!r}" in error.message
+        and f"{named!r}, which this command named" in error.message
+    )
+    assert "Nothing of it is recorded here" in error.message
+
+
+async def test_a_top_up_the_clearinghouse_added_to_another_allocation_is_no_success_and_records_nothing(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = await ports.engine.payments.allot(ports.admin, allot_request(ports, amount="0"))
+    assert mine.status == "exhausted"  # a top-up that succeeded would make it active
+    there = reallotted_meanwhile(ports, monkeypatch, "/top-up")
+    top_up = TopUpRequest(amount=usd(3), operation_ref="t-1")
+
+    with pytest.raises(ProviderError) as moved:
+        await ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", top_up)
+
+    [theirs] = there
+    acted_elsewhere(moved.value, mine.allocation_id, theirs.allocation_id)
+    assert "revoking that allocation at the clearinghouse returns" in moved.value.message
+    # what happened at the provider: the money is on the other allocation
+    assert ports.provider.allocations[theirs.allocation_id].granted == Decimal(12)
+    assert ports.provider.allocations[mine.allocation_id].status == "revoked"
+    # and here: the actor's record is as it was, and the command's reference stays held
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == mine
+    held = await ports.engine.store.get_operation(OPERATOR.tenant_id, OPERATOR.actor_id, "t-1")
+    assert held is not None and held.state == "started"
+    # its repeat is refused before anything is sent, and adds nothing more anywhere
+    later(ports)
+    sent = len(ports.sent())
+    with pytest.raises(ProviderError) as again:
+        await ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", top_up)
+    assert again.value.status_code == 404 and len(ports.sent()) == sent
+    assert ports.provider.allocations[theirs.allocation_id].granted == Decimal(12)
+    held = await ports.engine.store.get_operation(OPERATOR.tenant_id, OPERATOR.actor_id, "t-1")
+    assert held is not None and held.state == "started"
+
+
+async def test_a_status_the_clearinghouse_set_on_another_allocation_is_no_success_and_records_nothing(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    there = reallotted_meanwhile(ports, monkeypatch, "/status")
+
+    with pytest.raises(ProviderError) as moved:
+        await ports.engine.payments.set_status(ports.admin, ports.tenant_id, "alice", "paused")
+
+    [theirs] = there
+    acted_elsewhere(moved.value, mine.allocation_id, theirs.allocation_id)
+    assert "paused" in moved.value.message and "Set that allocation's status again" in moved.value.message
+    assert ports.provider.allocations[theirs.allocation_id].status == "paused"  # what the clearinghouse did
+    stored = await ports.engine.store.get_actor(ports.tenant_id, "alice")
+    assert stored == mine and stored.status == "active"  # the engine paused nothing of its own
+
+
+async def test_a_revoke_the_clearinghouse_applied_to_another_allocation_is_no_success_and_says_what_to_do(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    there = reallotted_meanwhile(ports, monkeypatch, "/revoke")
+
+    with pytest.raises(ProviderError) as moved:
+        await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+
+    [theirs] = there
+    acted_elsewhere(moved.value, mine.allocation_id, theirs.allocation_id)
+    assert "Repeat this revoke" in moved.value.message and "allots the actor again" in moved.value.message
+    # the clearinghouse revoked the allocation the other holder had just been allotted
+    assert ports.provider.allocations[theirs.allocation_id].status == "revoked"
+    assert ports.provider.unallocated(ports.tenant_id) == Decimal(100)
+    # the engine marked nothing revoked and forgot no key
+    stored = await ports.engine.store.get_actor(ports.tenant_id, "alice")
+    assert stored == mine and stored.status == "active"
+    assert ports.secrets is not None and len(ports.secrets.values) == 1
+
+    # what the message asks for: the repeat finds the named allocation ended, sends nothing, and records it
+    sent = len(ports.sent())
+    revoked = await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+    assert revoked.status == "revoked" and revoked.allocation_id == mine.allocation_id
+    assert len(ports.sent()) == sent and ports.secrets.values == {}
+
+
+async def test_a_rotation_the_clearinghouse_applied_to_another_allocation_is_no_success_and_keeps_no_key(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    key = (await ports.credentials.credential(ports.actor("alice"))).token
+    there = reallotted_meanwhile(ports, monkeypatch, "/rotate-payment-key")
+
+    with pytest.raises(ProviderError) as moved:
+        await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
+
+    [theirs] = there
+    acted_elsewhere(moved.value, mine.allocation_id, theirs.allocation_id)
+    assert "whoever holds that allocation rotates its key again" in moved.value.message
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == mine
+    assert ports.secrets is not None and list(ports.secrets.values.values()) == [
+        key
+    ]  # nothing new was stored
+    held = await ports.engine.store.get_operation(OPERATOR.tenant_id, OPERATOR.actor_id, "r-1")
+    assert held is not None and held.state == "started"
+
+
+async def test_a_read_of_an_allocation_the_actor_no_longer_holds_is_refused_by_its_answer(
+    ports: Ports,
+) -> None:
+    """A read applies nothing, so its answer for another allocation is a plain 404, never an amount."""
+    mine = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    await house(ports).payments.revoke(OPERATOR, ports.tenant_id, "alice")
+    await house(ports).payments.allot_for_delivery(OPERATOR, allot_request(ports, ref="again", amount="9"))
+    actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    for read in (
+        actor.read_allocation(mine.allocation_id),
+        ports.allowances.read_allowance(mine.allocation_id),
+    ):
+        with pytest.raises(ProviderError) as refused:
+            await read
+        assert refused.value.status_code == 404 and definite_refusal(refused.value)
+
+
 # -- what only a clearinghouse admin does -------------------------------------------------------------------
 
 
@@ -298,6 +453,7 @@ async def test_a_member_that_names_an_allocation_or_a_key_needs_its_actor(ports:
         manager.revoke_allocation("alloc_1"),
         manager.read_allocation("alloc_1"),
         manager.revoke_key("key_1"),
+        manager.holds_key("alloc_1", "key_1"),  # type: ignore[attr-defined]
     ]
     for call in needing:
         with pytest.raises(InvalidRequest, match="for_actor"):
@@ -309,8 +465,8 @@ async def test_a_member_that_names_an_allocation_or_a_key_needs_its_actor(ports:
 
 
 async def test_revoking_a_key_the_allocation_no_longer_holds_sends_nothing(ports: Ports) -> None:
-    """What every finished rotation asks about the key it replaced: the clearinghouse ended that key in
-    the rotation's own command. It is read, not assumed."""
+    """A key the allocation no longer holds has ended already: the clearinghouse ended it in the
+    rotation that replaced it. It is read, not assumed."""
     allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
     rotated = await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
     assert ports.provider.keys[allotted.api_key_id][2] is True  # ended by the clearinghouse's rotation
@@ -324,24 +480,42 @@ async def test_revoking_a_key_the_allocation_no_longer_holds_sends_nothing(ports
     assert ports.provider.keys[rotated.api_key_id][2] is False  # the live key is untouched
 
 
-async def test_revoking_the_key_the_allocation_holds_replaces_it_once_and_keeps_nothing(ports: Ports) -> None:
+async def test_revoking_the_key_the_allocation_holds_is_refused_and_nothing_is_sent_or_minted(
+    ports: Ports,
+) -> None:
     """No route revokes a key by its id, and a key is ended there only by the rotation that replaces it.
-    So the key is replaced, under a reference derived from it: a repeat replaces nothing more."""
+    The adapter mints nothing to end a key: it says so, and the key stays the one the allocation takes."""
     allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
     actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    sent = len(ports.sent())
 
-    await actor.revoke_key(allotted.api_key_id)
+    with pytest.raises(InvalidRequest) as refused:
+        await actor.revoke_key(allotted.api_key_id)
 
-    assert ports.provider.keys[allotted.api_key_id][2] is True
-    [replaced] = bodies(ports, ALLOCATION + "/rotate-payment-key")
-    assert replaced == {"operation_ref": folded("revoke-key", allotted.api_key_id)}
-    assert len(ports.provider.keys) == 2
-    # nothing of the replacement reached the engine: its record and its store are as they were
-    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == allotted
-    assert ports.secrets is not None and len(ports.secrets.values) == 1
+    assert "rotate the payment key of actor 'alice'" in str(refused.value)
+    assert len(ports.sent()) == sent and len(ports.provider.keys) == 1
+    assert ports.provider.keys[allotted.api_key_id][2] is False
 
-    await actor.revoke_key(allotted.api_key_id)  # a repeat: the key is not the one held now
-    assert len(bodies(ports, ALLOCATION + "/rotate-payment-key")) == 1 and len(ports.provider.keys) == 2
+
+async def test_the_manager_says_which_key_an_allocation_takes_now(ports: Ports) -> None:
+    """``OneKeyPerAllocation``: true of the key the actor's allocation holds at the clearinghouse, and of
+    no other key, no other allocation, and no revoked allocation."""
+    allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    assert isinstance(actor, OneKeyPerAllocation) and not isinstance(ports.provider, OneKeyPerAllocation)
+    with pytest.raises(InvalidRequest, match="for_actor"):
+        await cast(OneKeyPerAllocation, ports.manager).holds_key(allotted.allocation_id, allotted.api_key_id)
+    sent = len(ports.sent())
+
+    assert await actor.holds_key(allotted.allocation_id, allotted.api_key_id) is True
+    assert await actor.holds_key(allotted.allocation_id, "key_of_another_rotation") is False
+    assert await actor.holds_key("alloc_of_another_allotment", allotted.api_key_id) is False
+    rotated = await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
+    assert await actor.holds_key(allotted.allocation_id, allotted.api_key_id) is False
+    assert await actor.holds_key(allotted.allocation_id, rotated.api_key_id) is True
+    await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+    assert await actor.holds_key(allotted.allocation_id, rotated.api_key_id) is False
+    assert [path.rsplit("/", 1)[1] for path in ports.sent()[sent:]] == ["rotate-payment-key", "revoke"]
 
 
 async def test_no_key_of_a_revoked_allocation_is_replaced(ports: Ports) -> None:
@@ -434,7 +608,9 @@ async def test_a_clearinghouse_admin_key_is_refused_on_the_public_listener(ports
 
 
 def scripted(
-    answers: dict[str, httpx.Response], actors: ActorRepo | None = None
+    answers: dict[str, httpx.Response],
+    actors: ActorRepo | None = None,
+    secrets: MemorySecretStore | None = None,
 ) -> tuple[AllocationManager, list[httpx.Request]]:
     """The manager for alice over a clearinghouse that answers each path ending as the test says."""
     seen: list[httpx.Request] = []
@@ -448,7 +624,9 @@ def scripted(
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
     wire = ClearinghouseWire("http://clearinghouse.test", "lpk_made-up", "grant_1", client)
-    whole = ClearinghouseAllocations(wire, cast(ActorRepo, actors or NoActors()), MemorySecretStore())
+    whole = ClearinghouseAllocations(
+        wire, cast(ActorRepo, actors or NoActors()), secrets or MemorySecretStore()
+    )
     return whole.for_actor("grant_1", "alice"), seen
 
 
@@ -508,6 +686,37 @@ async def test_an_answer_that_says_it_is_a_repeat_is_never_a_key_even_when_it_ca
     assert KEY not in str(refused.value) and "never reached this engine" in str(refused.value)
 
 
+async def test_a_repeat_answered_without_the_key_the_engine_already_holds_is_its_own_copy() -> None:
+    """For a caller of the port alone: the clearinghouse finished this reference and hands nothing over
+    again, and the engine's record of the actor names the allocation and the key of that answer, with the
+    secret in its own store. The engine's own rotation never asks (``PaymentKeys.rotation_key``)."""
+    secrets = MemorySecretStore()
+    ref = await secrets.put("lpg/grant_1/alice", KEY)
+    mine = ActorAllocation.model_validate(
+        ALLOTTED | {"secret_ref": {"ref": ref.ref}, "credential_custody": "secret_store"}
+    )
+
+    class OneActor(NoActors):
+        async def get_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation | None:  # NOSONAR
+            return mine if (tenant_id, actor_id) == ("grant_1", "alice") else None
+
+    replayed = ALLOTTED | {"allocation_api_key": None, "replayed": True, "resumed": False}
+    manager, _ = scripted(
+        {"/allocation": httpx.Response(201, json=replayed)}, cast(ActorRepo, OneActor()), secrets
+    )
+    key = await manager.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "k")
+    assert (key.allocation_id, key.api_key_id, key.secret.get_secret_value()) == ("alloc_1", "key_1", KEY)
+
+    # another key than the one the engine holds is the key that never arrived
+    elsewhere, _ = scripted(
+        {"/allocation": httpx.Response(201, json=replayed | {"api_key_id": "key_2"})},
+        cast(ActorRepo, OneActor()),
+        secrets,
+    )
+    with pytest.raises(InvalidRequest, match="never reached this engine"):
+        await elsewhere.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "k")
+
+
 async def test_a_rotation_answered_for_another_allocation_is_refused_and_its_key_not_kept() -> None:
     """Revoked and allotted again at the clearinghouse between the adapter's read and its command: the
     key is another allocation's, and the engine's record of this one is never pointed at it."""
@@ -520,8 +729,34 @@ async def test_a_rotation_answered_for_another_allocation_is_refused_and_its_key
     )
     with pytest.raises(ProviderError) as refused:
         await manager.create_key("alloc_1", "n", "k")
-    assert refused.value.status_code == 404 and "another allocation" in refused.value.message
+    # no refusal: a rotation was applied there, to the other allocation, so the reference stays held
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert (
+        "allocation 'alloc_2'" in refused.value.message
+        and "'alloc_1', which this command named" in refused.value.message
+    )
     assert KEY not in str(refused.value) and len(seen) == 2
+
+
+@pytest.mark.parametrize(
+    ("ending", "call"),
+    [
+        ("/top-up", lambda manager: manager.top_up_allocation("alloc_1", usd(1), "k")),
+        ("/status", lambda manager: manager.set_allocation_status("alloc_1", "paused")),
+        ("/revoke", lambda manager: manager.revoke_allocation("alloc_1")),
+    ],
+    ids=["top-up", "status", "revoke"],
+)
+async def test_a_command_answered_with_something_that_is_no_allocation_is_no_success(
+    ending: str, call: Any
+) -> None:
+    """The answer is read, so one the engine cannot read is an unknown outcome, as for any command."""
+    manager, _ = scripted(
+        {ending: httpx.Response(200, json={"ok": True}), "/allocation": httpx.Response(200, json=ALLOTTED)}
+    )
+    with pytest.raises(ProviderError) as unreadable:
+        await call(manager)
+    assert unreadable.value.status_code == 200 and not definite_refusal(unreadable.value)
 
 
 async def test_an_allotment_from_another_grant_than_the_tenant_is_refused_before_it_is_sent() -> None:

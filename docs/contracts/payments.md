@@ -1161,8 +1161,14 @@ selects the remote adapters (#169), and three settings, set together, say which 
   so are they with `LPB_ROLE` unset, `both` or `clearinghouse`: the role is the one switch, and the
   three settings alone do not turn an engine into a clearinghouse's tenant.
 - **`LPB_SECRET_KEY` is required**, as with Batteries: the engine keeps each actor's key.
-- **`LPB_CLEARINGHOUSE_TIMEOUT_S`** (30) bounds each request. `LPB_OPERATION_STALE_S` must be at least
-  four times it, as for `LPB_BATTERIES_TIMEOUT_S`.
+- **`LPB_CLEARINGHOUSE_TIMEOUT_S`** (20) bounds each request. `LPB_OPERATION_STALE_S` must be at least
+  six times it. The ledger cancels a run at half the stale window
+  ([a resume is a lease](#repeat-safe-commands)), and the longest command must fit in that half. Through
+  the remote adapters the longest makes three calls: a rotation that another one overtook reads the
+  allocation, sends the rotation, and reads which key the allocation takes. Every other command makes
+  one or two, and none writes after its second call, so a read that is cut short leaves nothing in
+  flight and the resume asks again. Three calls in the half is six timeouts in the window, where
+  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly.
 - **`LPB_DISCOVERY_URL` defaults to the clearinghouse's runner list** (D87), and the reader carries the
   tenant admin key there and to no other address ([discovery.md](discovery.md#the-clearinghouses-runner-list)).
 - A caller who supplies a part through `EngineSupply` keeps it: a supplied part is never replaced.
@@ -1187,7 +1193,8 @@ Member by member: `{t}` is the tenant and `{a}` the actor, and every path begins
 | --- | --- | --- |
 | `AllocationManager.create_key_for_grant` | `POST /actors/{a}/allocation` with `amount`, `label`, `operation_ref` | The allocation's id, its key's id, and `allocation_api_key` as the secret: the port's new key ([the key](#the-key-an-enterprises-engine-is-handed)) |
 | `AllocationManager.create_key` | `POST /actors/{a}/allocation/rotate-payment-key` with `operation_ref` | The same, with the new key. The clearinghouse ends the old key in the same command |
-| `AllocationManager.revoke_key` | `GET /actors/{a}/allocation`. Then, only for the key the allocation holds now, `POST /actors/{a}/allocation/rotate-payment-key` | Nothing ([two rotations](#two-rotations-of-one-actor-through-a-clearinghouse)) |
+| `AllocationManager.revoke_key` | `GET /actors/{a}/allocation` | Nothing, for a key the allocation no longer holds: it has ended. The key it holds now is refused. The engine's rotation never calls it ([two rotations](#two-rotations-of-one-actor-through-a-clearinghouse)) |
+| `OneKeyPerAllocation.holds_key`, which only the remote manager has | `GET /actors/{a}/allocation` | Whether the allocation is live and takes that key now |
 | `AllocationManager.top_up_allocation` | `POST /actors/{a}/allocation/top-up` with `amount`, `operation_ref` | Nothing |
 | `AllocationManager.set_allocation_status` | `POST /actors/{a}/allocation/status` with `status` | Nothing |
 | `AllocationManager.revoke_allocation` | `POST /actors/{a}/allocation/revoke` | Nothing |
@@ -1219,11 +1226,24 @@ Member by member: `{t}` is the tenant and `{a}` the actor, and every path begins
 
   A repeat at the enterprise's engine is therefore a repeat at the clearinghouse, which answers it from
   its own ledger. The adapter itself never sends a request twice.
-- **The allocation is checked before a write.** The routes act on whichever allocation the actor holds
-  at the clearinghouse. Before a top-up, a status change or a rotation the adapter reads the actor's
-  allocation there, and refuses with 404 when it is not the one the engine names. A rotation answered
-  for another allocation is refused the same way, and its key is not kept. A revoke of an allocation the
-  clearinghouse has already ended sends nothing.
+- **The allocation is checked before a write, and in its answer.** The routes act on whichever
+  allocation the actor holds at the clearinghouse when a command arrives. Before a top-up, a status
+  change, a revoke or a rotation the adapter reads the actor's allocation there. It refuses with 404
+  when it is not the one the engine names, and a revoke of an allocation the clearinghouse has already
+  ended sends nothing. That read proves what the clearinghouse held then, and no more: a revoke and a new
+  allotment there can land before the command does. So the adapter also reads the allocation each route
+  answers, which is the one it acted on. When that is another allocation than the one named:
+  - the command is no success and no refusal: `ProviderError` with the answer's 2xx (502 over REST), as
+    for any answer the engine cannot use. The reference of a top-up or a rotation stays held, since
+    something was applied;
+  - the engine's record of the actor is not changed, and a rotation's key is not kept;
+  - the message names both allocations, says nothing is recorded here, and says what to do: for a
+    top-up, where the amount is now; for a status, to set it again there; for a revoke, to repeat it,
+    which sends nothing and records that the named allocation has ended; for a rotation, that the other
+    allocation's holder rotates its key again.
+
+  The adapter finds this out and cannot prevent it: the routes take no allocation id (tech debt T53). A
+  read that is answered for another allocation is a plain 404, since it applied nothing.
 - **No work route of the clearinghouse is called.** The allowance is read from the actor's allocation
   route, which answers it with the record ([Allowance](#allowance)). The remote adapters, the discovery
   reader and `lpb payments check` call the tenant's routes and the runner list, and nothing else of the
@@ -1251,7 +1271,7 @@ What the engine does depends on what the answer carries:
 | --- | --- |
 | A key | Stores it, and saves the actor or points it at the key |
 | A key, with `resumed: true`: the clearinghouse's own run had not finished, and this repeat finished it | The same. This is the ordinary recovery from a failure at the clearinghouse |
-| No key, `replayed: true`, and the engine's own record of the actor names the allocation and the key of the answer, with the secret in its store | Finishes from its own copy: its run was handed the key and died afterwards. A rotation resumed after it stored the key ends this way |
+| No key, `replayed: true`, and the engine's own record of the actor names the allocation and the key of the answer, with the secret in its store | The manager returns the engine's own copy: the engine was handed that key before. The engine's own rotation does not come this far, since its resume asks for no key (below); a caller of the port alone does |
 | No key, `replayed: true`, otherwise | Refused, `InvalidRequest` (400). Nothing is stored, and no actor record is saved or changed. The message says what replaces the key (below) |
 | No key and no `replayed`: the clearinghouse's routes are mounted to keep each key with its own engine | `ProviderError`, an answer the engine cannot use and no refusal: the allocation exists there, and the reference stays held |
 
@@ -1270,35 +1290,54 @@ key, so a lost answer loses the key: nobody holds it. A lost key is replaced by 
 - **Under a new reference without the revoke,** an allotment is the clearinghouse's 409
   `already_allotted`, passed on. Nothing is applied and the amount is not added.
 
-**The engine's own resume.** A run of the engine that died after the clearinghouse answered repeats
-the same reference there.
+**The engine's own resume.** A run of the engine that died before it stored a key repeats the same
+reference at the clearinghouse.
 
 | The clearinghouse's command | Its answer | The engine |
 | --- | --- | --- |
 | Is still running, or stopped less than `LPB_OPERATION_STALE_S` ago | 409 `operation_in_progress` | `ProviderOutcomeUnknown`: the reference stays held, for a later repeat |
 | Stopped unfinished | The key, with `resumed: true` | Stores it and finishes |
-| Finished | No key, `replayed: true` | Finishes from its own copy when its run had stored the key and pointed the actor at it; otherwise the refusal above. An allotment resumed after the engine saved the actor asks the clearinghouse nothing |
+| Finished | No key, `replayed: true` | The refusal above: the key never reached the engine's store |
+
+A run that died after it stored the key asks the clearinghouse nothing. A rotation's record notes the
+stored key of its call, and the resume reads it back from the engine's own store. An allotment resumed
+after the engine saved the actor answers from that record.
 
 #### Two rotations of one actor through a clearinghouse
 
-The engine writes a rotation's key only over the key that rotation began from
-([two rotations](#allotment)), and a rotation that another one overtook revokes its own new key
-(`revoke_key`). A clearinghouse has no route that revokes a key by its id: a rotation there ends the key
-before it, and a revoked allocation takes none. So `revoke_key` reads the actor's allocation.
+**The clearinghouse's order decides which key the engine keeps** (Mike, 23 November 2026). A
+clearinghouse keeps one key for an allocation: its rotation ends the key before it in the same command.
+Of two rotations it ran one after the other, only the later one's key is live, whichever of them the
+engine wrote first. With self-hosted payments both keys are live until one is revoked, the rotation that
+writes the actor first keeps its key, and the other revokes its own ([two rotations](#allotment)). The
+difference comes from the allocation manager, through the optional protocol `OneKeyPerAllocation`, which
+the remote manager has and the Batteries adapter does not:
 
-- A key the allocation no longer holds has ended already, and nothing is sent. This is the old key of
-  every rotation the engine finishes.
-- The key the allocation holds now is replaced, by one more rotation at the clearinghouse under a
-  reference derived from the key, and nothing of that answer is read or kept. Only an overtaken
-  rotation asks this, about its own new key, which the engine is about to forget. So no key the engine
-  stored and then dropped stays live.
+- **No key is revoked by its id.** The clearinghouse ended the old key when it minted the new one, so
+  the rotation never calls `revoke_key`, and no rotation is ever made to end a key.
+- **An overtaken rotation asks which key the allocation takes** (`holds_key`, one read of the actor's
+  allocation). The engine still writes a rotation's key only over the key that rotation began from. A
+  rotation that finds another rotation's key on the actor asks about its own:
 
-When the clearinghouse ran two rotations one after the other and the engine wrote the earlier one's key,
-the later one is refused in the engine (`InvalidRequest`, "another key rotation finished"), and the
-actor holds a key the clearinghouse has ended. Its payments are refused by the signer until the next
-rotation, which the refusal asks for: under a new `operation_ref` the engine is handed the key the
-clearinghouse takes. Two rotations that overlap at the clearinghouse are settled there, and the engine
-keeps the key of the one the clearinghouse kept.
+  | The allocation at the clearinghouse | The rotation |
+  | --- | --- |
+  | Takes this rotation's key: the clearinghouse ran it last, and the key the actor holds is ended | Points the actor at its key, over the key the actor holds at that moment and no other, drops that key's secret, and answers the actor: a success. When a third rotation wrote the actor in between, it asks again |
+  | Takes another key, or is revoked: this rotation's key is ended | Drops its own secret and is refused, `InvalidRequest`: another key rotation finished after this one began. The reference stays held, as with Batteries |
+
+- **A resume asks for no key.** A rotation resumed after it stored its key reads that key back from
+  the engine's own store, by the note in its record, and sends the clearinghouse no command: the
+  clearinghouse would answer the repeat without the key. So an overtaken rotation that died before its
+  write of the actor still keeps its key, and one that died after it drops the ended key's secret, which
+  its record noted before the write.
+- **Every outcome ends the same way.** The engine's record of the actor and its secret store hold the
+  one key the clearinghouse takes, and no other secret. A revoke that lands in between leaves the actor
+  revoked, no key live and no secret stored. The one exception is a key that never reached the engine's
+  store, because the engine died between the clearinghouse's answer and its own write of the secret:
+  that key is lost, and a rotation under a new reference replaces it, as above.
+
+`revoke_key` on the remote manager, for a caller of the port alone, reads the actor's allocation: a key
+it no longer holds has ended and nothing is sent, and the key it holds now is refused, since a
+clearinghouse ends a key only by the rotation that replaces it.
 
 **Rows a deployment already has.** An actor allotted while the engine ran self-hosted payments holds a
 Batteries key and an allocation the clearinghouse does not know. Its commands are refused before

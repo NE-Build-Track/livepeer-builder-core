@@ -54,7 +54,8 @@ CLEARINGHOUSE_OF_ITS_OWN = {
     "clearinghouse_tenant_id": f"grant-{CREDENTIAL}",
 }
 CLEARINGHOUSE_STALE_WINDOW_REFUSED = (
-    "LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S"
+    "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S: a command is cancelled "
+    "at half the stale window, and the longest one makes three calls to the clearinghouse"
 )
 # The model validator that hides what was given (config.py). Every other must run inside it.
 REDACTION = "_a_refusal_holds_no_value"
@@ -460,7 +461,7 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
             ),
         ),
         Refused(
-            "a stale window shorter than four calls to the clearinghouse",
+            "a stale window shorter than six calls to the clearinghouse",
             CLEARINGHOUSE_OF_ITS_OWN
             | {
                 "batteries_token": ABSENT,

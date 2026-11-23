@@ -129,6 +129,9 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # payment clearinghouse's routes name the actor, and AllocationManager names an allocation's id. It adds
 # no way to reach payments: PaymentsService asks it of the manager it already holds, and the manager it
 # returns is an AllocationManager.
+# OneKeyPerAllocation is how an allocation manager says its provider keeps one key for an allocation and
+# hands it over once (#168): the rotation step, in the clearinghouse half, asks it which key an allocation
+# takes. It is asked of the manager PaymentsService already holds, and reaches nothing new.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
@@ -136,6 +139,7 @@ BEHIND_THE_PORTS = {
     "ActorRepo",
     "ActorCommandRepo",
     "AllocationsByActor",
+    "OneKeyPerAllocation",
     "TenantUsageSource",
     "EscrowSource",
     "SignerProbe",

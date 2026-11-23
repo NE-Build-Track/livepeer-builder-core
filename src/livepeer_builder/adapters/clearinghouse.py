@@ -171,6 +171,12 @@ class ClearinghouseAllocations:
         del api_key_id
         _needs_the_actor("revoke_key")
 
+    async def holds_key(  # NOSONAR - async by protocol (OneKeyPerAllocation)
+        self, allocation_id: str, api_key_id: str
+    ) -> bool:
+        del allocation_id, api_key_id
+        _needs_the_actor("holds_key")
+
 
 class _ActorAllocation(ClearinghouseAllocations):
     """The same manager for one actor: each member that names an allocation calls that actor's route."""
@@ -223,18 +229,28 @@ class _ActorAllocation(ClearinghouseAllocations):
     async def revoke_key(self, api_key_id: str) -> None:
         """End one key. A clearinghouse has no route that revokes a key by its id: a rotation there ends
         the key before it, and a revoked allocation takes none. So the actor's allocation is read. A key
-        it no longer holds has ended already, and nothing is sent: that is the old key of every rotation
-        this engine finishes. The key the allocation holds now is asked for only by a rotation that
-        another rotation overtook in this engine, about its own new key, which the engine is about to
-        forget (``PaymentKeys.rotated``). It is ended the one way a clearinghouse ends a key: it is
-        replaced, under a reference derived from the key, so a repeat replaces nothing more. The
-        replacement's key is in an answer this method never reads: nobody holds it, and the actor's next
-        rotation, which that refusal asks for, replaces it."""
+        it no longer holds has ended already, and nothing is sent. The key it holds now cannot be ended
+        without minting another, which nobody asked for: that is refused, plainly. The engine's rotation
+        never asks either (``OneKeyPerAllocation``); this is for a caller of the port alone."""
         held = await self._wire.read_as(AllocationRead, self._path())
         if held.status == "revoked" or held.api_key_id != api_key_id:
             return
-        replacing = {"operation_ref": _digest("revoke-key", api_key_id)}
-        await self._wire.write(self._path("/rotate-payment-key"), replacing)
+        raise InvalidRequest(
+            f"key {api_key_id!r} is the one allocation {held.allocation_id!r} takes at the clearinghouse "
+            "now, and a clearinghouse ends a key only by the rotation that replaces it: rotate the "
+            f"payment key of actor {self._actor_id!r}"
+        )
+
+    async def holds_key(self, allocation_id: str, api_key_id: str) -> bool:
+        """Whether the clearinghouse takes ``api_key_id`` for ``allocation_id`` now
+        (``OneKeyPerAllocation``): the actor holds that allocation there, it is not revoked, and its key
+        is this one. Of two rotations the clearinghouse ran one after the other, this is true of the
+        later one's key alone."""
+        held = await self._wire.read_as(AllocationRead, self._path())
+        return (held.allocation_id, held.api_key_id) == (
+            allocation_id,
+            api_key_id,
+        ) and held.status != "revoked"
 
     def _allotment_ref(self, idempotency_key: str) -> str:
         """An allotment's reference at the clearinghouse, which keys its own ledger on it for this tenant
@@ -249,13 +265,23 @@ class _ActorAllocation(ClearinghouseAllocations):
 
     async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         await self._held(allocation_id)
-        await self._wire.write(
-            self._path("/top-up"), {"amount": _money(amount), "operation_ref": idempotency_key}
+        body = {"amount": _money(amount), "operation_ref": idempotency_key}
+        self._acted_on(
+            await self._wire.write_as(ActorAllocation, self._path("/top-up"), body),
+            allocation_id,
+            "added this top-up to",
+            "The amount is on that allocation now: revoking that allocation at the clearinghouse returns "
+            "what it has not spent to the grant",
         )
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
         await self._held(allocation_id)
-        await self._wire.write(self._path("/status"), {"status": status})
+        self._acted_on(
+            await self._wire.write_as(ActorAllocation, self._path("/status"), {"status": status}),
+            allocation_id,
+            f"set the status {status!r} on",
+            "Set that allocation's status again at the clearinghouse if this was not meant for it",
+        )
 
     async def revoke_allocation(self, allocation_id: str) -> None:
         """Repeat-safe, as at the provider. An actor that holds another allocation at the clearinghouse
@@ -263,7 +289,14 @@ class _ActorAllocation(ClearinghouseAllocations):
         command's to revoke."""
         held = await self._wire.read_as(AllocationRead, self._path())
         if held.allocation_id == allocation_id and held.status != "revoked":
-            await self._wire.write(self._path("/revoke"))
+            self._acted_on(
+                await self._wire.write_as(ActorAllocation, self._path("/revoke")),
+                allocation_id,
+                "revoked",
+                "Repeat this revoke: the allocation it named has ended there, so the repeat sends "
+                "nothing and records that here. The allocation revoked in its place is ended, and what "
+                "it had not spent is back in the grant: whoever held it allots the actor again",
+            )
 
     async def read_allocation(self, allocation_id: str) -> Allowance:
         return await read_allowance(self._wire, self._tenant_id, self._actor_id, allocation_id)
@@ -271,11 +304,26 @@ class _ActorAllocation(ClearinghouseAllocations):
     async def _held(self, allocation_id: str) -> ActorAllocation:
         """The actor's allocation at the clearinghouse, when it is the one the engine names. The routes
         act on whichever allocation the actor holds there, so a command about another one is refused
-        before it is sent, as the provider answers an allocation id it does not hold."""
+        before it is sent, as the provider answers an allocation id it does not hold. This proves what
+        the clearinghouse held at the read, and no more: the command's own answer is read too
+        (``_acted_on``)."""
         held = await self._wire.read_as(AllocationRead, self._path())
         if held.allocation_id != allocation_id:
             raise _not_held(self._actor_id, allocation_id)
         return held
+
+    def _acted_on(self, answer: ActorAllocation, named: str, did: str, then: str) -> None:
+        """Refuse to report a command as done when the clearinghouse applied it to another allocation
+        than the one it named. The routes name an actor and take no allocation id, so a command lands on
+        whichever allocation the actor holds when it arrives: a revoke and a new allotment there, between
+        this adapter's read and its command, move it. Each route answers the allocation it acted on.
+
+        No refusal: something was applied, so the operation ledger keeps the command's reference
+        (``ProviderError`` with the answer's 2xx, as for any answer the engine cannot use). Raised before
+        the engine writes anything, so its record of the actor is not changed as if the command it named
+        had been done."""
+        if answer.allocation_id != named:
+            raise _acted_elsewhere(self._actor_id, named, answer.allocation_id, did, then)
 
     async def _handed(self, answer: DeliveredAllocation, *, rotated: str | None = None) -> NewAllocationKey:
         """The key an allotment or a rotation handed over, as the port's new key: the engine's command
@@ -293,7 +341,14 @@ class _ActorAllocation(ClearinghouseAllocations):
             # Revoked and allotted again there between the adapter's read and its command: this key is
             # another allocation's, and the actor's record here is never pointed at it.
             del key
-            raise _not_held(self._actor_id, rotated)
+            raise _acted_elsewhere(
+                self._actor_id,
+                rotated,
+                allocation_id,
+                "rotated the key of",
+                "Its new key is in an answer this engine did not keep, and the key it had is ended: "
+                "whoever holds that allocation rotates its key again",
+            )
         if key is not None and not replayed:
             return NewAllocationKey(allocation_id=allocation_id, api_key_id=api_key_id, secret=key)
         del key
@@ -411,6 +466,17 @@ def _never_arrived(actor_id: str, allocation_id: str, *, rotation: bool) -> Inva
         f"{lost}, and this engine has no record of actor {actor_id!r} to rotate it from. Revoke the "
         "allocation at the clearinghouse, which returns what it has not spent to the grant, then allot "
         "again here under a new operation_ref"
+    )
+
+
+def _acted_elsewhere(actor_id: str, named: str, acted_on: str, did: str, then: str) -> ProviderError:
+    """What a command the clearinghouse applied to another allocation comes to: which allocation was
+    named, which one was acted on, that nothing is recorded here, and what to do next (``then``)."""
+    return ProviderError(
+        200,
+        f"the clearinghouse {did} allocation {acted_on!r}, which actor {actor_id!r} holds there now, and "
+        f"not {named!r}, which this command named: the actor was revoked and allotted again at the "
+        f"clearinghouse while the command was on its way. Nothing of it is recorded here. {then}",
     )
 
 

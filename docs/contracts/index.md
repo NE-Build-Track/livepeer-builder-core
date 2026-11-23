@@ -280,12 +280,12 @@ at the clearinghouse's signer itself ([payments.md](payments.md#the-remote-adapt
 
 | What | Before | Now |
 | --- | --- | --- |
-| Settings | | `LPB_CLEARINGHOUSE_URL` (a scheme, a host and an optional port, and nothing after them), `LPB_CLEARINGHOUSE_TOKEN` and `LPB_CLEARINGHOUSE_TENANT_ID`, set together or not at all, and `LPB_CLEARINGHOUSE_TIMEOUT_S` (30). Refused at startup beside `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` or `LPB_BATTERIES_GRANTS_TOKEN` ([payments.md](payments.md#the-remote-adapters)) |
+| Settings | | `LPB_CLEARINGHOUSE_URL` (a scheme, a host and an optional port, and nothing after them), `LPB_CLEARINGHOUSE_TOKEN` and `LPB_CLEARINGHOUSE_TENANT_ID`, set together or not at all, and `LPB_CLEARINGHOUSE_TIMEOUT_S` (20; `LPB_OPERATION_STALE_S` must be at least six times it). Refused at startup beside `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` or `LPB_BATTERIES_GRANTS_TOKEN` ([payments.md](payments.md#the-remote-adapters)) |
 | `LPB_SIGNER_URL` | The engine's own signer | The same setting. An engine that uses a clearinghouse sets it to the clearinghouse's published signer. Unset, the engine does not pay, as before |
 | `LPB_DISCOVERY_URL` | Required | Required unless `LPB_CLEARINGHOUSE_URL` is set: it then defaults to the clearinghouse's runner list, and the reader carries the tenant admin key there |
 | `EngineSettings.from_env(defaults=...)` | A default fills a field the environment leaves unset | The same, except that with a clearinghouse set the discovery address is its runner list before any default |
 | `EngineSupply`, `EngineParts` | | `credentials` (`CredentialResolver`) and `allowances` (`AllowanceReader`). Unset, or `None`: the engine's own records, as before |
-| Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id, operation_ref=None)`. A supplied manager without it is called as before |
+| Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id, operation_ref=None)`. `OneKeyPerAllocation` (an allocation manager whose provider keeps one key for an allocation and hands it over once): `holds_key(allocation_id, api_key_id)`. A supplied manager without them is called as before |
 | Errors | | `ProviderOutcomeUnknown`, a `ProviderUnavailable` (503): a command left and no answer says whether it applied |
 | Adapters | | `ClearinghouseAllocations`, `ClearinghouseAllowances`, `ClearinghouseUsage` (`livepeer_builder.adapters.clearinghouse`). `CredentialResolver` and signing have none: they are the engine's own |
 | `HttpDiscoverySource` | `HttpDiscoverySource(discovery_url, *, client, timeout_s)` | and `bearer`, a credential for the discovery address |

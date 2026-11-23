@@ -12,12 +12,16 @@ What this file holds is what follows from "once":
   replaced by a rotation, or, for an allotment the engine has no record of, by revoking the allocation at
   the clearinghouse and allotting again;
 - a resumed command at the clearinghouse hands the key over again (``resumed``), and the engine stores it;
-- the engine's own resume after it stored the key finishes from its own copy;
-- two rotations of one actor leave no key live that the engine stored and dropped.
+- the engine's own resume after it stored the key finishes from its own copy, and asks the clearinghouse
+  nothing;
+- when two rotations of one actor overlap, the clearinghouse's order decides which key the engine keeps
+  (Mike, 23 November 2026): the engine ends up holding the key the clearinghouse takes, no rotation is
+  ever made to end a key, and no secret is left in the engine's store that nothing points at.
 
 The two engines share nothing: each has a store and a secret store of its own (``payment_ports.py``).
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -31,10 +35,12 @@ from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpReque
 from livepeer_builder.errors import (
     AlreadyAllotted,
     InvalidRequest,
+    NotFound,
     NotProvisioned,
     OperationInProgress,
     ProviderError,
     ProviderOutcomeUnknown,
+    ProviderUnavailable,
 )
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
@@ -419,9 +425,9 @@ async def test_a_rotation_the_clearinghouse_resumes_hands_the_key_over_and_the_e
 async def test_a_rotation_the_engine_resumes_after_it_stored_the_key_finishes_from_its_own_copy(
     ports: Ports, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The engine's run stored the handed key and pointed the actor at it, then died. Its repeat sends the
-    same reference; the clearinghouse finished that command and answers without the key. The engine has
-    the key of exactly that answer in its own store, so the command finishes, and nothing rotates twice."""
+    """The engine's run stored the handed key and pointed the actor at it, then died. The clearinghouse
+    finished that command and would answer its repeat without the key, so the engine does not ask: its
+    own record notes the key of that very call, and the command finishes from the engine's own copy."""
     await allot(ports)
     old = await stored_key(ports)
     assert ports.secrets is not None
@@ -430,11 +436,12 @@ async def test_a_rotation_the_engine_resumes_after_it_stored_the_key_finishes_fr
         await rotate(ports, "r-1")
     new = await stored_key(ports)
     assert new != old and live_keys(ports) == {new}
+    sent = len(ports.requests)
 
     later(ports)
     rotated = await rotate(ports, "r-1")
 
-    assert handed(ports, ROTATE)[-1]["replayed"] is True  # the clearinghouse handed nothing over again
+    assert len(ports.requests) == sent  # nothing is asked of the clearinghouse
     assert rotated.api_key_id == handed(ports, ROTATE)[-1]["api_key_id"]
     assert await stored_key(ports) == new and live_keys(ports) == {new}
     assert list(ports.secrets.values.values()) == [new]  # the old key's secret is gone at last
@@ -459,89 +466,451 @@ async def test_an_allotment_the_engine_resumes_after_it_saved_the_actor_asks_the
     assert answer.credential_custody == "secret_store" and await stored_key(ports) == key
 
 
-# -- two rotations of one actor ----------------------------------------------------------------------------
+# -- two rotations of one actor: the clearinghouse's order decides which key the engine keeps -------------
+#
+# Rotations A and B of one actor, each under its own reference. The clearinghouse runs them one after the
+# other: the later one's key is the one the allocation takes, and the earlier one's is ended. In the engine
+# a rotation writes its key only over the key it began from, so the first to write wins there. When the
+# rotation the clearinghouse ran first also writes first, the other holds the only key the clearinghouse
+# takes. It asks the clearinghouse which key the allocation holds, and stores its own over the ended one.
 
 
-async def test_a_rotation_that_another_overtook_leaves_no_key_live_that_the_engine_stored_and_dropped(
-    ports: Ports, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The second review thread of #182. Rotation B begins, and before it reaches the clearinghouse
-    rotation A runs whole: the clearinghouse replaces the first key with A's, and the engine stores A's.
-    B's call then replaces A's key at the clearinghouse, but the engine writes a rotation's key only over
-    the key that rotation began from, so B writes nothing, as at Batteries. There the loser revokes its
-    own key by its id. A clearinghouse ends a key only by replacing it, and the loser's key is the one it
-    takes now: the adapter's ``revoke_key`` replaces it and keeps nothing of the answer, so the key the
-    engine stored and then dropped is dead, as the refusal says. The actor then holds a key the
-    clearinghouse has ended, and the next rotation, which the refusal asks for, puts that right."""
-    allotted = await allot(ports)
-    first = await stored_key(ports)
+async def settled(ports: Ports, *, rotations: int) -> str:
+    """What every outcome below comes to: the clearinghouse takes exactly one key; the engine's record of
+    the actor and its secret store hold exactly that key, and no other secret; the clearinghouse rotated
+    ``rotations`` times and no more, so no key was ever minted to end another. Returns that key."""
+    [taken] = live_keys(ports)
+    assert await stored_key(ports) == taken
+    assert await ports.pays_for(taken) is not None
+    assert ports.secrets is not None and list(ports.secrets.values.values()) == [taken]
+    assert ports.provider.calls.count("create_key") == rotations
+    sent = [r for r in ports.requests if r.method == "POST" and r.url.path.endswith("/rotate-payment-key")]
+    assert len({json.loads(request.content)["operation_ref"] for request in sent}) == rotations
+    assert len(ports.provider.keys) == 1 + rotations  # the allotment's key, and one for each rotation
+    return taken
+
+
+def a_whole_before_b_reaches_the_clearinghouse(
+    ports: Ports,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    then: Callable[[], Awaitable[object]] | None = None,
+    when_b_asks: Callable[[], Awaitable[object]] | None = None,
+) -> list[ActorAllocation]:
+    """Arrange the next rotation (B) so that, once it has begun and before its call reaches the
+    clearinghouse, rotation A (``r-a``) runs whole: the clearinghouse runs A first, and A writes the
+    engine's record first. ``then`` runs after A and before B's call. ``when_b_asks`` runs after B has
+    asked the clearinghouse which key the allocation takes, and before B acts on the answer. A's answer
+    is appended to the list."""
     manager = ports.manager
     original = manager.for_actor  # type: ignore[attr-defined]
-    overtaken: list[ActorAllocation] = []
+    first: list[ActorAllocation] = []
 
-    def b_waits_for_a(*args: Any, **kwargs: Any) -> Any:
-        """The manager rotation B is given: its call to the clearinghouse lets rotation A run first."""
+    def for_b(*args: Any, **kwargs: Any) -> Any:
         monkeypatch.setattr(manager, "for_actor", original)
         mine = original(*args, **kwargs)
-        create_key = mine.create_key
+        create_key, holds_key = mine.create_key, getattr(mine, "holds_key", None)
 
         async def after_a(*call: Any) -> Any:
-            overtaken.append(await rotate(ports, "r-a"))
+            first.append(await rotate(ports, "r-a"))
+            if then is not None:
+                await then()
             return await create_key(*call)
 
+        async def asked(*call: Any) -> Any:
+            answer = await holds_key(*call)
+            if when_b_asks is not None:
+                monkeypatch.setattr(mine, "holds_key", holds_key)
+                await when_b_asks()
+            return answer
+
         monkeypatch.setattr(mine, "create_key", after_a)
+        if holds_key is not None:
+            monkeypatch.setattr(mine, "holds_key", asked)
         return mine
 
-    monkeypatch.setattr(manager, "for_actor", b_waits_for_a)
-    with pytest.raises(InvalidRequest) as lost:
-        await rotate(ports, "r-b")
-
-    [a] = overtaken
-    a_key = await stored_key(ports)
-    assert "another key rotation" in str(lost.value) and "this rotation's key is revoked" in str(lost.value)
-    assert (await ports.engine.store.get_actor(ports.tenant_id, "alice")) == a  # B wrote nothing
-    assert ports.secrets is not None and list(ports.secrets.values.values()) == [a_key]
-    # every key this engine ever held for the actor is dead at the provider: the first, A's, and B's
-    engine_saw = [answer["allocation_api_key"] for answer in handed(ports, ROTATE)[:2]]
-    assert len(set(engine_saw)) == 2 and a_key in engine_saw
-    for key in (first, *engine_saw):
-        assert await ports.pays_for(key) is None
-    # B's key was ended the one way a clearinghouse ends a key: by a third rotation, whose key nobody kept
-    assert [path.rsplit("/", 1)[1] for path in ports.sent()] == ["allocation"] + ["rotate-payment-key"] * 3
-    assert len(live_keys(ports)) == 1 and live_keys(ports).isdisjoint({first, *engine_saw})
-    assert ports.provider.allocations[allotted.allocation_id].granted == 5
-
-    # the refusal asks for a rotation under a new reference, and that leaves the engine holding the one
-    # key the clearinghouse takes
-    await rotate(ports, "r-c")
-    final = await stored_key(ports)
-    assert await ports.pays_for(final) == allotted.allocation_id and live_keys(ports) == {final}
-    assert list(ports.secrets.values.values()) == [final]
+    monkeypatch.setattr(manager, "for_actor", for_b)
+    return first
 
 
-async def test_the_rotation_that_wrote_first_in_the_engine_and_last_at_the_clearinghouse_is_the_one_kept(
+def fail_the_call(
+    monkeypatch: pytest.MonkeyPatch, target: object, name: str, number: int, *, apply: bool = False
+) -> None:
+    """The ``number``th call of ``target.name`` from now fails, before it applies or (``apply``) after:
+    the engine's run dies there."""
+    original = getattr(target, name)
+    calls = [0]
+
+    async def counted(*args: Any, **kwargs: Any) -> Any:
+        calls[0] += 1
+        if calls[0] != number:
+            return await original(*args, **kwargs)
+        monkeypatch.setattr(target, name, original)
+        if apply:
+            await original(*args, **kwargs)
+        raise ConnectionError("the engine's run died here")
+
+    monkeypatch.setattr(target, name, counted)
+
+
+async def test_the_rotation_the_clearinghouse_ran_last_keeps_its_key_though_the_other_wrote_first(
     ports: Ports, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other order: rotation B runs whole while A's answer is on its way back. B's key is the one the
-    clearinghouse takes and the one the engine stored; A, which then writes nothing, has a key the
-    clearinghouse already ended, so nothing is sent to end it."""
+    """The second review thread of #182, as Mike decided it. A at the clearinghouse first, and A writes
+    first. B's key is the one the clearinghouse takes, so B stores it over A's, which is ended, drops A's
+    secret, and answers as a success. No third rotation, and the actor pays at once."""
     allotted = await allot(ports)
+    first = a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch)
+    before = len(ports.requests)
+
+    b = await rotate(ports, "r-b")
+
+    [a] = first
+    taken = await settled(ports, rotations=2)
+    assert b.api_key_id != a.api_key_id and b.allocation_id == allotted.allocation_id
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == b
+    assert taken == handed(ports, ROTATE)[-1]["allocation_api_key"]  # the key of the later answer
+    assert ports.provider.keys[a.api_key_id][2] is True  # A's key: ended by the clearinghouse itself
+    done = await record_of(ports, "r-b")
+    assert done is not None and done.state == "done"
+    # what B asked of the clearinghouse, apart from A's own calls: a read, the rotation, and one read of
+    # which key the allocation takes. Nothing after the rotation writes
+    asked = [(r.method, r.url.path.rsplit("/", 1)[1]) for r in ports.requests[before:]]
+    assert asked == [
+        ("GET", "allocation"),  # A, whole: its read
+        ("POST", "rotate-payment-key"),  # and its rotation
+        ("GET", "allocation"),  # B reads the allocation
+        ("POST", "rotate-payment-key"),  # B's rotation
+        ("GET", "allocation"),  # B asks which key the allocation takes
+    ]
+
+
+async def test_the_rotation_the_clearinghouse_ran_first_is_refused_when_the_other_wrote_first(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other order: A at the clearinghouse first, and B, which ran there last, writes first. A's key
+    is ended already, so A keeps nothing, drops its secret, and is refused. Nothing live is dropped."""
+    await allot(ports)
+    store = ports.engine.store
+    original = store.set_actor_key  # type: ignore[attr-defined]
+    second: list[ActorAllocation] = []
+
+    async def b_first(*args: Any, **kwargs: Any) -> Any:
+        monkeypatch.setattr(store, "set_actor_key", original)
+        second.append(await rotate(ports, "r-b"))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "set_actor_key", b_first)
+    with pytest.raises(InvalidRequest) as lost:
+        await rotate(ports, "r-a")
+
+    [b] = second
+    taken = await settled(ports, rotations=2)
+    assert "another key rotation" in str(lost.value) and "Rotate again under a new reference" in str(
+        lost.value
+    )
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == b
+    assert taken == handed(ports, ROTATE)[-1]["allocation_api_key"]
+    held = await record_of(ports, "r-a")
+    assert held is not None and held.state == "started"  # never freed: its key is ended
+
+
+async def test_an_overtaken_rotation_that_dies_before_its_write_finishes_from_the_secret_it_noted(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B was handed its key, stored it and noted it, and died at its write of the actor. The clearinghouse
+    finished B's command and would answer the repeat without the key. The engine holds that key, so the
+    resume asks for no rotation: it finishes from the secret B's record noted, and keeps the key."""
+    await allot(ports)
+    a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch)
+    fail_the_call(monkeypatch, ports.engine.store, "set_actor_key", 2)  # A's write, then B's
+    with pytest.raises(ConnectionError):
+        await rotate(ports, "r-b")
+    assert ports.secrets is not None and len(ports.secrets.values) == 2  # A's key, and B's, noted
+    assert await ports.pays_for(await stored_key(ports)) is None  # the actor holds A's key, which is ended
+    rotations = len(ports.sent())
+
+    later(ports)
+    b = await rotate(ports, "r-b")
+
+    assert len(ports.sent()) == rotations  # no command is sent: the key is the engine's own copy
+    taken = await settled(ports, rotations=2)
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == b
+    assert taken == [answer["allocation_api_key"] for answer in handed(ports, ROTATE)][-1]
+
+
+async def test_an_overtaken_rotation_that_dies_after_it_kept_its_key_drops_the_ended_one_on_its_resume(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B pointed the actor at its key and died before it dropped the secret of the key it replaced. B's
+    record noted that secret before the write, so the resume drops it."""
+    await allot(ports)
+    a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch)
+    assert ports.secrets is not None
+    fail_the_call(monkeypatch, ports.secrets, "delete", 2)  # A forgets the first key; B, the key it replaced
+    with pytest.raises(ConnectionError):
+        await rotate(ports, "r-b")
+    [taken] = live_keys(ports)
+    assert await stored_key(ports) == taken  # the write was made
+    assert len(ports.secrets.values) == 2  # and A's secret is still in the store
+    sent = len(ports.requests)
+
+    later(ports)
+    await rotate(ports, "r-b")
+
+    assert len(ports.requests) == sent
+    assert await settled(ports, rotations=2) == taken
+
+
+async def test_an_overtaken_rotation_that_dies_after_it_dropped_its_ended_key_is_refused_on_its_resume(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A at the clearinghouse first, B writes first, and A dies just after it dropped its own secret and
+    before it noted that it lost. Its resume finds no secret where its record noted one, asks the
+    clearinghouse, and is refused: the key is ended, and nothing is left to drop."""
+    await allot(ports)
     store = ports.engine.store
     original = store.set_actor_key  # type: ignore[attr-defined]
 
     async def b_first(*args: Any, **kwargs: Any) -> Any:
         monkeypatch.setattr(store, "set_actor_key", original)
         await rotate(ports, "r-b")
+        assert ports.secrets is not None
+        fail_the_call(monkeypatch, ports.secrets, "delete", 1, apply=True)  # A's own secret
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(store, "set_actor_key", b_first)
-    with pytest.raises(InvalidRequest, match="another key rotation"):
+    with pytest.raises(ConnectionError):
         await rotate(ports, "r-a")
+    taken = await settled(ports, rotations=2)
 
-    kept = await stored_key(ports)
-    assert await ports.pays_for(kept) == allotted.allocation_id and live_keys(ports) == {kept}
-    assert ports.secrets is not None and list(ports.secrets.values.values()) == [kept]
-    assert [path.rsplit("/", 1)[1] for path in ports.sent()] == ["allocation"] + ["rotate-payment-key"] * 2
+    later(ports)
+    with pytest.raises(InvalidRequest, match="again, under a new operation_ref"):
+        await rotate(ports, "r-a")
+    assert await settled(ports, rotations=2) == taken
+
+
+async def test_an_overtaken_rotation_that_dies_before_it_stored_its_key_has_lost_it_and_says_so(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one outcome that needs one more rotation, by D87 point 1: B was handed its key and died before
+    it stored it. The clearinghouse hands a key over once, so nobody holds the key it takes. B's resume
+    is refused with what replaces it, and that rotation leaves the engine holding the key that is taken."""
+    await allot(ports)
+    a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch)
+    assert ports.secrets is not None
+    fail_the_call(monkeypatch, ports.secrets, "put", 2)  # A's key, then B's
+    with pytest.raises(ConnectionError):
+        await rotate(ports, "r-b")
+    assert await ports.pays_for(await stored_key(ports)) is None  # the actor holds A's key, which is ended
+    assert len(ports.secrets.values) == 1 and len(live_keys(ports)) == 1
+
+    later(ports)
+    with pytest.raises(InvalidRequest) as lost:
+        await rotate(ports, "r-b")
+    assert "A lost key is replaced by a rotation" in str(lost.value)
+    assert ports.provider.calls.count("create_key") == 2  # the repeat rotated nothing
+
+    await rotate(ports, "r-c")
+    await settled(ports, rotations=3)
+
+
+async def test_an_overtaken_rotation_cut_short_at_its_third_call_wrote_nothing_and_finishes_on_its_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stale window (``config.py``): the ledger cancels a run at half of it. An overtaken rotation's
+    third call is a read, of which key the allocation takes. Cut short there, the command has no write
+    in flight, at the clearinghouse or in the engine, and its resume asks again and keeps its key."""
+    quick = {"operation_stale_s": 2.0, "clearinghouse_timeout_s": 0.25, "batteries_timeout_s": 0.25}
+    async with open_ports("remote", **quick) as ports:
+        await allot(ports)
+
+        async def never() -> None:
+            await asyncio.Event().wait()
+
+        a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch, when_b_asks=never)
+        with pytest.raises(ProviderUnavailable, match="ran past its 1 s budget"):
+            await rotate(ports, "r-b")
+        sent = len(ports.sent())
+        assert ports.provider.calls.count("create_key") == 2
+        assert ports.secrets is not None and len(ports.secrets.values) == 2  # A's, and B's, noted
+
+        later(ports)
+        b = await rotate(ports, "r-b")
+
+        assert len(ports.sent()) == sent  # the resume writes nothing at the clearinghouse
+        await settled(ports, rotations=2)
+        assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == b
+
+
+async def test_a_third_rotation_between_the_question_and_the_write_is_the_one_whose_key_is_kept(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A, then B, then C at the clearinghouse. B is told its key is the one the allocation takes, and
+    before B writes, C runs whole and writes its own. B writes only over the key the actor held when it
+    asked, so it writes nothing, asks again, learns its key is ended, and is refused. C's key is kept."""
+    await allot(ports)
+    third: list[ActorAllocation] = []
+
+    async def c_whole() -> None:
+        third.append(await rotate(ports, "r-c"))
+
+    a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch, when_b_asks=c_whole)
+    with pytest.raises(InvalidRequest, match="another key rotation"):
+        await rotate(ports, "r-b")
+
+    [c] = third
+    taken = await settled(ports, rotations=3)
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == c
+    assert taken == handed(ports, ROTATE)[-1]["allocation_api_key"]
+
+
+async def test_a_rotation_that_wrote_meanwhile_with_an_ended_key_does_not_cost_the_live_one_its_place(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A, then D, then B at the clearinghouse, so B's key is the one it takes. A writes the engine's
+    record first. D began from A's key and is held up at its own write. B is told its key is live; then
+    D's write lands, over A's key, with a key the clearinghouse has ended. B's write, over the key the
+    actor held when it asked, writes nothing. B asks again, is told the same, and writes over D's."""
+    await allot(ports)
+    store = ports.engine.store
+    original = store.set_actor_key  # type: ignore[attr-defined]
+    reached, release = asyncio.Event(), asyncio.Event()
+    writes = [0]
+    running: list[asyncio.Task[ActorAllocation]] = []
+
+    async def d_is_held_up(*args: Any, **kwargs: Any) -> Any:
+        writes[0] += 1
+        if writes[0] == 2:  # A's write is the first, D's the second
+            reached.set()
+            await release.wait()
+        return await original(*args, **kwargs)
+
+    async def d_reaches_the_clearinghouse() -> None:
+        running.append(asyncio.create_task(rotate(ports, "r-d")))
+        await reached.wait()
+
+    async def d_writes() -> None:
+        release.set()
+        await running[0]
+
+    monkeypatch.setattr(store, "set_actor_key", d_is_held_up)
+    a_whole_before_b_reaches_the_clearinghouse(
+        ports, monkeypatch, then=d_reaches_the_clearinghouse, when_b_asks=d_writes
+    )
+    b = await rotate(ports, "r-b")
+
+    d = running[0].result()
+    taken = await settled(ports, rotations=3)
+    assert b.api_key_id != d.api_key_id
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == b
+    assert taken == handed(ports, ROTATE)[-1]["allocation_api_key"]
+    assert ports.provider.keys[d.api_key_id][2] is True  # D's key: ended by B's rotation
+
+
+async def test_a_revoke_between_the_question_and_the_write_leaves_nothing_live_and_nothing_stored(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allotted = await allot(ports)
+
+    async def revoked() -> None:
+        await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+
+    a_whole_before_b_reaches_the_clearinghouse(ports, monkeypatch, when_b_asks=revoked)
+    with pytest.raises(NotFound, match="has no allocation"):
+        await rotate(ports, "r-b")
+
+    assert live_keys(ports) == set()  # the allocation is revoked: the clearinghouse takes no key
+    assert ports.provider.allocations[allotted.allocation_id].status == "revoked"
+    stored = await ports.engine.store.get_actor(ports.tenant_id, "alice")
+    assert stored is not None and stored.status == "revoked"
+    assert ports.secrets is not None and ports.secrets.values == {}
+    assert ports.provider.calls.count("create_key") == 2
+    with pytest.raises(NotProvisioned):
+        await ports.credentials.credential(ports.actor("alice"))
+
+
+async def test_a_revoke_before_the_question_leaves_nothing_live_and_nothing_stored(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The allocation is revoked after B's rotation and before B's write: B's write is refused for a
+    revoked actor, as any rotation's is, and its secret is dropped."""
+    await allot(ports)
+    store = ports.engine.store
+    original = store.set_actor_key  # type: ignore[attr-defined]
+
+    async def revoked_first(*args: Any, **kwargs: Any) -> Any:
+        monkeypatch.setattr(store, "set_actor_key", original)
+        await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "set_actor_key", revoked_first)
+    with pytest.raises(NotFound, match="has no allocation"):
+        await rotate(ports, "r-b")
+
+    assert live_keys(ports) == set()
+    assert ports.secrets is not None and ports.secrets.values == {}
+    assert ports.provider.calls.count("create_key") == 1
+
+
+async def test_self_hosted_payments_still_revoke_the_overtaken_rotations_own_key() -> None:
+    """The same two rotations over Batteries' stand-in, which keeps both keys live until one is revoked:
+    the rotation that wrote first keeps its key, the other revokes its own and is refused, and the
+    provider is never asked which key an allocation takes."""
+    async with open_ports("local") as local:
+        await allot(local)
+        store = local.engine.store
+        original = store.set_actor_key  # type: ignore[attr-defined]
+        second: list[ActorAllocation] = []
+
+        async def b_first(*args: Any, **kwargs: Any) -> Any:
+            monkeypatch_restore()
+            second.append(await rotate(local, "r-b"))
+            return await original(*args, **kwargs)
+
+        def monkeypatch_restore() -> None:
+            store.set_actor_key = original  # type: ignore[attr-defined]
+
+        store.set_actor_key = b_first  # type: ignore[attr-defined]
+        with pytest.raises(InvalidRequest, match="another key rotation"):
+            await rotate(local, "r-a")
+
+        [b] = second
+        assert not hasattr(local.manager, "holds_key")
+        assert local.provider.calls.count("revoke_key") == 3  # the first key twice, and A's own
+        assert [key for key, (_, _, revoked) in local.provider.keys.items() if not revoked] == [b.api_key_id]
+        assert await local.engine.store.get_actor(local.tenant_id, "alice") == b
+
+
+# -- how many calls a command makes ------------------------------------------------------------------------
+
+
+async def test_no_command_writes_after_its_second_call_and_only_an_overtaken_rotation_makes_a_third(
+    ports: Ports,
+) -> None:
+    """What ``LPB_OPERATION_STALE_S`` is held to (``config.py``): the ledger cancels a run at half the
+    stale window, and the longest command makes three calls to the clearinghouse, each within
+    ``LPB_CLEARINGHOUSE_TIMEOUT_S``. The three are an overtaken rotation's (the test above counts them);
+    every other command makes one or two, and the last write is never later than the second."""
+    payments = ports.engine.payments
+
+    async def calls_of(command: Callable[[], Awaitable[object]]) -> list[str]:
+        before = len(ports.requests)
+        await command()
+        return [request.method for request in ports.requests[before:]]
+
+    assert await calls_of(lambda: allot(ports)) == ["POST"]
+    top_up = TopUpRequest(amount=usd(1), operation_ref="t-1")
+    assert await calls_of(lambda: payments.top_up(ports.admin, ports.tenant_id, "alice", top_up)) == [
+        "GET",
+        "POST",
+    ]
+    assert await calls_of(lambda: payments.set_status(ports.admin, ports.tenant_id, "alice", "paused")) == [
+        "GET",
+        "POST",
+    ]
+    assert await calls_of(lambda: rotate(ports, "r-1")) == ["GET", "POST"]
+    assert await calls_of(lambda: payments.revoke(ports.admin, ports.tenant_id, "alice")) == ["GET", "POST"]
 
 
 # -- a clearinghouse that hands no key over ----------------------------------------------------------------

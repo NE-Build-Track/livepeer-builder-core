@@ -19,7 +19,7 @@ import contextlib
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI
@@ -135,18 +135,20 @@ def usd(amount: str | int) -> Money:
 
 @contextlib.asynccontextmanager
 async def open_ports(
-    side: Side, served: AppOf | None = None, house: dict[str, object] | None = None
+    side: Side, served: AppOf | None = None, house: dict[str, object] | None = None, **engine_settings: Any
 ) -> AsyncIterator[Ports]:
     """``served`` builds the app the enterprise's engine calls from the engine behind it (remote): a
     standalone clearinghouse's public listener unless a test serves something else. ``house`` is that
-    engine's role and listeners: a clearinghouse's unless a test puts another engine there."""
+    engine's role and listeners: a clearinghouse's unless a test puts another engine there.
+    ``engine_settings`` are more settings of the enterprise's engine (remote)."""
     provider, provider_usage = FakeAllocationManager(), FakeUsageSource()
     if side == "local":
         async with _local(provider, provider_usage) as ports:
             yield ports
     else:
         role = CLEARINGHOUSE_ROLE if house is None else house
-        async with _remote(provider, provider_usage, served or standalone_clearinghouse, role) as ports:
+        app = served or standalone_clearinghouse
+        async with _remote(provider, provider_usage, app, role, engine_settings) as ports:
             yield ports
 
 
@@ -179,7 +181,11 @@ async def _local(provider: FakeAllocationManager, usage: FakeUsageSource) -> Asy
 
 @contextlib.asynccontextmanager
 async def _remote(
-    provider: FakeAllocationManager, usage: FakeUsageSource, served: AppOf, role: dict[str, object]
+    provider: FakeAllocationManager,
+    usage: FakeUsageSource,
+    served: AppOf,
+    role: dict[str, object],
+    more: dict[str, Any],
 ) -> AsyncIterator[Ports]:
     # The clearinghouse's own engine, store and secret store: nothing of them is the enterprise engine's.
     house_secrets = MemorySecretStore()
@@ -219,7 +225,7 @@ async def _remote(
             "clearinghouse_token": token,
             "clearinghouse_tenant_id": one.tenant_id,
         }
-        engine = await stack.enter_async_context(make_engine(supply=supply, **settings))
+        engine = await stack.enter_async_context(make_engine(supply=supply, **settings, **more))
         yield Ports(
             side="remote",
             engine=engine,

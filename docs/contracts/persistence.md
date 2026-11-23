@@ -20,9 +20,11 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   enforced after the provider key was funded), so a supplied secret store may return a long path. The
   encrypted-database `SecretStore` keeps Fernet ciphertext in `lpb_secrets`, with the key outside the
   database.
-- **A clearinghouse's payment keys** (`lpp_`, #166) are not stored either. `lpb_payment_keys` holds the
-  SHA-256 of each token, one row for each actor, with the allocation the key was issued for (migration
-  0015), as `lpb_access_keys` holds an access key's hash ([payments.md](payments.md#payment-keys)).
+- **Who holds a payment key** is `lpb_actors.credential_custody` (migration 0015, #166), beside the
+  `secret_ref` it describes. `secret_store`: the configured `SecretStore` issued the reference, and
+  resolves and deletes it. `work_engine`: a standalone clearinghouse handed the key to the enterprise's
+  engine once and kept none, and the reference is a receipt that no store resolves. The column is never
+  derived from the reference's text ([payments.md](payments.md#payment-keys)).
 - **Default URL:** `sqlite+aiosqlite:///./livepeer-builder.db`. There is no silent in-memory store.
 - **Optional store protocols.** A store may also implement these; the engine asks with `isinstance`
   and falls back for a supplied store that does not. `SqlStore` implements all of them.
@@ -34,12 +36,15 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   | `UsageOnceRepo` (#115, C20) | `set_usage_once`: a job's usage is written only where it has none and is `succeeded`, in one statement | the engine checks the job it read and calls `set_usage` (unconditional); two usage reports at the same moment can still both succeed ([engine.md](engine.md#measured-usage)) |
   | `ActorCommandRepo` (#115, C4) | `set_actor_status`, `set_actor_key`: each admin command writes only its own actor columns, with its condition in the statement | the engine reads the actor again, checks the condition itself and saves the whole row with `save_actor`; two commands on one actor at the same moment can still overwrite each other ([payments.md](payments.md#allotment)) |
 
-  | `PaymentKeyRepo` (#166) | `put_payment_key`, `delete_payment_key`, `actor_by_payment_key`: the hash of each payment key a clearinghouse issues, and the actor it finds | no payment key is issued or recognized: allotment and rotation answer `payment_key: null` ([payments.md](payments.md#payment-keys)) |
-
   `ActorCommandRepo` has a third write, `allot_actor`, and its key write takes the key the rotation
   began from (`only_from`). A rotation writes only over that key, and allotment writes its row only
   where the actor has none or still has the revoked row it read. A store has all three writes or is
   treated as having none.
+
+  Since #166 the key write also takes `credential_custody`, a keyword the engine always passes, and
+  writes it with `api_key_id` and `secret_ref` in the one statement. Every store keeps
+  `ActorAllocation.credential_custody` with the rest of the actor it saves and returns: a store that
+  drops it reads every key back as `secret_store`, the field's default.
 
 ## Migrations
 
@@ -73,15 +78,17 @@ like a source checkout. Version table: `lpb_alembic_version`.
   is kept, and a downgrade puts the old names back. The run is one transaction on SQLite and on
   PostgreSQL: one that dies before its commit changes nothing
   (`tests/store/test_domain_language_names.py`).
+- **0015, credential custody (#166):** it adds `lpb_actors.credential_custody` (16 characters, not
+  null) and changes nothing else. Every existing row becomes `secret_store`, whatever its `secret_ref`
+  reads: each was written through the configured store, and a supplied store may issue any handle. A
+  downgrade drops the column and keeps every row
+  (`tests/store/test_credential_custody_migration.py`). No revision creates `lpb_payment_keys`: the
+  migration that did was never released, and it is deleted, not undone by a later revision (Mike, 23
+  November 2026). A database that ran it is recreated.
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at
   revision 0001 and upgrades.
-
-- **0015, payment keys (#166):** it adds `lpb_payment_keys` and changes no other table, so every
-  existing row stays as it is. An allocation allotted before it has no payment key until its payment
-  key is rotated. A downgrade drops the table, and the payment keys with it; the allocations and the
-  Batteries keys they pay with are untouched (`tests/store/test_payment_keys.py`).
 
 ## Retention
 

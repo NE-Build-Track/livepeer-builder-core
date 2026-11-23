@@ -337,11 +337,13 @@ Both are generic: no enterprise logic lives in the engine.
   clearinghouse admin key exists, and only when engine API keys are on. There is no network
   bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
   only a clearinghouse admin issues another.
-- **Payment keys (#166):** a payment key (`lpp_`) is no access key. It asks a clearinghouse for one
-  actor's payments and nothing else, at the signer's two paths (`POST /sign-orchestrator-info`,
-  `POST /generate-live-payment`): as a bearer on any other route it gets what no credential gets, 401.
-  Those two paths do not go through the authenticator chain: a payment key is the one credential there,
-  and an access key or a JWT is 401 ([payments.md](payments.md#signing-through-a-clearinghouse)).
+- **Payment keys (#166):** an allocation's key (`lpg_`) is no access key. It is a credential at the
+  signer and nowhere else: as a bearer on any engine route it gets what no credential gets, 401. The
+  engine that runs an actor's jobs holds that actor's key. With self-hosted payments that is the one
+  engine, which keeps it in its `SecretStore` and returns it in no answer. At a standalone clearinghouse
+  it is the enterprise's engine: allotment and rotation hand it the key once, in an answer only that
+  tenant's admin or a clearinghouse admin can get, and the clearinghouse keeps none
+  ([payments.md](payments.md#payment-keys)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 
@@ -357,8 +359,7 @@ Both are generic: no enterprise logic lives in the engine.
 | A tenant's auditor key | That tenant's admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
 | Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
-| Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
-| Payment key (`lpp_`, #166) | A clearinghouse's engine, when it allots the actor's allocation | The enterprise's engine, where it keeps a Batteries key today; the clearinghouse keeps the hash | The tenant's admin: `rotate-payment-key` (the old one stops at once) / `revoke` |
+| Allocation key (`lpg_`) | Engine, through the Batteries management API | Self-hosted payments: the engine's `SecretStore` (a reference in the DB). At a standalone clearinghouse: the enterprise's engine, handed the key once by allotment or rotation; the clearinghouse keeps a receipt and no key (`credential_custody`, [payments.md](payments.md#payment-keys)) | Engine: `rotate-payment-key` / `revoke`, on the tenant admin's command |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 
 ## Example standalone flow

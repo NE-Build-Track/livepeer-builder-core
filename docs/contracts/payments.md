@@ -1197,11 +1197,24 @@ Member by member: `{t}` is the tenant and `{a}` the actor, and every path begins
 
   A repeat at the enterprise's engine is therefore a repeat at the clearinghouse, which answers it from
   its own ledger. The adapter itself never sends a request twice.
-- **The allocation is checked before a write.** The routes act on whichever allocation the actor holds
-  at the clearinghouse. Before a top-up, a status change or a rotation the adapter reads the actor's
-  allocation there, and refuses with 404 when it is not the one the engine names. A rotation answered
-  for another allocation is refused the same way, and its key is not kept. A revoke of an allocation the
-  clearinghouse has already ended sends nothing.
+- **The allocation is checked before a write, and in its answer.** The routes act on whichever
+  allocation the actor holds at the clearinghouse when a command arrives. Before a top-up, a status
+  change, a revoke or a rotation the adapter reads the actor's allocation there. It refuses with 404
+  when it is not the one the engine names, and a revoke of an allocation the clearinghouse has already
+  ended sends nothing. That read proves what the clearinghouse held then, and no more: a revoke and a new
+  allotment there can land before the command does. So the adapter also reads the allocation each route
+  answers, which is the one it acted on. When that is another allocation than the one named:
+  - the command is no success and no refusal: `ProviderError` with the answer's 2xx (502 over REST), as
+    for any answer the engine cannot use. The reference of a top-up or a rotation stays held, since
+    something was applied;
+  - the engine's record of the actor is not changed, and a rotation's key is not kept;
+  - the message names both allocations, says nothing is recorded here, and says what to do: for a
+    top-up, where the amount is now; for a status, to set it again there; for a revoke, to repeat it,
+    which sends nothing and records that the named allocation has ended; for a rotation, that the other
+    allocation's holder rotates its key again.
+
+  The adapter finds this out and cannot prevent it: the routes take no allocation id (tech debt T53). A
+  read that is answered for another allocation is a plain 404, since it applied nothing.
 - **No work route of the clearinghouse is called.** The allowance is read from the actor's allocation
   route, which answers it with the record ([Allowance](#allowance)). The remote adapters, the discovery
   reader and `lpb payments check` call the tenant's routes and the runner list, and nothing else of the

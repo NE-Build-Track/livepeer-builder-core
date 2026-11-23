@@ -154,7 +154,8 @@ async def test_no_error_of_an_allotment_whose_answer_holds_a_key_carries_the_ans
 
 
 async def test_no_error_of_a_rotation_whose_answer_holds_a_key_carries_the_answer_or_the_key() -> None:
-    """The rotation is answered for another allocation than the one named: refused, with the key in hand."""
+    """The rotation is answered for another allocation than the one named: no success, with the key in
+    hand."""
     other = HANDED | {"allocation_id": "alloc_2"}
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -163,7 +164,7 @@ async def test_no_error_of_a_rotation_whose_answer_holds_a_key_carries_the_answe
 
     with pytest.raises(ProviderError) as refused:
         await manager_over(wire(httpx.MockTransport(handle))).create_key("alloc_1", "n", "k")
-    assert refused.value.status_code == 404 and clean(refused.value)
+    assert refused.value.status_code == 200 and clean(refused.value)
 
 
 async def test_a_rotation_whose_answer_is_lost_carries_nothing_of_the_request() -> None:

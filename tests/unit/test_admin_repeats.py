@@ -22,6 +22,7 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     OperationRecord,
+    SeenActor,
     TopUpRequest,
 )
 from livepeer_builder.errors import (
@@ -1066,3 +1067,88 @@ async def test_a_allotment_resumed_after_its_actor_was_saved_returns_that_actor(
     clock.advance(120)
     assert await engine.payments.allot(admin, allot_request()) == saved
     assert manager.calls == ["create_key_for_grant"]
+
+
+@pytest.mark.parametrize("before", ["", "Alice Example"], ids=["first-sign-in", "renamed"])
+async def test_a_name_recorded_between_an_allotment_that_died_and_its_resume_is_refused_by_the_provider(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    before: str,
+) -> None:
+    """A known gap, pinned as it is and not as it should be (#166 review). An allotment with no label names
+    its allocation after the person's sign-in name, read when the run reaches the provider. A run that
+    died before saving the actor reads it again on its resume: when the person signed in, or was renamed,
+    in between, the resume sends another name under the first run's idempotency key and Batteries refuses
+    it (409). The reference stays held, so every repeat is refused the same way while the allocation the
+    first run funded stays at the provider with no actor here."""
+    engine = await make_engine()
+
+    async def signed_in(name: str) -> None:
+        seen = SeenActor(
+            tenant_id="default", actor_id="alice", name=name, first_seen_at=clock.now(), last_seen_at=clock.now()
+        )  # fmt: skip
+        await store.save_sighting(seen)
+
+    if before:
+        await signed_in(before)
+    allot_actor, create = store.allot_actor, manager.create_key_for_grant
+    names: list[str] = []
+
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
+        raise ConnectionError("the database went away")
+
+    async def named(grant_id: str, name: str, amount: Money, sent_as: str) -> object:
+        names.append(name)
+        return await create(grant_id, name, amount, sent_as)
+
+    monkeypatch.setattr(store, "allot_actor", lost)
+    monkeypatch.setattr(manager, "create_key_for_grant", named)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request())
+    await signed_in("Alice E. Example")
+    for _ in range(2):
+        clock.advance(120)
+        with pytest.raises(ProviderError) as refused:
+            await engine.payments.allot(admin, allot_request())
+        assert refused.value.status_code == 409 and "idempotency key" in refused.value.message
+    assert names == [before or "default/alice", "Alice E. Example", "Alice E. Example"]
+    assert len(manager.allocations) == 1 and manager.unallocated("default") == 995  # funded, once
+    assert await store.get_actor("default", "alice") is None
+
+
+async def test_another_amount_for_an_actor_whose_allotment_died_at_the_provider_is_refused_there(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider key is actor-derived, so a second reference meets the first one's allocation there.
+    With the first run's amount it gets that allocation replayed; with another amount Batteries refuses
+    it (409), so that amount is never recorded as allotted when it was not. Nothing was applied, the
+    reference is freed, and the first reference still resumes to the allocation it funded."""
+    engine = await make_engine()
+    allot_actor = store.allot_actor
+
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "allot_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
+    for _ in range(2):  # freed each time, so refused again at once and never in progress
+        with pytest.raises(ProviderError) as refused:
+            await engine.payments.allot(admin, allot_request(amount="7", ref="p-b"))
+        assert refused.value.status_code == 409 and "idempotency key" in refused.value.message
+    assert await store.get_actor("default", "alice") is None
+    clock.advance(120)
+    resumed = await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
+    assert (await manager.read_allocation(resumed.allocation_id)).granted == usd("5")
+    assert len(manager.allocations) == 1 and manager.unallocated("default") == 995

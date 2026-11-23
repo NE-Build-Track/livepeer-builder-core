@@ -17,7 +17,13 @@ import pytest
 from sqlalchemy import select, update
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.contracts import ActorContext, AllotRequest, DeliveredAllocation, SecretRef
+from livepeer_builder.contracts import (
+    ActorContext,
+    AllotRequest,
+    DeliveredAllocation,
+    SecretRef,
+    SeenActor,
+)
 from livepeer_builder.docs_gen import render_openapi
 from livepeer_builder.errors import AccessDenied, NotFound, NotProvisioned
 from livepeer_builder.http.app import create_app, shared_app
@@ -420,6 +426,57 @@ async def test_a_resumed_delivery_hands_over_the_key_the_first_run_was_given(
     with pytest.raises(NotProvisioned, match="work engine"):
         await engine.payments.credential(alice)  # the work engine holds it, as on a first delivery
     assert not (await allot_delivered(engine, admin, allot_request("bob"))).resumed  # each command resets it
+
+
+@pytest.mark.parametrize("label", ["", "Alice, on trial"], ids=["named-by-her-sign-in", "labelled"])
+@pytest.mark.parametrize(
+    ("write", "applied"),
+    [
+        pytest.param("allot_actor", False, id="before-the-actor-row"),
+        pytest.param("allot_actor", True, id="the-actor-row-written-then-lost"),
+        pytest.param("complete_operation", False, id="before-the-record-completes"),
+    ],
+)
+async def test_a_resumed_delivery_sends_the_provider_the_request_its_first_run_sent(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    write: str,
+    applied: bool,
+    label: str,
+) -> None:
+    """Batteries replays a saved success only to the request it was first given for; any other under that
+    idempotency key is its 409. The first run names the allocation after the person's sign-in name when
+    the request gives no label, so a resume sends that name again wherever the first run died. Refused,
+    the allotment could never finish, and nobody would hold its live key (#166 review)."""
+    engine = await make_engine()
+    await store.save_sighting(
+        SeenActor(
+            tenant_id="default",
+            actor_id="alice",
+            name="Alice Example",
+            first_seen_at=clock.now(),
+            last_seen_at=clock.now(),
+        )
+    )
+    request = allot_request(label=label)
+    given = provider_answers(manager, monkeypatch, "create_key_for_grant")
+    lose_once(monkeypatch, store, write, apply=applied)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot_for_delivery(admin, request)
+    clock.advance(STALE_S)
+    resumed = await allot_delivered(engine, admin, request)
+
+    assert resumed.resumed and resumed.label == (label or "Alice Example")
+    assert key_of(resumed) == given[0] and given[0].startswith("lpg_")
+    assert given == [given[0]] * 2  # the provider was asked again, and replayed the first run's key
+    assert len(manager.keys) == 1 and len(manager.allocations) == 1  # nothing minted or allotted twice
+    again = await allot_delivered(engine, admin, request)
+    assert again.allocation_api_key is None and again.replayed and not again.resumed
+    assert manager.calls.count("create_key_for_grant") == 2  # the repeat is answered from the record
 
 
 async def test_two_allotments_of_one_actor_both_carry_the_key_the_provider_gave_both(

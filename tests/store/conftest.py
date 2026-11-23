@@ -34,11 +34,19 @@ async def database_url(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncI
     yield url
 
 
+# Columns a revision after 0014 added, which neither 0014 nor any revision before it has: 0015 records an
+# actor's credential custody (#186 review).
+ADDED_SINCE_0014 = {"lpb_actors": {"credential_custody"}}
+
+
 def as_before_0014(current: Table) -> TableClause:
     """``current`` under the column names it had at every revision before 0014, where a tenant was an
-    application (#163): for a row a test writes while the database is at one of those revisions."""
+    application (#163), and without the columns added since: for a row a test writes while the database
+    is at one of those revisions."""
     old = {"tenant_id": "application_id"}
-    return table(current.name, *(column(old.get(c.name, c.name), c.type) for c in current.columns))
+    added = ADDED_SINCE_0014.get(current.name, set())
+    kept = [c for c in current.columns if c.name not in added]
+    return table(current.name, *(column(old.get(c.name, c.name), c.type) for c in kept))
 
 
 def make_job(

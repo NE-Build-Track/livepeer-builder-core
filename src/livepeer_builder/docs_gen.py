@@ -8,7 +8,7 @@ from livepeer_builder.store.schema import metadata
 
 
 async def render_openapi() -> str:
-    from livepeer_builder.http import create_app
+    from livepeer_builder.http.app import create_app
     from livepeer_builder.runtime.assembly import EngineSupply
     from livepeer_builder.testing import FakeAllocationManager
 
@@ -21,6 +21,8 @@ async def render_openapi() -> str:
     )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:
+        # The app ``lpb serve`` runs, built the same way, so the spec documents what ships (#186 review).
+        # Handing allocation keys over belongs to the clearinghouse role, which #169 mounts.
         schema = create_app(engine, manage_lifecycle=False).openapi()
     finally:
         await engine.stop()

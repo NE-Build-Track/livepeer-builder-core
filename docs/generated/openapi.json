@@ -90,6 +90,15 @@
             "title": "Created At",
             "type": "string"
           },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
           "currency": {
             "enum": [
               "USD",
@@ -2049,7 +2058,7 @@
       },
       "SecretRef": {
         "additionalProperties": false,
-        "description": "A handle to a secret held by a SecretStore. Databases, records and logs hold only this.",
+        "description": "A SecretStore handle, or an opaque receipt for a credential the work engine holds. Which one is the\nactor's ``credential_custody``, never the text of ``ref``.",
         "properties": {
           "ref": {
             "minLength": 1,
@@ -2283,11 +2292,14 @@
       },
       "TenantGrant": {
         "additionalProperties": false,
-        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it.",
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166).",
         "properties": {
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Money-Output"
           },
           "status": {
             "title": "Status",
@@ -2309,7 +2321,8 @@
           "name",
           "status",
           "total",
-          "unallocated"
+          "unallocated",
+          "spent"
         ],
         "title": "TenantGrant",
         "type": "object"
@@ -2563,6 +2576,31 @@
           }
         ],
         "summary": "Allowance"
+      }
+    },
+    "/v1/clearinghouse/discovery": {
+      "get": {
+        "description": "The clearinghouse's runner list, in livepeer/node's discovery format: what an enterprise's\nengine reads as its ``LPB_DISCOVERY_URL``. The document is served as the clearinghouse read\nit. Any credential of a tenant may read it.",
+        "operationId": "discovery_v1_clearinghouse_discovery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "The livepeer/node `/discovery` document the clearinghouse last read."
+          },
+          "503": {
+            "description": "The clearinghouse has read no runner list yet."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Discovery"
       }
     },
     "/v1/clearinghouse/tenants": {

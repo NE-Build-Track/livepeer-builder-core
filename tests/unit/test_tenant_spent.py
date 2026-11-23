@@ -12,12 +12,14 @@ from decimal import Decimal
 import httpx
 import pytest
 
+from livepeer_builder.adapters.batteries import BatteriesClient
 from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.errors import ProviderError
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
-from tests.unit.test_batteries_grants import Batteries, allocation, grant, usd
+from tests.unit.test_batteries_grants import BASE, Batteries, allocation, grant, usd
+from tests.unit.test_provider_answers import CYCLES
 
 
 def spending(allocation_id: str, grant_id: str, allocated: str, spent: str, currency: str = "usd") -> dict:  # type: ignore[type-arg]
@@ -59,6 +61,34 @@ async def test_a_spent_figure_the_engine_cannot_read_is_never_a_zero(spent: obje
         await batteries.client().read_grant("g1")
     with pytest.raises(ProviderError):
         await batteries.client().grant_balances()
+
+
+@pytest.mark.parametrize("route", CYCLES.values(), ids=CYCLES)
+async def test_allocations_whose_cursor_comes_back_are_a_provider_error_and_never_a_spent_figure(
+    route: dict[str, str],
+) -> None:
+    """#158: the read behind ``spent`` and the unallocated balance is the client's paged list. A list of
+    allocations that goes round (A, B, A) is refused as a grant list's is, within a few turns of it, and
+    is never followed without end or answered with the sum of the pages read so far."""
+    batteries = Batteries([grant("g1", "5")], [])
+    asked: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v1/allocations":
+            return batteries.handle(request)
+        asked.append(request.url.params.get("cursor", ""))
+        if len(asked) > 40:
+            raise httpx.ConnectError("the list never ended")
+        held = spending(f"a-{asked[-1]}", "g1", "1", "0.25")
+        return httpx.Response(200, json={"items": [held], "next_cursor": route[asked[-1]]})
+
+    http = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
+    client = BatteriesClient(BASE, "t", client=http)
+    for read in (lambda: client.read_grant("g1"), client.grant_balances):
+        asked.clear()
+        with pytest.raises(ProviderError, match="did not advance"):
+            await read()
+        assert len(asked) <= 3 * len(route)
 
 
 async def test_the_tenant_list_and_the_grant_read_show_what_each_tenant_spent(

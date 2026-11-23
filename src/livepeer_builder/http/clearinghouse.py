@@ -4,10 +4,10 @@ access keys and its usage. Beside them, ``/v1/clearinghouse/discovery``: the run
 publishes (#166).
 
 Allotment and payment key rotation answer the allocation. Mounted for a standalone clearinghouse
-(``deliver_allocation_keys``, the default) they also hand the allocation's own Batteries key to the caller,
-once: the enterprise's engine keeps it and signs at the signer itself, and the clearinghouse stores none
-(D85 point 1, D87 point 1; docs/contracts/payments.md, "Payment keys"). No route here signs or forwards a
-payment.
+(``deliver_allocation_keys=True``) they also hand the allocation's own Batteries key to the caller, once:
+the enterprise's engine keeps it and signs at the signer itself, and the clearinghouse stores none (D85
+point 1, D87 point 1; docs/contracts/payments.md, "Payment keys"). The keyword has no default: whoever
+mounts these routes says who keeps the keys. No route here signs or forwards a payment.
 
 One unit, mounted by itself or beside the work set (D84). It is typed against ``ClearinghouseApi``, so it
 cannot run a job. Routes are thin: each authenticates, then makes one engine call, and authorization
@@ -67,13 +67,15 @@ DISCOVERY = "/v1/clearinghouse/discovery"
 
 
 def mount_clearinghouse_routes(
-    app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool = True
+    app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool
 ) -> None:
-    """Mount both groups. With ``deliver_allocation_keys``, for a standalone clearinghouse, allotment and
-    rotation hand each allocation's key to the caller once and store none.
+    """Mount both groups. ``deliver_allocation_keys`` is required (Mike, 23 November 2026). ``True``, for a
+    standalone clearinghouse: allotment and rotation hand each allocation's key to the caller once and
+    store none.
 
-    ``create_app`` passes ``False``: an engine with both halves stores the key for its own jobs and returns
-    none. Any app that mounts this set on an engine that also runs jobs passes ``False`` too.
+    ``False``, for an engine that also runs jobs: it stores the key for its own jobs and returns none.
+    ``create_app`` passes ``False``. With ``True`` on such an engine the caller is handed each key, the
+    engine stores none, and that actor's jobs fail ``not_provisioned``.
     """
     mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
     mount_clearinghouse_admin_routes(app, engine)
@@ -118,12 +120,11 @@ def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> 
         return replay(response, state)
 
 
-def mount_tenant_routes(
-    app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool = True
-) -> None:
+def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool) -> None:
     """Add what a tenant's admin or auditor calls for its own tenant: its grant, its actors and their
     allocations, its usage and its access keys. A clearinghouse admin calls them for any tenant. With
-    them, the clearinghouse's runner list, which any credential of a tenant reads."""
+    them, the clearinghouse's runner list, which any credential of a tenant reads.
+    ``deliver_allocation_keys`` is required, as for ``mount_clearinghouse_routes``."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     if engine.payments.tenants is not None:  # reading a grant needs the tenant desk

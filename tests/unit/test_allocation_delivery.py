@@ -857,7 +857,7 @@ async def test_clearinghouse_routes_deliver_and_expose_no_signer_proxy(make_engi
     assert engine.keys is not None
     key = await engine.keys.bootstrap_admin()
     app = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(app, engine)
+    mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)
     headers = {"Authorization": f"Bearer {key.token}"}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "first"}
@@ -889,7 +889,7 @@ async def test_a_resumed_delivery_is_marked_in_the_http_answer(
     assert engine.keys is not None
     key = await engine.keys.bootstrap_admin()
     app = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(app, engine)
+    mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)
     headers = {"Authorization": f"Bearer {key.token}"}
     body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "first"}
     lose_once(monkeypatch, store, "allot_actor")

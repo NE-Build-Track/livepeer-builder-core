@@ -791,8 +791,8 @@ The routes are two sets (D84). `mount_work_routes` adds the work half's routes t
 `mount_clearinghouse_routes` the clearinghouse half's, each typed against its half of the facade.
 `shared_app` builds the app both need: the lifecycle, the error answers, the request limit and health.
 `create_app` mounts both sets on it, the clearinghouse set with `deliver_allocation_keys=False`: an
-engine with both halves stores each payment key and returns none. Mounted by itself, with the default,
-that set hands each key to the caller once
+engine with both halves stores each payment key and returns none. Mounted by itself with
+`deliver_allocation_keys=True`, that set hands each key to the caller once. The keyword is required
 ([payments.md](../contracts/payments.md#payment-keys)). Every route is a closure over `engine`: nothing is looked up from a
 global or from `app.state`. `actor_dependency(engine)` is the authentication dependency, and routes you
 add with `extend` use the same one.

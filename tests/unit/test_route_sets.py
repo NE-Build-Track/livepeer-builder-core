@@ -15,7 +15,10 @@ Reconciliation, cost sync and the engine's own access keys are work routes
 (tests/unit/test_work_route_paths.py).
 """
 
+from collections.abc import Callable
+
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
@@ -151,7 +154,7 @@ async def test_the_work_set_mounts_by_itself(make_engine: EngineFactory) -> None
 async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory) -> None:
     engine = await make_engine()
     app = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(app, engine)
+    mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)
     assert served(app) == HEALTH | CLEARINGHOUSE | OPTIONAL
     assert all(path.startswith("/v1/clearinghouse/") for _, path in served(app) - HEALTH)
     in_a_tenant = served(app) - HEALTH - RUNNER_LIST  # the list is every tenant's: it names none
@@ -167,6 +170,20 @@ async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory
         for method, path in (("GET", "/v1/jobs"), ("GET", "/v1/offerings"), ("GET", "/v1/keys")):
             assert (await client.request(method, path, headers=admin)).status_code == 404, path
         assert (await client.post("/v1/costs/sync", headers=admin)).status_code == 404
+
+
+@pytest.mark.parametrize("mount", [mount_clearinghouse_routes, mount_tenant_routes])
+async def test_mounting_the_allocation_routes_says_who_keeps_the_keys(
+    make_engine: EngineFactory, mount: Callable[..., None]
+) -> None:
+    """``deliver_allocation_keys`` has no default (Mike, 23 November 2026). Defaulted to delivering, an
+    app that mounted the set by hand on an engine that also runs jobs handed each key to the caller and
+    stored none, and that actor's jobs then failed ``not_provisioned``."""
+    engine = await make_engine()
+    app = shared_app(engine, manage_lifecycle=False)
+    with pytest.raises(TypeError, match="deliver_allocation_keys"):
+        mount(app, engine)
+    assert served(app) == HEALTH  # and nothing was mounted
 
 
 async def test_health_is_shared_by_both_halves(make_engine: EngineFactory) -> None:
@@ -193,7 +210,7 @@ async def test_each_optional_group_is_absent_from_its_own_set_when_it_is_off(
     mount_work_routes(work, engine)
     assert served(work) == HEALTH | WORK
     clearinghouse = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(clearinghouse, engine)
+    mount_clearinghouse_routes(clearinghouse, engine, deliver_allocation_keys=True)
     assert served(clearinghouse) == HEALTH | CLEARINGHOUSE | RUNNER_LIST  # the reader is always there
 
 
@@ -204,13 +221,13 @@ async def test_the_two_groups_of_the_clearinghouse_set_mount_by_themselves(
     function, and the tenants' own routes are another. Together they are the set, with nothing twice."""
     engine = await make_engine()
     tenants = shared_app(engine, manage_lifecycle=False)
-    mount_tenant_routes(tenants, engine)
+    mount_tenant_routes(tenants, engine, deliver_allocation_keys=True)
     assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ | RUNNER_LIST
     private = shared_app(engine, manage_lifecycle=False)
     mount_clearinghouse_admin_routes(private, engine)
     assert served(private) == HEALTH | ADMIN_ROUTES | TENANT_DESK
     both = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(both, engine)
+    mount_clearinghouse_routes(both, engine, deliver_allocation_keys=True)
     assert len([route for route in both.routes if isinstance(route, APIRoute)]) == len(
         (served(tenants) | served(private)) - HEALTH
     ) + len(HEALTH)

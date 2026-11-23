@@ -110,6 +110,9 @@ async def test_a_batteries_whose_on_chain_listener_is_off_reports_no_account() -
         [row(chain_id=42161)],
         [row(block="latest")],
         [row(block=412)],
+        [row(block="-2")],  # -1 is the one height below zero Batteries serves: before the first block
+        [row(block="--1")],
+        [row(block="-")],
         None,
     ],
 )

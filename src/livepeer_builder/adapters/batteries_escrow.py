@@ -56,9 +56,9 @@ def _eth(item: dict[str, Any], key: str) -> Decimal:
 
 def _block(item: dict[str, Any]) -> int:
     """The last block the listener confirmed, as Batteries serves it: a string of digits, or ``-1`` for
-    a snapshot taken before the chain's first block."""
+    a snapshot taken before the chain's first block. No other height is below zero."""
     value = item.get("confirmed_through_block")
-    digits = value.removeprefix("-") if isinstance(value, str) else ""
+    digits = "" if not isinstance(value, str) else "0" if value == "-1" else value
     if not (digits.isascii() and digits.isdigit()):
         raise ProviderError(
             200, "Batteries answered an escrow account with no usable confirmed_through_block"

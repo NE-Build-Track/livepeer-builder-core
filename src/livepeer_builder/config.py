@@ -122,7 +122,8 @@ class EngineSettings(Contract):
     clearinghouse_url: str | None = None
     clearinghouse_token: SecretStr | None = None  # the tenant admin key; sent as a bearer, never logged
     clearinghouse_tenant_id: GrantId | None = None
-    clearinghouse_timeout_s: float = Field(default=30.0, gt=0)  # each request to the clearinghouse
+    # each request to the clearinghouse. Six of them fit in the default stale window, as the rule below asks
+    clearinghouse_timeout_s: float = Field(default=20.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
     operation_stale_s: float = Field(default=120.0, gt=0)
 
@@ -289,8 +290,9 @@ class EngineSettings(Contract):
     @model_validator(mode="after")
     def _a_clearinghouse_is_whole_and_alone(self) -> "EngineSettings":
         """A half setting, or a clearinghouse beside a Batteries setting, is refused before the engine
-        starts (#168). Only names are said: three of these settings are secrets. ``LPB_SIGNER_URL`` is
-        no part of this rule: it is the clearinghouse's signer, set or unset as on any engine."""
+        starts (#168), and so is a stale window shorter than six timeouts of a clearinghouse call. Only
+        names are said: three of these settings are secrets. ``LPB_SIGNER_URL`` is no part of this rule:
+        it is the clearinghouse's signer, set or unset as on any engine."""
         named = [name for name in _CLEARINGHOUSE if getattr(self, name) is not None]
         if not named:
             return self
@@ -306,8 +308,19 @@ class EngineSettings(Contract):
                 "own engine reaches Batteries, and an engine that uses a payment clearinghouse holds no "
                 "address or credential of it"
             )
-        if self.operation_stale_s < 4 * self.clearinghouse_timeout_s:  # as for Batteries, just above
-            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
+        # As for Batteries, just above: the ledger cancels a run at half the stale window, and the longest
+        # command must fit in that half. Through the remote adapters that is three calls, each under one
+        # deadline of the timeout: a rotation that another rotation overtook in the engine reads the
+        # allocation, sends the rotation, and reads which key the allocation takes (OneKeyPerAllocation).
+        # Every other command makes one or two, and none writes after its second call: a read that is cut
+        # short leaves nothing in flight, and the resume asks again. 3 calls in the half, so 6 timeouts
+        # in the whole window, where Batteries' two calls make four.
+        if self.operation_stale_s < 6 * self.clearinghouse_timeout_s:
+            raise ValueError(
+                "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S: a command "
+                "is cancelled at half the stale window, and the longest one makes three calls to the "
+                "clearinghouse"
+            )
         return self
 
     @property

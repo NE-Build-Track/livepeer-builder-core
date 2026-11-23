@@ -3,15 +3,16 @@
 ``open_ports("local")`` is an engine whose payment ports reach the payment provider itself: self-hosted
 payments, with the shipped fakes standing in for Batteries. ``open_ports("remote")`` is an enterprise's
 engine whose ports are the remote adapters, over an in-process transport into a standalone
-clearinghouse's public listener (``standalone_clearinghouse``): the tenant routes alone, mounted to
-hand each allocation's key to the caller and store none. The clearinghouse is an engine of its own,
-with a store and a secret store of its own and the same fakes behind it. So on the remote side both
-ends of the wire are this repository's code, and the provider that holds the money is the same kind of
-object on both sides: a test reads it to see what happened.
+clearinghouse's public listener (``standalone_clearinghouse``): the app ``create_app`` builds for an
+engine in its ``clearinghouse`` role, which hands each allocation's key to the caller and stores none.
+The clearinghouse is an engine of its own, with a store and a secret store of its own and the same fakes
+behind it. So on the remote side both ends of the wire are this repository's code, and the provider that
+holds the money is the same kind of object on both sides: a test reads it to see what happened.
 
-Since #169 each engine is in the role its side has: ``local`` is the ``both`` role, the enterprise's
-engine is in its ``work`` role, and the clearinghouse in its ``clearinghouse`` role, which serves no work
-route and runs no job.
+Each engine is in the role its side has (#169): ``local`` is the ``both`` role, the enterprise's engine
+is in its ``work`` role, and the clearinghouse in its ``clearinghouse`` role, which serves no work route
+and runs no job. ``open_ports("remote", house=...)`` puts another engine where the clearinghouse should
+be: a test of what an enterprise's engine meets there.
 """
 
 import contextlib
@@ -28,9 +29,7 @@ from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.clearinghouse import ClearinghousePorts
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import ActorContext, Money
-from livepeer_builder.http.app import shared_app
-from livepeer_builder.http.clearinghouse import mount_tenant_routes
-from livepeer_builder.http.listeners import LISTENERS
+from livepeer_builder.http import create_app
 from livepeer_builder.protocols import AllocationManager, AllowanceReader, CredentialResolver, UsageSource
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, MemorySecretStore, make_engine
@@ -43,6 +42,8 @@ GRANT_TOTAL = Decimal(100)
 OPERATOR = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 # A clearinghouse has a private listener (#169). Nothing binds it here: the apps are called in process.
 CLEARINGHOUSE_ROLE: dict[str, object] = {"role": "clearinghouse", "http_private_port": 18081}
+# An engine with self-hosted payments and two listeners: no clearinghouse for anybody's engine.
+BOTH_ROLE: dict[str, object] = {"role": "both", "http_private_port": 18081}
 PERMISSIONS = frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 
 
@@ -133,27 +134,27 @@ def usd(amount: str | int) -> Money:
 
 
 @contextlib.asynccontextmanager
-async def open_ports(side: Side, served: AppOf | None = None) -> AsyncIterator[Ports]:
-    """``served`` builds the clearinghouse's app from its engine (remote): a standalone clearinghouse's
-    public listener unless a test serves something else."""
+async def open_ports(
+    side: Side, served: AppOf | None = None, house: dict[str, object] | None = None
+) -> AsyncIterator[Ports]:
+    """``served`` builds the app the enterprise's engine calls from the engine behind it (remote): a
+    standalone clearinghouse's public listener unless a test serves something else. ``house`` is that
+    engine's role and listeners: a clearinghouse's unless a test puts another engine there."""
     provider, provider_usage = FakeAllocationManager(), FakeUsageSource()
     if side == "local":
         async with _local(provider, provider_usage) as ports:
             yield ports
     else:
-        async with _remote(provider, provider_usage, served or standalone_clearinghouse) as ports:
+        role = CLEARINGHOUSE_ROLE if house is None else house
+        async with _remote(provider, provider_usage, served or standalone_clearinghouse, role) as ports:
             yield ports
 
 
 def standalone_clearinghouse(house: BuilderEngine) -> FastAPI:
-    """What a payment clearinghouse serves an enterprise's engine: the tenant routes and nothing else,
-    mounted to hand each allocation's key to the caller once and store none
-    (``deliver_allocation_keys=True``), under the public listener's rule on credentials. No shipped app
-    is this yet: the role setting that serves it is #169."""
-    app = shared_app(house, manage_lifecycle=False)
-    app.state.listener = LISTENERS["public"]
-    mount_tenant_routes(app, house, deliver_allocation_keys=True)
-    return app
+    """What a payment clearinghouse serves an enterprise's engine: the public listener of an engine in
+    its ``clearinghouse`` role, as ``lpb serve`` builds it. The role decides that each allocation's key
+    is handed to the caller once and none is stored; nothing here says so."""
+    return create_app(house, manage_lifecycle=False, listener="public")
 
 
 @contextlib.asynccontextmanager
@@ -178,7 +179,7 @@ async def _local(provider: FakeAllocationManager, usage: FakeUsageSource) -> Asy
 
 @contextlib.asynccontextmanager
 async def _remote(
-    provider: FakeAllocationManager, usage: FakeUsageSource, served: AppOf
+    provider: FakeAllocationManager, usage: FakeUsageSource, served: AppOf, role: dict[str, object]
 ) -> AsyncIterator[Ports]:
     # The clearinghouse's own engine, store and secret store: nothing of them is the enterprise engine's.
     house_secrets = MemorySecretStore()
@@ -186,7 +187,7 @@ async def _remote(
         allocation_manager=provider, grants_manager=provider, usage_source=usage, secret_store=house_secrets
     )
     async with contextlib.AsyncExitStack() as stack:
-        house = await stack.enter_async_context(make_engine(supply=house_supply, **CLEARINGHOUSE_ROLE))
+        house = await stack.enter_async_context(make_engine(supply=house_supply, **role))
         assert house.payments.tenants is not None
         one = await house.payments.tenants.onboard(OPERATOR, "one", usd(100), operation_ref="onboard-one")
         two = await house.payments.tenants.onboard(OPERATOR, "two", usd(100), operation_ref="onboard-two")

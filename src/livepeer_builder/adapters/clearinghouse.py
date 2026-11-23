@@ -302,8 +302,9 @@ class _ActorAllocation(ClearinghouseAllocations):
             raise ProviderError(
                 200,
                 "the clearinghouse answered with no key and did not say the answer was a repeat: it "
-                "keeps each allocation's key itself, so it is not serving as a standalone clearinghouse "
-                "and hands this engine none. The allocation exists there",
+                "keeps each allocation's key itself, as an engine that runs its own jobs does, and "
+                "hands this engine none. LPB_CLEARINGHOUSE_URL must name an engine in its clearinghouse "
+                "role (LPB_ROLE=clearinghouse). The allocation exists there",
             )
         own = await self._actors.get_actor(self._tenant_id, self._actor_id)
         if (

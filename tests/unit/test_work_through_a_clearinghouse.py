@@ -49,7 +49,6 @@ from livepeer_builder.testing import (
 )
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.paying_ports import FIXED_APP, LIVE_APP, Listening, listening, open_paying_ports, runners
-from tests.unit.payment_ports import standalone_clearinghouse
 from tests.unit.role_engines import PRIVATE_PORT, served
 from tests.unit.test_admin_route_sweep import filled
 from tests.unit.test_listeners import body_for
@@ -134,7 +133,7 @@ async def arrangement(net: Net, tmp_path: Path) -> AsyncIterator[Arrangement]:
         )
         assert house.keys is not None
         admin = bearer((await house.keys.bootstrap_admin()).token)
-        public_app = standalone_clearinghouse(house)
+        public_app = create_app(house, manage_lifecycle=False, listener="public")
         public = await stack.enter_async_context(listening(public_app))
         private = await stack.enter_async_context(
             client_of(create_app(house, manage_lifecycle=False, listener="private"))

@@ -26,9 +26,14 @@ to every kind of credential, as it did before #167. An engine in its ``clearingh
 two: its settings refuse to load without the private port, and ``mount_listener_routes`` refuses to
 build it the app of one listener.
 
-Every app this module builds keeps each allocation's key with the engine
-(``deliver_allocation_keys=False``), on one listener or two. No listener serves a signer path: no engine
-signs for another.
+**Who keeps each allocation's key** follows the role too (D85 point 1, D87 point 1), and
+``delivers_allocation_keys`` is the one place that says so. An engine that runs jobs, in its ``both``
+role, stores each key for its own jobs and returns none (``deliver_allocation_keys=False``). A
+standalone clearinghouse, the ``clearinghouse`` role, hands each key to the caller once, at allotment
+and at rotation, and stores none (``True``): the enterprise's engine keeps it and signs at the
+clearinghouse's published signer itself. An engine in its ``work`` role mounts no route that allots.
+``create_app`` asks that function and passes the answer to ``mount_listener_routes``, for the app of one
+listener and for each app of two. No listener serves a signer path: no engine signs for another.
 
 To serve a new group of routes, add a ``RouteGroup`` to ``ROUTE_GROUPS`` with its half, and
 ``private=True`` when only a clearinghouse admin calls it. A group that is not in the table is served by
@@ -91,6 +96,16 @@ EVERY_LISTENER: tuple[Mount, ...] = tuple(group.mount for group in ROUTE_GROUPS 
 PRIVATE_ONLY: tuple[Mount, ...] = tuple(group.mount for group in ROUTE_GROUPS if group.private)
 
 
+def delivers_allocation_keys(role: Role) -> bool:
+    """Whether an engine in ``role`` hands each allocation's key to the caller at allotment and rotation,
+    and stores none. The one place that decides it (D85 point 1, D87 point 1).
+
+    Only a role that runs no jobs does: the ``clearinghouse`` role. An engine that serves the work half
+    runs jobs, so it stores each key for them and returns none; handing a key over there would leave
+    that actor's jobs ``not_provisioned``."""
+    return WORK_HALF not in ROLE_HALVES[role]
+
+
 PRIVATE_TAG = "private listener"
 """The OpenAPI tag on every route of ``PRIVATE_ONLY``, so a published schema says where it is served."""
 HALF_TAGS: dict[Half, str] = {WORK_HALF: "work half", CLEARINGHOUSE_HALF: "clearinghouse half"}
@@ -140,15 +155,29 @@ LISTENERS: dict[ListenerName, Listener] = {
 }
 
 
-def mount_listener_routes(app: FastAPI, engine: EngineApi, name: ListenerName = "only") -> None:
+def mount_listener_routes(
+    app: FastAPI, engine: EngineApi, name: ListenerName = "only", *, deliver_allocation_keys: bool
+) -> None:
     """Add to ``app`` the groups of routes the engine's role serves on the listener ``name``, and put the
-    listener on ``app.state.listener``, where authentication reads the credentials it takes."""
+    listener on ``app.state.listener``, where authentication reads the credentials it takes.
+
+    ``deliver_allocation_keys`` is required, as for ``mount_tenant_routes``, which is handed it: whoever
+    mounts the routes says who keeps the keys. ``delivers_allocation_keys(engine.role)`` is the answer,
+    ``create_app`` passes it, and any other value raises ``ValueError``: an engine that runs jobs would
+    hand each key over and leave that actor's jobs ``not_provisioned``, and a clearinghouse would keep
+    keys its tenants' engines sign with."""
     halves = ROLE_HALVES[engine.role]
     if WORK_HALF not in halves and name == "only":  # the clearinghouse role
         raise ValueError(
             "an engine in its clearinghouse role serves two listeners, never one: what only a "
             "clearinghouse admin does is on the private listener alone. Run serve(), or build each app "
             'with create_app(engine, listener="public") and create_app(engine, listener="private")'
+        )
+    if deliver_allocation_keys != delivers_allocation_keys(engine.role):
+        raise ValueError(
+            "deliver_allocation_keys does not agree with the engine's role: an engine in its "
+            "clearinghouse role hands each allocation's key to the caller and stores none, and any other "
+            "stores each key for its own jobs. Pass delivers_allocation_keys(engine.role)"
         )
     listener = LISTENERS[name]
     app.state.listener = listener
@@ -158,7 +187,7 @@ def mount_listener_routes(app: FastAPI, engine: EngineApi, name: ListenerName = 
             continue
         before = len(app.routes)
         if group.mount is mount_tenant_routes:  # the one group that allots and rotates
-            mount_tenant_routes(app, engine, deliver_allocation_keys=False)
+            mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
         else:
             group.mount(app, engine)
         # Tagged here, from the table, and not on each route: a route added to a group is tagged too.

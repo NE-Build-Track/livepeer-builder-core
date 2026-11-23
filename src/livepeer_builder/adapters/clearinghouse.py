@@ -24,6 +24,8 @@ admin is told what replaces the key (``_ActorAllocation._handed``).
 The mapping, member by member, is in docs/contracts/payments.md#the-remote-adapters.
 """
 
+import base64
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NoReturn
@@ -78,9 +80,10 @@ class ClearinghouseAllocations:
         self._actors = actors
         self._secrets = secrets
 
-    def for_actor(self, tenant_id: str, actor_id: str) -> AllocationManager:
-        """The manager for one actor's allocation (``AllocationsByActor``)."""
-        return _ActorAllocation(self._wire, self._actors, self._secrets, tenant_id, actor_id)
+    def for_actor(self, tenant_id: str, actor_id: str, operation_ref: str | None = None) -> AllocationManager:
+        """The manager for one actor's allocation (``AllocationsByActor``), for the admin command under
+        ``operation_ref`` when it has one."""
+        return _ActorAllocation(self._wire, self._actors, self._secrets, tenant_id, actor_id, operation_ref)
 
     # -- the grant ----------------------------------------------------------------------------------
     # Every member below but ``read_grant`` is async by protocol and awaits nothing: it refuses, or has
@@ -173,11 +176,18 @@ class _ActorAllocation(ClearinghouseAllocations):
     """The same manager for one actor: each member that names an allocation calls that actor's route."""
 
     def __init__(
-        self, wire: ClearinghouseWire, actors: ActorRepo, secrets: SecretStore, tenant_id: str, actor_id: str
+        self,
+        wire: ClearinghouseWire,
+        actors: ActorRepo,
+        secrets: SecretStore,
+        tenant_id: str,
+        actor_id: str,
+        operation_ref: str | None,
     ) -> None:
         super().__init__(wire, actors, secrets)
         self._tenant_id = tenant_id
         self._actor_id = actor_id
+        self._operation_ref = operation_ref
 
     def _path(self, rest: str = "") -> str:
         return allocation_path(self._tenant_id, self._actor_id, rest)
@@ -185,13 +195,17 @@ class _ActorAllocation(ClearinghouseAllocations):
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
-        """Allot, and return the key the clearinghouse hands over. The engine's idempotency key is the
-        route's ``operation_ref``: a repeat here is a repeat there. An actor with no label of its own is
-        sent with none, so the clearinghouse names the allocation by its own default."""
+        """Allot, and return the key the clearinghouse hands over. A repeat here is a repeat there
+        (``_allotment_ref``). An actor with no label of its own is sent with none, so the clearinghouse
+        names the allocation by its own default."""
         if grant_id != self._tenant_id:  # a tenant's id is its grant's id (D83)
             raise InvalidRequest("an allocation is allotted from its own tenant's grant")
         label = "" if name == f"{self._tenant_id}/{self._actor_id}" else name
-        body = {"amount": _money(amount), "label": label, "operation_ref": idempotency_key}
+        body = {
+            "amount": _money(amount),
+            "label": label,
+            "operation_ref": self._allotment_ref(idempotency_key),
+        }
         return await self._handed(await self._wire.write_as(DeliveredAllocation, self._path(), body))
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
@@ -205,6 +219,17 @@ class _ActorAllocation(ClearinghouseAllocations):
             await self._wire.write_as(DeliveredAllocation, self._path("/rotate-payment-key"), body),
             rotated=allocation_id,
         )
+
+    def _allotment_ref(self, idempotency_key: str) -> str:
+        """An allotment's reference at the clearinghouse, which keys its own ledger on it for this tenant
+        admin key. The engine's idempotency key names the engine and the actor and no reference (two
+        references for one actor meet at Batteries by it), and the clearinghouse answers a reference it
+        finished without the key, for good. So the admin's reference is folded in: a new reference here
+        is a new command there, which the clearinghouse judges by its own record of the actor, and the
+        repeat of one reference is the repeat of one command."""
+        if self._operation_ref is None:
+            return idempotency_key
+        return _digest(idempotency_key, self._operation_ref)
 
     async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         await self._held(allocation_id)
@@ -343,6 +368,12 @@ async def read_allowance(
     if read.allowance is None:
         raise ProviderUnavailable("the clearinghouse could not read the allowance at its payment provider")
     return read.allowance
+
+
+def _digest(*parts: str) -> str:
+    """base64url(sha256(parts joined by ``:``)): 43 characters, as the engine's idempotency keys are."""
+    digest = hashlib.sha256(":".join(parts).encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 def _never_arrived(actor_id: str, allocation_id: str, *, rotation: bool) -> InvalidRequest:

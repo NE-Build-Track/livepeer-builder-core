@@ -1,6 +1,8 @@
 """#168: what only the remote adapters do. The contract both sets of adapters share is in
 ``test_payment_port_suite.py``; this file is what is true of an enterprise's engine and no other.
 
+- A command's reference at the clearinghouse, which keys its own ledger on it: a repeat here is a repeat
+  there, and a new reference here is a new command there.
 - The clearinghouse's routes name an actor and no allocation id, so the allocation is checked before a
   command is sent.
 - What only a clearinghouse admin does is refused in the engine, and nothing is sent.
@@ -10,6 +12,8 @@ The key an allotment or a rotation hands over, and what the engine does without 
 ``test_clearinghouse_handed_keys.py``.
 """
 
+import base64
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -24,6 +28,7 @@ from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest, UsageRow
 from livepeer_builder.errors import AccessDenied, InvalidRequest, ProviderError, ProviderOutcomeUnknown
 from livepeer_builder.protocols import ActorRepo, AllocationManager, AllocationsByActor
+from livepeer_builder.services.grants import idempotency_key
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.testing import FixedClock, MemorySecretStore
 from tests.unit.payment_ports import OPERATOR, Ports, open_ports, usd
@@ -67,7 +72,58 @@ def bodies(ports: Ports, ending: str) -> list[dict[str, Any]]:
     ]
 
 
-# -- what is sent ------------------------------------------------------------------------------------------
+# -- the reference a command carries to the clearinghouse ---------------------------------------------------
+
+
+def folded(*parts: str) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(":".join(parts).encode()).digest()).decode().rstrip("=")
+
+
+async def test_an_allotment_reference_names_the_engine_the_actor_and_the_admins_reference(
+    ports: Ports,
+) -> None:
+    """The clearinghouse keys its ledger on the ``operation_ref`` it is sent, for the tenant admin key that
+    sent it. The engine's own idempotency key for an allotment names the engine and the actor and no
+    reference, so the admin's reference is folded into it."""
+    await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    [allot] = bodies(ports, ALLOCATION)
+    engine_key = idempotency_key(
+        ports.engine.settings.engine_id, f"provision:{ports.tenant_id}:alice", "api-key"
+    )
+    sent_as = folded(engine_key, "allot-alice")
+    assert allot == {"amount": {"amount": "5", "currency": "USD"}, "label": "", "operation_ref": sent_as}
+    assert len(sent_as) == 43
+    # the clearinghouse's own ledger holds the command under that reference, for the tenant's admin
+    held = await house(ports).store.get_operation(ports.tenant_id, "tenant-admin", sent_as)
+    assert held is not None and (held.command, held.state) == ("allot", "done")
+    # a repeat here is a repeat there: one command, and nothing more is sent for it
+    await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    assert len(bodies(ports, ALLOCATION)) == 1
+
+
+async def test_a_top_up_and_a_rotation_carry_the_engine_key_which_names_the_admins_reference(
+    ports: Ports,
+) -> None:
+    allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    engine_id = ports.engine.settings.engine_id
+
+    top_up = TopUpRequest(amount=usd(2), operation_ref="t-1")
+    await ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", top_up)
+    [sent] = bodies(ports, ALLOCATION + "/top-up")
+    assert sent["operation_ref"] == idempotency_key(engine_id, f"fund:{allotted.allocation_id}:t-1", "fund")
+
+    await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
+    [rotated] = bodies(ports, ALLOCATION + "/rotate-payment-key")
+    assert rotated == {
+        "operation_ref": idempotency_key(engine_id, f"rotate:{allotted.allocation_id}:r-1", "api-key")
+    }
+
+
+async def test_a_manager_asked_for_no_reference_sends_the_engine_key_as_it_is() -> None:
+    """``for_actor`` without a reference, as a caller of the port alone makes it."""
+    manager, seen = scripted({"/allocation": httpx.Response(201, json=HANDED)})
+    await manager.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "the-engine-key")
+    assert json.loads(seen[0].content)["operation_ref"] == "the-engine-key"
 
 
 async def test_a_label_is_sent_and_an_actor_with_none_is_named_by_the_clearinghouse(ports: Ports) -> None:

@@ -167,8 +167,8 @@ class PaymentsService:
         )
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
-        # refused before the ledger: nothing was sent
-        manager = self._manager_for(request.tenant_id, request.actor_id)
+        # refused before the ledger: nothing was sent. A manager that keeps a ledger by reference is told it
+        manager = self._manager_for(request.tenant_id, request.actor_id, request.operation_ref)
 
         async def steps(run: RunningOperation) -> ActorAllocation:
             return await self._allot(run, admin, manager, request, keys)
@@ -482,11 +482,16 @@ class PaymentsService:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
 
-    def _manager_for(self, tenant_id: str, actor_id: str) -> AllocationManager:
+    def _manager_for(
+        self, tenant_id: str, actor_id: str, operation_ref: str | None = None
+    ) -> AllocationManager:
         """The manager for a command about one actor's allocation. A provider that names an actor and not
-        an allocation id, as a payment clearinghouse does, is told which (``AllocationsByActor``, #168)."""
+        an allocation id, as a payment clearinghouse does, is told which (``AllocationsByActor``, #168),
+        and an allotment's ``operation_ref`` with it."""
         manager = self._require_manager()
-        return manager.for_actor(tenant_id, actor_id) if isinstance(manager, AllocationsByActor) else manager
+        if isinstance(manager, AllocationsByActor):
+            return manager.for_actor(tenant_id, actor_id, operation_ref)
+        return manager
 
 
 def _allocation(tenant_id: str, actor_id: str) -> ResourceRef:

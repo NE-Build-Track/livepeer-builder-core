@@ -237,9 +237,15 @@ class AllocationsByActor(Protocol):
     actor has this: the engine, which knows the actor of every allocation command, calls ``for_actor``
     and sends that command to the manager it returns. The members that name a grant are called on the
     manager itself. ``ClearinghouseAllocations`` has it; ``BatteriesClient`` does not, and is called as
-    before. Without it nothing changes for a supplied manager."""
+    before. Without it nothing changes for a supplied manager.
 
-    def for_actor(self, tenant_id: str, actor_id: str) -> AllocationManager: ...
+    ``operation_ref`` is the admin's reference of an allotment, and ``None`` for every other command.
+    An allotment's idempotency key is derived from the actor and names no reference, so a manager whose
+    provider keeps a ledger of its own by reference (a clearinghouse) is told the admin's."""
+
+    def for_actor(
+        self, tenant_id: str, actor_id: str, operation_ref: str | None = None
+    ) -> AllocationManager: ...
 
 
 class UsageSource(Protocol):

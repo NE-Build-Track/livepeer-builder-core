@@ -28,6 +28,7 @@ from sqlalchemy import select
 from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest
 from livepeer_builder.errors import (
+    AlreadyAllotted,
     InvalidRequest,
     NotProvisioned,
     OperationInProgress,
@@ -283,6 +284,38 @@ async def test_a_lost_allotment_is_never_a_success_and_never_a_record_that_point
     # the engine's own record of the command stays started: it finished nothing
     held = await record_of(ports, "allot-alice")
     assert held is not None and held.state == "started"
+
+
+async def test_a_lost_allotment_is_put_right_by_revoking_it_at_the_clearinghouse_and_allotting_again(
+    ports: Ports,
+) -> None:
+    """The first review thread of #182. The engine has no record of the actor, so it can neither rotate
+    nor revoke it here; the tenant's admin revokes the allocation at the clearinghouse, with the key the
+    engine holds, and the engine allots again under a new reference. The clearinghouse keys its ledger
+    on the reference it is sent, which follows the admin's, so the second allotment is a new command
+    there and is handed a key."""
+    ports.lose_the_answer_to(ALLOCATION)
+    with pytest.raises(ProviderOutcomeUnknown):
+        await allot(ports)
+    lost_allocation = next(iter(ports.provider.allocations))
+    client = ports.manager._wire._client  # type: ignore[attr-defined]
+    revoke = f"http://clearinghouse.test/v1/clearinghouse/tenants/{ports.tenant_id}{ALLOCATION}/revoke"
+    answer = await client.post(revoke, headers={"Authorization": f"Bearer {ports.token}"})
+    assert answer.status_code == 200 and answer.json()["status"] == "revoked"
+    assert ports.provider.unallocated(ports.tenant_id) == 100  # what was allotted is back in the grant
+
+    anew = await allot(ports, ref="allot-alice-again", amount="4")
+
+    assert anew.allocation_id != lost_allocation and anew.status == "active"
+    assert ports.provider.unallocated(ports.tenant_id) == 96
+    key = await stored_key(ports)
+    assert await ports.pays_for(key) == anew.allocation_id and live_keys(ports) == {key}
+    # the first reference's record can now finish: its repeat is told the actor is allotted, and is freed
+    later(ports)
+    with pytest.raises(AlreadyAllotted):
+        await allot(ports)
+    assert await record_of(ports, "allot-alice") is None
+    assert len(ports.provider.allocations) == 2 and ports.provider.unallocated(ports.tenant_id) == 96
 
 
 async def test_a_lost_rotation_is_refused_plainly_and_a_rotation_under_a_new_reference_replaces_the_key(

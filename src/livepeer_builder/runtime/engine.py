@@ -46,6 +46,7 @@ class BuilderEngine:
         self.payments = services.payments
         self.costs = services.costs
         self.keys = services.keys
+        self.runner_list = services.runner_list
         self.admission = services.admission
         self.events = services.events
         self.sessions = services.sessions

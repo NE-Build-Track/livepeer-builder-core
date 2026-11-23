@@ -17,11 +17,11 @@ from livepeer_builder.runtime.engine import BuilderEngine
 from livepeer_builder.testing.discovery import FAKE_DISCOVERY_URL, serve
 from livepeer_builder.testing.fakes import (
     FakeAllocationManager,
-    FakeUsageSource,
     FixedClock,
     ScriptedStreamTransport,
     runner,
 )
+from livepeer_builder.testing.usage import FakeUsageSource
 
 MEMORY_URL = "sqlite+aiosqlite:///:memory:"
 

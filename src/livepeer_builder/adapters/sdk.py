@@ -58,10 +58,17 @@ class HttpDiscoverySource:
         )  # one per source: polls reuse its connection
         self._owns_client = client is None
         self._timeout_s = timeout_s
+        self._document: bytes | None = None  # the last body ``fetch`` read as an inventory
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def document(self) -> bytes | None:
+        """The document the last successful ``fetch`` read, as it was served (``DiscoveryDocumentSource``,
+        #166): what a clearinghouse serves as its runner list. ``None`` until one succeeded; a fetch that
+        fails, or reads an answer it cannot use, leaves it as it was."""
+        return self._document
 
     async def fetch(self) -> tuple[Runner, ...]:
         try:
@@ -71,7 +78,9 @@ class HttpDiscoverySource:
         except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
             message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
             raise TimeoutError(message) from error
-        return read_inventory(body)
+        runners = read_inventory(body)
+        self._document = body  # kept only once it read: the document the snapshot is built from
+        return runners
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
         request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})

@@ -60,16 +60,20 @@ from livepeer_builder.contracts.jobs import (
 )
 from livepeer_builder.contracts.operations import (
     OPERATION_REPLAYED,
+    OPERATION_RESUMED,
     OperationCommand,
     OperationRecord,
     OperationRef,
     OperationState,
 )
 from livepeer_builder.contracts.payments import (
+    CREDENTIAL_CUSTODIES,
     ActorAllocation,
     AllocationStatus,
     AllotRequest,
     Allowance,
+    CredentialCustody,
+    DeliveredAllocation,
     GrantPage,
     GrantRecord,
     KnownActor,
@@ -87,8 +91,10 @@ from livepeer_builder.contracts.payments import (
 from livepeer_builder.contracts.reserved import EngineEvent, EventPage, Session, SessionRequest
 
 __all__ = [
+    "CREDENTIAL_CUSTODIES",
     "DEFAULT_ACTOR_PERMISSIONS",
     "OPERATION_REPLAYED",
+    "OPERATION_RESUMED",
     "AccessKey",
     "ActorAllocation",
     "ActorContext",
@@ -105,8 +111,10 @@ __all__ = [
     "CostClass",
     "CostStatus",
     "CostSummary",
+    "CredentialCustody",
     "CredentialKind",
     "Currency",
+    "DeliveredAllocation",
     "DiscoverySnapshot",
     "EngineEvent",
     "EngineHealth",

@@ -139,7 +139,7 @@ def test_layer_edges(path: Path) -> None:
 
 @pytest.mark.parametrize("path", module_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_third_party_packages_are_confined(path: Path) -> None:
-    relative = str(path.relative_to(SRC))
+    relative = path.relative_to(SRC).as_posix()
     for module, line in imports_of(path):
         package = module.split(".")[0]
         homes = CONFINED.get(package)

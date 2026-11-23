@@ -17,8 +17,8 @@ from livepeer_builder.adapters.batteries import (
     BatteriesUsageSource,
     allowance_from_body,
     error_message,
-    usage_row_from_item,
 )
+from livepeer_builder.adapters.batteries_usage_rows import usage_row_from_item
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_call import network_kind
 from livepeer_builder.adapters.sdk import HttpDiscoverySource

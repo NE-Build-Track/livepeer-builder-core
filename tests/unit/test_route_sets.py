@@ -5,15 +5,20 @@ tenants, grants, allocations and payment keys. Each half's routes are one unit: 
 ``mount_clearinghouse_routes`` add them to an app that ``shared_app`` built, which carries what both
 halves share (health, the error answers, the request limit). ``create_app`` mounts both.
 
-Since #165 every clearinghouse route is under ``/v1/clearinghouse/tenants``, and the set is two groups
-that mount by themselves too: what a tenant's own admin calls (``mount_tenant_routes``), and what only a
-clearinghouse admin does (``mount_clearinghouse_admin_routes``), which #167 serves on a private listener.
+Since #165 every clearinghouse route that names a tenant is under ``/v1/clearinghouse/tenants``; the
+runner list a clearinghouse publishes is beside them, at ``/v1/clearinghouse/discovery`` (#166). The set
+is two groups that mount by themselves too: what a tenant's own admin calls (``mount_tenant_routes``),
+and what only a clearinghouse admin does (``mount_clearinghouse_admin_routes``), which #167 serves on a
+private listener.
 
 Reconciliation, cost sync and the engine's own access keys are work routes
 (tests/unit/test_work_route_paths.py).
 """
 
+from collections.abc import Callable
+
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
@@ -77,11 +82,16 @@ TENANT_KEYS = {  # a tenant's access keys: only when engine API keys are on
     ("POST", TENANT + "/keys/{key_id}/revoke"),
 }
 GRANT_READ = {("GET", TENANT + "/grant")}  # only when the tenant desk is on
+# only with a usage source that reads one tenant's records (#166)
+USAGE_READ = {("GET", TENANT + "/usage")}
+# the runner list a clearinghouse publishes (#166): only when the discovery source holds its document,
+# as the HTTP reader does
+RUNNER_LIST = {("GET", "/v1/clearinghouse/discovery")}
 # What only a clearinghouse admin does: a private listener's routes (#167).
 ADMIN_ROUTES = {("POST", TENANT + "/grant/top-up")}
 TENANT_DESK = {("POST", TENANTS), ("GET", TENANTS), ("POST", TENANT + "/status")}  # only when it is on
 CLEARINGHOUSE = TENANT_ROUTES | ADMIN_ROUTES
-OPTIONAL = TENANT_KEYS | GRANT_READ | TENANT_DESK
+OPTIONAL = TENANT_KEYS | GRANT_READ | TENANT_DESK | USAGE_READ | RUNNER_LIST
 # Gone since #165, with no alias: the tenant is in the path, and a tenant's id is its grant's id.
 REMOVED = [
     ("GET", "/v1/clearinghouse/actors"),
@@ -144,9 +154,11 @@ async def test_the_work_set_mounts_by_itself(make_engine: EngineFactory) -> None
 async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory) -> None:
     engine = await make_engine()
     app = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(app, engine)
+    mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)
     assert served(app) == HEALTH | CLEARINGHOUSE | OPTIONAL
-    assert all(path.startswith("/v1/clearinghouse/tenants") for _, path in served(app) - HEALTH)
+    assert all(path.startswith("/v1/clearinghouse/") for _, path in served(app) - HEALTH)
+    in_a_tenant = served(app) - HEALTH - RUNNER_LIST  # the list is every tenant's: it names none
+    assert all(path.startswith("/v1/clearinghouse/tenants") for _, path in in_a_tenant)
     admin, alice = await keys_of(engine)
     actors = ACTORS.format(tenant_id="default")
     async with client_of(app) as client:
@@ -158,6 +170,20 @@ async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory
         for method, path in (("GET", "/v1/jobs"), ("GET", "/v1/offerings"), ("GET", "/v1/keys")):
             assert (await client.request(method, path, headers=admin)).status_code == 404, path
         assert (await client.post("/v1/costs/sync", headers=admin)).status_code == 404
+
+
+@pytest.mark.parametrize("mount", [mount_clearinghouse_routes, mount_tenant_routes])
+async def test_mounting_the_allocation_routes_says_who_keeps_the_keys(
+    make_engine: EngineFactory, mount: Callable[..., None]
+) -> None:
+    """``deliver_allocation_keys`` has no default (Mike, 23 November 2026). Defaulted to delivering, an
+    app that mounted the set by hand on an engine that also runs jobs handed each key to the caller and
+    stored none, and that actor's jobs then failed ``not_provisioned``."""
+    engine = await make_engine()
+    app = shared_app(engine, manage_lifecycle=False)
+    with pytest.raises(TypeError, match="deliver_allocation_keys"):
+        mount(app, engine)
+    assert served(app) == HEALTH  # and nothing was mounted
 
 
 async def test_health_is_shared_by_both_halves(make_engine: EngineFactory) -> None:
@@ -175,15 +201,17 @@ async def test_each_optional_group_is_absent_from_its_own_set_when_it_is_off(
 ) -> None:
     """Engine API keys off: neither set has a key route. The tenant desk off: the clearinghouse set has
     no onboarding, tenant list, grant read or tenant status. The grant's top-up uses the engine's own
-    provider credential and stays."""
-    off = EngineSupply(api_keys=None, authenticators=(HeaderAuthenticator(),), grants_manager=None)
+    provider credential and stays. No usage source: no tenant's usage is served (#166)."""
+    off = EngineSupply(
+        api_keys=None, authenticators=(HeaderAuthenticator(),), grants_manager=None, usage_source=None
+    )
     engine = await make_engine(supply=off)
     work = shared_app(engine, manage_lifecycle=False)
     mount_work_routes(work, engine)
     assert served(work) == HEALTH | WORK
     clearinghouse = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(clearinghouse, engine)
-    assert served(clearinghouse) == HEALTH | CLEARINGHOUSE
+    mount_clearinghouse_routes(clearinghouse, engine, deliver_allocation_keys=True)
+    assert served(clearinghouse) == HEALTH | CLEARINGHOUSE | RUNNER_LIST  # the reader is always there
 
 
 async def test_the_two_groups_of_the_clearinghouse_set_mount_by_themselves(
@@ -193,13 +221,13 @@ async def test_the_two_groups_of_the_clearinghouse_set_mount_by_themselves(
     function, and the tenants' own routes are another. Together they are the set, with nothing twice."""
     engine = await make_engine()
     tenants = shared_app(engine, manage_lifecycle=False)
-    mount_tenant_routes(tenants, engine)
-    assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ
+    mount_tenant_routes(tenants, engine, deliver_allocation_keys=True)
+    assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ | RUNNER_LIST
     private = shared_app(engine, manage_lifecycle=False)
     mount_clearinghouse_admin_routes(private, engine)
     assert served(private) == HEALTH | ADMIN_ROUTES | TENANT_DESK
     both = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(both, engine)
+    mount_clearinghouse_routes(both, engine, deliver_allocation_keys=True)
     assert len([route for route in both.routes if isinstance(route, APIRoute)]) == len(
         (served(tenants) | served(private)) - HEALTH
     ) + len(HEALTH)

@@ -114,6 +114,7 @@ async def test_tenants_are_onboarded_and_listed_over_rest(api) -> None:  # type:
     five = {"amount": "5", "currency": "USD"}
     assert (await client.get(TENANTS, headers=admin)).json()[-1] == {
         "tenant_id": tenant_id, "name": "ops", "status": "active", "total": five, "unallocated": five,
+        "spent": {"amount": "0", "currency": "USD"},
     }  # fmt: skip
 
 

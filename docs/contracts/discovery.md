@@ -2,7 +2,7 @@
 
 - **Decision:** D63. Supersedes D43 except that the signer only signs. Amends D62 (1).
 - **Plan:** [discovery-service](../exec-plans/completed/discovery-service.md) (built 26 October to 5 November; removed here).
-- **Code:** `adapters/sdk.py` (`HttpDiscoverySource`), `adapters/discovery_inventory.py`, `contracts/discovery.py`.
+- **Code:** `adapters/sdk.py` (`HttpDiscoverySource`), `adapters/discovery_inventory.py`, `contracts/discovery.py`; `services/runner_list.py` for the list a clearinghouse serves.
 - **Status:** the engine reads livepeer/node's `/discovery` contract through one HTTP source. It does not know which process serves that URL.
 
 ## What the engine reads
@@ -65,9 +65,21 @@ There is no setting for this. An operator who wants zero-capacity runners droppe
 
 ## Sources
 
-Any process that serves this contract can sit behind `LPB_DISCOVERY_URL`. One orchestrator's own `/discovery` is such a process. The reference implementation these docs name is livepeer/node's `livepeer-discovery`. The dev stack runs it in static mode (`deploy/dev-stack/config/discovery.toml`).
+Any process that serves this contract can sit behind `LPB_DISCOVERY_URL`. One orchestrator's own `/discovery` is such a process, and so is a payment clearinghouse's runner list ([above](#the-clearinghouses-runner-list)), for a reader that sends a credential. The reference implementation these docs name is livepeer/node's `livepeer-discovery`. The dev stack runs it in static mode (`deploy/dev-stack/config/discovery.toml`).
 
 That process GETs each listed orchestrator at startup and every `RefreshInterval` (30s in the dev stack; the process default is 5 minutes) and verifies TLS with the system trust store. A failed refresh keeps the last successful snapshot until `MaxFailedRefreshes` consecutive failures. The default is 6, and the dev stack does not override it. A TLS failure, a non-200, or a document `Decode` rejects counts as one failure. A source that has never succeeded stays out of the inventory. A runner with no `observed_at`, or one more than 30 seconds ahead, is skipped inside `Decode`. That skip does not drop the source when another runner in the same document is valid.
+
+## The clearinghouse's runner list
+
+A payment clearinghouse publishes its runner list, and an enterprise's engine reads that list by default (D87, #166): its `LPB_DISCOVERY_URL` is `https://<clearinghouse>/v1/clearinghouse/discovery`. Nothing is enforced at signing in this version, so an enterprise may point at a source of its own.
+
+- **What is served.** The document the clearinghouse's own `HttpDiscoverySource` last read from its `LPB_DISCOVERY_URL`, byte for byte, as `application/json`. It is livepeer/node's document, not a copy in another shape: nothing is parsed and written again, no schema is vendored, every number keeps its digits, and a field or a record the reader skips is still there. An engine reading the route therefore reads what the clearinghouse read, by the same rules, and holds the same runners (`tests/unit/test_clearinghouse_discovery.py` reads the pinned node dump through the route with today's reader).
+- **Who may read it.** Any credential of a tenant, which at a clearinghouse is its admin's or its auditor's key, and a clearinghouse admin. An actor key is 403, a payment key 401, and no credential 401.
+- **The reader needs a credential.** `HttpDiscoverySource` sends none today (it reads livepeer/node's open `/discovery`), so pointed at the route as it is, its refresh fails with the 401. It reads the route once its HTTP client sends `Authorization: Bearer <a tenant admin key>`. Giving the default reader that header from a setting is #168's.
+- **When the clearinghouse's source is down.** The route serves the last document that read, however old: it is what the clearinghouse's engine itself would run a job on, since a failed refresh keeps the last good snapshot ([above](#what-the-engine-reads)). `observed_at` on each runner still says how old the record is, so the reading engine's catalog marks its rates `stale` by `LPB_RATE_MAX_AGE_S`, as the clearinghouse's does. The clearinghouse's own `GET /readyz` shows the failure (`discovery_error`).
+- **Before any document was read** the route is 503 with `Retry-After: 5`. It is never an empty list in place of an unknown one: a reader would replace its snapshot with it. A 503 is a failed refresh there, which keeps what the reader had.
+- **Optional.** The route is present when the discovery source holds the document it read (`DiscoveryDocumentSource` in `protocols`, which `HttpDiscoverySource` has). A source supplied through `decorate` that holds none, such as a wrapper that filters runners, serves no route: `engine.runner_list` is `None`. The engine does not write a node document from its `Runner`s.
+- **The halves stay apart.** The route is the clearinghouse half's and the discovery service the work half's. The route reaches the document through that port on the discovery source, and `services/runner_list.py` imports nothing of `services/discovery.py` (`tests/structure/test_two_halves.py`). The engine's refresh loop is what reads the source, so a deployment that serves the route keeps that loop running.
 
 ## Testing
 

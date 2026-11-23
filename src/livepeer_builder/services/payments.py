@@ -12,7 +12,6 @@ Every provider write that moves money carries an idempotency key derived from
 (engine_id, operation, step), so a retried command never applies twice.
 """
 
-import logging
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -30,7 +29,6 @@ from livepeer_builder.contracts import (
     Operation,
     PaymentKey,
     ResourceRef,
-    SeenActor,
     TopUpRequest,
 )
 from livepeer_builder.errors import (
@@ -38,7 +36,6 @@ from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
     NotProvisioned,
-    ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import (
@@ -52,19 +49,16 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets, delivered
-from livepeer_builder.services.allocation_read import with_allowance
+from livepeer_builder.services.allocation_read import for_a_builder, known, with_allowance
 from livepeer_builder.services.grants import allotted_from_grant, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PREVIOUS_CUSTODY, PaymentKeys, recorded_secret
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
 from livepeer_builder.services.wallet import Wallet
-from livepeer_builder.utils import BODY_LIMIT
 
-_LOG = logging.getLogger(__name__)
 _ACTOR = TypeAdapter(ActorAllocation)
 _NOTHING = TypeAdapter(type(None))
-_UNREADABLE = "the allowance could not be read"  # what a builder reads when the provider fails (D58)
 _SENT_LABEL = "sent_label"  # in an allotment's record, from the moment it begins: the label its runs send
 
 
@@ -297,13 +291,13 @@ class PaymentsService:
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         allocations = {(a.tenant_id, a.actor_id): a for a in await self._store.list_actors(scope)}
         sightings = {(s.tenant_id, s.actor_id): s for s in await self._store.list_sightings(scope)}
-        known = [
-            _known(key, allocations.get(key), sightings.get(key))
+        listed = [
+            known(key, allocations.get(key), sightings.get(key))
             for key in sorted(allocations.keys() | sightings.keys())
         ]
         return [
             actor
-            for actor in known
+            for actor in listed
             if (allotted is None or actor.allotted == allotted)
             and (status is None or (actor.allocation is not None and actor.allocation.status == status))
         ][:limit]
@@ -475,15 +469,7 @@ class PaymentsService:
         allocation_id = await self.allocation_for(actor.tenant_id, target)
         if allocation_id is None:
             raise NotFound(f"no allocation pays for actor {target!r}")
-        try:
-            return await self.read_allowance(allocation_id)
-        except (ProviderError, ProviderUnavailable) as error:  # a builder's read: provider words to the log
-            status = error.status_code if isinstance(error, ProviderError) else None
-            extra = {"provider_status": status, "detail": str(error)[:BODY_LIMIT]}
-            _LOG.warning("allowance read failed", extra={"event": "payments.allowance_failed", **extra})
-            if status is None:  # httpx's text can name the provider's host (D58)
-                raise ProviderUnavailable(f"{_UNREADABLE}: the provider is unavailable") from error
-            raise ProviderError(status, _UNREADABLE) from error
+        return await for_a_builder(self.read_allowance, allocation_id)
 
     async def _require_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation:
         actor = await self._store.get_actor(tenant_id, actor_id)
@@ -506,16 +492,3 @@ class PaymentsService:
 def _allocation(tenant_id: str, actor_id: str) -> ResourceRef:
     """What an allocation command acts on, for the policy: a tenant admin is confined by it (#165)."""
     return ResourceRef(kind="allocation", tenant_id=tenant_id, owner_actor_id=actor_id)
-
-
-def _known(key: tuple[str, str], allocation: ActorAllocation | None, seen: SeenActor | None) -> KnownActor:
-    name = seen.name if seen is not None and seen.name else None
-    return KnownActor(
-        tenant_id=key[0],
-        actor_id=key[1],
-        label=(allocation.label if allocation is not None else "") or name or "",
-        name=name if seen is not None else None,
-        allocation=allocation,
-        first_seen_at=seen.first_seen_at if seen is not None else None,
-        last_seen_at=seen.last_seen_at if seen is not None else None,
-    )

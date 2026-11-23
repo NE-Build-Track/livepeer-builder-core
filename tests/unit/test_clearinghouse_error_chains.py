@@ -14,13 +14,13 @@ import httpx
 import pytest
 
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
-from livepeer_builder.contracts import KeyedAllocation
+from livepeer_builder.contracts import DeliveredAllocation
 from livepeer_builder.errors import ProviderError, ProviderUnavailable
 
 BASE = "https://clearinghouse.test"
 TOKEN = "lpk_tenant-admin-key-throwaway"
 PAYMENT_KEY = "lpp_throwaway-payment-key"
-# a payment key just issued, in an answer that is not a KeyedAllocation: it names no actor or allocation
+# a payment key just issued, in an answer that is not a DeliveredAllocation: it names no actor or allocation
 UNREADABLE = {"payment_key": {"token": PAYMENT_KEY, "allocation_id": "alloc_1"}}
 
 
@@ -43,10 +43,10 @@ def reachable(error: BaseException) -> str:
 async def test_an_answer_that_does_not_parse_chains_nothing_that_holds_it() -> None:
     answers = wire(httpx.MockTransport(lambda request: httpx.Response(201, json=UNREADABLE)))
     with pytest.raises(ProviderError) as refused:
-        await answers.write_as(KeyedAllocation, "/allocation", {"operation_ref": "a-1"})
+        await answers.write_as(DeliveredAllocation, "/allocation", {"operation_ref": "a-1"})
     assert refused.value.__cause__ is None and refused.value.__context__ is None
     assert PAYMENT_KEY not in reachable(refused.value)
-    assert "not KeyedAllocation" in str(refused.value)
+    assert "not DeliveredAllocation" in str(refused.value)
 
 
 @pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ReadTimeout], ids=["never sent", "no answer"])
@@ -57,6 +57,6 @@ async def test_a_request_that_failed_chains_no_request_that_holds_the_tenant_adm
         raise failure("the network failed", request=request)
 
     with pytest.raises(ProviderUnavailable) as unavailable:
-        await wire(httpx.MockTransport(fail)).read_as(KeyedAllocation, "/allocation")
+        await wire(httpx.MockTransport(fail)).read_as(DeliveredAllocation, "/allocation")
     assert unavailable.value.__context__ is None
     assert TOKEN not in reachable(unavailable.value)

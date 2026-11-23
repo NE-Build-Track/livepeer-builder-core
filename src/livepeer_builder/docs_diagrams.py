@@ -17,7 +17,6 @@ from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageS
 from livepeer_builder.adapters.clearinghouse import (
     ClearinghouseAllocations,
     ClearinghouseAllowances,
-    ClearinghouseCredentials,
     ClearinghouseUsage,
 )
 from livepeer_builder.adapters.clock import SystemClock
@@ -71,7 +70,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
     "RunnerStream": (SdkRunnerStream,),
-    "CredentialResolver": (PaymentsService, ClearinghouseCredentials),
+    "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient, ClearinghouseAllocations),
     "AllocationsByActor": (ClearinghouseAllocations,),
     "UsageSource": (BatteriesUsageSource, ClearinghouseUsage),

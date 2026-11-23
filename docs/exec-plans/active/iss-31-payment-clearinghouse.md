@@ -126,3 +126,6 @@ Each pull request ticks its own line here in the same change.
   engine (`deliver_allocation_keys=False`), on one listener or two: there is no role setting yet, and
   the engine behind a listener runs jobs. Handing keys to the caller is the `clearinghouse` role's
   (#169). Source: the amended ticket; the `False` on both listeners is for Mike's review.
+- **23 November 2026, P6.** Cancelling `serve()` with two listeners is a forced exit, as a listener
+  that ended by itself is: both hang up on their open connections, and the task ends with its
+  cancellation. A first SIGINT or SIGTERM still ends them in order. Source: Mike, after review of #181.

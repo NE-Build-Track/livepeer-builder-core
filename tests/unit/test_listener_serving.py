@@ -393,6 +393,37 @@ async def test_a_second_interrupt_does_not_wait_for_open_connections(signals: di
         await asyncio.wait_for(serving, timeout=10)
 
 
+@pytest.mark.parametrize("held_on", ["one listener", "both listeners"])
+async def test_a_second_interrupt_ends_serving_while_a_request_is_held_open(
+    signals: dict[int, object], held_on: str
+) -> None:
+    """The forced exit must hang up on open connections itself (John, #181 review): from Python 3.12 the
+    listening server's ``wait_closed()`` returns only once every connection is gone, so ``force_exit``
+    alone left ``serve`` waiting for a request that never ends. With a request held on both listeners,
+    neither server ends after the first Ctrl-C, and the second must still end them."""
+    apps = [Held(), Held()] if held_on == "both listeners" else [Held()]
+    servers, ports = two_servers(*apps)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writers = [await held_open(port, app) for port, app in zip(ports, apps, strict=False)]
+        try:
+            signal.raise_signal(signal.SIGINT)
+            await nothing_listens(ports)  # both stopped accepting, and the held requests are waited for
+            assert not serving.done() and not any(app.disconnected.is_set() for app in apps)
+            signal.raise_signal(signal.SIGINT)
+            ended, _ = await asyncio.wait([serving], timeout=10)
+            told = [app.disconnected.is_set() for app in apps]
+        finally:  # a serve() left waiting ends once its callers hang up, so a failure is an assertion
+            for writer in writers:
+                await hung_up(writer)
+            await asyncio.wait_for(serving, timeout=10)
+    assert ended, "serve() still waited for a held request 10 s after the second interrupt"
+    assert all(told)  # each request in flight was told its caller is gone
+    assert [server.force_exit for server in servers] == [True, True]
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
 async def test_off_the_main_thread_no_signal_handler_is_installed(signals: dict[int, object]) -> None:
     """Python delivers signals to the main thread only, and refuses a handler set from another. An
     embedder that serves from a worker thread ends the listeners itself."""

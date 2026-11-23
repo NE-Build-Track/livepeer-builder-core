@@ -815,7 +815,9 @@ clearinghouse set.
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/keys`, `GET /v1/keys/{id}`, `POST /v1/keys/{id}/rotate`, `POST /v1/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
+| `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation`; allot and rotate answer `KeyedAllocation`, the allocation with the actor's payment key, shown once (#166) |
 | `GET /v1/clearinghouse/tenants/{tenant}/usage` | `payments.usage.page` | `UsagePage`; only when `payments.usage` is set |
+| `POST /sign-orchestrator-info`, `POST /generate-live-payment` | `payments.signing.payer`, then `payments.signing.forward` | the signer's own answer, passed on; a payment key is the credential; only when `payments.signing` is set |
 | `GET /v1/clearinghouse/discovery` | `runner_list.document` | livepeer/node's `/discovery` document, as the clearinghouse read it; only when `runner_list` is set |
 | `POST, GET /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants/{tenant}/grant`, `POST /v1/clearinghouse/tenants/{tenant}/status` | `payments.tenants.onboard`, `list_tenants`, `grant`, `set_status` | `OnboardedTenant`, `TenantGrant[]`, `TenantGrant`, `TenantState`; only when `payments.tenants` is set |
 | `POST /v1/clearinghouse/tenants/{tenant}/grant/top-up` | `payments.top_up_grant` | `204` |

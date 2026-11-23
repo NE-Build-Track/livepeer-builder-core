@@ -300,16 +300,15 @@ no v1 metadata. ISS-48 adopts the standard as the last feature of M4, and it may
 
 ## Amended on 18 November 2026
 
-The payment clearinghouse (D82 to D87, the [ISS-31 guide](iss-31-payment-configurations.md)) changes
-where sessions run and who holds the key that pays for them, beyond names.
+The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) changes one
+thing here beyond names.
 
 - **Where it runs.** Sessions belong to the work half of the engine, in the enterprise's own engine.
-- **Payment cycles go to the signer.** A session's renewals are payment cycles, about one every 3
-  seconds, and stay the SDK's `run_payments()`. The work engine resolves the allocation API key it holds
-  for the actor, and the SDK presents it to the signer at `/sign-orchestrator-info` and
-  `/generate-live-payment` (D85 point 1, D87 point 1). There is no clearinghouse payments route (D87
-  point 3). The SDK's `run_payments()` result is read as before.
-- **An empty allocation ends the session** at the next cycle, which the signer refuses.
+- **Payment cycles go through the clearinghouse.** A session's renewals are payment cycles, about one
+  every 3 seconds. When the engine uses a payment clearinghouse, each cycle is signed through the
+  clearinghouse, at the signer's path it serves, with the actor's payment key (#166). The SDK's `run_payments()` result is
+  read as before.
+- **An empty allocation ends the session** at the next cycle, which the clearinghouse refuses.
 - **Names.** `application_id` becomes `tenant_id` (#163).
 
 ## Delivery slices

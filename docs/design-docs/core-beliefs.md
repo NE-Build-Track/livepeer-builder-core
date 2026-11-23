@@ -26,8 +26,7 @@ belief can be checked mechanically, the enforcing test is named.
 7. **Parse at the boundary.** Wire formats are converted into frozen contract models in adapters. No
    guessed shapes inside services.
 8. **Secrets never ride on records.** Records hold a `SecretRef`. Plaintext keys appear in no database
-   column, ordinary read, event or log. Authenticated allocation handoff returns the provider key once
-   for the work engine to persist; the clearinghouse keeps no secret (`tests/unit/test_payments.py`).
+   column, response, event or log (`tests/unit/test_payments.py`).
 9. **Reserved means loud.** Contracts defined ahead of their implementation raise
    `NotImplementedInMilestone` (HTTP 501).
 10. **The repository is the system of record.** Decisions, plans and evidence live in `docs/`. If it

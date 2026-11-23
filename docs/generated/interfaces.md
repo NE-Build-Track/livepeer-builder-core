@@ -35,6 +35,10 @@ classDiagram
         <<interface>>
         +async fetch() Runner[]
     }
+    class DiscoveryDocumentSource {
+        <<interface>>
+        +document() bytes?
+    }
     class SelectionPolicy {
         <<interface>>
         +order(candidates, request) Runner[]
@@ -83,6 +87,10 @@ classDiagram
         <<interface>>
         +async page(cursor, limit) UsagePage
     }
+    class TenantUsageSource {
+        <<interface>>
+        +async tenant_page(tenant_id, cursor, limit) UsagePage
+    }
     class AllowanceReader {
         <<interface>>
         +async allocation_for(tenant_id, actor_id) str?
@@ -102,7 +110,7 @@ classDiagram
     class ActorCommandRepo {
         <<interface>>
         +async allot_actor(actor, replacing) bool
-        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ActorAllocation?
+        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from, credential_custody) ActorAllocation?
         +async set_actor_status(tenant_id, actor_id, allocation_id, status, updated_at, only_from) ActorAllocation?
     }
     class UsageOnceRepo {
@@ -171,6 +179,7 @@ classDiagram
     SecretStore <|.. EncryptedDbSecretStore
     WritableSecretStore <|.. RoutingSecretStore
     DiscoverySource <|.. HttpDiscoverySource
+    DiscoveryDocumentSource <|.. HttpDiscoverySource
     SelectionPolicy <|.. MostCapacityFirst
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
@@ -178,6 +187,7 @@ classDiagram
     CredentialResolver <|.. PaymentsService
     AllocationManager <|.. BatteriesClient
     UsageSource <|.. BatteriesUsageSource
+    TenantUsageSource <|.. BatteriesUsageSource
     AllowanceReader <|.. PaymentsService
     EngineStore <|.. SqlStore
     StoreMaintenance <|.. SqlMaintenance
@@ -203,6 +213,7 @@ classDiagram
 | `SecretStore` | `EncryptedDbSecretStore` | `livepeer_builder.adapters.secrets` |
 | `WritableSecretStore` | `RoutingSecretStore` | `livepeer_builder.adapters.secrets` |
 | `DiscoverySource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
+| `DiscoveryDocumentSource` | `HttpDiscoverySource` | `livepeer_builder.adapters.sdk` |
 | `SelectionPolicy` | `MostCapacityFirst` | `livepeer_builder.services.discovery` |
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
@@ -210,6 +221,7 @@ classDiagram
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
+| `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `AllowanceReader` | `PaymentsService` | `livepeer_builder.services.payments` |
 | `EngineStore` | `SqlStore` | `livepeer_builder.store.sql` |
 | `StoreMaintenance` | `SqlMaintenance` | `livepeer_builder.store.maintenance` |

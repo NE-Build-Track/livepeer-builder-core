@@ -304,11 +304,12 @@ The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configu
 thing here beyond names.
 
 - **Where it runs.** Sessions belong to the work half of the engine, in the enterprise's own engine.
-- **Payment cycles go through the clearinghouse.** A session's renewals are payment cycles, about one
-  every 3 seconds. When the engine uses a payment clearinghouse, each cycle is signed by the
-  clearinghouse's payments route with the actor's payment key (#166). The SDK's `run_payments()` result is
-  read as before.
-- **An empty allocation ends the session** at the next cycle, which the clearinghouse refuses.
+- **Payment cycles go to the signer, as with self-hosted payments.** A session's renewals are payment
+  cycles, about one every 3 seconds. When the engine uses a payment clearinghouse, each cycle is signed
+  at the clearinghouse's signer directly, with the actor's payment key, which the engine holds since the
+  clearinghouse handed it over at allotment (#166; D85 point 1, as Mike amended it on 19 November 2026).
+  The SDK's `run_payments()` result is read as before.
+- **An empty allocation ends the session** at the next cycle, which the signer refuses.
 - **Names.** `application_id` becomes `tenant_id` (#163).
 
 ## Delivery slices

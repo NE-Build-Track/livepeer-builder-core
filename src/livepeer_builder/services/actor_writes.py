@@ -5,8 +5,8 @@ write. They used to save the whole row from that read, so a command that finishe
 overwritten: a rotation's new key by a pause, a pause by a rotation, a revoke by any of them. Now:
 
 - a status command writes ``status`` and ``updated_at``;
-- a key rotation writes ``api_key_id``, ``secret_ref`` and ``updated_at``, and only over the key it began
-  from: an actor holding another key got it from a rotation that finished first;
+- a key rotation writes ``api_key_id``, ``secret_ref``, ``credential_custody`` and ``updated_at``, and only
+  over the key it began from: an actor holding another key got it from a rotation that finished first;
 - a top-up moves ``exhausted`` to ``active`` and writes nothing else;
 - no write applies to a ``revoked`` actor, or to an allocation other than the one the command acted on
   (one allotted after a revoke);
@@ -21,7 +21,7 @@ read and the save is still overwritten, which only the store's own write can pre
 
 from typing import Any
 
-from livepeer_builder.contracts import ActorAllocation, AllocationStatus, SecretRef
+from livepeer_builder.contracts import ActorAllocation, AllocationStatus, CredentialCustody, SecretRef
 from livepeer_builder.protocols import ActorCommandRepo, ActorRepo, Clock
 
 
@@ -52,12 +52,18 @@ class ActorWrites:
         return await self._saved(current, {"status": status})
 
     async def key(
-        self, actor: ActorAllocation, api_key_id: str, secret_ref: SecretRef, *, only_from: str
+        self,
+        actor: ActorAllocation,
+        api_key_id: str,
+        secret_ref: SecretRef,
+        *,
+        credential_custody: CredentialCustody,
+        only_from: str,
     ) -> ActorAllocation | None:
-        """Point the actor at a new payment key, only where it still holds the key ``only_from`` (the one
-        the rotation began from) or holds the new key already. An actor that holds another key got it
-        from a rotation that finished first: nothing is written, and the answer is the actor as stored,
-        holding that key."""
+        """Point the actor at a new payment key, and record who holds its credential, only where it still
+        holds the key ``only_from`` (the one the rotation began from) or holds the new key already. An
+        actor that holds another key got it from a rotation that finished first: nothing is written, and
+        the answer is the actor as stored, holding that key."""
         if isinstance(self._store, ActorCommandRepo):
             written = await self._store.set_actor_key(
                 actor.tenant_id,
@@ -67,12 +73,14 @@ class ActorWrites:
                 secret_ref,
                 self._clock.now(),
                 only_from,
+                credential_custody=credential_custody,
             )
             return written or await self._held(actor)  # nothing written: read why
         current = await self._held(actor)
         if current is None or current.api_key_id not in (only_from, api_key_id):
             return current
-        return await self._saved(current, {"api_key_id": api_key_id, "secret_ref": secret_ref})
+        changes = {"api_key_id": api_key_id, "secret_ref": secret_ref}
+        return await self._saved(current, changes | {"credential_custody": credential_custody})
 
     async def allotted(self, actor: ActorAllocation, *, replacing: ActorAllocation | None) -> bool:
         """Write a newly allotted actor's whole row, only where the actor is still as allotment read

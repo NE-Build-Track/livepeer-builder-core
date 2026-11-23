@@ -37,6 +37,7 @@ erDiagram
         datetime created_at
         datetime updated_at
         string label
+        string credential_custody
     }
     lpb_attempts {
         string job_id PK
@@ -189,6 +190,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `created_at` | DATETIME | no |  |
 | `updated_at` | DATETIME | no |  |
 | `label` | VARCHAR(200) | no |  |
+| `credential_custody` | VARCHAR(16) | no |  |
 
 ## `lpb_attempts`
 

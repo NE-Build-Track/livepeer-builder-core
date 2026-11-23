@@ -19,6 +19,22 @@ pinned SDK's `call_runner` path changes, so a pin bump reviews the copy.
 | `call_runner(...)` | **Not called** since D53; the copy follows it at `2017a80`. A missing `payload` is still sent as `{}` (T15) |
 | `selection.reserve_session(...)` → `LiveRunnerSession(app_url, control_url)` | Persistent sessions (M4), proxied by the engine |
 
+## How the SDK reaches a signer (#166)
+
+The SDK calls a signer at two paths and nowhere else the engine reaches: `get_signer_info` posts `{}` to
+`{origin}/sign-orchestrator-info`, and `LivePaymentSession._payment_request` posts the payment request to
+`{origin}/generate-live-payment` (`remote_signer.py`). `origin` is `http._http_origin(signer_url)`: the
+scheme and the host, with any path, query or fragment dropped. Both calls carry the signer headers the
+engine gives (`Authorization: Bearer <key>`), have 5 seconds in all, open a session of their own and are
+not retried. An error status keeps its body on `LivepeerHTTPError.body`; 480 and 482 are errors of
+their own.
+
+So a signer is named by its origin: a path in `LPB_SIGNER_URL` is dropped, and a signer cannot be
+published under a path of another host. An enterprise's engine that uses a payment clearinghouse points
+the SDK at the clearinghouse's signer in the same way, with each actor's payment key as the bearer
+([payments.md](../contracts/payments.md#payment-keys)). The SDK remembers a signer's identity for the
+life of the process, by address and headers, so the identity call is made once for each payment key.
+
 ## Runner session stop (#83)
 
 [#83](https://github.com/livepeer/livepeer-python-gateway/pull/83) adds

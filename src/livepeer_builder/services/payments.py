@@ -26,7 +26,6 @@ from livepeer_builder.contracts import (
     Currency,
     DeliveredAllocation,
     KnownActor,
-    NewAllocationKey,
     Operation,
     PaymentKey,
     ResourceRef,
@@ -50,7 +49,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets, delivered
-from livepeer_builder.services.grants import idempotency_key
+from livepeer_builder.services.grants import allotted_from_grant, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PREVIOUS_CUSTODY, PaymentKeys, recorded_secret
 from livepeer_builder.services.tenant_usage import TenantUsage
@@ -205,7 +204,7 @@ class PaymentsService:
             sent_as = run.context.get("new_secret_sent_as")
             if keys.delivers(existing) and sent_as is not None:
                 sent = request.model_copy(update={"label": existing.label})
-                replayed = await self._allotted_from_grant(manager, sent, sent_as)
+                replayed = await allotted_from_grant(manager, sent, sent_as)
             return await keys.shared(existing, recorded_secret(run), replayed)
         if existing is not None and existing.grant_id != request.tenant_id:
             # A record from before a tenant's id was its grant's id (#165). Its allocation was allotted
@@ -227,7 +226,7 @@ class PaymentsService:
             operation += f":{existing.updated_at.isoformat()}"
         sent_as = idempotency_key(self._engine_id, operation, "api-key")
         await keys.require_writable(run, sent_as)
-        key = await self._allotted_from_grant(manager, request, sent_as)
+        key = await allotted_from_grant(manager, request, sent_as)
         new = await keys.stored(run, request.tenant_id, request.actor_id, key, sent_as)
         now = self._clock.now()
         allotted = ActorAllocation(
@@ -248,24 +247,6 @@ class PaymentsService:
             current = await self._store.get_actor(request.tenant_id, request.actor_id)
             return await keys.overtaken(request.actor_id, current, key, new)
         return allotted
-
-    @staticmethod
-    async def _allotted_from_grant(
-        manager: AllocationManager, request: AllotRequest, sent_as: str
-    ) -> NewAllocationKey:
-        """The allocation and its key, allotted from the tenant's grant: one id (D83). The provider's
-        refusal is passed on with its reason (an allocation larger than the grant's unallocated balance
-        is its 409); a grant it does not hold is said as the tenant that was never onboarded."""
-        name = request.label or f"{request.tenant_id}/{request.actor_id}"
-        try:
-            return await manager.create_key_for_grant(request.tenant_id, name, request.amount, sent_as)
-        except ProviderError as refused:
-            if refused.status_code != 404:
-                raise
-            raise NotFound(
-                f"tenant {request.tenant_id!r} has no grant at the payment provider: a tenant's id is its "
-                "grant's id, and a clearinghouse admin onboards a tenant before anything is allotted to it"
-            ) from refused
 
     # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------
 

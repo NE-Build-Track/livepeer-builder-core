@@ -543,7 +543,7 @@ The engine that runs an actor's jobs keeps that actor's key:
 | The commands | `payments.allot`, `payments.rotate_payment_key` | `payments.allot_for_delivery`, `payments.rotate_for_delivery` |
 | They answer | `ActorAllocation` | `DeliveredAllocation`: the allocation, and `allocation_api_key`, `replayed` and `resumed` |
 | `credential_custody` on the allocation | `secret_store` | `work_engine` |
-| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
+| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` for one listener and for each of two ([access.md](access.md#listeners)) | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
 | Signs at the signer | The engine, with the stored key | The enterprise's engine, with the key it was handed |
 
 `lpb serve` runs the combined app, so its allotment and rotation store the key and answer none. The role

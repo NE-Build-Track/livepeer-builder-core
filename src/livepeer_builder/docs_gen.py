@@ -20,7 +20,7 @@ async def render_openapi() -> str:
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
         log_json=False,
-        discovery_url="http://discovery.invalid/discovery",
+        discovery_url="https://discovery.invalid/discovery",
     )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:

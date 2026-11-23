@@ -391,3 +391,33 @@ async def test_the_rule_is_by_the_kind_of_credential_whatever_verified_it(make_e
             got = {kind: (await client.get(actors, headers={"x-kind": kind})).status_code for kind in answers}
             assert got == answers, listener
             assert (await client.get(actors)).status_code == 401
+
+
+async def test_no_listener_hands_an_allocations_key_to_the_caller_or_serves_a_signer_path(
+    clearinghouse: Clearinghouse,
+) -> None:
+    """Every listener's app keeps each allocation's key with the engine (``deliver_allocation_keys`` is
+    false in ``http/listeners.py``): the engine behind a listener runs jobs. So allotment and payment key
+    rotation answer the allocation alone, on the public listener, on the private one and with one
+    listener. Handing keys to the caller is the clearinghouse role's (#169). And a clearinghouse serves
+    no signer path, so no listener has one."""
+    house = clearinghouse
+    callers = {
+        "only": (create_app(house.engine, manage_lifecycle=False), house.clearinghouse_admin),
+        "public": (house.public, house.tenant_admin),
+        "private": (house.private, house.clearinghouse_admin),
+    }
+    for name, (app, headers) in callers.items():
+        allocation = f"{TENANTS}/default/actors/on-{name}/allocation"
+        allot = {"amount": {"amount": "1", "currency": "USD"}, "operation_ref": f"allot-on-{name}"}
+        rotate = {"operation_ref": f"rotate-on-{name}"}
+        async with client_of(app) as client:
+            allotted = await client.post(allocation, json=allot, headers=headers)
+            rotated = await client.post(f"{allocation}/rotate-payment-key", json=rotate, headers=headers)
+            for path in ("/sign-orchestrator-info", "/generate-live-payment"):
+                assert (await client.post(path, content=b"{}", headers=headers)).status_code == 404, name
+        assert (allotted.status_code, rotated.status_code) == (201, 200), (name, allotted.text, rotated.text)
+        for answer in (allotted.json(), rotated.json()):
+            assert "allocation_api_key" not in answer, name
+            assert answer["credential_custody"] == "secret_store", name
+        assert "DeliveredAllocationBody" not in app.openapi()["components"]["schemas"], name

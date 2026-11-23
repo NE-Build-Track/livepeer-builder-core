@@ -20,6 +20,7 @@ from pydantic import TypeAdapter
 from livepeer_builder.contracts import (
     DEFAULT_ACTOR_PERMISSIONS,
     OPERATION_REPLAYED,
+    OPERATION_RESUMED,
     AccessKey,
     ActorContext,
     CredentialKind,
@@ -61,6 +62,7 @@ class KeyService:
         issued = ResourceRef(kind="key", tenant_id=tenant_id, credential_kind=kind)
         self._policy.check(admin, Operation.ADMIN_KEYS, issued)
         OPERATION_REPLAYED.set(False)
+        OPERATION_RESUMED.set(False)  # a key command is never a resume: its record is written done
         granted = _validated_permissions(kind, permissions)
         request: dict[str, Any] = {"kind": kind, "actor_id": actor_id, "tenant_id": tenant_id}
         request |= {"permissions": sorted(granted), "label": label}
@@ -141,6 +143,7 @@ class KeyService:
         when the first run would have answered this caller under the tenant it names."""
         self._check_scope(admin, tenant_id)
         OPERATION_REPLAYED.set(False)
+        OPERATION_RESUMED.set(False)
         request = {"key_id": key_id, "label": label}
         fingerprint = ledger.fingerprint("rotate_access_key", request)
         replay = await self._rotation_replayed(admin, key_id, tenant_id, operation_ref, fingerprint)

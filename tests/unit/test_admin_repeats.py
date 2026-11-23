@@ -15,6 +15,8 @@ from sqlalchemy import select
 
 from livepeer_builder import BuilderEngine, EngineSettings
 from livepeer_builder.contracts import (
+    OPERATION_REPLAYED,
+    OPERATION_RESUMED,
     AccessKey,
     ActorAllocation,
     ActorContext,
@@ -766,6 +768,42 @@ async def test_rotating_a_key_repeated_after_success_rotates_once_and_the_replay
     assert rotated.token is not None and not rotated.replayed
     assert (again.key, again.token, again.replayed) == (rotated.key, None, True)
     assert len(await engine.keys.list_keys(admin)) == 2  # the old key and one replacement
+
+
+@pytest.mark.parametrize("command", ["issue", "issue-replayed", "rotate", "rotate-replayed"])
+async def test_an_access_key_command_after_a_resumed_command_is_not_marked_resumed(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    command: str,
+) -> None:
+    """``OPERATION_RESUMED`` says what the last command did, and each command resets it. An access key
+    is never resumed (its record is written done), so a key command that follows a resumed payment
+    command must not be read as resumed: a caller would take its answer for one of unknown history."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    await engine.payments.allot(admin, allot_request(amount="0"))
+    request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
+    manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
+    with pytest.raises(ProviderUnavailable):
+        await engine.payments.top_up(admin, "default", "alice", request)
+    clock.advance(120)
+    await engine.payments.top_up(admin, "default", "alice", request)
+    assert OPERATION_RESUMED.get() and not OPERATION_REPLAYED.get()
+
+    fresh = "replayed" not in command
+    if command.startswith("issue"):
+        ref = "key-2" if fresh else "key-1"
+        answer = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref=ref)
+    else:
+        ref = "rotate-key-2" if fresh else "rotate-key-1"
+        key_id = (await engine.keys.list_keys(admin))[-1].key_id if fresh else issued.key.key_id
+        answer = await engine.keys.rotate(admin, key_id, operation_ref=ref)
+    assert not OPERATION_RESUMED.get()
+    assert OPERATION_REPLAYED.get() is answer.replayed is (not fresh)
 
 
 async def test_a_repeat_that_found_the_ref_free_but_lost_the_write_answers_from_the_winner(

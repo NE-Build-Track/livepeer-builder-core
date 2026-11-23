@@ -124,7 +124,7 @@ clearinghouse has one for each enterprise app.
 | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
 | `GET /v1/clearinghouse/wallet` | A clearinghouse admin | The wallet's deposit and reserve, the total of unspent grants and the signer's readiness ([the wallet report](#the-wallet-report)) |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated`, `spent` and `allocated_unspent` |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
 | `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment). Each answers the allocation (`ActorAllocation`). On a standalone clearinghouse, allotting (`201`) and rotating the payment key (`200`) also hand over the allocation's key, once (`allocation_api_key`, with `replayed` and `resumed`); on a self-hosted engine the engine stores the key and the answer has none ([payment keys](#payment-keys)) |
 | `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
@@ -159,6 +159,20 @@ allocations have spent, the revoked ones included. Batteries serves `spent_<curr
 and keeps it on a revoked one, late charges too. The tenant list and the grant read already read the
 allocations for the unallocated balance, so `spent` adds no request. The records behind the figure are
 [a tenant's usage](#a-tenants-usage). A `spent` the engine cannot read is a `ProviderError`, never a zero.
+
+**What a tenant's allocations still hold (#167).** `allocated_unspent` is the sum, over the tenant's
+allocations, of what each was allotted less what it has spent, and nothing for an allocation that has
+spent more. Batteries charges after it authorizes and reserves nothing, so an allocation can spend more
+than it holds (verified at Batteries v0.0.3, `internal/store/ingest.go`: its balance goes below zero and
+it becomes `exhausted`). Such an allocation holds nothing, and its overdraft takes nothing off what
+another allocation holds or off the unallocated balance. A paused allocation counts: it can be resumed.
+A revoked one holds nothing: the revoke returned what it had not spent to the grant and took it off the
+allocation's `allocated` amount (`internal/store/manage.go`), so that money is in `unallocated` and is
+counted there only, and a charge that lands later raises `spent` and nothing else. `unallocated` and
+`allocated_unspent` together are what the tenant may still spend, which
+[the wallet report](#the-wallet-report) sums. The figure comes from the allocations the two reads
+already make, at no further request, and from the same `allocated` and `spent` amounts: one the engine
+cannot read is a `ProviderError`, never a zero.
 
 **Batteries refuses what the grant cannot cover.** An allocation, or an allocation's top-up, larger than
 the grant's unallocated balance is refused by Batteries: 409, with its reason, "insufficient unallocated
@@ -256,17 +270,20 @@ only ([access.md](access.md#listeners)).
 | `escrow[].deposit`, `reserve` | ETH, exact to the wei | The same | The wallet's TicketBroker deposit and reserve, as Batteries' listener has confirmed them from the chain's events |
 | `escrow[].confirmed_through_block` | A block number | The same | How far the listener has read. The amounts are as of that block, not the chain's head: Batteries waits for confirmations (64 blocks by default) and polls (every 5 s by default). `-1` is a first snapshot from before the chain's first block. There is no timestamp |
 | `unspent_grants[]` | | Batteries, the grants and their allocations (`grants.read`, `allocations.read`), as the tenant list reads them | One entry for each currency a grant is in, by currency |
-| `unspent_grants[].unspent` | The grants' currency (`USD` or `ETH`) | The same | The sum, over every grant Batteries holds in that currency, of the grant's `total` less its `spent` ([tenants](#tenants)) |
+| `unspent_grants[].unspent` | The grants' currency (`USD` or `ETH`) | The same | The sum, over every grant Batteries holds in that currency, of the grant's `unallocated` and its `allocated_unspent` ([tenants](#tenants)) |
 | `unspent_grants[].grants` | A count | The same | How many grants were summed |
 | `signer.ready` | | The signer, `POST /sign-orchestrator-info` at the root of `LPB_SIGNER_URL` | Whether the signer answered its identity call just now |
 | `signer.reason` | | The same | `null` when ready. `not_configured`: the engine has no `LPB_SIGNER_URL`. `unavailable`: the signer could not be reached, timed out or answered a 5xx. `no_identity`: something answered, but not with a signer's address and a signature |
 
-**What "unspent" sums.** A grant's unspent amount is its total less what its allocations have spent:
-what is allotted and not yet spent, and what is not yet allotted. Both are the tenant's to spend, so the
-wallet may still have to pay for both. Every grant counts, whatever its status: a paused grant can be
-resumed. Batteries charges after it authorizes, so an allocation can spend more than it held; a grant
-whose allocations spent more than its total counts as zero, and its overdraft does not hide another
-grant's unspent amount. The figure is read as the tenant list is (T31): the grants, then every
+**What "unspent" sums.** A grant's unspent amount is what is not yet allotted (`unallocated`) and what
+is allotted and not yet spent (`allocated_unspent`). Both are the tenant's to spend, so the wallet may
+still have to pay for both. Every grant counts, whatever its status: a paused grant can be resumed. It
+is not the grant's total less what was spent. Batteries charges after it authorizes, so an allocation
+can spend more than it held. That overdraft is charged already, and it takes nothing off what another
+allocation holds or off what the grant has left to allot: a grant of 100 with 60 allotted, of which 70
+was spent, still has 40 to allot and spend, and counts as 40, not 30. A figure that is too low is the
+unsafe one, since the deposit is held above this total. No grant counts below zero, so none hides
+another grant's unspent amount. The figure is read as the tenant list is (T31): the grants, then every
 allocation, so a command that lands between the reads can put it off by its amount.
 
 **The deposit and reserve need Batteries' on-chain listener.** Batteries records escrow only with

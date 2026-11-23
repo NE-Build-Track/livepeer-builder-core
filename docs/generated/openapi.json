@@ -2457,8 +2457,11 @@
       },
       "TenantGrant": {
         "additionalProperties": false,
-        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166).",
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166). ``allocated_unspent`` is what its allocations still hold (#167): for each one,\nwhat it was allotted less what it has spent, and nothing for one that has spent more, so an overdrawn\nallocation takes nothing off another's. A revoked allocation holds nothing: what it had not spent is\nback in ``unallocated``. The two together are what the tenant may still spend.",
         "properties": {
+          "allocated_unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2487,7 +2490,8 @@
           "status",
           "total",
           "unallocated",
-          "spent"
+          "spent",
+          "allocated_unspent"
         ],
         "title": "TenantGrant",
         "type": "object"

@@ -86,7 +86,10 @@ class TenantGrant(Contract):
     """A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's
     id. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation
     larger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked
-    ones included (#166)."""
+    ones included (#166). ``allocated_unspent`` is what its allocations still hold (#167): for each one,
+    what it was allotted less what it has spent, and nothing for one that has spent more, so an overdrawn
+    allocation takes nothing off another's. A revoked allocation holds nothing: what it had not spent is
+    back in ``unallocated``. The two together are what the tenant may still spend."""
 
     tenant_id: str
     name: str
@@ -94,6 +97,7 @@ class TenantGrant(Contract):
     total: Money
     unallocated: Money
     spent: Money
+    allocated_unspent: Money
 
 
 class OnboardedTenant(Contract):

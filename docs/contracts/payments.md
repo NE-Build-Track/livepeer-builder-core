@@ -622,8 +622,7 @@ left unfinished; a replay of a finished command is not a resume.
   again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below. A provider error
   an admin command answers with ("provider HTTP 409: ...") carries Batteries' own error text: the `error`
   of its JSON body, else the body as text, and at most 4096 characters of either, the limit a runner's
-  or a signer's error body has (`BODY_LIMIT`). Before #158 it was the whole body, whatever its size, in
-  the answer and in the log.
+  or a signer's error body has (`BODY_LIMIT`, #158).
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
   answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
   nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
@@ -636,13 +635,13 @@ left unfinished; a replay of a finished command is not a resume.
   with an unknown outcome (as `cost_sync_error` it is `unavailable`). An answer whose content encoding
   does not decode (it says `gzip` over a body that is not) is a `ProviderError` with the answer's own
   status, from a management call as from the usage feed: a refusal when that status is a 4xx other than
-  408, an unknown outcome otherwise. Before #158 a management call answered 500 for one. A malformed page
+  408, an unknown outcome otherwise (#158). A malformed page
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
   resumed create's search, cost sync and [a tenant's usage page](#a-tenants-usage) alike: before, the engine asked for that page again without end,
   and the grant list (`GET /v1/clearinghouse/tenants` since #165) and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
-  comes back after other pages: A, B, A) is that `ProviderError` too, from the first three of those readers (#158; a tenant's usage page reads one page for each request):
-  before, it was followed without end. A cursor that does not advance is refused at once, the first
+  comes back after other pages: A, B, A) is that `ProviderError` too, from the first three of those readers (#158; a tenant's usage page reads one page for each request).
+  A cursor that does not advance is refused at once, the first
   time its page is read. A longer cycle is found after at most a few turns of it and not always at its
   first repeat, because the engine keeps one earlier cursor to compare with, not every cursor; pages
   read twice meanwhile store no usage row twice. A grant, in a list or read alone,
@@ -650,16 +649,16 @@ left unfinished; a replay of a finished command is not a resume.
   strings where present: an object that is not that (`{}`, an error object, `metadata` as `null` or as a
   JSON object) is the same `ProviderError`, never a grant with no tag, and nothing is turned into text
   (`null` was read as the name `"None"`). `metadata` that is free text, or `""`, is a grant the engine did
-  not create, and so is `metadata` whose JSON is nested deeper than the decoder reads (before #158 that
-  one raised out of a resumed onboarding's search of the grants, a 500 on every try). The same holds for every value a command's result is built from: the `id` a grant create
+  not create, and so is `metadata` whose JSON is nested deeper than the decoder reads (#158): a resumed onboarding's
+  search of the grants reads past it. The same holds for every value a command's result is built from: the `id` a grant create
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with
   `allocation_id: "None"`), and an answer that lacked the key answered 500. An allocation's `allocated`,
   `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
   (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or
-  `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is; before #158
-  it answered 500 from `GET /v1/allowance` and from reconciliation. The error does not quote the
+  `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is (#158):
+  502 from `GET /v1/allowance` and from reconciliation. The error does not quote the
   body. A usage item that is an object the engine cannot read as a usage row is not malformed in this
   sense: it is set aside ([cost classification](#cost-classification)).
 - **Fencing.** A resume takes the record over with a compare-and-set that bumps its `fencing_token`.
@@ -860,11 +859,11 @@ records it and moves the cursor:
 
 | Reason | The row |
 | --- | --- |
-| `missing_id` | has no `id` (absent, `null`, empty, blank, or not a string or a whole number; a whole number is kept as its digits). Blank is white space alone (`"  "`), which was stored as the row's id before #158. An id with text in it is stored as received: nothing is trimmed |
+| `missing_id` | has no `id` (absent, `null`, empty, blank, or not a string or a whole number; a whole number is kept as its digits). Blank is white space alone (`"  "`, #158). An id with text in it is stored as received: nothing is trimmed |
 | `unknown_status` | has a `status` other than `applied`, `quarantined`, `ignored`, `duplicate` |
 | `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
-| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a decimal string as Batteries writes one: digits, then a point and digits when the fee has a fraction, after a minus sign when it is negative (`"0.000000039"`, `"7"`, `"-0.25"`). So not `NaN` or `Infinity`, not something that is no number at all (`"abc"`, `"0,5"`, `true`, an object), and since #158 not a form only Python's decimal reader takes: an exponent (`"1e999999"`, `"3.9e-8"`), a digit separator (`"1_000"`), digits of another script, padded text, a plus sign, `".5"` or `"5."`. A JSON number (`0.1`, `5`) is no fee either: a fee is text, and the engine turns no number into text. Before #158 each of these was read as a number and stored, and two fees like `"1e999999"` could not be added up. `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
-| `unreadable_row` | is one the JSON decoder's own limits refuse: an integer of more than 4300 digits, or a field nested deeper than the decoder reads (#158). Nothing of such a row is read, its id and its fees included: it is recorded under a digest of its text, with no fee, and the log line carries the start of that text. Before, it failed its whole page on every pass. Also a row that passes the checks above and is still refused by the usage row's own type (a backstop: no known row reaches it), and the code for another `UsageSource` whose row fits no other reason |
+| `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a decimal string as Batteries writes one: digits, then a point and digits when the fee has a fraction, after a minus sign when it is negative (`"0.000000039"`, `"7"`, `"-0.25"`). So not `NaN` or `Infinity`, not something that is no number at all (`"abc"`, `"0,5"`, `true`, an object), and not a form only Python's decimal reader takes (#158): an exponent (`"1e999999"`, `"3.9e-8"`), a digit separator (`"1_000"`), digits of another script, padded text, a plus sign, `".5"` or `"5."`. A JSON number (`0.1`, `5`) is no fee either: a fee is text, and the engine turns no number into text. `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
+| `unreadable_row` | is one the JSON decoder's own limits refuse: an integer of more than 4300 digits, or a field nested deeper than the decoder reads (#158). Nothing of such a row is read, its id and its fees included: it is recorded under a digest of its text, with no fee, and the log line carries the start of that text. The page's other rows are stored and the cursor moves. Also a row that passes the checks above and is still refused by the usage row's own type (a backstop: no known row reaches it), and the code for another `UsageSource` whose row fits no other reason |
 | `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
 Each value is judged as it was received, and that value is the one stored: apart from a whole-number

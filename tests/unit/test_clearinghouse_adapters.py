@@ -7,6 +7,7 @@
   command is sent.
 - What only a clearinghouse admin does is refused in the engine, and nothing is sent.
 - A tenant admin key reaches its own tenant and no other.
+- Ending one key: ``revoke_key``, at a clearinghouse that has no route for it.
 
 The key an allotment or a rotation hands over, and what the engine does without one, is
 ``test_clearinghouse_handed_keys.py``.
@@ -286,7 +287,7 @@ async def test_what_only_a_clearinghouse_admin_does_is_refused_plainly_and_nothi
     assert (await desk.grant(ports.admin, ports.tenant_id)).total == usd(100)  # its own grant is read
 
 
-async def test_a_member_that_names_an_allocation_needs_its_actor(ports: Ports) -> None:
+async def test_a_member_that_names_an_allocation_or_a_key_needs_its_actor(ports: Ports) -> None:
     manager = ports.manager
     assert isinstance(manager, AllocationsByActor)
     needing = [
@@ -296,11 +297,60 @@ async def test_a_member_that_names_an_allocation_needs_its_actor(ports: Ports) -
         manager.set_allocation_status("alloc_1", "paused"),
         manager.revoke_allocation("alloc_1"),
         manager.read_allocation("alloc_1"),
+        manager.revoke_key("key_1"),
     ]
     for call in needing:
         with pytest.raises(InvalidRequest, match="for_actor"):
             await call
     assert ports.requests == []
+
+
+# -- ending one key -----------------------------------------------------------------------------------------
+
+
+async def test_revoking_a_key_the_allocation_no_longer_holds_sends_nothing(ports: Ports) -> None:
+    """What every finished rotation asks about the key it replaced: the clearinghouse ended that key in
+    the rotation's own command. It is read, not assumed."""
+    allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    rotated = await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
+    assert ports.provider.keys[allotted.api_key_id][2] is True  # ended by the clearinghouse's rotation
+    sent, read = len(ports.sent()), len(ports.sent("GET"))
+
+    actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    await actor.revoke_key(allotted.api_key_id)
+    await actor.revoke_key("key_never_minted")
+
+    assert len(ports.sent()) == sent and len(ports.sent("GET")) == read + 2
+    assert ports.provider.keys[rotated.api_key_id][2] is False  # the live key is untouched
+
+
+async def test_revoking_the_key_the_allocation_holds_replaces_it_once_and_keeps_nothing(ports: Ports) -> None:
+    """No route revokes a key by its id, and a key is ended there only by the rotation that replaces it.
+    So the key is replaced, under a reference derived from it: a repeat replaces nothing more."""
+    allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+
+    await actor.revoke_key(allotted.api_key_id)
+
+    assert ports.provider.keys[allotted.api_key_id][2] is True
+    [replaced] = bodies(ports, ALLOCATION + "/rotate-payment-key")
+    assert replaced == {"operation_ref": folded("revoke-key", allotted.api_key_id)}
+    assert len(ports.provider.keys) == 2
+    # nothing of the replacement reached the engine: its record and its store are as they were
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == allotted
+    assert ports.secrets is not None and len(ports.secrets.values) == 1
+
+    await actor.revoke_key(allotted.api_key_id)  # a repeat: the key is not the one held now
+    assert len(bodies(ports, ALLOCATION + "/rotate-payment-key")) == 1 and len(ports.provider.keys) == 2
+
+
+async def test_no_key_of_a_revoked_allocation_is_replaced(ports: Ports) -> None:
+    allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+    sent = len(ports.sent())
+    actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    await actor.revoke_key(allotted.api_key_id)
+    assert len(ports.sent()) == sent
 
 
 # -- one tenant, and no other -------------------------------------------------------------------------------

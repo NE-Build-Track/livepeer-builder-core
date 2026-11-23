@@ -12,7 +12,8 @@ What this file holds is what follows from "once":
   replaced by a rotation, or, for an allotment the engine has no record of, by revoking the allocation at
   the clearinghouse and allotting again;
 - a resumed command at the clearinghouse hands the key over again (``resumed``), and the engine stores it;
-- the engine's own resume after it stored the key finishes from its own copy.
+- the engine's own resume after it stored the key finishes from its own copy;
+- two rotations of one actor leave no key live that the engine stored and dropped.
 
 The two engines share nothing: each has a store and a secret store of its own (``payment_ports.py``).
 """
@@ -456,6 +457,91 @@ async def test_an_allotment_the_engine_resumes_after_it_saved_the_actor_asks_the
 
     assert len(ports.requests) == sent  # its own record of the actor is the answer
     assert answer.credential_custody == "secret_store" and await stored_key(ports) == key
+
+
+# -- two rotations of one actor ----------------------------------------------------------------------------
+
+
+async def test_a_rotation_that_another_overtook_leaves_no_key_live_that_the_engine_stored_and_dropped(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second review thread of #182. Rotation B begins, and before it reaches the clearinghouse
+    rotation A runs whole: the clearinghouse replaces the first key with A's, and the engine stores A's.
+    B's call then replaces A's key at the clearinghouse, but the engine writes a rotation's key only over
+    the key that rotation began from, so B writes nothing, as at Batteries. There the loser revokes its
+    own key by its id. A clearinghouse ends a key only by replacing it, and the loser's key is the one it
+    takes now: the adapter's ``revoke_key`` replaces it and keeps nothing of the answer, so the key the
+    engine stored and then dropped is dead, as the refusal says. The actor then holds a key the
+    clearinghouse has ended, and the next rotation, which the refusal asks for, puts that right."""
+    allotted = await allot(ports)
+    first = await stored_key(ports)
+    manager = ports.manager
+    original = manager.for_actor  # type: ignore[attr-defined]
+    overtaken: list[ActorAllocation] = []
+
+    def b_waits_for_a(*args: Any, **kwargs: Any) -> Any:
+        """The manager rotation B is given: its call to the clearinghouse lets rotation A run first."""
+        monkeypatch.setattr(manager, "for_actor", original)
+        mine = original(*args, **kwargs)
+        create_key = mine.create_key
+
+        async def after_a(*call: Any) -> Any:
+            overtaken.append(await rotate(ports, "r-a"))
+            return await create_key(*call)
+
+        monkeypatch.setattr(mine, "create_key", after_a)
+        return mine
+
+    monkeypatch.setattr(manager, "for_actor", b_waits_for_a)
+    with pytest.raises(InvalidRequest) as lost:
+        await rotate(ports, "r-b")
+
+    [a] = overtaken
+    a_key = await stored_key(ports)
+    assert "another key rotation" in str(lost.value) and "this rotation's key is revoked" in str(lost.value)
+    assert (await ports.engine.store.get_actor(ports.tenant_id, "alice")) == a  # B wrote nothing
+    assert ports.secrets is not None and list(ports.secrets.values.values()) == [a_key]
+    # every key this engine ever held for the actor is dead at the provider: the first, A's, and B's
+    engine_saw = [answer["allocation_api_key"] for answer in handed(ports, ROTATE)[:2]]
+    assert len(set(engine_saw)) == 2 and a_key in engine_saw
+    for key in (first, *engine_saw):
+        assert await ports.pays_for(key) is None
+    # B's key was ended the one way a clearinghouse ends a key: by a third rotation, whose key nobody kept
+    assert [path.rsplit("/", 1)[1] for path in ports.sent()] == ["allocation"] + ["rotate-payment-key"] * 3
+    assert len(live_keys(ports)) == 1 and live_keys(ports).isdisjoint({first, *engine_saw})
+    assert ports.provider.allocations[allotted.allocation_id].granted == 5
+
+    # the refusal asks for a rotation under a new reference, and that leaves the engine holding the one
+    # key the clearinghouse takes
+    await rotate(ports, "r-c")
+    final = await stored_key(ports)
+    assert await ports.pays_for(final) == allotted.allocation_id and live_keys(ports) == {final}
+    assert list(ports.secrets.values.values()) == [final]
+
+
+async def test_the_rotation_that_wrote_first_in_the_engine_and_last_at_the_clearinghouse_is_the_one_kept(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other order: rotation B runs whole while A's answer is on its way back. B's key is the one the
+    clearinghouse takes and the one the engine stored; A, which then writes nothing, has a key the
+    clearinghouse already ended, so nothing is sent to end it."""
+    allotted = await allot(ports)
+    store = ports.engine.store
+    original = store.set_actor_key  # type: ignore[attr-defined]
+
+    async def b_first(*args: Any, **kwargs: Any) -> Any:
+        monkeypatch.setattr(store, "set_actor_key", original)
+        await rotate(ports, "r-b")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "set_actor_key", b_first)
+    with pytest.raises(InvalidRequest, match="another key rotation"):
+        await rotate(ports, "r-a")
+
+    kept = await stored_key(ports)
+    assert await ports.pays_for(kept) == allotted.allocation_id and live_keys(ports) == {kept}
+    assert ports.secrets is not None and list(ports.secrets.values.values()) == [kept]
+    assert [path.rsplit("/", 1)[1] for path in ports.sent()] == ["allocation"] + ["rotate-payment-key"] * 2
 
 
 # -- a clearinghouse that hands no key over ----------------------------------------------------------------

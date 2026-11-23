@@ -165,11 +165,11 @@ class ClearinghouseAllocations:
         del allocation_id
         _needs_the_actor("read_allocation")
 
-    async def revoke_key(  # NOSONAR - async by protocol (AllocationManager); nothing is sent
+    async def revoke_key(  # NOSONAR - async by protocol (AllocationManager)
         self, api_key_id: str
     ) -> None:
-        """Nothing is sent: a rotation at the clearinghouse ends the old key in the same command."""
         del api_key_id
+        _needs_the_actor("revoke_key")
 
 
 class _ActorAllocation(ClearinghouseAllocations):
@@ -219,6 +219,22 @@ class _ActorAllocation(ClearinghouseAllocations):
             await self._wire.write_as(DeliveredAllocation, self._path("/rotate-payment-key"), body),
             rotated=allocation_id,
         )
+
+    async def revoke_key(self, api_key_id: str) -> None:
+        """End one key. A clearinghouse has no route that revokes a key by its id: a rotation there ends
+        the key before it, and a revoked allocation takes none. So the actor's allocation is read. A key
+        it no longer holds has ended already, and nothing is sent: that is the old key of every rotation
+        this engine finishes. The key the allocation holds now is asked for only by a rotation that
+        another rotation overtook in this engine, about its own new key, which the engine is about to
+        forget (``PaymentKeys.rotated``). It is ended the one way a clearinghouse ends a key: it is
+        replaced, under a reference derived from the key, so a repeat replaces nothing more. The
+        replacement's key is in an answer this method never reads: nobody holds it, and the actor's next
+        rotation, which that refusal asks for, replaces it."""
+        held = await self._wire.read_as(AllocationRead, self._path())
+        if held.status == "revoked" or held.api_key_id != api_key_id:
+            return
+        replacing = {"operation_ref": _digest("revoke-key", api_key_id)}
+        await self._wire.write(self._path("/rotate-payment-key"), replacing)
 
     def _allotment_ref(self, idempotency_key: str) -> str:
         """An allotment's reference at the clearinghouse, which keys its own ledger on it for this tenant

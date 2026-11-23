@@ -90,6 +90,7 @@ async def test_before_in_another_zone_is_the_same_instant_in_utc(history: Histor
     assert await history.page(history.alice, before=shifted) == [first]
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="changing the process timezone requires Unix tzset")
 async def test_paging_does_not_depend_on_the_servers_local_zone(
     history: History, monkeypatch: pytest.MonkeyPatch
 ) -> None:

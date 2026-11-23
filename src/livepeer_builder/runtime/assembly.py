@@ -42,7 +42,6 @@ from livepeer_builder.protocols import (
     SecretStore,
     SelectionPolicy,
     SessionManager,
-    SignerForwarder,
     SignerProbe,
     TenantUsageSource,
     UsageSource,
@@ -294,21 +293,11 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
-    # An engine that uses a clearinghouse is not one (#168): it signs at the clearinghouse with the same
-    # transport a clearinghouse forwards with, and offers neither of the two things below to anybody.
-    clearinghouse_transport = None if settings.uses_clearinghouse else parts.transport
     wallet: Wallet | None = None
     # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
     # and the transport asks the signer it pays through
-    if isinstance(parts.grants_manager, EscrowSource) and isinstance(clearinghouse_transport, SignerProbe):
-        wallet = Wallet(parts.grants_manager, parts.grants_manager, clearinghouse_transport, parts.policy)
-    forwarder: SignerForwarder | None = None
-    # Otherwise the signer's two paths are not served (#166): a transport that forwards no signer call,
-    # or one that does not pay, which has no signer to forward to.
-    if isinstance(clearinghouse_transport, SignerForwarder) and getattr(
-        clearinghouse_transport, "pays", True
-    ):
-        forwarder = clearinghouse_transport
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -320,12 +309,9 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         tenants=tenants,
         usage=usage,
         wallet=wallet,
-        forwarder=forwarder,
         currency=settings.default_currency,
         allowances=parts.allowances,
     )
-    if settings.uses_clearinghouse:  # it is handed its actors' payment keys and issues none (#168)
-        payments.issue_no_payment_keys()
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
     jobs = JobService(
         parts.store,

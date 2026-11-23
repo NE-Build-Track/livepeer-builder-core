@@ -213,8 +213,10 @@ ISS-31 was replaced on 18 November (D82 to D86 in [m4-decisions.md](../m4-decisi
 payment arrangement of the proof.
 
 - **The payment arrangement (Q2).** The reviewer installs an engine in its `work` role and pays through
-  Mike's payment clearinghouse with a tenant admin key. No Batteries credential and no signer address is
-  handed over.
+  Mike's payment clearinghouse with a tenant admin key. The reviewer is given the clearinghouse's address
+  and its signer's address, and no Batteries management credential: allotment hands the reviewer's engine
+  each actor's payment key, and that engine signs at the signer itself (D85 point 1, as amended on 19
+  November 2026).
 - **Self-hosted payments** are rechecked up to readiness, as before.
 - **The bundle check** also rejects payment keys.
 

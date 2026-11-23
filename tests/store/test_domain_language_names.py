@@ -139,6 +139,11 @@ async def stored(engine: AsyncEngine, old_names: bool) -> dict[str, list[dict[st
     return {name: in_order(rows) for name, rows in found.items()}
 
 
+# What a row written before 0014 reads at the head in a column added since: 0015 makes every existing
+# actor's credential the configured store's (#186 review).
+ADDED_AT_HEAD = {"lpb_actors": {"credential_custody": "secret_store"}}
+
+
 def in_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: json.dumps(row, default=str))
 
@@ -297,7 +302,7 @@ async def test_a_command_recorded_before_the_rename_is_replayed_and_not_run_agai
     async with make_engine(supply=supply, auto_migrate=False) as built:
         answered = await built.payments.allot(ADMIN, PROVISION)
         assert OPERATION_REPLAYED.get() is True and manager.calls == []
-        assert answered.allocation == await built.payments.get_actor(ADMIN, "default", "alice")
+        assert answered == await built.payments.get_actor(ADMIN, "default", "alice")
         more = PROVISION.model_copy(update={"amount": Money(amount=Decimal("50"), currency="USD")})
         with pytest.raises(OperationConflict):
             await built.payments.allot(ADMIN, more)
@@ -341,7 +346,8 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
         await upgrade(engine)
         head = await stored(engine, old_names=False)
         for name in ("lpb_access_keys", "lpb_jobs", "lpb_actors", "lpb_actor_sightings"):
-            assert head[name] == in_order([renamed(row) for row in before[name]])
+            added = ADDED_AT_HEAD.get(name, {})
+            assert head[name] == in_order([renamed(row) | added for row in before[name]])
 
         await interrupted(engine, "down", "0013")
         assert await current_revision(engine) == head_revision()

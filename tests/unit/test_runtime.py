@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -385,7 +386,7 @@ async def test_without_auto_migrate_a_database_at_another_revision_stops_startup
         await engine.start()
     message = str(refused.value)
     assert database in message and head_revision() in message
-    assert str(tmp_path / "engine.db") in message  # the database that was checked, by name
+    assert str(tmp_path / "engine.db") in unquote(message)  # the database that was checked, by name
     if revision == "head":  # ahead: this package cannot migrate it, so it does not say to
         assert "another release" in message and "run `lpb migrate`" not in message
     else:  # behind: migrate that database
@@ -484,7 +485,7 @@ async def test_the_refusal_names_a_supplied_stores_own_database_not_the_configur
     finally:
         await inner.close()
     message = str(refused.value)
-    assert str(tmp_path / "engine.db") in message and ":memory:" not in message
+    assert str(tmp_path / "engine.db") in unquote(message) and ":memory:" not in message
 
 
 def test_the_database_named_in_the_refusal_hides_its_password() -> None:

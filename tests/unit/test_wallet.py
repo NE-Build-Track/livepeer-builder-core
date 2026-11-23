@@ -57,7 +57,7 @@ async def spend(
     request = AllotRequest(
         operation_ref=f"allot:{tenant}", tenant_id=tenant, actor_id=f"actor-of-{tenant}", amount=allotted
     )
-    allocation = (await engine.payments.allot(operator, request)).allocation
+    allocation = await engine.payments.allot(operator, request)
     manager.allocations[allocation.allocation_id].spent = Decimal(spent)
 
 

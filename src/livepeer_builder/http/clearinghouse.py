@@ -3,6 +3,12 @@ tenant's actors and their allocations (allot, top up, status, revoke, rotate the
 access keys and its usage. Beside them, ``/v1/clearinghouse/discovery``: the runner list the clearinghouse
 publishes (#166).
 
+Allotment and payment key rotation answer the allocation. Mounted for a standalone clearinghouse
+(``deliver_allocation_keys=True``) they also hand the allocation's own Batteries key to the caller, once:
+the enterprise's engine keeps it and signs at the signer itself, and the clearinghouse stores none (D85
+point 1, D87 point 1; docs/contracts/payments.md, "Payment keys"). The keyword has no default: whoever
+mounts these routes says who keeps the keys. No route here signs or forwards a payment.
+
 One unit, mounted by itself or beside the work set (D84). It is typed against ``ClearinghouseApi``, so it
 cannot run a job. Routes are thin: each authenticates, then makes one engine call, and authorization
 lives in the services' AccessPolicy checks: the path names the tenant, the service passes it to the
@@ -34,7 +40,6 @@ from livepeer_builder.contracts import (
     AllocationStatus,
     AllotRequest,
     IssuedKey,
-    KeyedAllocation,
     KnownActor,
     OnboardedTenant,
     TenantGrant,
@@ -54,9 +59,9 @@ from livepeer_builder.http.bodies import (
     TenantKeyBody,
     TenantStatusBody,
 )
+from livepeer_builder.http.delivered import DeliveredAllocationBody, delivered_body
 from livepeer_builder.http.params import GrantTenantId, PathId, QueryId
 from livepeer_builder.http.replies import replay, replayed
-from livepeer_builder.http.signing import mount_signing_routes
 
 TENANTS = "/v1/clearinghouse/tenants"
 TENANT = TENANTS + "/{tenant_id}"
@@ -66,12 +71,20 @@ DISCOVERY = "/v1/clearinghouse/discovery"
 WALLET = "/v1/clearinghouse/wallet"
 
 
-def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
-    """Add the clearinghouse half's routes to ``app``: both groups, and the signer's two paths, which an
-    enterprise's engine calls with a payment key (``http/signing.py``, #166)."""
-    mount_tenant_routes(app, engine)
+def mount_clearinghouse_routes(
+    app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool
+) -> None:
+    """Mount both groups. ``deliver_allocation_keys`` is required (Mike, 23 November 2026). ``True``, for a
+    standalone clearinghouse: allotment and rotation hand each allocation's key to the caller once and
+    store none.
+
+    ``False``, for an engine that also runs jobs: it stores the key for its own jobs and returns none.
+    ``create_app`` passes ``False``, for every listener (``http/listeners.py``). With ``True`` on such an
+    engine the caller is handed each key, the engine stores none, and that actor's jobs fail
+    ``not_provisioned``.
+    """
+    mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
     mount_clearinghouse_admin_routes(app, engine)
-    mount_signing_routes(app, engine)
 
 
 def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
@@ -123,10 +136,11 @@ def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> 
         return replay(response, state)
 
 
-def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
+def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool) -> None:
     """Add what a tenant's admin or auditor calls for its own tenant: its grant, its actors and their
     allocations, its usage and its access keys. A clearinghouse admin calls them for any tenant. With
-    them, the clearinghouse's runner list, which any credential of a tenant reads."""
+    them, the clearinghouse's runner list, which any credential of a tenant reads.
+    ``deliver_allocation_keys`` is required, as for ``mount_clearinghouse_routes``."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     if engine.payments.tenants is not None:  # reading a grant needs the tenant desk
@@ -192,16 +206,19 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         be read."""
         return await engine.payments.get_allocation(actor, tenant_id, actor_id)
 
-    @app.post(ALLOCATION, status_code=201)
+    @app.post(
+        ALLOCATION,
+        status_code=201,
+        response_model=DeliveredAllocationBody if deliver_allocation_keys else ActorAllocation,
+    )
     async def allot(
         actor: Actor,
         tenant_id: Annotated[StoredText, Path()],  # as stored: a 422 here, before money moves
         actor_id: Annotated[StoredText, Path()],
         body: AllotBody,
         response: Response,
-    ) -> KeyedAllocation:
-        """Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment
-        key, whose token is shown once."""
+    ) -> ActorAllocation:
+        response.headers["Cache-Control"] = "no-store"
         request = AllotRequest(
             tenant_id=tenant_id,
             actor_id=actor_id,
@@ -209,6 +226,8 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
             label=body.label,
             operation_ref=body.operation_ref,
         )
+        if deliver_allocation_keys:  # the key is written out here, and only here
+            return replay(response, delivered_body(await engine.payments.allot_for_delivery(actor, request)))
         return replay(response, await engine.payments.allot(actor, request))
 
     @app.post(ALLOCATION + "/top-up")
@@ -227,13 +246,19 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     async def revoke(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.revoke(actor, tenant_id, actor_id)
 
-    @app.post(ALLOCATION + "/rotate-payment-key")
+    @app.post(
+        ALLOCATION + "/rotate-payment-key",
+        response_model=DeliveredAllocationBody if deliver_allocation_keys else ActorAllocation,
+    )
     async def rotate_payment_key(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
-    ) -> KeyedAllocation:
-        """Replace the actor's payment key, and the Batteries key behind it. The old one stops at once."""
-        rotated = await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, body.operation_ref)
-        return replay(response, rotated)
+    ) -> ActorAllocation:
+        response.headers["Cache-Control"] = "no-store"
+        ref = body.operation_ref
+        if deliver_allocation_keys:  # the key is written out here, and only here
+            rotated = await engine.payments.rotate_for_delivery(actor, tenant_id, actor_id, ref)
+            return replay(response, delivered_body(rotated))
+        return replay(response, await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, ref))
 
     if engine.keys is None:  # API keys off: a tenant has no access keys to manage (decision 2)
         return

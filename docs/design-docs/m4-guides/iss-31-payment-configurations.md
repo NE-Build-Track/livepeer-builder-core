@@ -5,7 +5,7 @@
 > [m4-decisions.md](../m4-decisions.md), and the answers are under [Questions locked](#questions-locked).
 > The 13 November design (`separately_operated`, `per_application` only) is not built.
 
-**Status:** amended by John on 19 November 2026 for direct signer access and work-engine credential custody. The
+**Status:** locked, with direct signer access and work-engine credential custody (D85 point 1, D87 points 1 and 3). The
 work is tracked in [the exec plan](../../exec-plans/active/iss-31-payment-clearinghouse.md).\
 **Tracker:** ISS-31 ([Network-Engineering-SPE#45](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/45)),
 source task P4, amended on 18 November. Its work is eight builder-core issues, #162 to #169 (P1 to P8).\
@@ -76,8 +76,7 @@ Batteries is a Go server. It cannot be vendored, and no upstream change is propo
 
 The enterprise work engine holds each actor's allocation API key and calls the signer directly.
 The clearinghouse manages tenants, grants and allocations and serves tenant usage and discovery.
-It exposes no signer proxy and stores no allocation secret. This is John's 19 November amendment
-of D85/D87; the historical decisions below must be read with that amendment.
+It exposes no signer proxy and stores no allocation secret (D85 point 1, D87 point 1).
 
 ### What each side holds
 
@@ -161,7 +160,7 @@ is accepted on the private one only.
 The `/v1/keys` routes exist only while engine API keys are on.
 
 The names follow D83. Usage, discovery, tenant status, both sets of key routes, reconciliation and
-cost sync keep the paths D87 locked. The 19 November amendment supersedes D87's payments path: the
+cost sync keep the paths D87 locked. There is no clearinghouse payments route (D87 point 3): the
 work engine calls `/sign-orchestrator-info` and `/generate-live-payment` on the signer origin.
 
 ### What builder-core can do without an upstream change
@@ -280,11 +279,11 @@ Locked by Mike on 18 November 2026. They replace the four answers of 13 November
 
 **The open points, settled by Mike on 18 November (D87).** They were first left for John.
 
-- **The key that signs for an actor (amended by John, 19 November):** the Batteries allocation API
+- **The key that signs for an actor:** the Batteries allocation API
   key, delivered once and persisted only by the work engine, which calls the signer directly.
 - **The runner list:** the clearinghouse's list is the default, and an enterprise may use its own
   discovery. Nothing is enforced at signing in the first version.
-- **The eight route paths** are as written under Routes.
+- **The route paths** are as written under Routes.
 - **The two Compose projects** live in this repository's `deploy/` folder.
 - **`lpb payments check`** is kept as a read-only check for each role.
 - **The Keycloak realm's `operator` role** is renamed and maps to `clearinghouse_admin`. A second role

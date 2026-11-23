@@ -68,8 +68,8 @@ Each pull request ticks its own line here in the same change.
   The clearinghouse accepts keys only in the first version. Source: Mike.
 - **18 November 2026, D86.** The console runs twice at a clearinghouse, top-up is manual, and the work is
   inside M4. Source: Mike.
-- **18 November 2026, D87.** The open points are settled: a payment key for each actor, the
-  clearinghouse's runner list by default, the eight route paths, the Compose projects in `deploy/`,
+- **18 November 2026, D87.** The open points are settled: the allocation API key held by the work
+  engine, the clearinghouse's runner list by default, the route paths, the Compose projects in `deploy/`,
   `lpb payments check` kept, the realm's role mapping, and how a clearinghouse failure is classified.
   Source: Mike.
 - **18 November 2026.** The sample enterprise apps and the console break when they next move their pin.
@@ -79,8 +79,9 @@ Each pull request ticks its own line here in the same change.
   allotted to a tenant whose id is not a grant's id. Whether to re-key existing deployments is open.
   Source: Mike (not to rewrite rows in #165); the rest follows from it.
 
-- **19 November 2026, John, P5 comparison.** Remove the signer proxy and separate payment tokens.
+- **19 November 2026, P5 (D85 point 1, D87 points 1 and 3).** Remove the signer proxy and separate payment tokens.
   Allocation secrets belong to the work engine. P5 provides the authenticated one-response handoff,
   with metadata-only replay and explicit rotation for lost delivery. Self-hosted combined engines
   retain their local work-engine secret store. Remote persistence stays in P7 and role/listener
-  selection in P6/P8; no later-stack implementation is included here.
+  selection in P6/P8; no later-stack implementation is included here. Source: Mike (Option A, as the
+  change to #180).

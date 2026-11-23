@@ -886,7 +886,7 @@ cannot safely give an engine a management credential.
 D74 (13 November 2026) answered it with a separately operated engine in `per_application` mode. That
 was not built. D82 (18 November 2026) replaces it with the payment clearinghouse, which needs no scoped
 management credential at the enterprise: only the clearinghouse reaches Batteries management.
-Under the 19 November direct-signer amendment, the work engine holds its allocation credential and
+The work engine holds its allocation credential (D85 point 1, D87 point 1) and
 reaches the signer directly.
 
 ### Provisioning

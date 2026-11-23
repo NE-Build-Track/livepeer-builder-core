@@ -23,10 +23,8 @@ from livepeer_builder.contracts import (
     RunnerReply,
     SecretRef,
     TenantGrant,
-    UsagePage,
-    UsageRow,
 )
-from livepeer_builder.errors import CursorMismatch, NotFound, ProviderError, RunnerCallError
+from livepeer_builder.errors import NotFound, ProviderError, RunnerCallError
 from livepeer_builder.protocols import OnSigned
 
 
@@ -254,6 +252,8 @@ class _Grant:
 
 class FakeAllocationManager:
     """Mimics Batteries management semantics: idempotent replays, and a grant's unallocated balance.
+    A success is saved under the call's idempotency key and replayed to the same request under that key;
+    any other request under it is refused as Batteries refuses it (409), and nothing is applied.
 
     A tenant's id is its grant's id (D83), so an allotment names a grant the fake must hold. ``add_grant``
     gives it one under an id the test chooses (a tenant such as ``"default"``); ``create_grant``, which
@@ -272,6 +272,7 @@ class FakeAllocationManager:
         self.allocations: dict[str, _Allocation] = {}
         self.keys: dict[str, tuple[str, str, bool]] = {}  # api_key_id -> (allocation, secret, revoked)
         self.replays: dict[str, object] = {}
+        self._sent: dict[str, tuple[object, ...]] = {}  # the request each saved success answered
         self.calls: list[str] = []
         self.topped_up_grants: list[tuple[str, Money, str]] = []
         self.grants: list[GrantRecord] = []
@@ -310,6 +311,17 @@ class FakeAllocationManager:
         if call in self._failures:
             raise self._failures.pop(call)
 
+    def _saved(self, idempotency_key: str, *request: object) -> bool:
+        """Whether a success is saved under the key, for this request as it is sent: an amount is compared
+        as written (``5`` is not ``5.0``). A call that failed saved nothing."""
+        sent = tuple(f"{v.amount:f} {v.currency}" if isinstance(v, Money) else v for v in request)
+        if idempotency_key not in self.replays:
+            self._sent[idempotency_key] = sent
+            return False
+        if self._sent[idempotency_key] == sent:
+            return True
+        raise ProviderError(409, "idempotency key was already used with different parameters or operation")
+
     def _grant(self, grant_id: str) -> _Grant:
         if grant_id not in self._held:
             raise ProviderError(404, "resource not found")
@@ -326,7 +338,7 @@ class FakeAllocationManager:
     ) -> NewAllocationKey:
         self._called("create_key_for_grant")
         self.last_grant_id = grant_id
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "create_key_for_grant", grant_id, name, amount):
             return self.replays[idempotency_key]  # type: ignore[return-value]
         self._take(grant_id, amount.amount)
         allocation = f"alloc_{len(self.allocations) + 1}"
@@ -338,7 +350,7 @@ class FakeAllocationManager:
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
         self._called("create_key")
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "create_key", allocation_id, name):
             return self.replays[idempotency_key]  # type: ignore[return-value]
         key = self._mint(allocation_id)
         self.replays[idempotency_key] = key
@@ -348,7 +360,7 @@ class FakeAllocationManager:
         self, allocation_id: str, amount: Money, idempotency_key: str
     ) -> None:
         self._called("top_up_allocation")
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "top_up_allocation", allocation_id, amount):
             return
         allocation = self.allocations[allocation_id]
         self._take(allocation.grant_id, amount.amount)
@@ -361,7 +373,7 @@ class FakeAllocationManager:
         self, grant_id: str, amount: Money, idempotency_key: str
     ) -> None:
         self._called("top_up_grant")
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "top_up_grant", grant_id, amount):
             return
         grant = self._grant(grant_id)
         self.replays[idempotency_key] = True
@@ -431,11 +443,16 @@ class FakeAllocationManager:
 
     async def read_grant(self, grant_id: str) -> TenantGrant:  # NOSONAR - async by protocol
         self._called("read_grant")
-        return _tenant_grant(self._grant(grant_id))
+        return _tenant_grant(self._grant(grant_id), self._spent(grant_id))
 
     async def grant_balances(self) -> list[TenantGrant]:  # NOSONAR - async by protocol
         self._called("grant_balances")
-        return [_tenant_grant(self._held[grant.id]) for grant in self.grants]
+        return [_tenant_grant(self._held[grant.id], self._spent(grant.id)) for grant in self.grants]
+
+    def _spent(self, grant_id: str) -> Decimal:
+        """What the grant's allocations have spent, the revoked ones included, as Batteries reports it."""
+        spent = (held.spent for held in self.allocations.values() if held.grant_id == grant_id)
+        return sum(spent, Decimal(0))
 
     async def set_grant_status(self, grant_id: str, status: str) -> None:  # NOSONAR - async by protocol
         self._called("set_grant_status")
@@ -467,7 +484,7 @@ class FakeAllocationManager:
         return NewAllocationKey(allocation_id=allocation_id, api_key_id=key_id, secret=SecretStr(secret))
 
 
-def _tenant_grant(grant: _Grant) -> TenantGrant:
+def _tenant_grant(grant: _Grant, spent: Decimal) -> TenantGrant:
     currency: Currency = "USD" if grant.record.currency == "USD" else "ETH"
     return TenantGrant(
         tenant_id=grant.record.id,
@@ -475,22 +492,5 @@ def _tenant_grant(grant: _Grant) -> TenantGrant:
         status=grant.record.status,
         total=Money(amount=grant.total, currency=currency),
         unallocated=Money(amount=grant.unallocated, currency=currency),
+        spent=Money(amount=spent, currency=currency),
     )
-
-
-class FakeUsageSource:
-    """Pages a fixed row list like Batteries: opaque cursors, empty cursor on the last page."""
-
-    def __init__(self, rows: Sequence[UsageRow] = (), page_size: int = 2) -> None:
-        self.rows = list(rows)
-        self.page_size = page_size
-
-    async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
-        start = 0
-        if cursor:
-            if not cursor.startswith("c"):
-                raise CursorMismatch("invalid cursor")
-            start = int(cursor[1:])
-        end = start + min(limit, self.page_size)
-        items = tuple(self.rows[start:end])
-        return UsagePage(items=items, next_cursor=f"c{end}" if end < len(self.rows) else "")

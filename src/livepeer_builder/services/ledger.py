@@ -17,7 +17,13 @@ from typing import Any, Literal
 
 from pydantic import TypeAdapter
 
-from livepeer_builder.contracts import OPERATION_REPLAYED, ActorContext, OperationCommand, OperationRecord
+from livepeer_builder.contracts import (
+    OPERATION_REPLAYED,
+    OPERATION_RESUMED,
+    ActorContext,
+    OperationCommand,
+    OperationRecord,
+)
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyAllotted,
@@ -141,8 +147,13 @@ class OperationLedger:
         answer: TypeAdapter[T],
         context: Mapping[str, str] | None = None,
         earlier_request: Callable[[], Awaitable[Mapping[str, Any]]] | None = None,
+        resumable: Callable[[OperationRecord], None] | None = None,
     ) -> T:
         """Run ``steps`` once per ``operation_ref``; a repeat gets the first run's result back.
+
+        ``resumable`` is shown a held record of this command that has not finished, before it is resumed
+        or reported in progress, and raises when this call must not finish that run. Nothing was sent or
+        written by then, so the record stays as it was for the call that may resume it.
 
         ``earlier_request`` is the request as an earlier release recorded it, for a command whose request
         lost a field since. It is asked only when a held record does not match ``request``: a finished
@@ -150,6 +161,7 @@ class OperationLedger:
         still ``started`` is a conflict however old, and is never resumed: the earlier release's run is
         not one this release can finish (docs/contracts/index.md, the upgrade notes of #165)."""
         OPERATION_REPLAYED.set(False)
+        OPERATION_RESUMED.set(False)
         record = OperationRecord(
             tenant_id=caller.tenant_id,
             actor_id=caller.actor_id,
@@ -167,10 +179,13 @@ class OperationLedger:
                 raise OperationConflict(held)  # before any provider call
             if held.state == "done":
                 return _replayed(held, answer)
+            if resumable is not None:
+                resumable(held)  # before the take-over, which is a write and restarts the stale window
             taken = await self._resume(held)
             if taken is None:  # another repeat resumed it first: answer as the record is now
                 return await self._recorded(held, answer)
             record = taken
+            OPERATION_RESUMED.set(True)  # this run follows an attempt whose outcome is unknown
         running = RunningOperation(self._repo, record)
         # A run never outlives half the stale window, so none is still calling a provider when a repeat
         # resumes it: fencing guards the records, not a call in flight (grant creation has no provider

@@ -47,7 +47,7 @@ ACTORS_AT_0012 = as_before_0014(t.actors)
 
 
 def row_at_0012(actor: ActorAllocation) -> dict[str, object]:
-    values = actor.model_dump(exclude={"secret_ref", "tenant_id"})
+    values = actor.model_dump(exclude={"secret_ref", "tenant_id", "credential_custody"})  # 0015's column
     return values | {"application_id": actor.tenant_id, "secret_ref": actor.secret_ref.ref}
 
 
@@ -105,7 +105,7 @@ async def test_existing_actors_survive_the_change_and_a_downgrade(
         await save_at_0012(engine, before)  # a row written by revision 0012's schema
 
         await upgrade(engine)
-        assert await current_revision(engine) == head_revision() == "0014"
+        assert await current_revision(engine) == head_revision() == "0015"
         assert await secret_ref_length(engine) is None
         store = SqlStore(engine)
         assert await store.get_actor("default", "alice") == before

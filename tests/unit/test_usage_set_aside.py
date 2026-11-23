@@ -216,7 +216,7 @@ async def test_a_usage_row_the_checks_pass_and_the_row_type_refuses_is_set_aside
     make_engine: EngineFactory, store: SqlStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The backstop: whatever a check misses, a row that is no ``UsageRow`` never fails its page."""
-    monkeypatch.setattr("livepeer_builder.adapters.batteries_usage._unreadable", lambda item: None)
+    monkeypatch.setattr("livepeer_builder.adapters.batteries_usage_rows._unreadable", lambda item: None)
     source = batteries([item("u1")], [item("u-bad", computed_fee_usd="NaN"), item("u2")])
     engine = await make_engine(supply=EngineSupply(usage_source=source))
     report = await engine.costs.sync_once()

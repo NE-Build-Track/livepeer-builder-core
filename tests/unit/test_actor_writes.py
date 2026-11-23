@@ -577,6 +577,29 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
         await desk.pause()
 
 
+@pytest.mark.parametrize("whole_row", [False, True], ids=["column-writes", "whole-row"])
+async def test_a_rotation_records_custody_with_its_key_on_either_store(
+    make_engine: EngineFactory,
+    store: SqlStore,
+    admin: ActorContext,
+    vault: MemorySecretStore,
+    whole_row: bool,
+) -> None:
+    """The key write carries who holds the new key (#186 review), in the store's own write and in the
+    engine's whole-row fallback alike."""
+    supplied = _WholeRowStore(store) if whole_row else store
+    engine = await make_engine(supply=EngineSupply(store=supplied, secret_store=vault))  # type: ignore[arg-type]
+    await engine.payments.allot(admin, allot_request())
+    delivered = await engine.payments.rotate_for_delivery(admin, "default", "alice", "rotate-1")
+    stored = await engine.payments.get_actor(admin, "default", "alice")
+    assert stored.credential_custody == delivered.credential_custody == "work_engine"
+    assert stored.secret_ref == delivered.secret_ref and vault.values == {}
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-2")
+    stored = await engine.payments.get_actor(admin, "default", "alice")
+    assert stored == rotated and stored.credential_custody == "secret_store"
+    assert list(vault.values) == [stored.secret_ref.ref]
+
+
 @pytest.mark.parametrize("command", ["pause", "top_up", "rotate"])
 async def test_a_store_without_the_column_writes_gets_the_rules_from_the_engines_own_check(
     whole_row_desk: Desk, manager: FakeAllocationManager, vault: MemorySecretStore, command: str

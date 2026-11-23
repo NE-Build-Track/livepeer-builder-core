@@ -1,5 +1,5 @@
-"""Grants at the payment provider: the idempotency keys the engine sends Batteries, and the tag that
-finds a grant the engine created (D57).
+"""Grants at the payment provider: the idempotency keys the engine sends Batteries, the tag that finds
+a grant the engine created (D57), and the provider call that allots an allocation from a grant.
 
 A grant is a tenant's prepaid budget, and its id is the tenant's id (D83). ``tenants.py`` holds what an
 admin does to a tenant; ``payments.py`` allots and tops up one actor's allocation from the grant.
@@ -8,8 +8,8 @@ admin does to a tenant; ``payments.py`` allots and tops up one actor's allocatio
 import base64
 import hashlib
 
-from livepeer_builder.contracts import GrantRecord
-from livepeer_builder.errors import ProviderError
+from livepeer_builder.contracts import AllotRequest, GrantRecord, NewAllocationKey
+from livepeer_builder.errors import NotFound, ProviderError
 from livepeer_builder.protocols import AllocationManager
 from livepeer_builder.services.ledger import RunningOperation
 from livepeer_builder.utils import CursorTrail
@@ -21,6 +21,24 @@ def idempotency_key(engine_id: str, operation: str, step: str) -> str:
     """base64url(sha256(engine_id:operation:step)): 43 chars, inside Batteries' 256-char limit."""
     digest = hashlib.sha256(f"{engine_id}:{operation}:{step}".encode()).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+async def allotted_from_grant(
+    manager: AllocationManager, request: AllotRequest, sent_as: str
+) -> NewAllocationKey:
+    """The allocation and its key, allotted from the tenant's grant: one id (D83). The provider's
+    refusal is passed on with its reason (an allocation larger than the grant's unallocated balance
+    is its 409); a grant it does not hold is said as the tenant that was never onboarded."""
+    name = request.label or f"{request.tenant_id}/{request.actor_id}"
+    try:
+        return await manager.create_key_for_grant(request.tenant_id, name, request.amount, sent_as)
+    except ProviderError as refused:
+        if refused.status_code != 404:
+            raise
+        raise NotFound(
+            f"tenant {request.tenant_id!r} has no grant at the payment provider: a tenant's id is its "
+            "grant's id, and a clearinghouse admin onboards a tenant before anything is allotted to it"
+        ) from refused
 
 
 async def tagged_grant(manager: AllocationManager, run: RunningOperation, tag: str) -> GrantRecord | None:

@@ -151,6 +151,8 @@ actors = Table(
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
     Column("label", String(ID), nullable=False, server_default=""),  # readable beside an opaque actor_id
+    # Who holds the credential secret_ref names (0015): the configured store, or the work engine.
+    Column("credential_custody", String(16), nullable=False, server_default="secret_store"),
 )
 
 # People an identity provider signed in as actors, before or after an allocation (#52, D48).

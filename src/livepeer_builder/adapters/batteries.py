@@ -1,8 +1,8 @@
 """Clearinghouse Batteries: management API (AllocationManager) and usage feed (UsageSource).
 
-With ``batteries_usage.py`` (what one usage item must look like), the only modules that know the Batteries
-wire format. Baseline: livepeer/clearinghouse-batteries v0.0.3, ``03bc9fb``
-(docs/references/upstream-baseline.md). Every route needs the least-privilege
+With ``batteries_usage_rows.py``, which reads one usage item, the only modules that know the Batteries
+wire format. Baseline: livepeer/clearinghouse-batteries
+v0.0.3, ``03bc9fb`` (docs/references/upstream-baseline.md). Every route needs the least-privilege
 management credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant the engine
 names. It has no ``grants.*``: creating, reading and pausing a grant use the grants credential
 (``LPB_BATTERIES_GRANTS_TOKEN``). Batteries' ``grant_id`` is the engine's ``tenant_id`` (D83).
@@ -18,7 +18,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import SecretStr
 
-from livepeer_builder.adapters.batteries_usage import page_past_the_decoder, read_usage_item
+from livepeer_builder.adapters.batteries_usage_rows import page_past_the_decoder, read_usage_item
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
@@ -37,6 +37,7 @@ from livepeer_builder.utils import BODY_LIMIT, CursorTrail
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _GRANTS = "/v1/grants"
 _NO_AMOUNT = ("", "[error]")  # what Batteries serves, with null, for an amount it has not or cannot convert
+_NOTHING_HELD = (Decimal(0), Decimal(0))  # a grant with no allocation: nothing allotted, nothing spent
 
 
 def batteries_http_client(base_url: str, token: str, *, timeout_s: float) -> httpx.AsyncClient:
@@ -135,23 +136,25 @@ class BatteriesClient:
     async def read_grant(self, grant_id: str) -> TenantGrant:
         """The grant, with what is left of it to allot (``tenant_grant``): two reads, the grant first."""
         grant = await self._request("GET", f"/v1/grants/{segment(grant_id)}")
-        return tenant_grant(grant, (await self._allotted(grant_id)).get(grant_id, Decimal(0)))
+        return tenant_grant(grant, (await self._allotted(grant_id)).get(grant_id, _NOTHING_HELD))
 
     async def grant_balances(self) -> list[TenantGrant]:
         """Every grant with its unallocated balance, oldest first."""
         grants = await self._pages(_GRANTS, {})
         allotted = await self._allotted(None)
-        return [tenant_grant(grant, allotted.get(_required(grant, "id"), Decimal(0))) for grant in grants]
+        return [tenant_grant(grant, allotted.get(_required(grant, "id"), _NOTHING_HELD)) for grant in grants]
 
     async def set_grant_status(self, grant_id: str, status: str) -> None:
         await self._request("PATCH", f"/v1/grants/{segment(grant_id)}/status", json={"status": status})
 
-    async def _allotted(self, grant_id: str | None) -> dict[str, Decimal]:
-        """What the allocations of each grant hold, by grant; of one grant when it is named."""
-        held: dict[str, Decimal] = {}
+    async def _allotted(self, grant_id: str | None) -> dict[str, tuple[Decimal, Decimal]]:
+        """What the allocations of each grant hold and what they have spent, by grant; of one grant when
+        it is named. One read of the allocations gives both (#166)."""
+        held: dict[str, tuple[Decimal, Decimal]] = {}
         for item in await self._pages("/v1/allocations", {"grant_id": grant_id} if grant_id else {}):
             grant = _required(item, "grant_id")
-            held[grant] = held.get(grant, Decimal(0)) + _amount(item, "allocated")
+            allocated, spent = held.get(grant, _NOTHING_HELD)
+            held[grant] = (allocated + _amount(item, "allocated"), spent + _amount(item, "spent"))
         return held
 
     async def _pages(self, path: str, filters: dict[str, str]) -> list[dict[str, Any]]:
@@ -199,7 +202,8 @@ class BatteriesClient:
 
 
 class BatteriesUsageSource:
-    """UsageSource over ``GET /v1/usage``. The cursor is opaque and bound to its filters."""
+    """UsageSource, and TenantUsageSource, over ``GET /v1/usage``. The cursor is opaque and bound to its
+    filters."""
 
     def __init__(
         self,
@@ -219,7 +223,16 @@ class BatteriesUsageSource:
             await self._client.aclose()
 
     async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
-        params = {**self._filters, "limit": str(limit)}
+        return await self._page(self._filters, cursor, limit)
+
+    async def tenant_page(self, tenant_id: str, cursor: str | None, limit: int = 1000) -> UsagePage:
+        """One tenant's rows (``TenantUsageSource``, #166): Batteries' own ``grant_id`` filter, with the
+        tenant's id as the grant's (D83). Batteries keeps a row when the payment session it was charged
+        to belongs to an allocation of that grant; a row with no session is in the unfiltered list only."""
+        return await self._page({"grant_id": tenant_id}, cursor, limit)
+
+    async def _page(self, filters: dict[str, str], cursor: str | None, limit: int) -> UsagePage:
+        params = {**filters, "limit": str(limit)}
         if cursor:
             params["cursor"] = cursor
         try:
@@ -300,21 +313,26 @@ def grant_from_item(item: dict[str, Any]) -> GrantRecord:
     )
 
 
-def tenant_grant(item: dict[str, Any], allotted: Decimal) -> TenantGrant:
+def tenant_grant(item: dict[str, Any], held: tuple[Decimal, Decimal]) -> TenantGrant:
     """A grant as Batteries serves it, as the tenant whose id it is. Batteries serves a grant's total and
     no unallocated balance (v0.0.3, ``internal/store/manage.go``, ``listQuery``), so that is the total
     less ``allotted``, what the grant's allocations hold: each one's ``allocated`` amount, which a revoke
     lowers by what it returns. The grant is read first: an allotment made between the two reads is
     counted and a top-up is not yet, so the difference is held at zero, below which the provider never
-    lets the balance go. A figure to show, never one the engine refuses by."""
+    lets the balance go. A figure to show, never one the engine refuses by.
+
+    ``held`` is what the grant's allocations hold and what they have spent. The second is the tenant's
+    payment usage (#166): Batteries serves ``spent_<currency>`` on each allocation, a revoked one too."""
     currency: Currency = "USD" if _optional(item, "currency").lower() == "usd" else "ETH"
     total = _amount(item, "total")
+    allotted, spent = held
     return TenantGrant(
         tenant_id=_required(item, "id"),
         name=_optional(item, "name"),
         status=_optional(item, "status"),
         total=Money(amount=total, currency=currency),
         unallocated=Money(amount=max(total - allotted, Decimal(0)), currency=currency),
+        spent=Money(amount=spent, currency=currency),
     )
 
 

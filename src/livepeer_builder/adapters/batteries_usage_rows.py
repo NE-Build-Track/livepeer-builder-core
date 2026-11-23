@@ -1,8 +1,10 @@
 """A Batteries usage item, read as a usage row or set aside (#114, C13).
 
-What one item of ``GET /v1/usage`` must look like to be a ``UsageRow``, and the record that sets it aside
-when it does not. Each value is judged as it was received. ``adapters/batteries.py`` fetches the page and
-names the route; this module reads no HTTP.
+Split from ``batteries.py``, which holds the HTTP calls: this module holds no client, only what one item
+of ``GET /v1/usage`` must look like to be a ``UsageRow``, the record that sets it aside when it does not,
+and the reading of a page whose item the JSON decoder refuses. Each value is judged as it was received.
+Every reader of Batteries usage goes through it: the cost-sync page and a tenant's page alike. Baseline:
+livepeer/clearinghouse-batteries v0.0.3 (docs/references/batteries-api.md).
 """
 
 import json

@@ -10,7 +10,7 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [payments.md](payments.md): allocations, allotment, units, cost classification | ISS-04 | Implemented for self-hosted payments; the payment clearinghouse (D82) is M4 work (ISS-31) |
 | [events.md](events.md): versioned event feed | ISS-02 | Defined; held in M3 (D60) |
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
-| [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process |
+| [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process; a clearinghouse's engine serves the document it read (#166) |
 
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
 
@@ -164,3 +164,63 @@ key it has not seen:
 **What keeps its name.** `ActorAllocation.grant_id` (the grant an allocation was allotted from: the
 tenant's id for every allocation allotted from now on), `LPB_BATTERIES_GRANTS_TOKEN`,
 `EngineSupply.grants_manager`, the permission strings, and the words Batteries uses on its own API.
+
+## Upgrading to the payment key handover, a tenant's usage and the runner list
+
+With #166 the clearinghouse gained what an enterprise's engine needs from it (D85 and D87, as Mike
+amended them on 19 and 23 November 2026): each actor's payment key, handed over once by allotment and
+rotation at a standalone clearinghouse, the tenant's usage and the runner list. Every allocation answer
+gained a field, one contract gained a required field, and two routes are new. No path, body or status
+code of an existing route changed.
+
+| What | Before | Now |
+| --- | --- | --- |
+| `ActorAllocation` (every allocation answer and read, and each `KnownActor.allocation`) | | and `credential_custody`: `secret_store` (the engine's `SecretStore` holds the key) or `work_engine` (the key was handed to the enterprise's engine). It defaults to `secret_store` |
+| The answer to allotting an allocation and to rotating a payment key, on the app `lpb serve` runs (`create_app`) | `201` and `200` `ActorAllocation` | The same, with `credential_custody: secret_store` and `Cache-Control: no-store`. The engine stores the key and returns none, as before |
+| The same two answers, where the clearinghouse routes are mounted for a standalone clearinghouse | | The allocation, with `credential_custody: work_engine`, and `allocation_api_key` (the allocation's `lpg_` key, once), `replayed` and `resumed` ([payments.md](payments.md#payment-keys)) |
+| Mounting the clearinghouse routes | `mount_clearinghouse_routes(app, engine)`, `mount_tenant_routes(app, engine)` | Each requires the keyword `deliver_allocation_keys`, which has no default: a call without it is a `TypeError`. `True` is a standalone clearinghouse, which hands each key to the caller and stores none. `False` is an engine that also runs jobs, which stores the key: `create_app` passes it, and so does an app that mounts the set itself on such an engine. With `True` there, that actor's jobs fail `not_provisioned` |
+| Allot and rotate, in embedded mode | `payments.allot`, `payments.rotate_payment_key` return `ActorAllocation` and store the key | Unchanged. Beside them, `payments.allot_for_delivery` and `payments.rotate_for_delivery` return `DeliveredAllocation` and store no key. A command left unfinished is resumed only by the kind that began it: the other kind under that `operation_ref` is 409 `operation_conflict` ([payments.md](payments.md#payment-keys)) |
+| A command that resumed an unfinished run, in embedded mode | `OPERATION_REPLAYED` (`livepeer_builder.contracts`) marks a replay | and `OPERATION_RESUMED`, `True` right after a command that resumed a run an earlier attempt left unfinished |
+| `TenantGrant` (the tenant list, the grant read) | `tenant_id`, `name`, `status`, `total`, `unallocated` | and `spent`, required: what the tenant's allocations have spent |
+| A tenant's payment records | not served | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` (`UsagePage`); `engine.payments.usage` |
+| The clearinghouse's runner list | not served | `GET /v1/clearinghouse/discovery`, livepeer/node's document; `engine.runner_list` |
+| A usage cursor the provider refuses, over REST | `CursorMismatch` had no status of its own | 400, `code: cursor_mismatch` |
+| The facade | `PaymentsAdminApi`, `ClearinghouseApi` | `PaymentsAdminApi.allot_for_delivery` and `rotate_for_delivery`, `PaymentsAdminApi.usage` (`TenantUsageApi \| None`), `ClearinghouseApi.runner_list` (`RunnerListApi \| None`). A facade of your own that stands in for `PaymentsAdminApi` adds them |
+| The `AllocationManager` port | `read_grant` and `grant_balances` return a `TenantGrant` | The same, and each states `spent` |
+| `ActorCommandRepo.set_actor_key` (a supplied store's conditional key write) | `(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from)` | and the keyword `credential_custody`, which the engine always passes and the store writes with the key ([persistence.md](persistence.md#store)) |
+| Optional protocols | | `TenantUsageSource` (a usage source), `DiscoveryDocumentSource` (a discovery source). A supplied part without one runs without what it serves |
+| `FakeUsageSource` (`livepeer_builder.testing`) | `page` | and `tenant_page`, with `grant_of`, a map from an allocation to the grant it was allotted from |
+| The published schema | | `ActorAllocation` has `credential_custody`. The schema is the combined app's (`create_app`), so it does not show the answer that hands a key over |
+| Root exports | | `DeliveredAllocation`, `UsagePage`, `UsageRow` and `SetAsideUsage`. From `livepeer_builder.contracts` also `CredentialCustody` and `OPERATION_RESUMED` |
+
+**Before you start the new release:**
+
+- **Migrate.** `lpb migrate` applies revision 0015, or the engine does at start with `LPB_AUTO_MIGRATE`
+  ([persistence.md](persistence.md#migrations)). It adds one column, `lpb_actors.credential_custody`,
+  and every existing actor becomes `secret_store`.
+- **Nothing to finish first.** No command hashes or sends anything it did not before, so a command
+  recorded before the upgrade is replayed or resumed as it was. A record that notes no custody is read
+  as `secret_store`: every secret then was the configured store's.
+- **Existing allocations need nothing.** With self-hosted payments the engine keeps holding each key in
+  its `SecretStore` and paying with it.
+- **A supplied store** takes `credential_custody` on `set_actor_key`, when it has the conditional
+  writes, and keeps `ActorAllocation.credential_custody` with the actor it saves and returns.
+- **A supplied `AllocationManager`** states `spent` on the `TenantGrant` it returns, or building one
+  fails.
+- **Move the clients.** A client that reads the allocation from an answer keeps working. One that
+  refuses unknown fields is generated again from the OpenAPI document.
+- **A database that ran this work before it was released** is recreated. An earlier revision 0015
+  created a table `lpb_payment_keys`; it was never released, and it is deleted, not undone by a later
+  revision (Mike, 23 November 2026). The revision check will not tell you: that revision had the same
+  number, so such a database records 0015, the engine starts on it and `lpb migrate` changes nothing.
+  A database that has `lpb_payment_keys` is recreated. One at revision 0014 or earlier never ran that
+  work and is migrated as usual ([persistence.md](persistence.md#migrations)).
+
+**What a repeat gets.** The repeat of an allotment or a rotation recorded before the upgrade is answered
+from its record, as before, with `credential_custody: secret_store`. No repeat of a finished command
+hands a key over, on any app.
+
+**What keeps its name.** `PaymentKey`, what the work half's `CredentialResolver` returns: the
+allocation's Batteries key, which the runner call presents to the signer in both configurations.
+`pipeline` on a usage row, Batteries' word for the capability. The route and the command
+`rotate-payment-key`.

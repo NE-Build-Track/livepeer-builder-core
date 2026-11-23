@@ -7,7 +7,13 @@ from sqlalchemy import ColumnElement, and_, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from livepeer_builder.contracts import ActorAllocation, AllocationStatus, SecretRef, SeenActor
+from livepeer_builder.contracts import (
+    ActorAllocation,
+    AllocationStatus,
+    CredentialCustody,
+    SecretRef,
+    SeenActor,
+)
 from livepeer_builder.store import schema as t
 
 
@@ -58,12 +64,19 @@ class SqlActorCommands:
         secret_ref: SecretRef,
         updated_at: datetime,
         only_from: str,
+        *,
+        credential_custody: CredentialCustody = "secret_store",
     ) -> ActorAllocation | None:
         # the key the rotation began from, or its own key already: any other is a finished rotation's
         held = and_(
             _held(tenant_id, actor_id, allocation_id), t.actors.c.api_key_id.in_((only_from, api_key_id))
         )
-        values = {"api_key_id": api_key_id, "secret_ref": secret_ref.ref, "updated_at": updated_at}
+        values = {
+            "api_key_id": api_key_id,
+            "secret_ref": secret_ref.ref,
+            "credential_custody": credential_custody,  # beside the handle it describes, in one write
+            "updated_at": updated_at,
+        }
         return await self._write(held, tenant_id, actor_id, values)
 
     async def allot_actor(self, actor: ActorAllocation, *, replacing: str | None) -> bool:

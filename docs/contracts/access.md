@@ -77,7 +77,8 @@ class AccessPolicy(Protocol):
   its tenant's grant and cannot enlarge it:
   - **In its own tenant** it does what an admin does: allot, top up, pause and revoke allocations,
     rotate payment keys, issue and manage keys that are not admin keys, read its grant, its actors and
-    their allocations, and, on the work set, read every actor's jobs and costs and reconcile.
+    their allocations, its usage and the clearinghouse's runner list (#166), and, on the work set, read
+    every actor's jobs and costs and reconcile.
   - **Another tenant** is `AccessDenied`, whatever the operation: 403 for a tenant a route or a body
     names, before any lookup or provider call. Another tenant's record found by its id alone (a job, a
     key under `/v1/keys`) reads as missing, as for anyone ([Answers](#answers)).
@@ -91,7 +92,8 @@ class AccessPolicy(Protocol):
   - In this release a tenant admin credential is an engine key of kind `tenant_admin`. Mapping an
     identity provider's role to it is ISS-33.
 - **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
-  `events.read`, across every actor of its own tenant. Every write is `AccessDenied`, and so is any
+  `events.read`, across every actor of its own tenant. Its tenant's usage and the clearinghouse's runner
+  list are `admin.read` (#166). Every write is `AccessDenied`, and so is any
   record of another tenant. It is for a dashboard or an audit reader that must not move money. An
   engine key can be issued as `auditor`, and a JWT is one with `LPB_JWT_ADMIN_READ_SCOPE`.
 - **Everyone else** needs the operation's permission, and may touch only resources owned by their own
@@ -347,6 +349,13 @@ Both are generic: no enterprise logic lives in the engine.
   clearinghouse admin key exists, and only when engine API keys are on. There is no network
   bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
   only a clearinghouse admin issues another.
+- **Payment keys (#166):** an allocation's key (`lpg_`) is no access key. It is a credential at the
+  signer and nowhere else: as a bearer on any engine route it gets what no credential gets, 401. The
+  engine that runs an actor's jobs holds that actor's key. With self-hosted payments that is the one
+  engine, which keeps it in its `SecretStore` and returns it in no answer. At a standalone clearinghouse
+  it is the enterprise's engine: allotment and rotation hand it the key once, in an answer only that
+  tenant's admin or a clearinghouse admin can get, and the clearinghouse keeps none
+  ([payments.md](payments.md#payment-keys)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 
@@ -362,7 +371,7 @@ Both are generic: no enterprise logic lives in the engine.
 | A tenant's auditor key | That tenant's admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
 | Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
-| Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
+| Allocation key (`lpg_`) | Engine, through the Batteries management API | Self-hosted payments: the engine's `SecretStore` (a reference in the DB). At a standalone clearinghouse: the enterprise's engine, handed the key once by allotment or rotation; the clearinghouse keeps a receipt and no key (`credential_custody`, [payments.md](payments.md#payment-keys)) | Engine: `rotate-payment-key` / `revoke`, on the tenant admin's command |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 
 ## Example standalone flow

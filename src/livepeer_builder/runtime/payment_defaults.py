@@ -1,15 +1,17 @@
-"""The default adapter of each payment port (D84, #168): Batteries and the signer for self-hosted
-payments, or a payment clearinghouse.
+"""The default adapter of each payment port (D84, #168): Batteries for self-hosted payments, or a
+payment clearinghouse, and the signer either way.
 
 ``default_parts`` asks here for each payment part the caller did not supply, so a supplied part is never
 built. ``LPB_CLEARINGHOUSE_URL`` (with the tenant admin key and the tenant's id) selects the
-clearinghouse: every payment port then reaches it, and nothing of Batteries or a signer is built. The
-settings refuse a mix of the two (``config.py``).
+clearinghouse: ``AllocationManager``, ``AllowanceReader`` and ``UsageSource`` then reach it, and nothing
+of Batteries is built. The settings refuse a mix of the two (``config.py``).
 
-**Signing** is inside the runner transport, and it is the same transport either way: the gateway SDK's.
-A clearinghouse serves the signer's two paths at the root of its listener (D87), so an engine that uses
-one gives the transport the clearinghouse's address where a signer's goes, and the actor's payment key,
-which ``CredentialResolver`` returns, is the credential it signs with. The SDK is unmodified.
+**Signing and the key** are the engine's own either way (D85 point 1 and D87 point 1, as amended). The
+runner transport is the gateway SDK's, at ``LPB_SIGNER_URL``: the engine's own signer, or the one a
+clearinghouse publishes. The credential is the actor's allocation key from the engine's own secret
+store: minted by its Batteries, or handed over once by the clearinghouse at allotment and rotation. So
+``transport`` and ``credentials`` are one answer for both configurations (``_OwnSigning``), and nothing
+of a clearinghouse's engine is in the signing path.
 
 The adapters are imported inside the methods, not at module level, so importing the package loads no
 HTTP client or SDK (tests/structure/test_import_weight.py).
@@ -48,11 +50,27 @@ class PaymentDefaults(Protocol):
     def transport(self) -> RunnerTransport: ...
 
 
-class SelfHosted:
-    """Batteries' management API and usage feed, and the signer, as the settings name them."""
+class _OwnSigning:
+    """The two ports no clearinghouse serves: the engine signs at ``LPB_SIGNER_URL`` itself, and resolves
+    each actor's key from its own records and secret store (``None``: ``PaymentsService``)."""
+
+    def __init__(self, settings: EngineSettings) -> None:
+        self._settings = settings
+
+    def credentials(self) -> CredentialResolver | None:
+        return None
+
+    def transport(self) -> RunnerTransport:
+        from livepeer_builder.adapters.sdk import SdkRunnerTransport
+
+        return SdkRunnerTransport(self._settings.signer_url, self._settings.max_payment_challenge_retries)
+
+
+class SelfHosted(_OwnSigning):
+    """Batteries' management API and usage feed, as the settings name them."""
 
     def __init__(self, settings: EngineSettings, keep: Keep) -> None:
-        self._settings = settings
+        super().__init__(settings)
         self._keep = keep
 
     def allocation_manager(self) -> AllocationManager | None:
@@ -78,16 +96,8 @@ class SelfHosted:
         self._keep(usage, usage.aclose)
         return usage
 
-    def credentials(self) -> CredentialResolver | None:
-        return None
-
     def allowances(self) -> AllowanceReader | None:
         return None
-
-    def transport(self) -> RunnerTransport:
-        from livepeer_builder.adapters.sdk import SdkRunnerTransport
-
-        return SdkRunnerTransport(self._settings.signer_url, self._settings.max_payment_challenge_retries)
 
     def _batteries(self, token: str | None) -> AllocationManager | None:
         from livepeer_builder.adapters.batteries import BatteriesClient
@@ -101,13 +111,13 @@ class SelfHosted:
         return client
 
 
-class ThroughClearinghouse:
+class ThroughClearinghouse(_OwnSigning):
     """The remote adapters, over one wire to the clearinghouse, opened when the first is asked for.
     ``actors`` and ``secrets`` are the engine's own: where it keeps each actor's allocation record and
-    the payment key the clearinghouse issued for it."""
+    the key the clearinghouse handed over for it."""
 
     def __init__(self, settings: EngineSettings, keep: Keep, actors: ActorRepo, secrets: SecretStore) -> None:
-        self._settings = settings
+        super().__init__(settings)
         self._keep = keep
         self._actors = actors
         self._secrets = secrets
@@ -124,23 +134,8 @@ class ThroughClearinghouse:
     def usage_source(self) -> UsageSource | None:
         return self._ports().usage
 
-    def credentials(self) -> CredentialResolver | None:
-        return self._ports().credentials
-
     def allowances(self) -> AllowanceReader | None:
         return self._ports().allowances
-
-    def transport(self) -> RunnerTransport:
-        """The SDK's transport, signing at the clearinghouse: its address is the signer's address. The
-        credential of each call is the actor's payment key, and never the tenant admin key, which this
-        transport is not given."""
-        from livepeer_builder.adapters.sdk import SdkRunnerTransport
-
-        return SdkRunnerTransport(
-            self._settings.clearinghouse_url,
-            self._settings.max_payment_challenge_retries,
-            signer_is_clearinghouse=True,  # so its "nothing was sent" is read as that (signer_failures.py)
-        )
 
     def _ports(self) -> "ClearinghousePorts":
         from livepeer_builder.adapters.clearinghouse import ClearinghousePorts

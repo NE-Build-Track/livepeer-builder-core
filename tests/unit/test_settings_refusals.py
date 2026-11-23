@@ -121,11 +121,11 @@ REFUSED_IN_CODE = [
         (
             "value_error",
             (),
-            "Value error, LPB_BATTERIES_TOKEN cannot be set with LPB_CLEARINGHOUSE_URL: an engine that uses "
-            "a payment clearinghouse reaches Batteries and the signer through it, and holds no address or "
-            "credential of theirs",
+            "Value error, LPB_BATTERIES_TOKEN cannot be set with LPB_CLEARINGHOUSE_URL: only the "
+            "clearinghouse's own engine reaches Batteries, and an engine that uses a payment clearinghouse "
+            "holds no address or credential of it",
         ),
-        id="the rule on a clearinghouse beside self-hosted payments",
+        id="the rule on a clearinghouse beside a Batteries setting",
     ),
     pytest.param(  # #168
         CLEARINGHOUSE | {"batteries_token": ABSENT, "batteries_timeout_s": 1, "operation_stale_s": 100},
@@ -139,7 +139,7 @@ REFUSED_IN_CODE = [
             ("clearinghouse_url",),
             "Value error, LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, "
             "with no path, query, fragment or userinfo, such as https://clearinghouse.example: the "
-            "signer's two paths are called at its root",
+            "clearinghouse's routes are called at its root",
         ),
         id="the clearinghouse address's field validator",
     ),
@@ -385,8 +385,8 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
             value_error(
                 "clearinghouse_url",
                 "LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, with no "
-                "path, query, fragment or userinfo, such as https://clearinghouse.example: the signer's "
-                "two paths are called at its root",
+                "path, query, fragment or userinfo, such as https://clearinghouse.example: the "
+                "clearinghouse's routes are called at its root",
             ),
         ),
     ],
@@ -401,13 +401,13 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
             ),
         ),
         Refused(
-            "a clearinghouse beside self-hosted payments",
+            "a clearinghouse beside a Batteries setting",
             CLEARINGHOUSE_OF_ITS_OWN | {"batteries_url": f"https://batteries.invalid/{CREDENTIAL}"},
             value_error(
                 None,
-                "LPB_BATTERIES_URL, LPB_BATTERIES_TOKEN cannot be set with LPB_CLEARINGHOUSE_URL: an "
-                "engine that uses a payment clearinghouse reaches Batteries and the signer through it, "
-                "and holds no address or credential of theirs",
+                "LPB_BATTERIES_URL, LPB_BATTERIES_TOKEN cannot be set with LPB_CLEARINGHOUSE_URL: only "
+                "the clearinghouse's own engine reaches Batteries, and an engine that uses a payment "
+                "clearinghouse holds no address or credential of it",
             ),
         ),
         Refused(

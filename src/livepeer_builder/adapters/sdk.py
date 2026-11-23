@@ -120,18 +120,9 @@ class SdkRunnerTransport:
     ``get_payment`` (D53).
     """
 
-    def __init__(
-        self,
-        signer_url: str | None,
-        max_payment_challenge_retries: int = 3,
-        *,
-        signer_is_clearinghouse: bool = False,
-    ) -> None:
+    def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
-        # Whether the address is a payment clearinghouse's, which serves the signer's two paths (#168). A
-        # clearinghouse can say it sent its signer nothing; a signer never does (signer_failures.py).
-        self._signer_is_clearinghouse = signer_is_clearinghouse
 
     @property
     def pays(self) -> bool:
@@ -194,7 +185,7 @@ class SdkRunnerTransport:
         credential: str | None,
         on_signed: OnSigned | None = None,
     ) -> RunnerReply:
-        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
@@ -220,7 +211,7 @@ class SdkRunnerTransport:
         keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
         validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):

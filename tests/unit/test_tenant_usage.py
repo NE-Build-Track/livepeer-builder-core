@@ -11,7 +11,7 @@ Batteries here is the real adapter over an in-memory HTTP transport that filters
 
 import base64
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from typing import Any
 
@@ -24,8 +24,10 @@ from livepeer_builder.contracts import ActorContext, Money, UsagePage
 from livepeer_builder.errors import AccessDenied, CursorMismatch
 from livepeer_builder.protocols import TenantUsageSource
 from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource
+from livepeer_builder.utils import CursorTrail
 from tests.conftest import EngineFactory
 from tests.unit.clearinghouse_house import open_house
+from tests.unit.test_provider_answers import CYCLES
 from tests.unit.test_tenants import House, Tenant, allotted
 from tests.unit.test_usage_set_aside import (
     BLANK_IDS,
@@ -60,7 +62,8 @@ class BatteriesUsage:
         self.manager = manager
         self.items: list[dict[str, Any]] = []
         self.requests: list[dict[str, str]] = []
-        self.answer: httpx.Response | Exception | None = None  # set: every request gets this instead
+        # set: every request gets this instead, or what this makes of the request's query
+        self.answer: httpx.Response | Exception | Callable[[dict[str, str]], httpx.Response] | None = None
 
     def grant_of(self, allocation_id: str | None) -> str | None:
         held = self.manager.allocations.get(allocation_id or "")
@@ -72,8 +75,10 @@ class BatteriesUsage:
         self.requests.append(query)
         if isinstance(self.answer, Exception):
             raise self.answer
-        if self.answer is not None:
+        if isinstance(self.answer, httpx.Response):
             return self.answer
+        if self.answer is not None:
+            return self.answer(query)
         grant = query.get("grant_id", "")
         rows = [row for row in self.items if not grant or self.grant_of(row["allocation_id"]) == grant]
         start = 0
@@ -358,6 +363,50 @@ async def test_a_tenants_page_that_is_malformed_is_still_502_whatever_its_items(
     batteries.answer = httpx.Response(200, content=STILL_NO_PAGE[name].encode(), headers=JSON)
     refused = await house.client.get(usage(house.one), headers=house.one.admin)
     assert refused.status_code == 502 and "items" not in refused.json()
+
+
+def going_round(route: dict[str, str]) -> Callable[[dict[str, str]], httpx.Response]:
+    """A Batteries whose usage list names the next cursor by ``route``, with one row a page."""
+
+    def answer(query: dict[str, str]) -> httpx.Response:
+        cursor = query.get("cursor", "")
+        row = item(f"u-{cursor}", "a1")
+        return httpx.Response(200, json={"items": [row], "next_cursor": route[cursor]})
+
+    return answer
+
+
+async def test_a_tenants_page_that_names_its_own_cursor_is_502_and_none_of_it_is_served(
+    house: House, batteries: BatteriesUsage
+) -> None:
+    """Cost sync refuses such a page the first time it reads it. The route reads one page for each
+    request, so it refuses the page itself: a reader that followed its cursor would ask without end."""
+    batteries.answer = going_round({"": "c1", "c1": "c2", "c2": "c2"})
+    first = await house.client.get(usage(house.one), headers=house.one.admin)
+    assert first.status_code == 200 and first.json()["next_cursor"] == "c1"  # a page that advances
+    stuck = await house.client.get(usage(house.one, cursor="c2"), headers=house.one.admin)
+    assert stuck.status_code == 502 and "did not advance" in stuck.json()["error"]
+    assert "items" not in stuck.json()
+    assert [request.get("cursor") for request in batteries.requests] == [None, "c2"]  # asked for once
+
+
+@pytest.mark.parametrize("route", CYCLES.values(), ids=CYCLES)
+async def test_a_tenants_usage_whose_cursor_comes_back_is_served_page_by_page_and_its_reader_finds_it(
+    house: House, batteries: BatteriesUsage, route: dict[str, str]
+) -> None:
+    """The route keeps nothing between two requests, so it cannot know a cursor was named before: each
+    page of a list that goes round (A, B, A) is the page Batteries served, 200. The reader sees every
+    cursor of its pass. One that follows them with the trail cost sync keeps stops within a few turns."""
+    batteries.answer = going_round(route)
+    trail, cursor = CursorTrail(None), ""
+    while len(batteries.requests) <= 40:  # a reader that never stopped fails the test instead of hanging it
+        query = {"cursor": cursor} if cursor else {}
+        answer = await house.client.get(usage(house.one, **query), headers=house.one.admin)
+        assert answer.status_code == 200 and [row["id"] for row in answer.json()["items"]] == [f"u-{cursor}"]
+        if trail.repeats(answer.json()["next_cursor"]):
+            break
+        cursor = answer.json()["next_cursor"]
+    assert len(batteries.requests) <= 3 * len(route)
 
 
 class EveryTenant:

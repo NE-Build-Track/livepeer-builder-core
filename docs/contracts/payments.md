@@ -206,6 +206,12 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
 - **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
   refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
   Batteries' is about 135 for a grant id it issues.
+- **A cursor that does not advance.** A page whose `next_cursor` is the cursor it was asked with is 502
+  ("the usage cursor did not advance"), and none of its rows is served: a reader that followed it would
+  ask for that page without end. The route reads one page for each request and keeps nothing between
+  two, so it cannot tell a cursor that comes back after other pages (A, B, A): each of those pages is
+  served as Batteries answered it. The reader sees every cursor of its pass and finds the repeat, as
+  cost sync does for the feed it reads.
 - **Who may call.** That tenant's admin or auditor, and a clearinghouse admin for any tenant. The tenant
   is named to the access policy first, so another tenant's id is 403 before Batteries is asked. An actor
   key is 403.
@@ -633,9 +639,9 @@ left unfinished; a replay of a finished command is not a resume.
   408, an unknown outcome otherwise. Before #158 a management call answered 500 for one. A malformed page
   never reads as an empty one, and one malformed item fails its page. A page whose `next_cursor` is the
   cursor it was asked with is the same `ProviderError` ("cursor did not advance"), from a grant list, a
-  resumed create's search and cost sync alike: before, the engine asked for that page again without end,
+  resumed create's search, cost sync and [a tenant's usage page](#a-tenants-usage) alike: before, the engine asked for that page again without end,
   and the grant list (`GET /v1/clearinghouse/tenants` since #165) and `POST /v1/costs/sync` never answered. A longer cycle (a cursor that
-  comes back after other pages: A, B, A) is that `ProviderError` too, from the same three readers (#158):
+  comes back after other pages: A, B, A) is that `ProviderError` too, from the first three of those readers (#158; a tenant's usage page reads one page for each request):
   before, it was followed without end. A cursor that does not advance is refused at once, the first
   time its page is read. A longer cycle is found after at most a few turns of it and not always at its
   first repeat, because the engine keeps one earlier cursor to compare with, not every cursor; pages

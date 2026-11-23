@@ -2,10 +2,12 @@
 payment clearinghouse and an enterprise that uses it, side by side on one host.
 
 They are not part of CI and cannot be started here, so this file holds what a start would show too late:
-each engine's settings load in its role; the clearinghouse publishes its public listener and nothing
-else; Batteries runs its on-chain listener and the grants credential has the permissions the tenant desk
-and the wallet report need; the services listen where the engine calls them; the wallet's key folder is
-mounted read-only from a variable; and nothing real is committed.
+each engine's settings load in its role; the clearinghouse publishes its engine's public listener and
+its signer, and nothing else; the signer keeps its Batteries authorization webhook, the only check at
+signing; the enterprise's engine is told the published signer's address; Batteries runs its on-chain
+listener and the grants credential has the permissions the tenant desk and the wallet report need; the
+services listen where the engine calls them; the wallet's key folder is mounted read-only from a
+variable; and nothing real is committed.
 
 The files are read as text, as tests/structure/test_dev_stack.py reads the dev stack's.
 """
@@ -78,20 +80,27 @@ def test_the_clearinghouse_projects_engine_loads_in_its_clearinghouse_role() -> 
     assert "LPB_HTTP_PRIVATE_HOST" not in environment and settings.http_private_host == "127.0.0.1", (
         "the private listener stays on the engine container's own loopback: no network reaches it"
     )
-    assert settings.signer_url and settings.batteries_url
+    assert settings.batteries_url
     assert settings.batteries_token is not None and settings.batteries_grants_token is not None
-    assert settings.secret_key is not None
+    # where its wallet report reads the signer's readiness: the signer, inside the project
+    assert settings.signer_url == "http://batteries:8937"
+    assert "LPB_SECRET_KEY" not in environment and settings.secret_key is None, (
+        "a clearinghouse hands each allocation's key to the caller and stores none: it has no secret key"
+    )
     assert not [name for name in environment if name.startswith("LPB_CLEARINGHOUSE_")]
 
 
-def test_the_enterprise_projects_engine_loads_in_its_work_role_and_knows_only_the_clearinghouse() -> None:
+def test_the_enterprise_projects_engine_loads_in_its_work_role_and_knows_nothing_of_batteries() -> None:
     environment = engine_environment(ENTERPRISE)
     settings = EngineSettings.from_env(environment)
     assert settings.role == "work" and settings.uses_clearinghouse
     assert settings.clearinghouse_url == "http://clearinghouse:8080"
-    assert settings.secret_key is not None
-    held = [name for name in environment if name.startswith(("LPB_BATTERIES_", "LPB_SIGNER_"))]
-    assert not held, f"the enterprise's engine holds nothing of Batteries or a signer: {held}"
+    assert settings.signer_url == "http://signer:8937", (
+        "the enterprise's engine signs at the clearinghouse's published signer itself: LPB_SIGNER_URL"
+    )
+    assert settings.secret_key is not None, "it stores the keys the clearinghouse hands over"
+    held = [name for name in environment if name.startswith("LPB_BATTERIES_")]
+    assert not held, f"the enterprise's engine holds nothing of Batteries: {held}"
     assert "LPB_DISCOVERY_URL" not in environment  # the clearinghouse's runner list is the default (D87)
     assert settings.discovery_url == "http://clearinghouse:8080/v1/clearinghouse/discovery"
     assert settings.http_private_port is None
@@ -102,18 +111,76 @@ def test_the_enterprise_projects_engine_loads_in_its_work_role_and_knows_only_th
 # -- what is published ----------------------------------------------------------------------------------------
 
 
-def test_the_clearinghouse_publishes_its_public_listener_and_nothing_else() -> None:
+def test_the_clearinghouse_publishes_its_public_listener_and_its_signer_and_nothing_else() -> None:
     published = re.findall(r'^\s+- "?([^"\n]*:\d+)"?.*$', compose(CLEARINGHOUSE), flags=re.M)
     mappings = [entry for entry in published if re.search(r":\d+$", entry) and "//" not in entry]
-    assert mappings == ["127.0.0.1:${CLEARINGHOUSE_PUBLIC_PORT:-8180}:8080"], mappings
+    assert mappings == [
+        "127.0.0.1:${CLEARINGHOUSE_SIGNER_PORT:-8137}:8937",
+        "127.0.0.1:${CLEARINGHOUSE_PUBLIC_PORT:-8180}:8080",
+    ], mappings
     for name in ("batteries", "signer", "discovery", "private"):
         assert "ports:" not in service(CLEARINGHOUSE, name), (
-            f"{name} is published nowhere: only the engine's public listener is"
+            f"{name} publishes no port: the signer is published by signer-relay, and nothing of "
+            "Batteries is published at all"
         )
     assert service(CLEARINGHOUSE, "engine").count("ports:") == 1
+    assert service(CLEARINGHOUSE, "signer-relay").count("ports:") == 1
     # the private listener is reached in the engine's own network namespace, and from nowhere else
     assert "network_mode: service:engine" in service(CLEARINGHOUSE, "private")
     assert "profiles: [admin]" in service(CLEARINGHOUSE, "private")
+
+
+def test_the_signer_is_published_by_a_relay_of_its_one_port() -> None:
+    """The signer shares Batteries' network namespace (Kafka and the webhook are on its loopback), so
+    putting that namespace on the edge network would publish Batteries' management API with it. A relay
+    forwards the signer's main port and nothing else: no port of Batteries, and not the signer's metrics
+    and readiness port."""
+    relay = service(CLEARINGHOUSE, "signer-relay")
+    signer = tomllib.loads((CLEARINGHOUSE / "config" / "signer.toml").read_text())
+    batteries = tomllib.loads((CLEARINGHOUSE / "config" / "batteries.toml").read_text())
+    _, signs_on = _port(signer["Listen"])
+    targets = re.findall(r"TCP:([\w.-]+):(\d+)", relay)
+    assert targets == [("batteries", str(signs_on))], f"the relay forwards to {targets}"
+    assert re.findall(r"TCP-LISTEN:(\d+)", relay) == [str(signs_on)]
+    private_ports = {
+        _port(signer["MetricsListen"])[1],
+        _port(batteries["EnableManagementAPI"])[1],
+        _port(batteries["EnableAuthWebhook"])[1],
+        int(batteries["KafkaBind"].rpartition(":")[2]),
+    }
+    assert signs_on not in private_ports
+    assert not {int(port) for port in re.findall(r":(\d{4,5})\b", relay)} & private_ports, (
+        "the relay names a port that stays private: the signer's metrics, or a port of Batteries"
+    )
+    assert _port(signer["MetricsListen"])[0], "the signer's metrics and readiness stay on loopback"
+    # where enterprise engines find it: the edge network, under the name the enterprise project calls
+    assert re.search(r"edge:\s*\n\s+aliases: \[signer\]", relay), "the relay is `signer` on the edge network"
+    assert re.search(r"^      inside: \{\}$", relay, flags=re.M), "the relay reaches the signer on inside"
+    for name in ("batteries", "discovery"):
+        assert "edge" not in service(CLEARINGHOUSE, name), f"{name} is on the edge network"
+    assert "network_mode: service:batteries" in service(CLEARINGHOUSE, "signer")
+    # a third-party image in the signing path is named by its digest, and gets no privilege
+    assert re.search(r"image: alpine/socat:[\d.]+@sha256:[0-9a-f]{64}$", relay, flags=re.M)
+    assert "read_only: true" in relay and "cap_drop: [ALL]" in relay and 'user: "65534:65534"' in relay
+    called = re.fullmatch(r"http://signer:(\d+)", engine_environment(ENTERPRISE)["LPB_SIGNER_URL"])
+    assert called and int(called.group(1)) == signs_on
+
+
+def test_the_published_signer_keeps_its_batteries_authorization_webhook() -> None:
+    """Enterprise engines call the signer themselves, so the clearinghouse's engine is not in the path
+    and the webhook is the only check at signing (D85 point 1): a signer published without it would sign
+    for anybody."""
+    signer = tomllib.loads((CLEARINGHOUSE / "config" / "signer.toml").read_text())
+    assert signer["AuthWebhookFile"] == "/run/secrets/webhook-url"
+    assert signer["AuthWebhookHeadersFile"] == "/run/secrets/webhook-headers"
+    script = (CLEARINGHOUSE / "config" / "init-secrets.py").read_text()
+    assert re.search(r'"webhook-url": "http://127\.0\.0\.1:\d+/v1/signer/authorize"', script)
+    assert '"webhook-headers": f"Livepeer-Clearinghouse-Token:{webhook}"' in script
+    credential = script.split('id = "signer"', 1)[1].split("[[credentials]]", 1)[0]
+    assert "[credentials.webhook]" in credential and "authorize = true" in credential
+    batteries = tomllib.loads((CLEARINGHOUSE / "config" / "batteries.toml").read_text())
+    assert batteries["EnableAuthWebhook"] and batteries["EnableAccounting"] is True
+    assert "/run/secrets:ro" in service(CLEARINGHOUSE, "signer")
 
 
 def test_the_two_projects_and_the_dev_stack_run_side_by_side() -> None:
@@ -125,11 +192,12 @@ def test_the_two_projects_and_the_dev_stack_run_side_by_side() -> None:
     assert "name: livepeer-builder-dev" in dev
     host_ports = {
         "clearinghouse": example_env(CLEARINGHOUSE)["CLEARINGHOUSE_PUBLIC_PORT"],
+        "signer": example_env(CLEARINGHOUSE)["CLEARINGHOUSE_SIGNER_PORT"],
         "enterprise": example_env(ENTERPRISE)["ENTERPRISE_PORT"],
     }
     taken = set(re.findall(r"127\.0\.0\.1:(\d+):", dev))
-    assert len(set(host_ports.values())) == 2 and not set(host_ports.values()) & taken
-    # The one network both are on carries the public listener alone, under a name of its own.
+    assert len(set(host_ports.values())) == 3 and not set(host_ports.values()) & taken
+    # The one network both are on carries the public listener and the signer's relay, and nothing else.
     assert "name: lpb-clearinghouse-edge" in compose(CLEARINGHOUSE)
     edge = compose(ENTERPRISE).split("\nnetworks:\n", 1)[1]
     assert "external: true" in edge and "name: lpb-clearinghouse-edge" in edge
@@ -259,7 +327,9 @@ def test_the_committed_files_hold_placeholders_and_no_real_address_or_path() -> 
         "LPB_CLEARINGHOUSE_TOKEN",
         "LPB_SECRET_KEY",
     ]
-    assert example_env(CLEARINGHOUSE)["LPB_SECRET_KEY"].startswith("replace-with-")
+    assert "LPB_SECRET_KEY" not in example_env(CLEARINGHOUSE)  # it stores no allocation's key
+    assert example_env(ENTERPRISE)["LPB_SECRET_KEY"].startswith("replace-with-")
+    assert example_env(ENTERPRISE)["LPB_SIGNER_URL"] == "http://signer:8937"
     for name in secrets:
         assert env[name].startswith("replace-with-"), f"{name} in a .env.example is not a placeholder"
     assert set(env["WALLET_ADDRESS"]) == {"0", "x"}
@@ -280,6 +350,11 @@ def test_the_committed_files_hold_placeholders_and_no_real_address_or_path() -> 
         text = path.read_text()
         assert not re.search(r"/home/|~/|\.livepeer/", text), f"{path.relative_to(ROOT)} names a local path"
         assert not re.search(r"@[\w-]+\.[a-z]{2,}", text.replace("unsafe@", "")), f"{path.relative_to(ROOT)}"
+        for withdrawn in ("lpp_", "payment_key", "signer's two paths", "signer paths"):
+            assert withdrawn not in text, (
+                f"{path.relative_to(ROOT)} still says {withdrawn!r}: no engine serves a signer path, and "
+                "an enterprise's engine signs at the published signer with the key it was handed"
+            )
 
 
 def test_what_is_not_committed_is_ignored_by_git_and_kept_out_of_the_image() -> None:

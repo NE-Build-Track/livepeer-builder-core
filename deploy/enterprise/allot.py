@@ -2,13 +2,15 @@
 
 An engine in its ``work`` role serves no route that allots: the allocation routes are the clearinghouse
 half's. The engine itself allots through ``engine.payments.allot``, which calls the clearinghouse with
-the tenant admin key and keeps the actor's payment key in this engine's secret store, where its jobs
-find it. This script does that once, in the engine's own container, from the engine's own settings:
+the tenant admin key and stores the key the clearinghouse hands over in this engine's secret store,
+where its jobs find it. This script does that once, in the engine's own container, from the engine's own
+settings:
 
     docker compose exec engine python /opt/enterprise/allot.py ACTOR_ID AMOUNT OPERATION_REF
 
 It moves the amount from the tenant's grant to the actor's allocation at the clearinghouse. A repeat with
-the same reference allots nothing more. Nothing secret is printed: the payment key is in no answer.
+the same reference allots nothing more. Nothing secret is printed: the handed key is stored and shown
+nowhere. ``key_kept_by`` in the output says where the key is: ``secret_store`` is this engine's own.
 """
 
 import asyncio
@@ -41,6 +43,7 @@ async def allot(actor_id: str, amount: str, operation_ref: str) -> dict[str, obj
         "actor_id": allotted.actor_id,
         "allocation_id": allotted.allocation_id,
         "status": allotted.status,
+        "key_kept_by": allotted.credential_custody,
     }
 
 

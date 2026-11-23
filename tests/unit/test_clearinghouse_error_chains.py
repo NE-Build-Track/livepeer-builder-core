@@ -348,3 +348,23 @@ async def test_a_plain_discovery_address_fails_as_it_always_did() -> None:
     with pytest.raises(httpx.ConnectError) as unreachable:
         await reader(refused_connection, bearer=None).fetch()
     assert unreachable.value.request is not None
+
+
+class Odd(Exception):
+    """An error whose constructor takes more than its words, as a transport's own may."""
+
+    def __init__(self, request: httpx.Request, reason: str) -> None:
+        super().__init__(f"odd failure: {reason}")
+        self.request = request
+
+
+async def test_an_error_that_cannot_be_made_again_from_its_words_is_named_and_holds_no_request() -> None:
+    def odd(request: httpx.Request) -> httpx.Response:
+        raise Odd(request, "the transport broke")
+
+    with pytest.raises(RuntimeError, match="Odd: odd failure: the transport broke") as failed:
+        await reader(odd).fetch()
+    assert TOKEN not in everywhere(failed.value)
+    with pytest.raises(Odd) as plain:  # with no credential, the transport's own error, as before
+        await reader(odd, bearer=None).fetch()
+    assert plain.value.request is not None

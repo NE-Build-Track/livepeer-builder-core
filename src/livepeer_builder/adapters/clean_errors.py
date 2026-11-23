@@ -20,15 +20,12 @@ def raised[T](outcome: T | Exception) -> T:
     return outcome
 
 
-def bare(error: BaseException, words: str | None = None) -> Exception:
-    """A new error of ``error``'s kind with its words (or ``words``) and nothing else of it: no request,
-    no answer, no traceback and no chain. A kind that cannot be built from its words alone is a
-    ``RuntimeError`` that names it."""
-    text = str(error) if words is None else words
+def bare(error: BaseException) -> Exception:
+    """A new error of ``error``'s kind with its words and nothing else of it: no request, no answer, no
+    traceback and no chain. A kind that cannot be built from its words alone is a ``RuntimeError`` that
+    names it."""
     try:
-        fresh = type(error)(text)
+        fresh = type(error)(str(error))
     except Exception:  # a kind whose constructor takes more than its words
         fresh = None
-    if not isinstance(fresh, Exception):
-        return RuntimeError(f"{type(error).__name__}: {text}")
-    return fresh
+    return fresh if isinstance(fresh, Exception) else RuntimeError(f"{type(error).__name__}: {error}")

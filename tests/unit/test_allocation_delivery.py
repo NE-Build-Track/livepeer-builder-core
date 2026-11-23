@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import select, update
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.contracts import ActorContext, AllotRequest, DeliveredAllocation, SecretRef
+from livepeer_builder.contracts import ActorContext, AllotRequest, DeliveredAllocation, SecretRef, SeenActor
 from livepeer_builder.docs_gen import render_openapi
 from livepeer_builder.errors import AccessDenied, NotFound, NotProvisioned
 from livepeer_builder.http.app import create_app, shared_app
@@ -420,6 +420,39 @@ async def test_a_resumed_delivery_hands_over_the_key_the_first_run_was_given(
     with pytest.raises(NotProvisioned, match="work engine"):
         await engine.payments.credential(alice)  # the work engine holds it, as on a first delivery
     assert not (await allot_delivered(engine, admin, allot_request("bob"))).resumed  # each command resets it
+
+
+@pytest.mark.parametrize(("write", "applied"), [("allot_actor", True), ("complete_operation", False)])
+async def test_a_resumed_allotment_resends_the_request_the_first_run_sent(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    write: str,
+    applied: bool,
+) -> None:
+    """With no label, the first run names the key after the person's sign-in name (D48). A resume after
+    the actor row was written sends the provider call again under the same idempotency key, so it must
+    send that same name: Batteries refuses a changed request under a used key (409), and the key would
+    then stay live with nobody given it."""
+    now = clock.now()
+    await store.save_sighting(
+        SeenActor(
+            tenant_id="default", actor_id="alice", name="Alice Example", first_seen_at=now, last_seen_at=now
+        )
+    )
+    engine = await make_engine()
+    given = provider_answers(manager, monkeypatch, "create_key_for_grant")
+    lose_once(monkeypatch, store, write, apply=applied)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot_for_delivery(admin, allot_request())
+    clock.advance(STALE_S)
+    resumed = await allot_delivered(engine, admin, allot_request())
+    assert resumed.label == "Alice Example" and resumed.resumed
+    assert key_of(resumed) == given[0] and len(given) == 2  # the first call, and its replay
+    assert len(manager.keys) == 1
 
 
 async def test_two_allotments_of_one_actor_both_carry_the_key_the_provider_gave_both(

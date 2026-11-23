@@ -199,11 +199,15 @@ class PaymentsService:
             # An earlier run wrote the actor and its answer was lost. A delivering resume sends that run's
             # provider call again, under the idempotency key it recorded: Batteries replays the original
             # success, the secret included, and never expires it (docs/references/batteries-api.md), so
-            # nothing is allotted twice and the answer carries the key.
+            # nothing is allotted twice and the answer carries the key. It must be the same request, or
+            # Batteries refuses it (409): the first run named the key after the label it wrote on this row,
+            # which may be the person's sign-in name rather than the request's (D48), and no command
+            # changes an actor's label after allotment.
             replayed = None
             sent_as = run.context.get("new_secret_sent_as")
             if keys.delivers(existing) and sent_as is not None:
-                replayed = await self._allotted_from_grant(manager, request, sent_as)
+                sent = request.model_copy(update={"label": existing.label})
+                replayed = await self._allotted_from_grant(manager, sent, sent_as)
             return await keys.shared(existing, recorded_secret(run), replayed)
         if existing is not None and existing.grant_id != request.tenant_id:
             # A record from before a tenant's id was its grant's id (#165). Its allocation was allotted

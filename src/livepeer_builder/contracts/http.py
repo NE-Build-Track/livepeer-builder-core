@@ -43,8 +43,10 @@ def response_content_type(value: str) -> str:
     The SDK transport hands in the header's bytes read as Latin-1, so a control character, which aiohttp
     lets through, is replaced. A supplied transport hands in its own text: a character Latin-1 cannot
     encode or a lone surrogate was a 500 when the answer was sent, after the job ran, and a line break
-    went out as written."""
-    return value if _HEADER_VALUE.fullmatch(value) else OCTET_STREAM
+    went out as written. A value that begins or ends with a space or a tab is replaced too: the server
+    cannot write that header, so the job ran and its answer was lost. Whitespace inside a value is kept."""
+    held = _HEADER_VALUE.fullmatch(value) and value == value.strip(" \t")
+    return value if held else OCTET_STREAM
 
 
 def request_headers(value: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:

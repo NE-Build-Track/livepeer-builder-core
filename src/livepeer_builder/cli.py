@@ -17,7 +17,8 @@ lpb serve              run the REST service (needs the [server] extra)
 lpb payments check     probe what the engine's role needs for payments, with GET requests only: the
                        signer, and Batteries or the payment clearinghouse of an engine in its work role
                        (exit 0 ready, 1 a probe failed, 2 settings refused)
-lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
+lpb gen-docs [--check] regenerate docs/generated (openapi.json, openapi-clearinghouse.json for the
+                       clearinghouse role, db-schema.md, interfaces.md, contracts.md)
 """
 
 import argparse
@@ -223,6 +224,7 @@ async def _gen_docs(args: argparse.Namespace) -> int:
 
     outputs = {
         args.out / "openapi.json": await render_openapi(),
+        args.out / "openapi-clearinghouse.json": await render_openapi("clearinghouse"),
         args.out / "db-schema.md": render_db_schema(),
         args.out / "interfaces.md": render_interfaces(),
         args.out / "contracts.md": render_contracts(),

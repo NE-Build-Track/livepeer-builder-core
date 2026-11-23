@@ -11,7 +11,8 @@ The sets register their routes on the app itself, as ``create_app`` always did, 
 ``include_router``: every route stays an ``APIRoute`` in ``app.routes``, which the structure tests read
 (tests/structure/test_route_params.py).
 
-The generated schema is committed at docs/generated/openapi.json and checked for drift in CI.
+The generated schema is committed at docs/generated/openapi.json, with the ``clearinghouse`` role's at
+docs/generated/openapi-clearinghouse.json, and both are checked for drift in CI.
 """
 
 from collections.abc import AsyncIterator

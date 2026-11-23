@@ -999,7 +999,9 @@ async def test_the_shipped_app_keeps_the_key_in_its_own_store(make_engine: Engin
 
 async def test_the_published_spec_documents_the_shipped_app() -> None:
     """The committed spec is ``create_app``'s (#186 review), so it never promises a key the
-    served routes do not return."""
+    served routes do not return: an engine in its ``both`` role, which is what ``lpb serve`` runs
+    unless ``LPB_ROLE`` says otherwise. The answer that hands a key over is in the ``clearinghouse``
+    role's own spec, beside this one (``test_the_clearinghouse_roles_spec_is_published_too``)."""
     rendered = await render_openapi()
     committed = Path(__file__).parents[2] / "docs" / "generated" / "openapi.json"
     assert committed.read_text() == rendered, "run `uv run lpb gen-docs`"
@@ -1008,3 +1010,33 @@ async def test_the_published_spec_documents_the_shipped_app() -> None:
     schema = allot["responses"]["201"]["content"]["application/json"]["schema"]
     assert schema == {"$ref": "#/components/schemas/ActorAllocation"}
     assert "DeliveredAllocationBody" not in spec["components"]["schemas"]
+
+
+async def test_the_clearinghouse_roles_spec_is_published_too() -> None:
+    """Tech debt T48, closed by #169. ``docs/generated/openapi-clearinghouse.json`` is the schema of an
+    engine in its ``clearinghouse`` role, built by the same ``create_app``, for its private listener,
+    which serves every route of the role. It is where the answer that hands an allocation's key over is
+    published: ``allocation_api_key``, ``replayed`` and ``resumed``, on allotment and on rotation."""
+    rendered = await render_openapi("clearinghouse")
+    committed = Path(__file__).parents[2] / "docs" / "generated" / "openapi-clearinghouse.json"
+    assert committed.read_text() == rendered, "run `uv run lpb gen-docs`"
+    spec = json.loads(rendered)
+    allocation = "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation"
+    delivered = {"$ref": "#/components/schemas/DeliveredAllocationBody"}
+    allot = spec["paths"][allocation]["post"]["responses"]["201"]
+    rotate = spec["paths"][allocation + "/rotate-payment-key"]["post"]["responses"]["200"]
+    assert allot["content"]["application/json"]["schema"] == delivered
+    assert rotate["content"]["application/json"]["schema"] == delivered
+    body = spec["components"]["schemas"]["DeliveredAllocationBody"]["properties"]
+    assert {"allocation_api_key", "replayed", "resumed", "credential_custody"} <= body.keys()
+    # the role's routes and no other: every path is health or a clearinghouse route, the private group
+    # is there and tagged, and no work route or signer path is promised
+    assert set(spec["paths"]) - {"/readyz"} and all(
+        path == "/readyz" or path.startswith("/v1/clearinghouse/") for path in spec["paths"]
+    )
+    onboard = spec["paths"]["/v1/clearinghouse/tenants"]["post"]
+    assert {"clearinghouse half", "private listener"} <= set(onboard["tags"])
+    assert "work half" not in {tag["name"] for tag in spec["tags"]}
+    assert "/v1/clearinghouse/wallet" in spec["paths"]
+    # and the default spec is still the both role's, which is a different document
+    assert await render_openapi() != rendered

@@ -224,8 +224,12 @@ in one process:
 - **The published schema.** `docs/generated/openapi.json` is generated from an engine in its `both`
   role with one listener, so it has every route. Each route but health carries the tag of its half,
   `work half` or `clearinghouse half`, whose description names the roles that serve it, and the routes
-  of the private group also carry the tag `private listener`. An engine's own `/openapi.json` names the
-  routes of its role and its listener, and no other.
+  of the private group also carry the tag `private listener`. Its allotment and rotation answer the
+  allocation alone, as that engine does. `docs/generated/openapi-clearinghouse.json` is generated from
+  an engine in its `clearinghouse` role, for its private listener: the routes of that role and no other,
+  with the answer that hands an allocation's key over
+  ([payments.md](payments.md#payment-keys)). An engine's own `/openapi.json` names the routes of its
+  role and its listener, and no other.
 - **A clearinghouse has no route that issues a second clearinghouse admin key** (#169). `/v1/keys`,
   which issues every kind, is a work route. The first clearinghouse admin key is `lpb bootstrap-admin`'s,
   once. It is kept under the tenant `default`, so its holder lists, rotates and revokes it on the private

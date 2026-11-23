@@ -12,7 +12,10 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
 | [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process; a clearinghouse's engine serves the document it read (#166) |
 
-The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
+The REST surface is generated into [../generated/openapi.json](../generated/openapi.json): every route
+of an engine in its `both` role, each tagged with its half. The routes of an engine in its
+`clearinghouse` role, whose allotment and rotation answer the allocation with its key, are generated
+into [../generated/openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) (#169).
 
 ## Upgrading to the M4 hardening (#112 to #115)
 

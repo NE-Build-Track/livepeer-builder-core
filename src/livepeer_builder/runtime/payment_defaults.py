@@ -13,7 +13,8 @@ runner transport is the gateway SDK's, at ``LPB_SIGNER_URL``: the engine's own s
 clearinghouse publishes. The credential is the actor's allocation key from the engine's own secret
 store: minted by its Batteries, or handed over once by the clearinghouse at allotment and rotation. So
 ``transport`` and ``credentials`` are one answer for both configurations (``_OwnSigning``), and nothing
-of a clearinghouse's engine is in the signing path.
+of a clearinghouse's engine is in the signing path. An engine in its ``clearinghouse`` role runs no job,
+so its transport cannot pay at all: it asks the signer's identity, for the wallet report, and no more.
 
 The adapters are imported inside the methods, not at module level, so importing the package loads no
 HTTP client or SDK (tests/structure/test_import_weight.py).
@@ -75,6 +76,15 @@ class SelfHosted(_OwnSigning):
     def __init__(self, settings: EngineSettings, keep: Keep) -> None:
         super().__init__(settings)
         self._keep = keep
+
+    def transport(self) -> RunnerTransport:
+        """An engine in its ``clearinghouse`` role runs no job and signs nothing (D82), so it is given no
+        transport that could pay: only the signer's identity call, which its wallet report makes."""
+        if self._settings.runs_jobs:
+            return super().transport()
+        from livepeer_builder.adapters.sdk import IdentityOnlyTransport
+
+        return IdentityOnlyTransport(self._settings.signer_url)
 
     def allocation_manager(self) -> AllocationManager | None:
         token = self._settings.batteries_token

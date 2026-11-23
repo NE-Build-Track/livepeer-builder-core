@@ -474,8 +474,9 @@ def test_an_engine_in_its_work_role_holds_no_adapter_that_reaches_batteries() ->
         "in the signing path."
     )
     own = adapters_named_in("SelfHosted")
-    assert own == {"batteries"}, (
+    assert own == {"batteries", "sdk"}, (
         f"SelfHosted (runtime/payment_defaults.py) builds adapters from {sorted(own)}. An engine in its "
         "both or its clearinghouse role reaches Batteries itself, and is no tenant of another "
-        "clearinghouse."
+        "clearinghouse. From adapters/sdk.py it takes only the identity-only transport of the "
+        "clearinghouse role, which cannot pay."
     )

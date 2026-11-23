@@ -14,7 +14,7 @@
 
 The engine's role (``LPB_ROLE``, D84) is wired here and in ``payment_defaults``: an engine in its ``work``
 role uses a payment clearinghouse and is nobody's clearinghouse, and one in its ``clearinghouse`` role
-runs no jobs and must be able to allot and onboard.
+runs no jobs, stores no allocation's key, and must be able to allot and onboard.
 
 Parts are ports (behaviour). Tuning values stay in ``EngineSettings``.
 """
@@ -416,7 +416,8 @@ async def build(
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
-        await _require_storable_payment_keys(parts)  # the final parts, after decoration
+        if settings.runs_jobs:  # a clearinghouse hands each key to the caller and stores none (#169)
+            await _require_storable_payment_keys(parts)  # the final parts, after decoration
         resources = stack.pop_all()  # out of the stack: the caller takes them with the services
     try:
         return assemble(settings, parts), resources
@@ -426,7 +427,11 @@ async def build(
 
 
 async def _require_storable_payment_keys(parts: EngineParts) -> None:
-    """Allotment would fund an allocation, then fail to keep its key (#112, C2). Judged on the parts the
+    """Allotment would fund an allocation, then fail to keep its key (#112, C2): asked of every engine
+    that stores allocation keys, which is every role that runs jobs. In its ``both`` role an engine
+    stores the keys its Batteries mints, and in its ``work`` role the keys its clearinghouse hands
+    over. An engine in its ``clearinghouse`` role stores none and is not asked; a command that would
+    store one there is refused when it is made (``PaymentKeys.require_writable``). Judged on the parts the
     engine will run with, so a decorator that turns the provider off or installs its own store is not
     refused, and one that adds a provider is. Only the built-in store is asked here: a plug-in store that
     cannot write at boot (a sealed vault) still starts, and is asked per request."""

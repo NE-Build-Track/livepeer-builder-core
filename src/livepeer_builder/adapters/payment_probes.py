@@ -50,12 +50,21 @@ from livepeer_builder.contracts import (
     PaymentConfiguration,
     PaymentProbe,
     ProbeOutcome,
+    Role,
     TenantGrant,
 )
 
 TIMEOUT_S = 5.0
 SIGNER_IDENTITY = "/sign-orchestrator-info"
 _NOT_SET = "{setting} is not set"
+# No role is refused at startup for a missing signer address, so this is where each is told what follows.
+_UNPAID = "LPB_SIGNER_URL is not set: this engine runs its jobs unpaid"
+_NO_SIGNER: dict[Role, str] = {
+    "both": _UNPAID,
+    "work": f"{_UNPAID}. Set it to the address of the signer its payment clearinghouse publishes",
+    "clearinghouse": "LPB_SIGNER_URL is not set: the wallet report cannot say whether the signer answers. "
+    "Set it to the address this engine reaches the signer at",
+}
 Answer = httpx.Response | None  # None: no answer came
 
 
@@ -105,7 +114,7 @@ async def _self_hosted(settings: EngineSettings, client: httpx.AsyncClient) -> P
 async def _signer(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentProbe:
     name, setting = "signer", "LPB_SIGNER_URL"
     if settings.signer_url is None:
-        return _probe(name, setting, None, "not_configured", _NOT_SET.format(setting=setting))
+        return _probe(name, setting, None, "not_configured", _NO_SIGNER[settings.role])
     url = settings.signer_url if "://" in settings.signer_url else f"https://{settings.signer_url}"
     parts = urlsplit(url)
     request = f"GET {SIGNER_IDENTITY}"

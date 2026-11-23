@@ -111,6 +111,94 @@ def test_a_clearinghouse_without_the_grants_credential_fails_the_check(
     assert recorder.targets == ["/sign-orchestrator-info", "/v1/usage?limit=1"]
 
 
+def test_a_work_engine_with_no_signer_address_is_told_its_jobs_run_unpaid(
+    server: tuple[str, Recorder],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No start-up rule refuses an engine in its ``work`` role without ``LPB_SIGNER_URL``: it runs its
+    jobs unpaid, as any engine without a signer. The check is where that is said plainly: the probe
+    fails, names the setting and says what to set it to. The clearinghouse is still probed, and the
+    signer is asked nowhere, least of all at the clearinghouse's address."""
+    url, recorder = server
+    clearinghouse(monkeypatch, url, recorder)
+    monkeypatch.delenv("LPB_SIGNER_URL")
+    code, report, _ = run(capsys)
+    signer = probes(report)["signer"]
+    assert code == 1 and report["ok"] is False and report["role"] == "work"
+    assert (signer["outcome"], signer["setting"], signer["request"]) == (
+        "not_configured",
+        "LPB_SIGNER_URL",
+        None,
+    )
+    assert signer["detail"] == (
+        "LPB_SIGNER_URL is not set: this engine runs its jobs unpaid. Set it to the address of the "
+        "signer its payment clearinghouse publishes"
+    )
+    assert [probes(report)[name]["outcome"] for name in ("clearinghouse_grant", "clearinghouse_usage")] == [
+        "ok",
+        "ok",
+    ]
+    assert recorder.methods == {"GET"} and "/sign-orchestrator-info" not in recorder.targets
+
+
+def test_a_work_engine_whose_signer_does_not_answer_fails_the_check(
+    server: tuple[str, Recorder],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    url, recorder = server
+    clearinghouse(monkeypatch, url, recorder, LPB_SIGNER_URL="http://127.0.0.1:9")
+    code, report, _ = run(capsys)
+    signer = probes(report)["signer"]
+    assert code == 1 and report["role"] == "work"
+    assert (signer["outcome"], signer["detail"]) == ("unavailable", "the signer did not answer")
+    assert recorder.methods == {"GET"} and "/sign-orchestrator-info" not in recorder.targets
+
+
+def test_a_clearinghouse_with_no_signer_address_fails_the_check_though_it_signs_nothing(
+    server: tuple[str, Recorder],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """It starts without one: it signs nothing. It runs the signer its tenants' engines sign at, and its
+    wallet report reads the signer's readiness at this address, so the check says what is missing."""
+    url, recorder = server
+    self_hosted(monkeypatch, url, recorder, **A_CLEARINGHOUSE)
+    monkeypatch.delenv("LPB_SIGNER_URL")
+    code, report, _ = run(capsys)
+    signer = probes(report)["signer"]
+    assert code == 1 and report["role"] == "clearinghouse"
+    assert (signer["outcome"], signer["setting"], signer["request"]) == (
+        "not_configured",
+        "LPB_SIGNER_URL",
+        None,
+    )
+    assert signer["detail"] == (
+        "LPB_SIGNER_URL is not set: the wallet report cannot say whether the signer answers. Set it to "
+        "the address this engine reaches the signer at"
+    )
+    assert recorder.methods == {"GET"}
+    assert recorder.targets == ["/v1/usage?limit=1", "/v1/grants?limit=1"]
+
+
+def test_a_both_engine_with_no_signer_address_is_told_what_is_not_set(
+    server: tuple[str, Recorder],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    url, recorder = server
+    self_hosted(monkeypatch, url, recorder)
+    monkeypatch.delenv("LPB_SIGNER_URL")
+    code, report, _ = run(capsys)
+    signer = probes(report)["signer"]
+    assert code == 1 and report["role"] == "both"
+    assert (signer["outcome"], signer["detail"]) == (
+        "not_configured",
+        "LPB_SIGNER_URL is not set: this engine runs its jobs unpaid",
+    )
+
+
 @pytest.mark.parametrize(
     ("env", "named"),
     [

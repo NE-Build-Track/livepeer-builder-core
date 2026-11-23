@@ -22,6 +22,12 @@ if TYPE_CHECKING:
     from livepeer_builder.contracts.discovery import PriceInfo
 
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
+# Who holds an allocation's credential (D85 point 1, D87 point 1). ``secret_store``: this engine's configured
+# SecretStore issued the actor's ``secret_ref``, and resolves and deletes it. ``work_engine``: the credential
+# was delivered once to the work engine, and ``secret_ref`` is an opaque receipt no store resolves. The
+# handle's text never says which: a store's handles are opaque (#186 review).
+CredentialCustody = Literal["secret_store", "work_engine"]
+CREDENTIAL_CUSTODIES: tuple[CredentialCustody, ...] = ("secret_store", "work_engine")
 
 
 class PaymentKey(Contract):
@@ -32,7 +38,8 @@ class PaymentKey(Contract):
 
 
 class SecretRef(Contract):
-    """A handle to a secret held by a SecretStore. Databases, records and logs hold only this."""
+    """A SecretStore handle, or an opaque receipt for a credential the work engine holds. Which one is the
+    actor's ``credential_custody``, never the text of ``ref``."""
 
     ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
@@ -122,45 +129,9 @@ class ActorAllocation(Contract):
     created_at: datetime
     updated_at: datetime
     label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
-
-
-class IssuedPaymentKey(Contract):
-    """An actor's payment key, as the command that issued it answers (D87, #166). The clearinghouse keeps
-    the key's hash and never the key, so the token is in the answer of the run that issued the key and
-    nowhere else. A repeat of the command's reference, or a run that found the key already issued,
-    answers ``token: null`` and ``replayed: true``, as issuing an access key does."""
-
-    token: str | None  # ``lpp_...``, shown once
-    replayed: bool = False
-
-
-class KeyedAllocation(ActorAllocation):
-    """The answer to allotting an allocation and to rotating its payment key: the allocation, and the
-    payment key the command issued for its actor. An enterprise's engine presents that key when it asks
-    the clearinghouse to sign a payment for the actor, and stores it where it stores a Batteries key
-    today. ``payment_key`` is ``None`` when the store keeps no payment keys (a supplied store without
-    ``PaymentKeyRepo``)."""
-
-    payment_key: IssuedPaymentKey | None = None
-
-    @property
-    def allocation(self) -> ActorAllocation:
-        """The allocation as the store keeps it and every read returns it: without the payment key."""
-        return ActorAllocation.model_validate(self.model_dump(exclude={"payment_key"}))
-
-
-SignerCall = Literal["sign-orchestrator-info", "generate-live-payment"]
-"""The two calls the gateway SDK makes to a signer, by the path of each: who the signer is, which signs
-no payment, and one payment."""
-
-
-class SignerAnswer(Contract):
-    """What a signer answered one call with, as it answered (#166): the status, the body as bytes and its
-    content type. Nothing of it is parsed: a clearinghouse hands it back to the engine that asked."""
-
-    status_code: int
-    content: bytes
-    content_type: str = ""
+    # Who holds the credential ``secret_ref`` names. The default is the configured store: every row and
+    # recorded answer written before custody was recorded (migration 0015) was the store's.
+    credential_custody: CredentialCustody = "secret_store"
 
 
 class SeenActor(Contract):
@@ -175,6 +146,24 @@ class SeenActor(Contract):
     name: str = Field(default="", max_length=200)
     first_seen_at: datetime
     last_seen_at: datetime
+
+
+class DeliveredAllocation(ActorAllocation):
+    """Allocation metadata and a one-response credential for the work engine.
+
+    Only the work engine persists the credential. ``allocation_api_key`` is a ``SecretStr``, so a dump or
+    log of this model shows it masked; only the HTTP answer writes it out.
+
+    - ``replayed`` is ``True`` exactly when the answer carries no key: a repeat of a finished command, or
+      a resume that has no secret in hand. The work engine checks it before persisting the actor.
+    - ``resumed`` is ``True`` when the command finished a run an earlier attempt left unfinished. That
+      attempt's answer was lost, so a resumed answer that carries a key hands over the key the provider
+      returned again, which may be one the work engine already saw.
+    """
+
+    allocation_api_key: SecretStr | None = None
+    replayed: bool = False  # no key in this answer, as an issued access key's ``replayed`` (D57)
+    resumed: bool = False  # this answer finishes a run an earlier attempt left unfinished
 
 
 class KnownActor(Contract):

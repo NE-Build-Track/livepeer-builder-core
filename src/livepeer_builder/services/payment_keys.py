@@ -4,52 +4,107 @@ it, and the key it replaces is retired (docs/contracts/payments.md).
 Split from ``payments.py`` by responsibility: ``PaymentsService`` decides which provider operation a
 command sends and under which idempotency key; ``PaymentKeys`` keeps the key that comes back, and says
 what a command does when another command wrote the actor first (#115, C4).
+
+Custody (D85 point 1, D87 point 1). A secret is held by the configured ``SecretStore`` or, for a
+delivering command, by the work engine, which gets it once in the command's answer. Every reference is
+kept with its custody, in the actor row and in the ledger's context, and every delete follows it: a
+``secret_store`` handle is deleted on the configured store that issued it, and a ``work_engine`` receipt
+never reaches a store. Nothing is read from the text of a reference (#186 review).
 """
 
-from livepeer_builder.contracts import ActorAllocation, NewAllocationKey, SecretRef
+from dataclasses import dataclass
+from typing import Any
+
+from livepeer_builder.contracts import (
+    CREDENTIAL_CUSTODIES,
+    ActorAllocation,
+    CredentialCustody,
+    NewAllocationKey,
+    SecretRef,
+)
 from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound
 from livepeer_builder.protocols import AllocationManager, SecretStore, WritableSecretStore
 from livepeer_builder.services.actor_writes import ActorWrites
+from livepeer_builder.services.allocation_delivery import DeliverySecrets
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
 
 BEGAN_ON = "allocation_id"  # in a rotation's record: the allocation the actor held when it began
+PREVIOUS_CUSTODY = "previous_credential_custody"  # in a rotation's record: who held the key it began from
+_NEW_CUSTODY = "new_secret_custody"  # in a record: who holds the secret ``new_secret_ref`` names
 _LOST_TO = "lost_to_api_key_id"  # in a rotation's record: the key another rotation gave the actor first
 
 
+@dataclass(frozen=True)
+class HeldSecret:
+    """A stored secret's reference and who holds it: the two travel together."""
+
+    ref: SecretRef
+    custody: CredentialCustody
+
+
 class PaymentKeys:
-    def __init__(self, secrets: SecretStore, writes: ActorWrites) -> None:
-        self._secrets = secrets
+    """``secrets`` is the configured store. ``delivery``, set only for a delivering command, is that
+    request's own buffer: a secret this object stores then goes there, and is ``work_engine``'s."""
+
+    def __init__(
+        self, secrets: SecretStore, writes: ActorWrites, *, delivery: DeliverySecrets | None = None
+    ) -> None:
+        self._retiring = secrets
+        self._delivery = delivery
         self._writes = writes
+
+    @property
+    def custody(self) -> CredentialCustody:
+        """Who holds a secret this object stores."""
+        return "work_engine" if self._delivery is not None else "secret_store"
 
     async def stored(
         self, run: RunningOperation, tenant_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
-    ) -> SecretRef:
+    ) -> HeldSecret:
         """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
-        key it belongs to and the provider operation that returned it (``sent_as``, its idempotency key),
-        before the actor points at it, so a resume reuses that copy instead of leaving it orphaned. A resume
-        that got another key (a second allotment after a revoke) stores that key's secret."""
+        key it belongs to, the provider operation that returned it (``sent_as``, its idempotency key) and
+        its custody, before the actor points at it, so a resume reuses that copy instead of leaving it
+        orphaned. A resume that got another key (a second allotment after a revoke) stores that key's
+        secret.
+
+        A resume keeps the custody recorded with the reference, never its own: a rotation begun by a
+        delivering command and resumed by the admin one keeps its receipt ``work_engine``'s, and the
+        reverse keeps a stored secret the store's. A resume that delivers holds the secret the provider
+        replayed under the recorded receipt, so its answer carries the key the first run never answered
+        with."""
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
-            return SecretRef(ref=run.context["new_secret_ref"])
-        ref = await self._secrets.put(_secret_name(tenant_id, actor_id), key.secret.get_secret_value())
+            recorded = recorded_secret(run)
+            self._redeliver(recorded, key)
+            return recorded
+        secret = key.secret.get_secret_value()
+        if self._delivery is not None:
+            ref = self._delivery.put(secret)
+        else:
+            ref = await self._retiring.put(_secret_name(tenant_id, actor_id), secret)
+        held = HeldSecret(ref, self.custody)
         try:
             await run.remember(
-                new_secret_ref=ref.ref, new_secret_key_id=key.api_key_id, new_secret_sent_as=sent_as
+                new_secret_ref=ref.ref,
+                new_secret_key_id=key.api_key_id,
+                new_secret_sent_as=sent_as,
+                **{_NEW_CUSTODY: held.custody},
             )
         except TakenOver:  # a resume took over: it stores its own copy
-            await self._secrets.delete(ref)
+            await self._drop(held)
             raise
-        return ref
+        return held
 
     async def require_writable(
         self, run: RunningOperation, sent_as: str, holder: ActorAllocation | None = None
     ) -> None:
         """In the step that mints a key, just before the provider is called: a store that says it cannot
         keep the new key refuses the command (#112, C2). A store without the optional ``writable`` check
-        is not asked. A run with nothing more to store is not refused (``_key_is_stored``): a repeat of a
-        finished command never reaches this step, and a resume goes on to finish."""
-        if self._key_is_stored(run, sent_as, holder):
+        is not asked, and neither is a delivering command's buffer, which keeps nothing. A run with
+        nothing more to store is not refused (``_key_is_stored``): a repeat of a finished command never
+        reaches this step, and a resume goes on to finish."""
+        if self._key_is_stored(run, sent_as, holder) or self._delivery is not None:
             return
-        if isinstance(self._secrets, WritableSecretStore) and not await self._secrets.writable():
+        if isinstance(self._retiring, WritableSecretStore) and not await self._retiring.writable():
             # only a fresh run knows that nothing was sent: a resumed one follows an unknown outcome
             sent = (
                 "an earlier attempt may have reached the payment provider; repeat this request when the "
@@ -81,26 +136,37 @@ class PaymentKeys:
             return False
         return (holder.api_key_id, holder.secret_ref.ref) == (run.context.get("new_secret_key_id"), ref)
 
-    async def shared(self, actor: ActorAllocation, own: SecretRef) -> ActorAllocation:
+    async def shared(
+        self, actor: ActorAllocation, own: HeldSecret, key: NewAllocationKey | None = None
+    ) -> ActorAllocation:
         """The actor holding the key this allotment got. Another reference may have saved it with its
-        own copy of the secret; this command's copy is then dropped."""
-        if own != actor.secret_ref:
-            await self._secrets.delete(own)
+        own copy of the secret; this command's copy is then dropped. With the actor's key in hand
+        (``key``: the provider gave it to both references, or replayed it to a resume), a delivering
+        command holds it under the actor's receipt, so its answer carries it too."""
+        if own.ref != actor.secret_ref:
+            await self._drop(own)
+        if key is not None and key.api_key_id == actor.api_key_id:
+            self._redeliver(HeldSecret(actor.secret_ref, actor.credential_custody), key)
         return actor
 
+    def delivers(self, actor: ActorAllocation) -> bool:
+        """Whether this command hands ``actor``'s key over in its answer: it delivers, and the work engine
+        holds the actor's key. Only then does a resume ask the provider to replay the key."""
+        return self._delivery is not None and actor.credential_custody == "work_engine"
+
     async def overtaken(
-        self, actor_id: str, current: ActorAllocation | None, key: NewAllocationKey, ref: SecretRef
+        self, actor_id: str, current: ActorAllocation | None, key: NewAllocationKey, own: HeldSecret
     ) -> ActorAllocation:
         """The answer of an allotment that did not write its row, because another command wrote the
         actor while it was at the provider: its row would undo a pause, a rotation or a revoke that
         finished meanwhile. The command that wrote first was an allotment that had read what this one
         read, so it sent the same actor-derived provider operation and got this same allocation and key:
-        nothing this one minted is unrecorded, and only its own copy of the secret (``ref``) is extra.
+        nothing this one minted is unrecorded, and only its own copy of the secret (``own``) is extra.
         The answer comes from ``current``, the actor as stored now, by the rule a resumed run follows:
         the actor is this command's result while it holds the key this command got."""
         if current is not None and current.status != "revoked" and current.api_key_id == key.api_key_id:
-            return await self.shared(current, ref)
-        await self._secrets.delete(ref)  # the actor holds another key or is revoked: nothing points at it
+            return await self.shared(current, own, key)
+        await self._drop(own)  # the actor holds another key or is revoked: nothing points at it
         if current is not None and current.status != "revoked":  # rotated, or revoked and allotted again
             raise AlreadyAllotted(current)
         if current is not None and current.allocation_id == key.allocation_id:
@@ -126,7 +192,7 @@ class PaymentKeys:
         if began_on == actor.allocation_id:
             return actor
         if "new_secret_ref" in run.context:
-            await self._secrets.delete(SecretRef(ref=run.context["new_secret_ref"]))
+            await self._drop(recorded_secret(run))
         raise NotFound(
             f"this rotation began on allocation {began_on!r}, which actor {actor.actor_id!r} no longer "
             f"holds: it was revoked and allotted again (allocation {actor.allocation_id!r}). Rotate "
@@ -147,21 +213,27 @@ class PaymentKeys:
         nothing, revokes its own key and is refused, ``InvalidRequest``."""
         previous_key = run.context["previous_api_key_id"]
         if actor.api_key_id != key.api_key_id:  # not stored yet
-            ref = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
-            actor = await self._pointed_at(actor, key.api_key_id, ref, previous_key)
+            new = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
+            actor = await self._pointed_at(actor, key.api_key_id, new, previous_key)
             if actor.api_key_id != key.api_key_id:
                 # Another rotation's key: this one wrote nothing, so its own key must not stay live. The
                 # revoke comes first: a key still live keeps its secret stored, and a revoke that fails
                 # leaves the record open for a repeat, which gets the same key replayed and comes back here.
                 await manager.revoke_key(key.api_key_id)
-                await self._secrets.delete(ref)
+                await self._drop(new)
+        elif actor.secret_ref.ref == run.context.get("new_secret_ref"):
+            # A resume after this rotation pointed the actor at its key: the answer the first run never
+            # gave still carries the key, which the provider replayed.
+            self._redeliver(HeldSecret(actor.secret_ref, actor.credential_custody), key)
         # The key this rotation began from is revoked in either case, unless the actor holds it: when this
         # rotation stored its key, failed here and was then replaced by a newer one, nothing else revokes it.
         if previous_key not in (key.api_key_id, actor.api_key_id):  # never the live key (B1)
             await manager.revoke_key(previous_key)  # repeat-safe upstream
-        previous_secret = SecretRef(ref=run.context["previous_secret_ref"])
-        if previous_secret != actor.secret_ref:
-            await self._secrets.delete(previous_secret)
+        previous = HeldSecret(
+            SecretRef(ref=run.context["previous_secret_ref"]), _custody(run.context, PREVIOUS_CUSTODY)
+        )
+        if previous.ref != actor.secret_ref:
+            await self._drop(previous)
         if actor.api_key_id != key.api_key_id:
             # Noted, and never freed: under a free reference the provider would replay the revoked key.
             await run.remember(**{_LOST_TO: actor.api_key_id})
@@ -169,18 +241,49 @@ class PaymentKeys:
         return actor
 
     async def _pointed_at(
-        self, actor: ActorAllocation, api_key_id: str, ref: SecretRef, previous_key: str
+        self, actor: ActorAllocation, api_key_id: str, new: HeldSecret, previous_key: str
     ) -> ActorAllocation:
         """The actor after the rotation's key write: only those columns are written, so a status another
         command set meanwhile stays (#115, C4). An actor revoked meanwhile stays revoked: the new key is on
         a revoked allocation, so its secret is dropped. The write applies only over ``previous_key``, the
         key the rotation began from: an actor that holds another key got it from a rotation that finished
         first, and is returned as stored, holding that key, with nothing written."""
-        current = await self._writes.key(actor, api_key_id, ref, only_from=previous_key)
+        current = await self._writes.key(
+            actor, api_key_id, new.ref, credential_custody=new.custody, only_from=previous_key
+        )
         if current is None:
-            await self._secrets.delete(ref)
+            await self._drop(new)
             raise NotFound(f"actor {actor.actor_id!r} has no allocation")
         return current
+
+    async def _drop(self, held: HeldSecret) -> None:
+        """Forget a secret where it is held: a ``secret_store`` handle on the configured store, which
+        issued it; a ``work_engine`` receipt only in this request's buffer, never on a store."""
+        if held.custody == "secret_store":
+            await self._retiring.delete(held.ref)
+        elif self._delivery is not None:
+            self._delivery.delete(held.ref)
+
+    def _redeliver(self, held: HeldSecret, key: NewAllocationKey) -> None:
+        """A delivering command holds the key the provider gave it under ``held``'s receipt, when that
+        receipt is the work engine's: the answer then carries it. Anything else is left as it is."""
+        if self._delivery is not None and held.custody == "work_engine":
+            self._delivery.hold(held.ref, key.secret.get_secret_value())
+
+
+def recorded_secret(run: RunningOperation) -> HeldSecret:
+    """The secret a run recorded storing, with the custody recorded beside it."""
+    return HeldSecret(SecretRef(ref=run.context["new_secret_ref"]), _custody(run.context, _NEW_CUSTODY))
+
+
+def _custody(context: dict[str, Any], name: str) -> CredentialCustody:
+    """A custody recorded in a ledger context. A record written before custody was recorded names none:
+    every secret then was the configured store's."""
+    value = context.get(name, "secret_store")
+    for custody in CREDENTIAL_CUSTODIES:
+        if value == custody:
+            return custody
+    raise ValueError(f"the operation record names an unknown credential custody {value!r}")
 
 
 def _lost_rotation(actor_id: str, held: str) -> InvalidRequest:

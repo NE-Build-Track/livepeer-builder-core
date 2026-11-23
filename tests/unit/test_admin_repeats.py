@@ -347,7 +347,7 @@ async def test_a_rotation_resumed_after_its_secret_was_stored_keeps_one_copy_of_
     await engine.payments.allot(admin, allot_request())
     set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(*_: object) -> None:
+    async def lost(*_: object, **__: object) -> None:
         monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 
@@ -425,7 +425,7 @@ async def test_a_slow_rotation_taken_over_while_storing_its_secret_drops_its_cop
     clock.advance(120)
     resumed = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
     release.set()
-    assert (await slow).allocation == resumed.allocation
+    assert await slow == resumed
     async with store.engine.connect() as conn:
         refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
     assert refs == {resumed.secret_ref.ref}
@@ -573,7 +573,7 @@ async def test_two_concurrent_allots_with_one_ref_create_one_allocation(
     answers = await asyncio.gather(
         *(engine.payments.allot(admin, allot_request()) for _ in range(2)), return_exceptions=True
     )
-    assert sorted(type(answer).__name__ for answer in answers) == ["KeyedAllocation", "OperationInProgress"]
+    assert sorted(type(answer).__name__ for answer in answers) == ["ActorAllocation", "OperationInProgress"]
     assert manager.calls == ["create_key_for_grant"] and len(manager.allocations) == 1
 
 
@@ -930,7 +930,7 @@ async def test_allotment_an_actor_already_allotted_under_a_new_ref_is_refused(
     first = await engine.payments.allot(admin, allot_request(ref="p-1"))
     with pytest.raises(AlreadyAllotted) as refused:
         await engine.payments.allot(admin, allot_request(ref="p-2"))
-    assert refused.value.actor == first.allocation and manager.calls == ["create_key_for_grant"]
+    assert refused.value.actor == first and manager.calls == ["create_key_for_grant"]
     bob = await engine.payments.allot(admin, allot_request("bob", ref="p-2"))
     assert bob.actor_id == "bob"
 
@@ -949,7 +949,7 @@ async def test_a_resumed_allotment_that_never_reached_the_provider_does_not_clai
     clock.advance(120)
     with pytest.raises(AlreadyAllotted) as refused:
         await engine.payments.allot(admin, allot_request(amount="5", ref="p-b"))
-    assert refused.value.actor == a.allocation
+    assert refused.value.actor == a
     with pytest.raises(AlreadyAllotted):  # freed, so not in progress: refused again at once
         await engine.payments.allot(admin, allot_request(amount="5", ref="p-b"))
 
@@ -977,7 +977,7 @@ async def test_a_resumed_allotment_that_reached_the_provider_answers_with_the_sh
         await engine.payments.allot(admin, allot_request(ref="p-b"))
     a = await engine.payments.allot(admin, allot_request(ref="p-a"))
     clock.advance(120)
-    assert (await engine.payments.allot(admin, allot_request(ref="p-b"))).allocation == a.allocation
+    assert await engine.payments.allot(admin, allot_request(ref="p-b")) == a
     assert manager.calls == ["create_key_for_grant", "create_key_for_grant"]  # one allocation, replayed
     async with store.engine.connect() as conn:
         refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
@@ -1038,7 +1038,7 @@ async def test_a_resumed_allotment_does_not_claim_an_actor_re_allotted_under_ano
     clock.advance(120)
     with pytest.raises(AlreadyAllotted) as refused:
         await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
-    assert refused.value.actor == b.allocation
+    assert refused.value.actor == b
     with pytest.raises(AlreadyAllotted):  # freed, so refused again at once, not in progress
         await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
 
@@ -1064,5 +1064,5 @@ async def test_a_allotment_resumed_after_its_actor_was_saved_returns_that_actor(
         await engine.payments.allot(admin, allot_request())
     saved = await store.get_actor("default", "alice")
     clock.advance(120)
-    assert (await engine.payments.allot(admin, allot_request())).allocation == saved
+    assert await engine.payments.allot(admin, allot_request()) == saved
     assert manager.calls == ["create_key_for_grant"]

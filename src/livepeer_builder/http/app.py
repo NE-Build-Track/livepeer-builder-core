@@ -70,7 +70,7 @@ def create_app(
     """The whole REST service: the work routes and the clearinghouse routes on one app."""
     app = shared_app(engine, manage_lifecycle=manage_lifecycle, max_request_bytes=max_request_bytes)
     mount_work_routes(app, engine)
-    mount_clearinghouse_routes(app, engine)
+    mount_clearinghouse_routes(app, engine, deliver_allocation_keys=False)
     return app
 
 

@@ -9,7 +9,13 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from livepeer_builder.contracts import ActorAllocation, AllocationStatus, MeasuredUsage, SecretRef
+from livepeer_builder.contracts import (
+    ActorAllocation,
+    AllocationStatus,
+    CredentialCustody,
+    MeasuredUsage,
+    SecretRef,
+)
 
 
 @runtime_checkable
@@ -48,10 +54,13 @@ class ActorCommandRepo(Protocol):
         secret_ref: SecretRef,
         updated_at: datetime,
         only_from: str,
+        *,
+        credential_custody: CredentialCustody = "secret_store",
     ) -> ActorAllocation | None:
-        """Write ``api_key_id``, ``secret_ref`` and ``updated_at``, only where the stored key is
-        ``only_from`` (the key the rotation began from) or already ``api_key_id`` (a repeat of this
-        write). An actor holding any other key got it from a rotation that finished first."""
+        """Write ``api_key_id``, ``secret_ref``, ``credential_custody`` and ``updated_at``, only where the
+        stored key is ``only_from`` (the key the rotation began from) or already ``api_key_id`` (a repeat
+        of this write). An actor holding any other key got it from a rotation that finished first. The
+        engine always passes ``credential_custody``; the default is only for callers written before it."""
         ...
 
     async def allot_actor(self, actor: ActorAllocation, *, replacing: str | None) -> bool:

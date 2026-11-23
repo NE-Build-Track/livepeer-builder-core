@@ -17,7 +17,13 @@ from typing import Any, Literal
 
 from pydantic import TypeAdapter
 
-from livepeer_builder.contracts import OPERATION_REPLAYED, ActorContext, OperationCommand, OperationRecord
+from livepeer_builder.contracts import (
+    OPERATION_REPLAYED,
+    OPERATION_RESUMED,
+    ActorContext,
+    OperationCommand,
+    OperationRecord,
+)
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyAllotted,
@@ -150,6 +156,7 @@ class OperationLedger:
         still ``started`` is a conflict however old, and is never resumed: the earlier release's run is
         not one this release can finish (docs/contracts/index.md, the upgrade notes of #165)."""
         OPERATION_REPLAYED.set(False)
+        OPERATION_RESUMED.set(False)
         record = OperationRecord(
             tenant_id=caller.tenant_id,
             actor_id=caller.actor_id,
@@ -171,6 +178,7 @@ class OperationLedger:
             if taken is None:  # another repeat resumed it first: answer as the record is now
                 return await self._recorded(held, answer)
             record = taken
+            OPERATION_RESUMED.set(True)  # this run follows an attempt whose outcome is unknown
         running = RunningOperation(self._repo, record)
         # A run never outlives half the stale window, so none is still calling a provider when a repeat
         # resumes it: fencing guards the records, not a call in flight (grant creation has no provider

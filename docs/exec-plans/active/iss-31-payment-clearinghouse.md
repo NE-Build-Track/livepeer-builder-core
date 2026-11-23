@@ -129,3 +129,8 @@ Each pull request ticks its own line here in the same change.
 - **23 November 2026, P6.** Cancelling `serve()` with two listeners is a forced exit, as a listener
   that ended by itself is: both hang up on their open connections, and the task ends with its
   cancellation. A first SIGINT or SIGTERM still ends them in order. Source: Mike, after review of #181.
+- **23 November 2026, P6.** The wallet report's unspent grants are exact. A grant counts as its
+  unallocated balance and what each of its allocations still holds, an overdrawn allocation as nothing.
+  `TenantGrant` gains the required field `allocated_unspent` for it. This replaces "each grant's total
+  less what its allocations spent" in the entry of 19 November, which read too low when an allocation
+  was overdrawn and the grant had a balance left to allot. Source: Mike, after review of #181.

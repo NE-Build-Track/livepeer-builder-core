@@ -14,8 +14,14 @@ async def render_openapi() -> str:
 
     # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
     # so the committed spec documents the whole API. A deployment without one lacks those routes.
-    # The engine is built and never started, so it needs no discovery address (#154).
-    settings = EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False)
+    # The runner list route is one of them: it is served only by an engine whose discovery source reads an
+    # address (#166), so this one is given a reserved name. The engine is built and never started, and
+    # nothing is asked there (#154).
+    settings = EngineSettings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        log_json=False,
+        discovery_url="http://discovery.invalid/discovery",
+    )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:
         # The app ``lpb serve`` runs, built the same way, so the spec documents what ships (#186 review).

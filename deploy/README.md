@@ -185,8 +185,15 @@ ledger from that run would also list its old grants as tenants. Remove them, whi
 touches nothing on-chain:
 
 ```sh
-ent down -v 2>/dev/null; ch down -v 2>/dev/null     # both projects' volumes; no error if none exist
+ent down -v 2>/dev/null; ch down -v 2>/dev/null     # stops both projects and removes their volumes
+docker volume rm lpb-enterprise_engine-data lpb-clearinghouse_engine-data lpb-clearinghouse_paid-state 2>/dev/null
+docker volume ls --format '{{.Name}}' | grep -E '^lpb-(clearinghouse|enterprise)_' || echo "no volumes left"
 ```
+
+Check: the last line prints `no volumes left`. The second line is for a project whose `.env` is gone,
+which `down` cannot read; it removes the same three volumes by name, and says nothing when they are
+already gone. If a volume is still listed, a container of an earlier run still holds it:
+`docker ps -a --filter name=lpb-` shows it, and `docker rm -f` removes it.
 
 Then the files `clearinghouse/` needs. If `clearinghouse/.env`, `clearinghouse/secrets/` and
 `clearinghouse/config/discovery.toml` are there from an earlier run, they still fit: keep them and skip

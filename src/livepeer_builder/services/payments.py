@@ -176,7 +176,15 @@ class PaymentsService:
             return target | {"grant_id": request.tenant_id if actor is None else actor.grant_id}
 
         return await self._ledger.run(
-            admin, "allot", request.operation_ref, target, steps, _ACTOR, earlier_request=as_recorded
+            admin,
+            "allot",
+            request.operation_ref,
+            target,
+            steps,
+            _ACTOR,
+            context=keys.begins(),  # the kind of command, noted as the record begins
+            earlier_request=as_recorded,
+            resumable=keys.resumes,
         )
 
     async def _allot(
@@ -403,7 +411,14 @@ class PaymentsService:
 
         target = {"tenant_id": tenant_id, "actor_id": actor_id}
         return await self._ledger.run(
-            admin, "rotate_payment_key", operation_ref, target, steps, _ACTOR, context=previous
+            admin,
+            "rotate_payment_key",
+            operation_ref,
+            target,
+            steps,
+            _ACTOR,
+            context=keys.begins(previous),
+            resumable=keys.resumes,
         )
 
     async def _rotate(

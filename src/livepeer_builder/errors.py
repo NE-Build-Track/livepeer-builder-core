@@ -58,11 +58,16 @@ class OperationInProgress(OperationExists):
 
 
 class OperationConflict(EngineError):
-    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it."""
+    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it.
 
-    def __init__(self, holder: Job | OperationRecord) -> None:
+    Also the answer to an allotment or a payment key rotation that would resume a run the other kind of
+    command began (docs/contracts/payments.md, "Payment keys"): ``message`` then says which command began
+    it."""
+
+    def __init__(self, holder: Job | OperationRecord, message: str | None = None) -> None:
         super().__init__(
-            f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
+            message
+            or f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
         )
         self.job, self.operation = _held(holder)
 

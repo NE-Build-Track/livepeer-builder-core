@@ -147,8 +147,13 @@ class OperationLedger:
         answer: TypeAdapter[T],
         context: Mapping[str, str] | None = None,
         earlier_request: Callable[[], Awaitable[Mapping[str, Any]]] | None = None,
+        resumable: Callable[[OperationRecord], None] | None = None,
     ) -> T:
         """Run ``steps`` once per ``operation_ref``; a repeat gets the first run's result back.
+
+        ``resumable`` is shown a held record of this command that has not finished, before it is resumed
+        or reported in progress, and raises when this call must not finish that run. Nothing was sent or
+        written by then, so the record stays as it was for the call that may resume it.
 
         ``earlier_request`` is the request as an earlier release recorded it, for a command whose request
         lost a field since. It is asked only when a held record does not match ``request``: a finished
@@ -174,6 +179,8 @@ class OperationLedger:
                 raise OperationConflict(held)  # before any provider call
             if held.state == "done":
                 return _replayed(held, answer)
+            if resumable is not None:
+                resumable(held)  # before the take-over, which is a write and restarts the stale window
             taken = await self._resume(held)
             if taken is None:  # another repeat resumed it first: answer as the record is now
                 return await self._recorded(held, answer)

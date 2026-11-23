@@ -18,6 +18,9 @@ from sqlalchemy import select, update
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import (
+    OPERATION_REPLAYED,
+    OPERATION_RESUMED,
+    ActorAllocation,
     ActorContext,
     AllotRequest,
     DeliveredAllocation,
@@ -25,7 +28,7 @@ from livepeer_builder.contracts import (
     SeenActor,
 )
 from livepeer_builder.docs_gen import render_openapi
-from livepeer_builder.errors import AccessDenied, NotFound, NotProvisioned
+from livepeer_builder.errors import AccessDenied, NotFound, NotProvisioned, OperationConflict
 from livepeer_builder.http.app import create_app, shared_app
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.runtime import BuilderEngine
@@ -504,87 +507,279 @@ async def test_two_allotments_of_one_actor_both_carry_the_key_the_provider_gave_
     assert first.secret_ref == other[0].secret_ref  # the receipt the actor holds
 
 
-async def test_a_rotation_begun_for_delivery_and_resumed_by_the_admin_keeps_its_custody(
-    make_engine: EngineFactory,
-    admin: ActorContext,
-    alice: ActorContext,
-    clock: FixedClock,
-    store: SqlStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A receipt recorded by a delivering run stays the work engine's when another path resumes it: it is
-    never written as a store handle, which the store could not resolve."""
-    vault = StrictVault()
-    engine = await make_engine(supply=EngineSupply(secret_store=vault))
-    before = await engine.payments.allot(admin, allot_request())
-    lose_once(monkeypatch, store, "set_actor_key")
-    with pytest.raises(ConnectionError):
-        await engine.payments.rotate_for_delivery(admin, "default", "alice", "rotate")
-    clock.advance(STALE_S)
-    resumed = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate")
-    assert resumed.credential_custody == "work_engine"
-    assert vault.deleted == [before.secret_ref.ref] and vault.values == {}
-    with pytest.raises(NotProvisioned, match="work engine"):
-        await engine.payments.credential(alice)
+# -- one kind of command resumes a record (Mike, 23 November 2026) -----------------------------------------
+#
+# The admin commands store the key; the delivering ones hand it to their caller. A run begun by one kind
+# and finished by the other would hand its key to nobody, or leave it where no caller looks for it.
+
+KINDS = {"admin": "secret_store", "delivering": "work_engine"}  # the kind of command, and who keeps its key
+COMMANDS = {
+    ("allot", "admin"): "allot",
+    ("allot", "delivering"): "allot_for_delivery",
+    ("rotate", "admin"): "rotate_payment_key",
+    ("rotate", "delivering"): "rotate_for_delivery",
+}
+REFS = {"allot": "allot:default:alice", "rotate": "rotate"}
+UNFINISHED = [  # where the first run dies, and whether the write it dies in had applied
+    pytest.param("allot", "allot_actor", False, id="allot-before-the-actor-row"),
+    pytest.param("allot", "allot_actor", True, id="allot-the-actor-row-written-then-lost"),
+    pytest.param("rotate", "set_actor_key", False, id="rotate-before-the-new-key-is-written"),
+    pytest.param("rotate", "set_actor_key", True, id="rotate-the-new-key-written-then-lost"),
+]
+BOTH_KINDS = pytest.mark.parametrize(
+    ("began", "other"), [("delivering", "admin"), ("admin", "delivering")], ids=["delivering", "admin"]
+)
 
 
-async def test_a_rotation_begun_by_the_admin_and_resumed_for_delivery_keeps_its_custody(
-    make_engine: EngineFactory,
-    admin: ActorContext,
-    alice: ActorContext,
-    manager: FakeAllocationManager,
-    clock: FixedClock,
-    store: SqlStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The reverse: a secret the store holds stays the store's, resolvable and deleted on the next
-    rotation. The delivering answer has no key to carry, and says so."""
-    vault = StrictVault()
-    engine = await make_engine(supply=EngineSupply(secret_store=vault))
-    await engine.payments.allot(admin, allot_request())
-    lose_once(monkeypatch, store, "set_actor_key")
-    with pytest.raises(ConnectionError):
-        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate")
-    clock.advance(STALE_S)
-    resumed = await rotate_delivered(engine, admin, "rotate")
-    assert resumed.credential_custody == "secret_store" and resumed.replayed and resumed.resumed
-    assert (await engine.payments.credential(alice)).token == manager.keys[resumed.api_key_id][1]
-    assert list(vault.values) == [resumed.secret_ref.ref]
-    again = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-2")
-    assert list(vault.values) == [again.secret_ref.ref] and resumed.secret_ref.ref in vault.deleted
+async def run_as(
+    engine: BuilderEngine, admin: ActorContext, command: str, kind: str
+) -> ActorAllocation | DeliveredAllocation:
+    """One allotment or rotation of Alice's key, by the admin command or by its delivering twin."""
+    if command == "allot":
+        if kind == "delivering":
+            return await allot_delivered(engine, admin, allot_request())
+        return await engine.payments.allot(admin, allot_request())
+    if kind == "delivering":
+        return await rotate_delivered(engine, admin, REFS["rotate"])
+    return await engine.payments.rotate_payment_key(admin, "default", "alice", REFS["rotate"])
 
 
-async def test_a_rotation_recorded_before_custody_was_noted_resumes_as_the_stores(
-    make_engine: EngineFactory,
-    admin: ActorContext,
-    alice: ActorContext,
-    manager: FakeAllocationManager,
-    clock: FixedClock,
-    store: SqlStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A record an earlier release wrote names no custody: every secret then was the configured store's."""
-    vault = StrictVault()
-    engine = await make_engine(supply=EngineSupply(secret_store=vault))
-    before = await engine.payments.allot(admin, allot_request())
-    lose_once(monkeypatch, store, "set_actor_key")
-    with pytest.raises(ConnectionError):
-        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate")
+async def everything_written(store: SqlStore, vault: "StrictVault", command: str) -> tuple[object, ...]:
+    """What a refused command must leave as it was: the ledger's record, the actor and the secret store."""
+    record = await store.get_operation("default", "operator", REFS[command])
+    actor = await store.get_actor("default", "alice")
+    return record, actor, dict(vault.values), vault.puts, list(vault.deleted)
+
+
+async def note_as_an_earlier_release(store: SqlStore, ref: str, *dropped: str) -> None:
+    """Rewrite a record as a release that noted less wrote it: without ``dropped``."""
     async with store.engine.begin() as conn:
         rows = (await conn.execute(select(t.operations.c.operation_ref, t.operations.c.context))).all()
-        [(ref, context)] = [row for row in rows if row[0] == "rotate"]
-        assert {"new_secret_custody", "previous_credential_custody"} <= set(context)
-        old = {
-            k: v for k, v in context.items() if k not in ("new_secret_custody", "previous_credential_custody")
-        }
+        [context] = [row[1] for row in rows if row[0] == ref]
+        assert set(dropped) <= set(context), context
+        old = {name: value for name, value in context.items() if name not in dropped}
         await conn.execute(
             update(t.operations).where(t.operations.c.operation_ref == ref).values(context=old)
         )
-    clock.advance(STALE_S)
-    resumed = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate")
-    assert resumed.credential_custody == "secret_store"
-    assert (await engine.payments.credential(alice)).token == manager.keys[resumed.api_key_id][1]
-    assert list(vault.values) == [resumed.secret_ref.ref] and vault.deleted == [before.secret_ref.ref]
+
+
+async def refused_then_resumed_by_its_own_kind(
+    engine: BuilderEngine,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    vault: "StrictVault",
+    given: list[str],
+    command: str,
+    began: str,
+    other: str,
+) -> None:
+    """The other kind of command is refused, in the stale window and after it, with nothing sent to the
+    provider and nothing written; the kind that began the record then resumes it and finishes."""
+    calls, written = list(manager.calls), await everything_written(store, vault, command)
+    for wait in (0, STALE_S):  # refused while the first run may still be going, and when it is stale
+        clock.advance(wait)
+        with pytest.raises(OperationConflict) as refused:
+            await run_as(engine, admin, command, other)
+        assert f"begun by {COMMANDS[command, began]}" in str(refused.value)
+        assert f"repeat {COMMANDS[command, began]}" in str(refused.value)
+        assert refused.value.operation is not None and refused.value.operation.state == "started"
+        assert manager.calls == calls  # no provider call
+        assert await everything_written(store, vault, command) == written  # and no write: still resumable
+
+    resumed = await run_as(engine, admin, command, began)
+    assert OPERATION_RESUMED.get() and resumed.credential_custody == KINDS[began]
+    if isinstance(resumed, DeliveredAllocation):
+        assert key_of(resumed) == given[0] and given[0].startswith("lpg_")  # the first run's key
+        assert resumed.resumed and not resumed.replayed and vault.values == {}
+        with pytest.raises(NotProvisioned, match="work engine"):
+            await engine.payments.credential(alice)
+    else:
+        assert (await engine.payments.credential(alice)).token == given[0]
+        assert list(vault.values) == [resumed.secret_ref.ref]
+    assert set(given) == {given[0]}  # every provider answer was the same key, replayed
+    assert len(manager.allocations) == 1 and len(manager.keys) == (2 if command == "rotate" else 1)
+    stored = await engine.payments.get_actor(admin, "default", "alice")
+    assert (stored.api_key_id, stored.secret_ref) == (resumed.api_key_id, resumed.secret_ref)
+
+
+@BOTH_KINDS
+@pytest.mark.parametrize(("command", "write", "applied"), UNFINISHED)
+async def test_an_unfinished_command_is_resumed_only_by_the_kind_of_command_that_began_it(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    write: str,
+    applied: bool,
+    began: str,
+    other: str,
+) -> None:
+    """A rotation begun by ``rotate_for_delivery`` and finished by ``rotate_payment_key`` revoked the old
+    key and handed the new one to nobody; the reverse kept the key in the store and answered a delivering
+    caller with none. The two allotment commands shared a record the same way. Now the record notes which
+    kind began it, and the other kind is refused before any provider call and before any write."""
+    vault = StrictVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    if command == "rotate":
+        await run_as(engine, admin, "allot", began)
+    given = provider_answers(
+        manager, monkeypatch, "create_key" if command == "rotate" else "create_key_for_grant"
+    )
+    lose_once(monkeypatch, store, write, apply=applied)
+    with pytest.raises(ConnectionError):
+        await run_as(engine, admin, command, began)
+    await refused_then_resumed_by_its_own_kind(
+        engine, admin, alice, manager, clock, store, vault, given, command, began, other
+    )
+
+
+@BOTH_KINDS
+@pytest.mark.parametrize("command", ["allot", "rotate"])
+async def test_a_record_that_notes_only_its_secrets_custody_is_the_kind_that_custody_implies(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    began: str,
+    other: str,
+) -> None:
+    """A record written before the kind was noted: a secret the work engine holds was stored by a
+    delivering command, and one the store holds by an admin command."""
+    vault = StrictVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    if command == "rotate":
+        await run_as(engine, admin, "allot", began)
+    given = provider_answers(
+        manager, monkeypatch, "create_key" if command == "rotate" else "create_key_for_grant"
+    )
+    lose_once(monkeypatch, store, "set_actor_key" if command == "rotate" else "allot_actor")
+    with pytest.raises(ConnectionError):
+        await run_as(engine, admin, command, began)
+    await note_as_an_earlier_release(store, REFS[command], "begun_for")
+    record = await store.get_operation("default", "operator", REFS[command])
+    assert record is not None and record.context["new_secret_custody"] == KINDS[began]
+    await refused_then_resumed_by_its_own_kind(
+        engine, admin, alice, manager, clock, store, vault, given, command, began, other
+    )
+
+
+@pytest.mark.parametrize("command", ["allot", "rotate"])
+async def test_a_record_that_notes_neither_kind_nor_custody_is_the_admin_commands(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    """A record an earlier release wrote names no kind and no custody. Only the admin commands existed
+    then, and every secret was the configured store's: the delivering command is refused, and the admin
+    command resumes it as the store's."""
+    vault = StrictVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    custodies = ["new_secret_custody"]
+    if command == "rotate":
+        await run_as(engine, admin, "allot", "admin")
+        custodies.append("previous_credential_custody")
+    given = provider_answers(
+        manager, monkeypatch, "create_key" if command == "rotate" else "create_key_for_grant"
+    )
+    lose_once(monkeypatch, store, "set_actor_key" if command == "rotate" else "allot_actor")
+    with pytest.raises(ConnectionError):
+        await run_as(engine, admin, command, "admin")
+    await note_as_an_earlier_release(store, REFS[command], "begun_for", *custodies)
+    await refused_then_resumed_by_its_own_kind(
+        engine, admin, alice, manager, clock, store, vault, given, command, "admin", "delivering"
+    )
+
+
+@BOTH_KINDS
+@pytest.mark.parametrize("command", ["allot", "rotate"])
+async def test_a_finished_command_repeated_by_the_other_kind_is_answered_from_the_ledger(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    command: str,
+    began: str,
+    other: str,
+) -> None:
+    """A repeat of a finished command is not a resume: either kind is answered from the record, the
+    delivering one with no key and ``replayed``."""
+    vault = StrictVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    if command == "rotate":
+        await run_as(engine, admin, "allot", began)
+    first = await run_as(engine, admin, command, began)
+    calls, values, deleted = list(manager.calls), dict(vault.values), list(vault.deleted)
+    again = await run_as(engine, admin, command, other)
+    assert OPERATION_REPLAYED.get() and not OPERATION_RESUMED.get()
+    assert manager.calls == calls and vault.values == values and vault.deleted == deleted
+    assert again.credential_custody == KINDS[began]
+    if isinstance(again, DeliveredAllocation):
+        assert again.allocation_api_key is None and again.replayed and not again.resumed
+        assert ActorAllocation(**again.model_dump(include=set(ActorAllocation.model_fields))) == first
+    else:
+        assert isinstance(first, DeliveredAllocation) and key_of(first)
+        assert again == ActorAllocation(**first.model_dump(include=set(ActorAllocation.model_fields)))
+
+
+@BOTH_KINDS
+async def test_two_references_of_two_kinds_that_meet_at_the_provider_leave_the_key_with_the_rows_writer(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    monkeypatch: pytest.MonkeyPatch,
+    began: str,
+    other: str,
+) -> None:
+    """Two references are two commands, so neither resumes the other: both get the actor-derived key from
+    the provider, and the one that wrote the row keeps it. A delivering writer's caller is handed it; an
+    admin writer's store holds it, and the delivering reference that did not write answers with no key
+    and says so. The key is never handed to nobody."""
+    vault = StrictVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    original = manager.create_key_for_grant
+    wrote: list[ActorAllocation | DeliveredAllocation] = []
+
+    async def overtaken(*args: Any) -> Any:
+        monkeypatch.setattr(manager, "create_key_for_grant", original)
+        request = allot_request().model_copy(update={"operation_ref": "allot-other"})
+        if other == "delivering":
+            wrote.append(await allot_delivered(engine, admin, request))
+        else:
+            wrote.append(await engine.payments.allot(admin, request))
+        return await original(*args)
+
+    monkeypatch.setattr(manager, "create_key_for_grant", overtaken)
+    late = await run_as(engine, admin, "allot", began)
+    [writer] = wrote
+    assert len(manager.keys) == 1 and len(manager.allocations) == 1
+    secret = manager.keys[writer.api_key_id][1]
+    assert late.credential_custody == writer.credential_custody == KINDS[other]
+    if isinstance(
+        writer, DeliveredAllocation
+    ):  # the writer's caller holds it; the store never saw a copy left
+        assert key_of(writer) == secret and vault.values == {}
+        with pytest.raises(NotProvisioned, match="work engine"):
+            await engine.payments.credential(alice)
+    else:  # the store holds it, and the delivering reference says it carries none
+        assert isinstance(late, DeliveredAllocation) and late.allocation_api_key is None and late.replayed
+        assert (await engine.payments.credential(alice)).token == secret
+        assert list(vault.values) == [writer.secret_ref.ref]
 
 
 async def test_delayed_delivery_cannot_replace_reallotted_key(
@@ -708,6 +903,46 @@ async def test_a_resumed_delivery_is_marked_in_the_http_answer(
     assert answer["resumed"] is True and answer["replayed"] is False
     assert answer["allocation_api_key"].startswith("lpg_")
     assert "idempotent-replayed" not in response.headers  # resumed, not answered from the record
+
+
+async def test_the_other_kind_of_route_cannot_resume_a_delivery_and_answers_409(
+    make_engine: EngineFactory,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two apps over one engine, one of each kind: the storing route is refused as a conflict, and the
+    delivering route that began the allotment still resumes it and hands the key over."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    key = await engine.keys.bootstrap_admin()
+    delivering = shared_app(engine, manage_lifecycle=False)
+    mount_clearinghouse_routes(delivering, engine, deliver_allocation_keys=True)
+    storing = create_app(engine, manage_lifecycle=False)
+    headers = {"Authorization": f"Bearer {key.token}"}
+    body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "first"}
+    lose_once(monkeypatch, store, "allot_actor")
+    async with (
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=delivering), base_url="http://engine") as first,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=storing), base_url="http://engine") as other,
+    ):
+        with pytest.raises(ConnectionError):
+            await first.post(ALLOCATION, json=body, headers=headers)
+        clock.advance(STALE_S)
+        refused = await other.post(ALLOCATION, json=body, headers=headers)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["code"] == "operation_conflict"
+        assert refused.json()["operation"] == {
+            "command": "allot",
+            "operation_ref": "first",
+            "state": "started",
+        }
+        assert "begun by allot_for_delivery" in refused.json()["error"]
+        assert manager.calls == ["create_key_for_grant"]  # the refused route sent nothing
+        resumed = await first.post(ALLOCATION, json=body, headers=headers)
+    assert resumed.status_code == 201, resumed.text
+    assert resumed.json()["resumed"] is True and resumed.json()["allocation_api_key"].startswith("lpg_")
 
 
 async def test_the_shipped_app_keeps_the_key_in_its_own_store(make_engine: EngineFactory) -> None:

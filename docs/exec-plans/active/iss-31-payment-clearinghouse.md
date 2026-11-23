@@ -104,6 +104,10 @@ Each pull request ticks its own line here in the same change.
   Batteries returns it again: Batteries replays the original success, the secret included, for a
   matching idempotency key, and never expires it. A repeat of a finished command answers without the key
   (`replayed`), and a lost key is then replaced by a rotation. Source: Mike, after review of #186.
+- **23 November 2026, P5.** An allotment or a payment key rotation left unfinished is resumed only by
+  the kind of command that began it, the one that stores the key or the one that hands it over. A resume
+  by the other kind is refused before any provider call (409 `operation_conflict`), and the record stays
+  resumable by the first. Source: Mike, after review of #180.
 - **23 November 2026, P5.** The unreleased migration that created `lpb_payment_keys` is deleted, not
   dropped by a later migration. A database that ran this stack before is recreated. Source: Mike.
 - **23 November 2026, P5.** [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186),

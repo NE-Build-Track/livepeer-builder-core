@@ -12,13 +12,11 @@ Every provider write that moves money carries an idempotency key derived from
 (engine_id, operation, step), so a retried command never applies twice.
 """
 
-import logging
 from typing import Any
 
 from pydantic import TypeAdapter
 
 from livepeer_builder.contracts import (
-    OPERATION_REPLAYED,
     ActorAllocation,
     ActorContext,
     AllocationRead,
@@ -26,23 +24,18 @@ from livepeer_builder.contracts import (
     AllotRequest,
     Allowance,
     Currency,
-    KeyedAllocation,
+    DeliveredAllocation,
     KnownActor,
-    NewAllocationKey,
     Operation,
     PaymentKey,
     ResourceRef,
-    SecretRef,
-    SeenActor,
     TopUpRequest,
 )
 from livepeer_builder.errors import (
     AlreadyAllotted,
     InvalidRequest,
-    NotAuthenticated,
     NotFound,
     NotProvisioned,
-    ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import (
@@ -53,24 +46,20 @@ from livepeer_builder.protocols import (
     AllowanceReader,
     Clock,
     SecretStore,
-    SignerForwarder,
 )
 from livepeer_builder.services.actor_writes import ActorWrites
-from livepeer_builder.services.allocation_read import with_allowance
-from livepeer_builder.services.grants import idempotency_key
-from livepeer_builder.services.issued_payment_keys import IssuedPaymentKeys
+from livepeer_builder.services.allocation_delivery import DeliverySecrets, delivered
+from livepeer_builder.services.allocation_read import for_a_builder, known, with_allowance
+from livepeer_builder.services.grants import allotted_from_grant, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
-from livepeer_builder.services.payment_keys import BEGAN_ON, PaymentKeys
-from livepeer_builder.services.payment_signing import PaymentSigning
+from livepeer_builder.services.payment_keys import BEGAN_ON, PREVIOUS_CUSTODY, PaymentKeys, recorded_secret
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
 from livepeer_builder.services.wallet import Wallet
-from livepeer_builder.utils import BODY_LIMIT
 
-_LOG = logging.getLogger(__name__)
 _ACTOR = TypeAdapter(ActorAllocation)
 _NOTHING = TypeAdapter(type(None))
-_UNREADABLE = "the allowance could not be read"  # what a builder reads when the provider fails (D58)
+_SENT_LABEL = "sent_label"  # in an allotment's record, from the moment it begins: the label its runs send
 
 
 class PaymentsService:
@@ -87,7 +76,6 @@ class PaymentsService:
         tenants: TenantDesk | None = None,
         usage: TenantUsage | None = None,
         wallet: Wallet | None = None,
-        forwarder: SignerForwarder | None = None,
         currency: Currency = "USD",
         allowances: AllowanceReader | None = None,
     ) -> None:
@@ -95,7 +83,6 @@ class PaymentsService:
         self._writes = ActorWrites(store, clock)
         self._secrets = secrets
         self._keys = PaymentKeys(secrets, self._writes)
-        self._issued = IssuedPaymentKeys(store, clock)  # the keys an enterprise's engine pays with (#166)
         self._policy = policy
         self._clock = clock
         self._engine_id = engine_id
@@ -104,17 +91,34 @@ class PaymentsService:
         self.tenants = tenants  # None: the tenant desk is off (no grants manager)
         self.usage = usage  # None: no source reads one tenant's usage (#166)
         self.wallet = wallet  # None: a part cannot report the escrow or probe the signer (#167)
-        # None: nothing forwards a signer call, so the signer's two paths are not served (#166)
-        self.signing = (
-            None if forwarder is None else PaymentSigning(self.resolve_payment_key, secrets, forwarder)
-        )
         self._currency = currency
         self._allowances = allowances  # None: the engine's own records and its provider
 
-    def issue_no_payment_keys(self) -> None:
-        """For an engine that uses a clearinghouse (#168): it is handed its actors' payment keys, issues
-        none of its own and recognizes none. Called once, when the engine is assembled."""
-        self._issued = IssuedPaymentKeys(None, self._clock)
+    # -- delivering commands (D85 point 1, D87 point 1) ----------------------------------------------
+    #
+    # The work engine holds the key: it gets it once, in the answer. Each call has its own buffer and its
+    # own PaymentKeys, passed to the same steps the admin commands run, so concurrent commands never share
+    # a plaintext key and nothing on this service is swapped for the call.
+
+    async def allot_for_delivery(self, admin: ActorContext, request: AllotRequest) -> DeliveredAllocation:
+        secrets = DeliverySecrets()
+        try:
+            keys = PaymentKeys(self._secrets, self._writes, delivery=secrets)
+            allocation = await self._allot_with(admin, request, keys)
+            return await delivered(self._store, allocation, secrets)
+        finally:
+            secrets.clear()
+
+    async def rotate_for_delivery(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
+    ) -> DeliveredAllocation:
+        secrets = DeliverySecrets()
+        try:
+            keys = PaymentKeys(self._secrets, self._writes, delivery=secrets)
+            allocation = await self._rotate_with(admin, tenant_id, actor_id, operation_ref, keys)
+            return await delivered(self._store, allocation, secrets)
+        finally:
+            secrets.clear()
 
     # -- CredentialResolver ---------------------------------------------------------------------
 
@@ -122,6 +126,8 @@ class PaymentsService:
         allotted = await self._store.get_actor(actor.tenant_id, actor.actor_id)
         if allotted is None or allotted.status == "revoked":
             raise NotProvisioned(f"actor {actor.actor_id!r} has no allocation; an admin must allot one")
+        if allotted.credential_custody == "work_engine":  # never asked of the store (#186 review)
+            raise NotProvisioned("allocation credential is held by the work engine")
         return PaymentKey(
             token=await self._secrets.get(allotted.secret_ref),
             allocation_id=allotted.allocation_id,
@@ -142,32 +148,30 @@ class PaymentsService:
 
     # -- admin commands (Operation.ADMIN_ALLOCATIONS) ---------------------------------------------
 
-    async def allot(self, admin: ActorContext, request: AllotRequest) -> KeyedAllocation:
+    async def allot(self, admin: ActorContext, request: AllotRequest) -> ActorAllocation:
         """Create the actor's allocation and key in one atomic provider call, on the ledger (D57).
 
         A repeat of the reference gets the first answer. An actor already allotted under another
         reference is ``AlreadyAllotted``: nothing is applied, the amount included. The row is written
         only where the actor is still as this command read it, so it never undoes a command that
         finished while it was at the provider (``PaymentKeys.overtaken``; #115, C4).
-
-        The answer carries the actor's payment key, once (D87, #166): the run that allots the
-        allocation issues it, and a repeat shows none (``IssuedPaymentKeys``).
         """
+        return await self._allot_with(admin, request, self._keys)
+
+    async def _allot_with(
+        self, admin: ActorContext, request: AllotRequest, keys: PaymentKeys
+    ) -> ActorAllocation:
+        """``allot``, keeping the key with ``keys``: the configured store's, or a delivering call's."""
         self._policy.check(
             admin, Operation.ADMIN_ALLOCATIONS, _allocation(request.tenant_id, request.actor_id)
         )
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
-        # refused before the ledger: nothing was sent
-        manager = self._manager_for(request.tenant_id, request.actor_id)
-
-        minted: list[str] = []  # the payment key's token, which the record never holds
+        # refused before the ledger: nothing was sent. A manager that keeps a ledger by reference is told it
+        manager = self._manager_for(request.tenant_id, request.actor_id, request.operation_ref)
 
         async def steps(run: RunningOperation) -> ActorAllocation:
-            actor = await self._allot(run, admin, manager, request)
-            if actor.status != "revoked":  # the first key, unless an earlier run issued it
-                minted.extend(await self._issued.first(actor))
-            return actor
+            return await self._allot(run, admin, manager, request, keys)
 
         # The grant stays in what is hashed, as it was while a request named one (the fingerprint is a
         # format: tests/unit/test_hashed_forms.py). It is the tenant's id.
@@ -180,10 +184,17 @@ class PaymentsService:
             actor = await self._store.get_actor(request.tenant_id, request.actor_id)
             return target | {"grant_id": request.tenant_id if actor is None else actor.grant_id}
 
-        allotted = await self._ledger.run(
-            admin, "allot", request.operation_ref, target, steps, _ACTOR, earlier_request=as_recorded
+        return await self._ledger.run(
+            admin,
+            "allot",
+            request.operation_ref,
+            target,
+            steps,
+            _ACTOR,
+            context=keys.begins({_SENT_LABEL: await self._label(request)}),  # before any provider call
+            earlier_request=as_recorded,
+            resumable=keys.resumes,
         )
-        return self._issued.shown(allotted, minted, replayed=OPERATION_REPLAYED.get())
 
     async def _allot(
         self,
@@ -191,6 +202,7 @@ class PaymentsService:
         admin: ActorContext,
         manager: AllocationManager,
         request: AllotRequest,
+        keys: PaymentKeys,
     ) -> ActorAllocation:
         existing = await self._store.get_actor(request.tenant_id, request.actor_id)
         if existing is not None and existing.status != "revoked":
@@ -200,7 +212,18 @@ class PaymentsService:
             # this amount would be silently dropped.
             if run.context.get("new_secret_key_id") != existing.api_key_id:
                 raise AlreadyAllotted(existing)
-            return await self._keys.shared(existing, SecretRef(ref=run.context["new_secret_ref"]))
+            # An earlier run wrote the actor and its answer was lost. A delivering resume sends that run's
+            # provider call again, under the idempotency key it recorded: Batteries replays the original
+            # success, the secret included, and never expires it (docs/references/batteries-api.md), so
+            # nothing is allotted twice and the answer carries the key. It replays only the request that run
+            # sent and refuses any other (409): the name sent was the label the record noted, which is the
+            # label the actor was saved with (all a record from before the label was noted has).
+            replayed = None
+            sent_as = run.context.get("new_secret_sent_as")
+            if keys.delivers(existing) and sent_as is not None:
+                sent = request.model_copy(update={"label": run.context.get(_SENT_LABEL, existing.label)})
+                replayed = await allotted_from_grant(manager, sent, sent_as)
+            return await keys.shared(existing, recorded_secret(run), replayed)
         if existing is not None and existing.grant_id != request.tenant_id:
             # A record from before a tenant's id was its grant's id (#165). Its allocation was allotted
             # from another grant, and a new one is never allotted from a grant the record does not name.
@@ -209,10 +232,10 @@ class PaymentsService:
                 f"tenant {request.tenant_id!r}'s: a tenant's id is its grant's id, and an allocation is "
                 "never moved to another grant"
             )
-        if not request.label:  # a person who signed in is labelled with their name (D48)
-            seen = await self._store.get_sighting(request.tenant_id, request.actor_id)
-            if seen is not None and seen.name:
-                request = request.model_copy(update={"label": seen.name})
+        # A resume sends the label the record noted: the sign-in name may have changed, and Batteries refuses
+        # another name under the first run's key for good. A record from before the note reads it again.
+        label = run.context[_SENT_LABEL] if _SENT_LABEL in run.context else await self._label(request)
+        request = request.model_copy(update={"label": label})
         # Actor-derived, so two references for one actor still meet at the provider. This text is hashed
         # into the provider's idempotency key, here and in the other commands: it keeps its first wording,
         # or a command resumed after an upgrade would apply twice (tests/unit/test_hashed_forms.py).
@@ -220,9 +243,9 @@ class PaymentsService:
         if existing is not None:  # allotting again after a revoke is a new operation
             operation += f":{existing.updated_at.isoformat()}"
         sent_as = idempotency_key(self._engine_id, operation, "api-key")
-        await self._keys.require_writable(run, sent_as)
-        key = await self._allotted_from_grant(manager, request, sent_as)
-        ref = await self._keys.stored(run, request.tenant_id, request.actor_id, key, sent_as)
+        await keys.require_writable(run, sent_as)
+        key = await allotted_from_grant(manager, request, sent_as)
+        new = await keys.stored(run, request.tenant_id, request.actor_id, key, sent_as)
         now = self._clock.now()
         allotted = ActorAllocation(
             tenant_id=request.tenant_id,
@@ -230,35 +253,24 @@ class PaymentsService:
             grant_id=request.tenant_id,
             allocation_id=key.allocation_id,
             api_key_id=key.api_key_id,
-            secret_ref=ref,
+            secret_ref=new.ref,
             currency=self._currency,
             status="exhausted" if request.amount.amount == 0 else "active",
             created_at=now,
             updated_at=now,
             label=request.label,
+            credential_custody=new.custody,  # the custody the secret was stored under, never a default
         )
         if not await self._writes.allotted(allotted, replacing=existing):
             current = await self._store.get_actor(request.tenant_id, request.actor_id)
-            return await self._keys.overtaken(request.actor_id, current, key, ref)
+            return await keys.overtaken(request.actor_id, current, key, new)
         return allotted
 
-    @staticmethod
-    async def _allotted_from_grant(
-        manager: AllocationManager, request: AllotRequest, sent_as: str
-    ) -> NewAllocationKey:
-        """The allocation and its key, allotted from the tenant's grant: one id (D83). The provider's
-        refusal is passed on with its reason (an allocation larger than the grant's unallocated balance
-        is its 409); a grant it does not hold is said as the tenant that was never onboarded."""
-        name = request.label or f"{request.tenant_id}/{request.actor_id}"
-        try:
-            return await manager.create_key_for_grant(request.tenant_id, name, request.amount, sent_as)
-        except ProviderError as refused:
-            if refused.status_code != 404:
-                raise
-            raise NotFound(
-                f"tenant {request.tenant_id!r} has no grant at the payment provider: a tenant's id is its "
-                "grant's id, and a clearinghouse admin onboards a tenant before anything is allotted to it"
-            ) from refused
+    async def _label(self, request: AllotRequest) -> str:
+        """The label an allotment is saved with, and names its allocation by at the provider: the
+        request's, else the name the person last signed in with (D48), else none."""
+        seen = None if request.label else await self._store.get_sighting(request.tenant_id, request.actor_id)
+        return request.label or (seen.name if seen is not None else "")
 
     # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------
 
@@ -279,13 +291,13 @@ class PaymentsService:
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         allocations = {(a.tenant_id, a.actor_id): a for a in await self._store.list_actors(scope)}
         sightings = {(s.tenant_id, s.actor_id): s for s in await self._store.list_sightings(scope)}
-        known = [
-            _known(key, allocations.get(key), sightings.get(key))
+        listed = [
+            known(key, allocations.get(key), sightings.get(key))
             for key in sorted(allocations.keys() | sightings.keys())
         ]
         return [
             actor
-            for actor in known
+            for actor in listed
             if (allotted is None or actor.allotted == allotted)
             and (status is None or (actor.allocation is not None and actor.allocation.status == status))
         ][:limit]
@@ -360,13 +372,18 @@ class PaymentsService:
 
         It takes no reference (D57): a repeat after it finished answers with the revoked actor and calls
         nothing, so a retry after a lost answer is not an error (D61). One cut short is still active here
-        and runs again; Batteries' revoke is repeat-safe."""
+        and runs again; Batteries' revoke is repeat-safe.
+
+        Only a secret the configured store holds is deleted there, before the actor is marked revoked: a
+        store that fails then leaves the actor active, and a retry deletes it. A credential the work engine
+        holds is never sent to the store, so a store that refuses handles it never issued cannot keep a
+        revoked allocation listed as active (#186 review)."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS, _allocation(tenant_id, actor_id))
         if (done := await self._store.get_actor(tenant_id, actor_id)) and done.status == "revoked":
             return done
         actor = await self._require_actor(tenant_id, actor_id)
         await self._manager_for(tenant_id, actor_id).revoke_allocation(actor.allocation_id)
-        await self._secrets.delete(actor.secret_ref)
+        await self._forget(actor)
         revoked = await self._writes.status(actor, "revoked")
         if revoked is None:  # another revoke wrote it first: answer as a repeat does
             stored = await self._store.get_actor(tenant_id, actor_id)
@@ -376,13 +393,17 @@ class PaymentsService:
             # allocation this call revoked, never an active actor as the result of a revoke.
             return actor.model_copy(update={"status": "revoked", "updated_at": self._clock.now()})
         if revoked.secret_ref != actor.secret_ref:  # a rotation stored a new key meanwhile: forget it too
-            await self._secrets.delete(revoked.secret_ref)
-        await self._issued.stopped(revoked)  # a revoked allocation's payment key finds nobody in any case
+            await self._forget(revoked)  # by its own custody, which may differ from the first row's
         return revoked
+
+    async def _forget(self, actor: ActorAllocation) -> None:
+        """Delete the actor's secret where the configured store holds it; a work engine's is not ours."""
+        if actor.credential_custody == "secret_store":
+            await self._secrets.delete(actor.secret_ref)
 
     async def rotate_payment_key(
         self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
-    ) -> KeyedAllocation:
+    ) -> ActorAllocation:
         """New key on the same allocation, store it, then revoke the old key, on the ledger (D57).
 
         The old key and secret are recorded when the rotation begins, with the allocation, and every step
@@ -390,38 +411,35 @@ class PaymentsService:
         still revokes the old one, a repeat never revokes the live key as "the old key" (B1), and a resume
         on an allocation allotted since is refused. The new key is written only over
         that old key: a rotation that another one overtook is refused (``PaymentKeys.rotated``; #115, C4).
+        The old key's custody is recorded with it, so its secret is deleted where it is held."""
+        return await self._rotate_with(admin, tenant_id, actor_id, operation_ref, self._keys)
 
-        Both of the actor's keys are replaced (#166): the Batteries key the allocation pays with, as
-        before, and then the payment key an enterprise's engine presents, whose old one stops at once.
-        The answer carries the new payment key, once."""
+    async def _rotate_with(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str, keys: PaymentKeys
+    ) -> ActorAllocation:
+        """``rotate_payment_key``, keeping the key with ``keys``: the configured store's, or a delivering
+        call's."""
         self._policy.check(admin, Operation.ADMIN_ALLOCATIONS, _allocation(tenant_id, actor_id))
         actor = await self._require_actor(tenant_id, actor_id)
         previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
         previous[BEGAN_ON] = actor.allocation_id
+        previous[PREVIOUS_CUSTODY] = actor.credential_custody
         manager = self._manager_for(tenant_id, actor_id)
 
-        minted: list[str] = []  # the payment key's token, which the record never holds
-
         async def steps(run: RunningOperation) -> ActorAllocation:
-            rotated = await self._rotate(run, manager, tenant_id, actor_id, operation_ref)
-            minted.extend(await self._issued.replaced(rotated))  # last: the Batteries key is rotated
-            return rotated
+            return await self._rotate(run, manager, tenant_id, actor_id, operation_ref, keys)
 
         target = {"tenant_id": tenant_id, "actor_id": actor_id}
-        rotated = await self._ledger.run(
-            admin, "rotate_payment_key", operation_ref, target, steps, _ACTOR, context=previous
+        return await self._ledger.run(
+            admin,
+            "rotate_payment_key",
+            operation_ref,
+            target,
+            steps,
+            _ACTOR,
+            context=keys.begins(previous),
+            resumable=keys.resumes,
         )
-        return self._issued.shown(rotated, minted, replayed=OPERATION_REPLAYED.get())
-
-    async def resolve_payment_key(self, token: str) -> ActorAllocation:
-        """The actor a payment key signs for (D87, #166): what the signer's two paths ask before that
-        actor's Batteries key is put in the payment key's place (``PaymentSigning``). A key that was never
-        issued, was replaced by a rotation, or belongs to a revoked allocation is ``NotAuthenticated``,
-        and so is anything that is no payment key: an access key, a Batteries key."""
-        actor = await self._issued.actor_of(token)
-        if actor is None:
-            raise NotAuthenticated("unknown or stopped payment key")
-        return actor
 
     async def _rotate(
         self,
@@ -430,15 +448,16 @@ class PaymentsService:
         tenant_id: str,
         actor_id: str,
         operation_ref: str,
+        keys: PaymentKeys,
     ) -> ActorAllocation:
-        self._keys.refuse_lost(run, actor_id)
-        actor = await self._keys.began_on(run, await self._require_actor(tenant_id, actor_id))
+        keys.refuse_lost(run, actor_id)
+        actor = await keys.began_on(run, await self._require_actor(tenant_id, actor_id))
         sent_as = idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key")
-        await self._keys.require_writable(run, sent_as, actor)
+        await keys.require_writable(run, sent_as, actor)
         key = await manager.create_key(  # the provider replays it on a resume
             actor.allocation_id, f"{tenant_id}/{actor_id}", sent_as
         )
-        return await self._keys.rotated(run, manager, actor, key, sent_as)
+        return await keys.rotated(run, manager, actor, key, sent_as)
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
         target = actor_id or actor.actor_id
@@ -450,15 +469,7 @@ class PaymentsService:
         allocation_id = await self.allocation_for(actor.tenant_id, target)
         if allocation_id is None:
             raise NotFound(f"no allocation pays for actor {target!r}")
-        try:
-            return await self.read_allowance(allocation_id)
-        except (ProviderError, ProviderUnavailable) as error:  # a builder's read: provider words to the log
-            status = error.status_code if isinstance(error, ProviderError) else None
-            extra = {"provider_status": status, "detail": str(error)[:BODY_LIMIT]}
-            _LOG.warning("allowance read failed", extra={"event": "payments.allowance_failed", **extra})
-            if status is None:  # httpx's text can name the provider's host (D58)
-                raise ProviderUnavailable(f"{_UNREADABLE}: the provider is unavailable") from error
-            raise ProviderError(status, _UNREADABLE) from error
+        return await for_a_builder(self.read_allowance, allocation_id)
 
     async def _require_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation:
         actor = await self._store.get_actor(tenant_id, actor_id)
@@ -471,26 +482,18 @@ class PaymentsService:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
 
-    def _manager_for(self, tenant_id: str, actor_id: str) -> AllocationManager:
+    def _manager_for(
+        self, tenant_id: str, actor_id: str, operation_ref: str | None = None
+    ) -> AllocationManager:
         """The manager for a command about one actor's allocation. A provider that names an actor and not
-        an allocation id, as a payment clearinghouse does, is told which (``AllocationsByActor``, #168)."""
+        an allocation id, as a payment clearinghouse does, is told which (``AllocationsByActor``, #168),
+        and an allotment's ``operation_ref`` with it."""
         manager = self._require_manager()
-        return manager.for_actor(tenant_id, actor_id) if isinstance(manager, AllocationsByActor) else manager
+        if isinstance(manager, AllocationsByActor):
+            return manager.for_actor(tenant_id, actor_id, operation_ref)
+        return manager
 
 
 def _allocation(tenant_id: str, actor_id: str) -> ResourceRef:
     """What an allocation command acts on, for the policy: a tenant admin is confined by it (#165)."""
     return ResourceRef(kind="allocation", tenant_id=tenant_id, owner_actor_id=actor_id)
-
-
-def _known(key: tuple[str, str], allocation: ActorAllocation | None, seen: SeenActor | None) -> KnownActor:
-    name = seen.name if seen is not None and seen.name else None
-    return KnownActor(
-        tenant_id=key[0],
-        actor_id=key[1],
-        label=(allocation.label if allocation is not None else "") or name or "",
-        name=name if seen is not None else None,
-        allocation=allocation,
-        first_seen_at=seen.first_seen_at if seen is not None else None,
-        last_seen_at=seen.last_seen_at if seen is not None else None,
-    )

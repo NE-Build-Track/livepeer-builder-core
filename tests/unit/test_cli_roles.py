@@ -3,8 +3,8 @@
 ``lpb payments check`` prints the role and probes what that role needs, with GET requests only:
 
 - ``both``: the signer and Batteries, and Batteries with the grants credential when one is set;
-- ``work``: the payment clearinghouse (its tenant's grant and usage, the signer's identity path, and
-  the runner list when that is its discovery address);
+- ``work``: the payment clearinghouse (its tenant's grant and usage, and the runner list when that is
+  its discovery address), and the clearinghouse's published signer at ``LPB_SIGNER_URL``;
 - ``clearinghouse``: the signer and Batteries, and Batteries with the grants credential always: a
   clearinghouse cannot onboard a tenant without it, so a missing one is a failed probe, not a skipped one.
 
@@ -62,11 +62,11 @@ def test_the_check_says_the_work_role_and_probes_the_clearinghouse(
     assert list(probes(report)) == [
         "clearinghouse_grant",
         "clearinghouse_usage",
-        "clearinghouse_signer",
+        "signer",
         "clearinghouse_runner_list",
     ]
     assert recorder.methods == {"GET"}
-    # nothing of a signer's or of Batteries' own is asked: the engine holds no address of either
+    # nothing of Batteries' own is asked: the engine holds no address of it
     assert not [target for target in recorder.targets if target.startswith(("/v1/usage", "/v1/grants"))]
 
 
@@ -204,8 +204,8 @@ def test_smoke_in_a_role_its_settings_contradict_does_not_start(
     environment.setenv("LPB_ROLE", "clearinghouse")  # no private listener
     with pytest.raises(ValidationError, match="LPB_HTTP_PRIVATE_PORT"):
         cli.main(["smoke"])
-    environment.setenv("LPB_HTTP_PRIVATE_PORT", "8081")  # and no signer or Batteries
-    with pytest.raises(ValueError, match="LPB_SIGNER_URL"):
+    environment.setenv("LPB_HTTP_PRIVATE_PORT", "8081")  # and no Batteries
+    with pytest.raises(ValueError, match="LPB_BATTERIES_TOKEN"):
         cli.main(["smoke"])
     capsys.readouterr()
 

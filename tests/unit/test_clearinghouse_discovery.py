@@ -159,12 +159,12 @@ async def test_any_credential_of_a_tenant_and_a_clearinghouse_admin_may_read_the
 ) -> None:
     """A tenant's credentials at a clearinghouse are its admin's and its auditor's keys: those are what
     the tenant routes issue. An actor key, which an enterprise's own engine issues to its users, is not
-    one, and neither is a payment key, which asks for payments and nothing else."""
+    one, and neither is a payment key, which is a credential at the signer and on no engine route."""
     for kind in ("tenant_admin", "auditor", "clearinghouse_admin"):
         assert (await house.client.get(ROUTE, headers=house.keys[kind])).status_code == 200, kind
     assert (await house.client.get(ROUTE, headers=house.keys["actor"])).status_code == 403
     assert (await house.client.get(ROUTE)).status_code == 401
-    payment_key = {"Authorization": "Bearer lpp_" + "x" * 43}
+    payment_key = {"Authorization": "Bearer lpg_" + "x" * 43}
     assert (await house.client.get(ROUTE, headers=payment_key)).status_code == 401
     for refused in ({}, house.keys["actor"], payment_key):
         assert NODE_DUMP[:40] not in (await house.client.get(ROUTE, headers=refused)).content

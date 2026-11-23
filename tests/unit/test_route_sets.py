@@ -19,7 +19,10 @@ alone, or the clearinghouse set alone on a public and a private listener. The la
 exact set of each role.
 """
 
+from collections.abc import Callable
+
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
@@ -32,9 +35,7 @@ from livepeer_builder.http.clearinghouse import (
     mount_clearinghouse_routes,
     mount_tenant_routes,
 )
-from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
-from livepeer_builder.testing import FakeSigningTransport
 from tests.conftest import EngineFactory
 from tests.unit.role_engines import in_role
 from tests.unit.test_assembly import HeaderAuthenticator
@@ -91,9 +92,6 @@ USAGE_READ = {("GET", TENANT + "/usage")}
 # the runner list a clearinghouse publishes (#166): only when the discovery source holds its document,
 # as the HTTP reader does
 RUNNER_LIST = {("GET", "/v1/clearinghouse/discovery")}
-# The signer's two paths, at the root, where the gateway SDK calls a signer (D87, #166): only on an engine
-# whose runner transport forwards a signer call. The shared test engine's scripted transport does not.
-SIGNING = {("POST", "/sign-orchestrator-info"), ("POST", "/generate-live-payment")}
 # What only a clearinghouse admin does: a private listener's routes (#167).
 ADMIN_ROUTES = {("POST", TENANT + "/grant/top-up")}
 TENANT_DESK = {("POST", TENANTS), ("GET", TENANTS), ("POST", TENANT + "/status")}  # only when it is on
@@ -164,7 +162,7 @@ async def test_the_work_set_mounts_by_itself(make_engine: EngineFactory) -> None
 async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory) -> None:
     engine = await make_engine()
     app = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(app, engine)
+    mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)
     assert served(app) == HEALTH | CLEARINGHOUSE | OPTIONAL
     assert all(path.startswith("/v1/clearinghouse/") for _, path in served(app) - HEALTH)
     # the runner list is every tenant's and the wallet is the clearinghouse's: neither names a tenant
@@ -183,28 +181,18 @@ async def test_the_clearinghouse_set_mounts_by_itself(make_engine: EngineFactory
         assert (await client.post("/v1/costs/sync", headers=admin)).status_code == 404
 
 
-async def test_the_signers_two_paths_are_a_group_of_the_clearinghouse_set_that_mounts_by_itself(
-    make_engine: EngineFactory,
+@pytest.mark.parametrize("mount", [mount_clearinghouse_routes, mount_tenant_routes])
+async def test_mounting_the_allocation_routes_says_who_keeps_the_keys(
+    make_engine: EngineFactory, mount: Callable[..., None]
 ) -> None:
-    """An engine whose transport forwards a signer call serves the two paths: with the whole app, with
-    the clearinghouse set, and from their own mount function, which a listener's table names (#167).
-    The work set never has them."""
-    engine = await make_engine(supply=EngineSupply(transport=FakeSigningTransport()))
-    alone = shared_app(engine, manage_lifecycle=False)
-    mount_signing_routes(alone, engine)
-    assert served(alone) == HEALTH | SIGNING
-    clearinghouse = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(clearinghouse, engine)
-    assert served(clearinghouse) == HEALTH | CLEARINGHOUSE | OPTIONAL | SIGNING
-    assert served(create_app(engine, manage_lifecycle=False)) == (
-        HEALTH | WORK | KEYS | CLEARINGHOUSE | OPTIONAL | SIGNING
-    )
-    work = shared_app(engine, manage_lifecycle=False)
-    mount_work_routes(work, engine)
-    assert not served(work) & SIGNING
-    tenants = shared_app(engine, manage_lifecycle=False)
-    mount_tenant_routes(tenants, engine)
-    assert not served(tenants) & SIGNING  # a group of its own: neither of the two #165 made
+    """``deliver_allocation_keys`` has no default (Mike, 23 November 2026). Defaulted to delivering, an
+    app that mounted the set by hand on an engine that also runs jobs handed each key to the caller and
+    stored none, and that actor's jobs then failed ``not_provisioned``."""
+    engine = await make_engine()
+    app = shared_app(engine, manage_lifecycle=False)
+    with pytest.raises(TypeError, match="deliver_allocation_keys"):
+        mount(app, engine)
+    assert served(app) == HEALTH  # and nothing was mounted
 
 
 async def test_health_is_shared_by_both_halves(make_engine: EngineFactory) -> None:
@@ -231,7 +219,7 @@ async def test_each_optional_group_is_absent_from_its_own_set_when_it_is_off(
     mount_work_routes(work, engine)
     assert served(work) == HEALTH | WORK
     clearinghouse = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(clearinghouse, engine)
+    mount_clearinghouse_routes(clearinghouse, engine, deliver_allocation_keys=True)
     assert served(clearinghouse) == HEALTH | CLEARINGHOUSE | RUNNER_LIST  # the reader is always there
 
 
@@ -242,13 +230,13 @@ async def test_the_two_groups_of_the_clearinghouse_set_mount_by_themselves(
     function, and the tenants' own routes are another. Together they are the set, with nothing twice."""
     engine = await make_engine()
     tenants = shared_app(engine, manage_lifecycle=False)
-    mount_tenant_routes(tenants, engine)
+    mount_tenant_routes(tenants, engine, deliver_allocation_keys=True)
     assert served(tenants) == HEALTH | TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ | RUNNER_LIST
     private = shared_app(engine, manage_lifecycle=False)
     mount_clearinghouse_admin_routes(private, engine)
     assert served(private) == HEALTH | ADMIN_ROUTES | TENANT_DESK | WALLET
     both = shared_app(engine, manage_lifecycle=False)
-    mount_clearinghouse_routes(both, engine)
+    mount_clearinghouse_routes(both, engine, deliver_allocation_keys=True)
     assert len([route for route in both.routes if isinstance(route, APIRoute)]) == len(
         (served(tenants) | served(private)) - HEALTH
     ) + len(HEALTH)
@@ -275,7 +263,7 @@ async def test_the_routes_that_took_a_tenant_or_a_grant_in_a_query_or_a_body_are
 # -- the role chooses the set (#169) ---------------------------------------------------------------------
 
 # What a tenant's own admin or auditor calls, with every optional group on: the public listener's routes
-# of the clearinghouse half, beside the signer's two paths.
+# of the clearinghouse half.
 TENANT_SET = TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ | RUNNER_LIST
 # What only a clearinghouse admin does: the private listener's own routes.
 ADMIN_SET = ADMIN_ROUTES | TENANT_DESK | WALLET
@@ -286,7 +274,7 @@ async def test_the_both_role_mounts_both_sets_as_before(make_engine: EngineFacto
     nothing is new. With a private listener it is the deployment of #167."""
     engine = await in_role(make_engine, "both")
     assert engine.role == "both"
-    everything = HEALTH | WORK | KEYS | TENANT_SET | SIGNING | ADMIN_SET
+    everything = HEALTH | WORK | KEYS | TENANT_SET | ADMIN_SET
     assert served(create_app(engine, manage_lifecycle=False)) == everything
     assert served(create_app(engine, manage_lifecycle=False, listener="private")) == everything
     assert served(create_app(engine, manage_lifecycle=False, listener="public")) == everything - ADMIN_SET
@@ -294,7 +282,7 @@ async def test_the_both_role_mounts_both_sets_as_before(make_engine: EngineFacto
 
 async def test_the_work_role_mounts_the_work_set_and_nothing_else(make_engine: EngineFactory) -> None:
     """Health, the work routes and the engine's own access keys. No tenant route, nothing a
-    clearinghouse admin does, no wallet, no runner list and no signer path, on any listener."""
+    clearinghouse admin does, no wallet and no runner list, on any listener."""
     engine = await in_role(make_engine, "work")
     work = HEALTH | WORK | KEYS
     assert served(create_app(engine, manage_lifecycle=False)) == work
@@ -307,16 +295,17 @@ async def test_the_work_role_mounts_the_work_set_and_nothing_else(make_engine: E
 async def test_the_clearinghouse_role_mounts_the_clearinghouse_set_on_two_listeners(
     make_engine: EngineFactory,
 ) -> None:
-    """Health and the clearinghouse half. The public listener has the tenants' own routes and the
-    signer's two paths; the private one has those and what only a clearinghouse admin does. No job
-    route, no catalog, no cost route, no allowance read and none of the engine's own key routes."""
+    """Health and the clearinghouse half. The public listener has the tenants' own routes; the private
+    one has those and what only a clearinghouse admin does. No job route, no catalog, no cost route, no
+    allowance read, none of the engine's own key routes, and no signer path: its tenants' engines sign
+    at the signer themselves."""
     engine = await in_role(make_engine, "clearinghouse")
     public = served(create_app(engine, manage_lifecycle=False, listener="public"))
     private = served(create_app(engine, manage_lifecycle=False, listener="private"))
-    assert public == HEALTH | TENANT_SET | SIGNING
-    assert private == HEALTH | TENANT_SET | SIGNING | ADMIN_SET
+    assert public == HEALTH | TENANT_SET
+    assert private == HEALTH | TENANT_SET | ADMIN_SET
     assert not (private - HEALTH) & (WORK | KEYS)
-    under_the_prefix = {path for _, path in private - HEALTH - SIGNING}
+    under_the_prefix = {path for _, path in private - HEALTH}
     assert all(path.startswith("/v1/clearinghouse/") for path in under_the_prefix)
 
 

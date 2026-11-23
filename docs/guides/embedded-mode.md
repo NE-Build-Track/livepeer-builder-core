@@ -214,8 +214,11 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   of your own (`manager.add_grant("<tenant id>")`, then `EngineSupply(allocation_manager=manager,
   grants_manager=manager)`), or onboard the tenant. The fake refuses as Batteries does: an unknown grant
   is its 404, and an allocation or a top-up larger than the grant's unallocated balance its 409.
-  `payments.allot` answers with the allocation and the actor's payment key (`KeyedAllocation`): an
-  engine with self-hosted payments does not use that key, and its `.allocation` is the stored record.
+  `payments.allot` stores the actor's payment key in the engine's `SecretStore` and answers the
+  allocation (`ActorAllocation`, with `credential_custody: secret_store`). `payments.allot_for_delivery`
+  is what a standalone clearinghouse calls: it hands the key to the caller once, in a
+  `DeliveredAllocation`, and stores none, so an engine that runs the actor's jobs itself never calls it
+  ([payments.md](../contracts/payments.md#payment-keys)).
 
 ## 5. What you still run as an operator
 

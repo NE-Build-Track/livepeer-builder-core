@@ -2,9 +2,10 @@
 
 A payment clearinghouse does payments only and never runs jobs, so it will serve no work route (the role
 setting, #169). Everything an enterprise's engine asks of it is therefore a clearinghouse route: the
-tenant's routes, the runner list and the signer's two paths. Here the clearinghouse's app is built from
-those groups alone, with the work routes left out, and the remote adapters, the discovery reader and
-``lpb payments check`` do all they do against it.
+tenant's routes and the runner list. Here the clearinghouse's app is a standalone clearinghouse's public
+listener, which is those routes alone (``tests/unit/payment_ports.py``), and the remote adapters, the
+discovery reader and ``lpb payments check`` do all they do against it. Signing is not among them: the
+engine signs at the clearinghouse's signer, which is no route of an engine.
 """
 
 from collections.abc import AsyncIterator
@@ -12,32 +13,21 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from fastapi import FastAPI
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import EngineSettings
 from livepeer_builder.adapters.payment_probes import probe_payments
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.contracts import AllotRequest, TopUpRequest
 from livepeer_builder.errors import ProviderError, ProviderUnavailable
-from livepeer_builder.http.app import shared_app
-from livepeer_builder.http.clearinghouse import mount_tenant_routes
-from livepeer_builder.http.signing import mount_signing_routes
 from tests.unit.payment_ports import CLEARINGHOUSE_URL, Ports, open_ports, usd
 
 WORK_ROUTES = ("/v1/allowance", "/v1/jobs", "/v1/runners", "/v1/costs/summary", "/v1/keys", "/v1/offerings")
-
-
-def payments_only(house: BuilderEngine) -> FastAPI:
-    """A clearinghouse's app with the routes of its own half and no work route."""
-    app = shared_app(house, manage_lifecycle=False)
-    mount_tenant_routes(app, house)
-    mount_signing_routes(app, house)
-    return app
+SIGNER_PATHS = ("/sign-orchestrator-info", "/generate-live-payment")
 
 
 @pytest.fixture
 async def ports() -> AsyncIterator[Ports]:
-    async with open_ports("remote", payments_only) as opened:
+    async with open_ports("remote") as opened:
         yield opened
 
 
@@ -52,10 +42,13 @@ async def allotted(ports: Ports, actor_id: str = "alice", amount: str = "5") -> 
     return (await ports.engine.payments.allot(ports.admin, request)).allocation_id
 
 
-async def test_this_clearinghouse_serves_no_work_route(ports: Ports) -> None:
+async def test_this_clearinghouse_serves_no_work_route_and_no_signer_path(ports: Ports) -> None:
     bearer = {"Authorization": f"Bearer {ports.token}"}
     for path in WORK_ROUTES:
         answer = await client_of(ports).get(CLEARINGHOUSE_URL + path, headers=bearer)
+        assert answer.status_code == 404, path
+    for path in SIGNER_PATHS:
+        answer = await client_of(ports).post(CLEARINGHOUSE_URL + path, headers=bearer)
         assert answer.status_code == 404, path
 
 
@@ -119,27 +112,42 @@ async def test_the_discovery_reader_reads_the_runner_list_there(ports: Ports) ->
     assert await reader.fetch() == ports.clearinghouse.discovery.snapshot.runners
 
 
-async def test_the_payments_check_passes_there_with_every_probe(ports: Ports) -> None:
+async def test_the_payments_check_passes_there_and_asks_the_signer_at_its_own_address(ports: Ports) -> None:
+    """The clearinghouse's engine is asked for clearinghouse routes only. The signer probe goes to
+    ``LPB_SIGNER_URL``: a signer answers 405 to a GET of its identity path."""
     settings = EngineSettings.model_validate(
         {
             "role": "work",
             "clearinghouse_url": CLEARINGHOUSE_URL,
             "clearinghouse_token": ports.token,
             "clearinghouse_tenant_id": ports.tenant_id,
+            "signer_url": "http://signer.test:8935",
         }
     )
+    at_signer: list[httpx.Request] = []
+
+    def signer(request: httpx.Request) -> httpx.Response:
+        at_signer.append(request)
+        return httpx.Response(405, headers={"Allow": "POST"})
+
+    mounts = {
+        "all://clearinghouse.test": client_of(ports)._transport,
+        "all://signer.test": httpx.MockTransport(signer),
+    }
     before = len(ports.requests)
-    report = await probe_payments(settings, client=client_of(ports))
+    async with httpx.AsyncClient(mounts=mounts) as client:
+        report = await probe_payments(settings, client=client)
     assert report.ok, report
     assert [probe.name for probe in report.probes] == [
         "clearinghouse_grant",
         "clearinghouse_usage",
-        "clearinghouse_signer",
+        "signer",
         "clearinghouse_runner_list",
     ]
     assert report.tenant is not None and report.tenant.tenant_id == ports.tenant_id
     asked = ports.requests[before:]
-    assert {request.method for request in asked} == {"GET"}
-    for request in asked:
-        path = request.url.path
-        assert path.startswith("/v1/clearinghouse/") or path == "/sign-orchestrator-info", path
+    assert {request.method for request in asked} == {"GET"} and len(asked) == 3
+    assert all(request.url.path.startswith("/v1/clearinghouse/") for request in asked)
+    [identity] = at_signer
+    assert (identity.method, identity.url.path) == ("GET", "/sign-orchestrator-info")
+    assert "authorization" not in identity.headers

@@ -13,8 +13,8 @@
    leave anything half-open, and a decorated policy reaches every service.
 
 The engine's role (``LPB_ROLE``, D84) is wired here and in ``payment_defaults``: an engine in its ``work``
-role pays through a payment clearinghouse and is nobody's clearinghouse, and one in its ``clearinghouse``
-role runs no jobs and must be able to sign, allot and onboard.
+role uses a payment clearinghouse and is nobody's clearinghouse, and one in its ``clearinghouse`` role
+runs no jobs and must be able to allot and onboard.
 
 Parts are ports (behaviour). Tuning values stay in ``EngineSettings``.
 """
@@ -46,7 +46,6 @@ from livepeer_builder.protocols import (
     SecretStore,
     SelectionPolicy,
     SessionManager,
-    SignerForwarder,
     SignerProbe,
     TenantUsageSource,
     UsageSource,
@@ -274,9 +273,9 @@ class EngineServices:
 
 def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     """Build every service from the final parts. No I/O: it opens nothing, so it leaves nothing open."""
-    # The role (D84, #169). An engine in its work role pays through a clearinghouse and is not one: it
-    # forwards no signer call, reports no wallet, publishes no runner list and issues no payment key,
-    # whatever its parts could do. One in its clearinghouse role runs no jobs and syncs no job's cost.
+    # The role (D84, #169). An engine in its work role uses a clearinghouse and is not one: it reports no
+    # wallet and publishes no runner list, whatever its parts could do. One in its clearinghouse role
+    # runs no jobs and syncs no job's cost.
     is_clearinghouse = not settings.uses_clearinghouse
     runs_jobs = settings.runs_jobs
     discovery = DiscoveryService(
@@ -300,7 +299,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
-    runner_list, wallet, forwarder = _offered_as_a_clearinghouse(parts) if is_clearinghouse else _NOTHING
+    runner_list, wallet = _offered_as_a_clearinghouse(parts) if is_clearinghouse else (None, None)
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -312,14 +311,11 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         tenants=tenants,
         usage=usage,
         wallet=wallet,
-        forwarder=forwarder,
         currency=settings.default_currency,
         allowances=parts.allowances,
     )
-    if not is_clearinghouse:  # it is handed its actors' payment keys and issues none (#168)
-        payments.issue_no_payment_keys()
     if not runs_jobs:
-        _require_a_whole_clearinghouse(parts, tenants, forwarder)
+        _require_a_whole_clearinghouse(parts, tenants)
     admission = AdmissionLimiter(
         settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app, runs_jobs=runs_jobs
     )
@@ -365,43 +361,33 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     )
 
 
-Offered = tuple[RunnerList | None, Wallet | None, SignerForwarder | None]
-# An engine in its work role signs at the clearinghouse with the same transport a clearinghouse forwards
-# with (#168), and offers none of the three to anybody.
-_NOTHING: Final[Offered] = (None, None, None)
-
-
-def _offered_as_a_clearinghouse(parts: EngineParts) -> Offered:
-    """What an engine offers the engines of its tenants, each only when its parts can: the runner list
-    it publishes, the wallet report, and forwarding a signer call."""
+def _offered_as_a_clearinghouse(parts: EngineParts) -> tuple[RunnerList | None, Wallet | None]:
+    """What an engine offers as a clearinghouse, each only when its parts can: the runner list it
+    publishes and the wallet report. It signs for nobody: its tenants' engines sign at the signer
+    themselves (D85 point 1)."""
     runner_list: RunnerList | None = None
     if isinstance(parts.discovery_source, DiscoveryDocumentSource):  # otherwise no list is served (#166)
         runner_list = RunnerList(parts.discovery_source, parts.policy)
-    transport = parts.transport
     wallet: Wallet | None = None
     # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
-    # and the transport asks the signer it pays through
-    if isinstance(parts.grants_manager, EscrowSource) and isinstance(transport, SignerProbe):
-        wallet = Wallet(parts.grants_manager, parts.grants_manager, transport, parts.policy)
-    forwarder: SignerForwarder | None = None
-    # Otherwise the signer's two paths are not served (#166): a transport that forwards no signer call,
-    # or one that does not pay, which has no signer to forward to.
-    if isinstance(transport, SignerForwarder) and getattr(transport, "pays", True):
-        forwarder = transport
-    return runner_list, wallet, forwarder
+    # and the transport asks the signer at LPB_SIGNER_URL for its identity
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    return runner_list, wallet
 
 
-def _require_a_whole_clearinghouse(
-    parts: EngineParts, tenants: TenantDesk | None, forwarder: SignerForwarder | None
-) -> None:
-    """A payment clearinghouse signs for its tenants' engines, allots from their grants and onboards
-    them (#169). One that cannot would serve routes that do nothing, so it does not start. Judged on the
-    parts the engine will run with, as the secret store is: a supplied part counts. Only settings are
-    named."""
+def _require_a_whole_clearinghouse(parts: EngineParts, tenants: TenantDesk | None) -> None:
+    """A payment clearinghouse allots from its tenants' grants and onboards them (#169). One that cannot
+    would serve routes that do nothing, so it does not start. Judged on the parts the engine will run
+    with, as the secret store is: a supplied part counts. Only settings are named.
+
+    The signer is not asked for here. The engine signs nothing in this role, and its tenants' engines
+    reach the signer at its published address, not through this engine: ``LPB_SIGNER_URL`` is only
+    where the wallet report reads the signer's readiness, and ``lpb payments check`` says when it is
+    missing."""
     missing = [
         needed
         for needed, absent in (
-            ("LPB_SIGNER_URL (the signer its tenants' engines sign through)", forwarder is None),
             (
                 "LPB_BATTERIES_URL and LPB_BATTERIES_TOKEN (the allocations it allots)",
                 parts.allocation_manager is None,

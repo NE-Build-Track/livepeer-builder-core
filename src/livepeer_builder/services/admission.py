@@ -32,7 +32,7 @@ class AdmissionLimiter:
         if not self._runs_jobs:
             raise InvalidRequest(
                 "this engine is in its clearinghouse role (LPB_ROLE) and runs no jobs: a job runs in "
-                "the enterprise's own engine, which pays through this one"
+                "the enterprise's own engine, which signs at the clearinghouse's signer itself"
             )
         if self._max_concurrent is not None and self._running >= self._max_concurrent:
             raise NoCapacity("engine is at its concurrent job limit")

@@ -19,7 +19,7 @@ pinned SDK's `call_runner` path changes, so a pin bump reviews the copy.
 | `call_runner(...)` | **Not called** since D53; the copy follows it at `2017a80`. A missing `payload` is still sent as `{}` (T15) |
 | `selection.reserve_session(...)` → `LiveRunnerSession(app_url, control_url)` | Persistent sessions (M4), proxied by the engine |
 
-## A clearinghouse in the signer's place (#166)
+## How the SDK reaches a signer (#166)
 
 The SDK calls a signer at two paths and nowhere else the engine reaches: `get_signer_info` posts `{}` to
 `{origin}/sign-orchestrator-info`, and `LivePaymentSession._payment_request` posts the payment request to
@@ -29,12 +29,11 @@ engine gives (`Authorization: Bearer <key>`), have 5 seconds in all, open a sess
 not retried. An error status keeps its body on `LivepeerHTTPError.body`; 480 and 482 are errors of
 their own.
 
-So a payment clearinghouse serves those two paths at the root of its listener, and an enterprise's engine
-points the SDK at it unmodified, with a payment key as the bearer
-([payments.md](../contracts/payments.md#signing-through-a-clearinghouse)). The clearinghouse's own
-forwarder reads the signer address by the same rule, and `tests/unit/test_signer_forward.py` holds it to
-`_http_origin`. The SDK remembers a signer's identity for the life of the process, by address and
-headers, so the identity call is made once for each payment key.
+So a signer is named by its origin: a path in `LPB_SIGNER_URL` is dropped, and a signer cannot be
+published under a path of another host. An enterprise's engine that uses a payment clearinghouse points
+the SDK at the clearinghouse's signer in the same way, with each actor's payment key as the bearer
+([payments.md](../contracts/payments.md#payment-keys)). The SDK remembers a signer's identity for the
+life of the process, by address and headers, so the identity call is made once for each payment key.
 
 ## Runner session stop (#83)
 

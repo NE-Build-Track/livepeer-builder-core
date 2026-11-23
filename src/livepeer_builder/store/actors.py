@@ -7,14 +7,20 @@ from sqlalchemy import ColumnElement, and_, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from livepeer_builder.contracts import ActorAllocation, AllocationStatus, SecretRef, SeenActor
+from livepeer_builder.contracts import (
+    ActorAllocation,
+    AllocationStatus,
+    CredentialCustody,
+    SecretRef,
+    SeenActor,
+)
 from livepeer_builder.store import schema as t
 
 
 async def get_actor(conn: AsyncConnection, tenant_id: str, actor_id: str) -> ActorAllocation | None:
     query = select(t.actors).where(t.actors.c.tenant_id == tenant_id, t.actors.c.actor_id == actor_id)
     row = (await conn.execute(query)).mappings().first()
-    return actor_from_row(row) if row else None
+    return _actor(row) if row else None
 
 
 async def save_actor(conn: AsyncConnection, actor: ActorAllocation) -> None:
@@ -58,12 +64,19 @@ class SqlActorCommands:
         secret_ref: SecretRef,
         updated_at: datetime,
         only_from: str,
+        *,
+        credential_custody: CredentialCustody = "secret_store",
     ) -> ActorAllocation | None:
         # the key the rotation began from, or its own key already: any other is a finished rotation's
         held = and_(
             _held(tenant_id, actor_id, allocation_id), t.actors.c.api_key_id.in_((only_from, api_key_id))
         )
-        values = {"api_key_id": api_key_id, "secret_ref": secret_ref.ref, "updated_at": updated_at}
+        values = {
+            "api_key_id": api_key_id,
+            "secret_ref": secret_ref.ref,
+            "credential_custody": credential_custody,  # beside the handle it describes, in one write
+            "updated_at": updated_at,
+        }
         return await self._write(held, tenant_id, actor_id, values)
 
     async def allot_actor(self, actor: ActorAllocation, *, replacing: str | None) -> bool:
@@ -111,7 +124,7 @@ async def list_actors(conn: AsyncConnection, tenant_id: str | None) -> list[Acto
     query = select(t.actors).order_by(t.actors.c.tenant_id, t.actors.c.actor_id)
     if tenant_id is not None:
         query = query.where(t.actors.c.tenant_id == tenant_id)
-    return [actor_from_row(row) for row in (await conn.execute(query)).mappings()]
+    return [_actor(row) for row in (await conn.execute(query)).mappings()]
 
 
 async def save_sighting(conn: AsyncConnection, seen: SeenActor) -> None:
@@ -149,6 +162,6 @@ def _values(actor: ActorAllocation) -> dict[str, Any]:
     return actor.model_dump(exclude={"secret_ref"}) | {"secret_ref": actor.secret_ref.ref}
 
 
-def actor_from_row(row: Any) -> ActorAllocation:
+def _actor(row: Any) -> ActorAllocation:
     data = {key: row[key] for key in ActorAllocation.model_fields if key != "secret_ref"}
     return ActorAllocation.model_validate(data | {"secret_ref": SecretRef(ref=row["secret_ref"])})

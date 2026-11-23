@@ -25,18 +25,8 @@ from livepeer_builder.adapters.runner_call import (
     json_object,
 )
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
-from livepeer_builder.adapters.signer_forward import HttpSignerForwarder
-from livepeer_builder.contracts import (
-    JobRequest,
-    Runner,
-    RunnerReply,
-    SignerAnswer,
-    SignerCall,
-    SignerNotReady,
-    SignerReadiness,
-)
+from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
-from livepeer_builder.errors import SignerNotReached
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
@@ -130,19 +120,9 @@ class SdkRunnerTransport:
     ``get_payment`` (D53).
     """
 
-    def __init__(
-        self,
-        signer_url: str | None,
-        max_payment_challenge_retries: int = 3,
-        *,
-        signer_is_clearinghouse: bool = False,
-    ) -> None:
+    def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
-        # Whether the address is a payment clearinghouse's, which serves the signer's two paths (#168). A
-        # clearinghouse can say it sent its signer nothing; a signer never does (signer_failures.py).
-        self._signer_is_clearinghouse = signer_is_clearinghouse
-        self._forwarder = HttpSignerForwarder(signer_url) if signer_url is not None else None
 
     @property
     def pays(self) -> bool:
@@ -175,16 +155,6 @@ class SdkRunnerTransport:
             return SignerReadiness(ready=False, reason=reason)
         return SignerReadiness(ready=True)
 
-    async def forward_signer_call(
-        self, call: SignerCall, credential: str, body: bytes, content_type: str
-    ) -> SignerAnswer:
-        """One signer call for a clearinghouse (``SignerForwarder``, #166), to the signer this transport
-        pays the engine's own jobs through, with ``credential`` as its bearer. An engine whose transport
-        does not pay serves neither signer path, so the first branch is a supplied wiring's."""
-        if self._forwarder is None:
-            raise SignerNotReached("this engine has no signer (LPB_SIGNER_URL)")
-        return await self._forwarder.forward_signer_call(call, credential, body, content_type)
-
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents
     ) -> PaidRequest:
@@ -215,7 +185,7 @@ class SdkRunnerTransport:
         credential: str | None,
         on_signed: OnSigned | None = None,
     ) -> RunnerReply:
-        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
@@ -241,7 +211,7 @@ class SdkRunnerTransport:
         keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
         validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):

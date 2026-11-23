@@ -1,7 +1,9 @@
 """#168: ``lpb payments check``, a read-only check of what the engine's payments need (D87).
 
 A self-hosted engine probes the signer and Batteries. An engine that uses a payment clearinghouse probes
-the clearinghouse: who it is there, its grant and its usage. **It never sends a request that is not a
+the clearinghouse (who it is there, its grant, its usage and the runner list) and the clearinghouse's
+signer, at ``LPB_SIGNER_URL``, exactly as a self-hosted engine probes its own: the engine signs there
+itself, and the clearinghouse's engine serves no signer path. **It never sends a request that is not a
 GET.** Three things hold that here: every request the command makes is recorded, by the servers it
 reaches and by its own HTTP client; the module that makes the requests is read, and has no other call in
 it; and the same is checked when each probe fails.
@@ -132,6 +134,8 @@ def clearinghouse(monkeypatch: pytest.MonkeyPatch, url: str, recorder: Recorder,
         "LPB_CLEARINGHOUSE_URL": url,
         "LPB_CLEARINGHOUSE_TOKEN": TENANT_KEY,
         "LPB_CLEARINGHOUSE_TENANT_ID": "grant_7",
+        # the clearinghouse's published signer. One server plays both here; they are two addresses
+        "LPB_SIGNER_URL": url + "/a/path/the/sdk/drops",
     } | env
     for name in [key for key in os.environ if key.startswith("LPB_")]:
         monkeypatch.delenv(name)
@@ -279,7 +283,7 @@ def test_an_engine_with_no_payment_settings_has_nothing_to_pay_with(
 # -- an engine that uses a clearinghouse ----------------------------------------------------------------
 
 
-def test_an_engine_that_uses_a_clearinghouse_probes_the_clearinghouse_with_get_requests_only(
+def test_an_engine_that_uses_a_clearinghouse_probes_it_and_its_signer_with_get_requests_only(
     server: tuple[str, Recorder], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     url, recorder = server
@@ -298,22 +302,23 @@ def test_an_engine_that_uses_a_clearinghouse_probes_the_clearinghouse_with_get_r
     assert list(probes(report)) == [
         "clearinghouse_grant",
         "clearinghouse_usage",
-        "clearinghouse_signer",
+        "signer",
         "clearinghouse_runner_list",
     ]
-    # the tenant admin key goes to the tenant's routes and the runner list, and never to a signer path
+    # the tenant admin key goes to the tenant's routes and the runner list, and never to the signer
     for _, target, headers in recorder.seen:
         if target == "/sign-orchestrator-info":
             assert "authorization" not in headers
         else:
             assert headers["authorization"] == f"Bearer {TENANT_KEY}"
-    signer = probes(report)["clearinghouse_signer"]
+    # the signer is probed as a self-hosted engine probes its own: the same GET, at LPB_SIGNER_URL
+    signer = probes(report)["signer"]
     assert (signer["outcome"], signer["status_code"], signer["request"]) == (
         "ok",
         405,
         "GET /sign-orchestrator-info",
     )
-    assert signer["setting"] == "LPB_CLEARINGHOUSE_URL"
+    assert signer["setting"] == "LPB_SIGNER_URL"
     # who the engine is there, and its grant
     assert report["tenant"] == GRANT
 
@@ -325,8 +330,43 @@ def test_a_runner_list_of_the_enterprise_own_is_not_probed_and_gets_no_key(
     clearinghouse(monkeypatch, url, recorder, LPB_DISCOVERY_URL="http://127.0.0.1:9/discovery")
     code, report, _ = run(capsys)
     assert code == 0
-    assert list(probes(report)) == ["clearinghouse_grant", "clearinghouse_usage", "clearinghouse_signer"]
+    assert list(probes(report)) == ["clearinghouse_grant", "clearinghouse_usage", "signer"]
     assert len(recorder.seen) == 3
+
+
+def test_the_signer_of_a_clearinghouse_is_probed_at_its_own_address_and_never_at_the_clearinghouse(
+    server: tuple[str, Recorder], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The clearinghouse's engine serves no signer path. With the signer's address naming a port
+    nothing listens on, the signer probe fails there, and the clearinghouse is never asked for it."""
+    url, recorder = server
+    clearinghouse(monkeypatch, url, recorder, LPB_SIGNER_URL="http://127.0.0.1:9")
+    code, report, _ = run(capsys)
+    assert code == 1 and probes(report)["signer"]["outcome"] == "unavailable"
+    assert "/sign-orchestrator-info" not in recorder.targets and len(recorder.seen) == 3
+    assert [probes(report)[name]["outcome"] for name in ("clearinghouse_grant", "clearinghouse_usage")] == [
+        "ok",
+        "ok",
+    ]
+
+
+def test_an_engine_that_uses_a_clearinghouse_and_names_no_signer_cannot_pay(
+    server: tuple[str, Recorder], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """As for a self-hosted engine: ``LPB_SIGNER_URL`` unset is an engine that does not pay, and the
+    check says which setting is missing. The clearinghouse's address stands in for nothing."""
+    url, recorder = server
+    clearinghouse(monkeypatch, url, recorder)
+    monkeypatch.delenv("LPB_SIGNER_URL")
+    code, report, _ = run(capsys)
+    signer = probes(report)["signer"]
+    assert code == 1 and report["ok"] is False
+    assert (signer["outcome"], signer["request"], signer["setting"]) == (
+        "not_configured",
+        None,
+        "LPB_SIGNER_URL",
+    )
+    assert "/sign-orchestrator-info" not in recorder.targets and recorder.methods == {"GET"}
 
 
 @pytest.mark.parametrize(
@@ -347,10 +387,10 @@ def test_a_runner_list_of_the_enterprise_own_is_not_probed_and_gets_no_key(
         ("/usage", (403, {"error": "another tenant"}), "clearinghouse_usage", "refused", "TENANT_ID"),
         ("/discovery", (503, {"error": "no list"}), "clearinghouse_runner_list", "unavailable", "503"),
         ("/discovery", (307, None), "clearinghouse_runner_list", "unexpected", "redirect"),
-        # a clearinghouse with no signer serves neither signer path: it cannot sign for anyone
-        ("signer", (404, {"error": "not found"}), "clearinghouse_signer", "unexpected", "signer's two paths"),
-        ("signer", (200, {"hello": "world"}), "clearinghouse_signer", "unexpected", "signer's two paths"),
-        ("signer", (503, {"error": "down"}), "clearinghouse_signer", "unavailable", "HTTP 503"),
+        # the signer, at its own address: what a self-hosted engine's check says of its own
+        ("signer", (404, {"error": "not found"}), "signer", "unexpected", "signer's identity route"),
+        ("signer", (200, {"hello": "world"}), "signer", "unexpected", "signer's identity route"),
+        ("signer", (503, {"error": "down"}), "signer", "unavailable", "HTTP 503"),
     ],
 )
 def test_a_clearinghouse_probe_that_is_refused_exits_1_and_says_which_setting_to_look_at(
@@ -379,7 +419,7 @@ def test_a_clearinghouse_probe_that_is_refused_exits_1_and_says_which_setting_to
 def test_a_clearinghouse_address_with_a_path_exits_2_and_sends_nothing(
     server: tuple[str, Recorder], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The address names a scheme, a host and a port: the signer's two paths are called at its root."""
+    """The address names a scheme, a host and a port: the clearinghouse's routes are called at its root."""
     url, recorder = server
     clearinghouse(monkeypatch, url, recorder, LPB_CLEARINGHOUSE_URL=url + "/pay")
     code, report, printed = run(capsys)
@@ -391,10 +431,10 @@ def test_settings_that_do_not_fit_together_exit_2_and_send_nothing(
     server: tuple[str, Recorder], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     url, recorder = server
-    clearinghouse(monkeypatch, url, recorder, LPB_SIGNER_URL=url)
+    clearinghouse(monkeypatch, url, recorder, LPB_BATTERIES_URL=url)
     code, report, printed = run(capsys)
     assert code == 2 and report == {} and recorder.seen == []
-    assert "LPB_SIGNER_URL" in printed and "LPB_CLEARINGHOUSE_URL" in printed
+    assert "LPB_BATTERIES_URL" in printed and "LPB_CLEARINGHOUSE_URL" in printed
 
 
 # -- the client's own record, and the module itself -----------------------------------------------------
@@ -416,6 +456,7 @@ CLEARINGHOUSE = {
     "clearinghouse_token": TENANT_KEY,
     "clearinghouse_tenant_id": "grant_7",
     "discovery_url": "https://clearinghouse.test/v1/clearinghouse/discovery",
+    "signer_url": "https://signer.test:8935",  # the clearinghouse's published signer
 }
 ANSWERS = [
     lambda request: httpx.Response(200, json={}),
@@ -454,6 +495,8 @@ async def test_every_request_the_check_makes_is_a_get_to_the_address_it_was_give
         if request.url.host == "signer.test" or request.url.path == "/sign-orchestrator-info":
             assert "authorization" not in request.headers
             assert "livepeer-clearinghouse-token" not in request.headers
+    # the signer is asked at its own address, whoever runs it, and nowhere else
+    assert [r.url.host for r in sent if r.url.path == "/sign-orchestrator-info"] == ["signer.test"]
 
 
 def test_the_module_that_probes_calls_nothing_but_get() -> None:

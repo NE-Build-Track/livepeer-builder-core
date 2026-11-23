@@ -47,7 +47,7 @@ ACTORS_AT_0012 = as_before_0014(t.actors)
 
 
 def row_at_0012(actor: ActorAllocation) -> dict[str, object]:
-    values = actor.model_dump(exclude={"secret_ref", "tenant_id"})
+    values = actor.model_dump(exclude={"secret_ref", "tenant_id", "credential_custody"})  # 0015's column
     return values | {"application_id": actor.tenant_id, "secret_ref": actor.secret_ref.ref}
 
 

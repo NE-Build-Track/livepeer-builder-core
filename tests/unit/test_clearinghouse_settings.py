@@ -1,9 +1,13 @@
 """#168: the settings of an engine that uses a payment clearinghouse (D84).
 
 An enterprise's engine holds the clearinghouse's address, its tenant admin key and its tenant's id, and
-nothing of Batteries or the signer. The three are set together or not at all, and a half setting, or one
-mixed with the settings of self-hosted payments, is refused when the engine starts: an engine that
-allotted at a clearinghouse and paid from a signer of its own would pay for nothing it accounts for.
+nothing of Batteries. The three are set together or not at all, and a half setting, or one mixed with a
+Batteries setting, is refused when the engine starts: an engine that allotted at a clearinghouse and
+read its usage from a Batteries of its own would account for nothing it paid.
+
+``LPB_SIGNER_URL`` is set beside them, as on any engine that pays: it names the clearinghouse's signer,
+where the engine signs itself with each actor's own key (D85 point 1, as amended). Without it the engine
+does not pay, as today.
 """
 
 from typing import Any
@@ -61,16 +65,32 @@ def test_a_half_setting_is_refused_and_names_what_is_missing(missing: str) -> No
 
 
 @pytest.mark.parametrize(
-    "setting",
-    ["LPB_BATTERIES_URL", "LPB_BATTERIES_TOKEN", "LPB_BATTERIES_GRANTS_TOKEN", "LPB_SIGNER_URL"],
+    "setting", ["LPB_BATTERIES_URL", "LPB_BATTERIES_TOKEN", "LPB_BATTERIES_GRANTS_TOKEN"]
 )
-def test_a_clearinghouse_mixed_with_self_hosted_payments_is_refused(setting: str) -> None:
-    """An engine that uses a clearinghouse knows nothing of Batteries or the signer. With both, an actor
-    would be allotted at one and paid for from the other."""
-    value = "http://signer:8935" if setting.endswith("_URL") else "bt_secret-not-to-be-shown"
+def test_a_clearinghouse_mixed_with_a_batteries_setting_is_refused(setting: str) -> None:
+    """An engine that uses a clearinghouse knows nothing of Batteries: only the clearinghouse's own
+    engine reaches it (D85 point 1). With both, an actor would be allotted at one and accounted for at
+    the other."""
+    value = "http://batteries:8080" if setting.endswith("_URL") else "bt_secret-not-to-be-shown"
     message = refused(WORK | DISCOVERY | {setting: value})
     assert setting in message and "LPB_CLEARINGHOUSE_URL" in message
     assert value not in message and TOKEN not in message
+
+
+def test_the_signer_address_is_set_beside_a_clearinghouse() -> None:
+    """The engine signs at the clearinghouse's published signer itself, so it is told that signer's
+    address as any paying engine is told its own (D85 point 1, as amended on 19 November 2026)."""
+    settings = EngineSettings.from_env(WORK | {"LPB_SIGNER_URL": "https://signer.clearinghouse.example"})
+    assert settings.uses_clearinghouse is True
+    assert settings.signer_url == "https://signer.clearinghouse.example"
+    assert settings.clearinghouse_url == URL  # neither address stands in for the other
+
+
+def test_a_clearinghouse_without_a_signer_address_is_an_engine_that_does_not_pay() -> None:
+    """No new rule: ``LPB_SIGNER_URL`` unset is an unpaid engine, with a clearinghouse or without one.
+    The clearinghouse's address never becomes the signer's."""
+    settings = EngineSettings.from_env(WORK)
+    assert settings.uses_clearinghouse is True and settings.signer_url is None
 
 
 def test_the_token_is_in_no_repr_and_no_dump() -> None:
@@ -129,17 +149,15 @@ def test_the_clearinghouse_runner_list_is_the_default_discovery_address() -> Non
 @pytest.mark.parametrize(
     "more",
     [
-        "/pay",  # a path: the gateway SDK drops it, so signing would go to the root while the rest did not
+        "/pay",  # a path: the engine calls the clearinghouse's routes at the root of its address
         "/v1/clearinghouse",
         "//",
         "/?",
     ],
 )
 def test_an_address_with_anything_after_the_host_and_port_is_refused(more: str) -> None:
-    """The gateway SDK keeps the scheme, the host and the port of a signer's address and drops the rest
-    (``livepeer_gateway.http._http_origin``). An engine signs at the clearinghouse through that SDK, so
-    the address names an origin and nothing more: with a path, the allocation routes would be called
-    under it and the two signer paths at the root."""
+    """The address names an origin and nothing more: the engine calls ``/v1/clearinghouse/...`` at its
+    root, and the default discovery address is built from it."""
     given = "https://ch.internal.test:8443"
     message = refused(WORK | DISCOVERY | {"LPB_CLEARINGHOUSE_URL": given + more})
     assert "LPB_CLEARINGHOUSE_URL" in message and "no path" in message

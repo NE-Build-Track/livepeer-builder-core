@@ -1,9 +1,9 @@
 # Payments and cost contract
 
-**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82, D83 and D87 (18 November 2026) ·
-**Code:** `contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/tenants.py`,
-`services/issued_payment_keys.py`, `services/payment_signing.py`, `services/tenant_usage.py`,
-`services/costs.py`, `adapters/batteries.py`, `adapters/signer_forward.py`
+**Ticket:** ISS-04 · **Decisions:** D17–D24 (12 October 2026), D82, D83, D85 and D87 (18 November 2026) ·
+**Code:** `contracts/payments.py`, `contracts/costs.py`, `services/payments.py`, `services/payment_keys.py`,
+`services/allocation_delivery.py`, `services/tenants.py`, `services/tenant_usage.py`, `services/costs.py`,
+`adapters/batteries.py`, `http/clearinghouse.py`, `http/delivered.py`
 
 Batteries and the livepeer/node remote signer are the payment path. Batteries is the authoritative
 network-accounting ledger. The engine projects cost per job and never keeps a second ledger.
@@ -56,9 +56,10 @@ being down reaches the engine as a signer 502, like any other signer fault.
 **What builders never see.** No builder-facing body carries a payment key, the signer URL or the
 signer's or Batteries' own text:
 
-- allotment and key rotation return the allocation, never the `lpg_` key, which is encrypted at rest.
-  They also return, once, the clearinghouse's own key for that actor (`lpp_`), of which only a hash is
-  kept ([payment keys](#payment-keys));
+- on a self-hosted engine, allotment and key rotation return the allocation, never the `lpg_` key, which
+  is encrypted at rest. On a standalone clearinghouse their answer hands the key to the enterprise's
+  engine, once ([payment keys](#payment-keys)). That answer is an admin's, never a builder's, and no read,
+  list, record or log line carries the key;
 - a job's `failure.message` for a payment failure is the engine's own words, and `failure.body` is
   only ever the runner's; the SDK's text, with the signer URL and its body, goes to the
   `runner.signer_error` log line as `detail`;
@@ -125,20 +126,20 @@ clearinghouse has one for each enterprise app.
 | `GET /v1/clearinghouse/wallet` | A clearinghouse admin | The wallet's deposit and reserve, the total of unspent grants and the signer's readiness ([the wallet report](#the-wallet-report)) |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
-| `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment) |
+| `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment). Each answers the allocation (`ActorAllocation`). On a standalone clearinghouse, allotting (`201`) and rotating the payment key (`200`) also hand over the allocation's key, once (`allocation_api_key`, with `replayed` and `resumed`); on a self-hosted engine the engine stores the key and the answer has none ([payment keys](#payment-keys)) |
 | `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
-| `POST /sign-orchestrator-info`, `POST /generate-live-payment` | A payment key | The signer's two paths, at the root: who the signer is, and one signed payment against that actor's allocation ([signing through a clearinghouse](#signing-through-a-clearinghouse)) |
 
-A clearinghouse admin may call every route but the last, for any tenant: the signer's two paths take a
-payment key and nothing else. The first five are what only a clearinghouse admin does; they are one
-group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A deployment with a private
-listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the public listener those
-five are 404, and a clearinghouse admin credential is 403 on every route that takes an access
-credential. The signer's two paths are served on both listeners, to a payment key
+A clearinghouse admin may call every route, for any tenant. The first five are what only a clearinghouse
+admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A
+deployment with a private listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the
+public listener those five are 404, and a clearinghouse admin credential is 403 on every route
 ([access.md](access.md#listeners)). With one listener, which is the default and what self-hosted
 payments runs, every route is served there and nothing is refused.
+
+There is no payments route, and a clearinghouse serves no signer path: an enterprise's engine signs at
+the signer itself, with the allocation's key ([payment keys](#payment-keys)).
 
 **The tenant desk.** Onboarding, the tenant list, the grant read and the tenant's status use the grants
 credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`,
@@ -358,7 +359,8 @@ checks stop that:
 - **Per request.** Allotment and key rotation ask the secret store whether it can write in the step
   that mints the key, just before the provider is called. The check is the store's optional
   `writable()` (`WritableSecretStore`); a supplied store that leaves it out is not asked. A `False` is
-  `InvalidRequest` (HTTP 400).
+  `InvalidRequest` (HTTP 400). A command that hands its key over (`allot_for_delivery`,
+  `rotate_for_delivery`) stores nothing and is not asked.
   - On a first run nothing was sent to the provider and nothing was noted, so the reference stays
     free and the same command runs once the store can write.
   - A repeat of a finished command stores nothing and is not asked: it gets the recorded result.
@@ -379,7 +381,7 @@ checks stop that:
 
 | Command | Provider call | Idempotency |
 | --- | --- | --- |
-| `allot(AllotRequest(tenant, actor, amount, operation_ref))` | `POST /v1/api-keys` with `grant_id`, the tenant's id (atomic: allocation + key + funding); then the actor's [payment key](#payment-keys), an engine record | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; top it up instead |
+| `allot(AllotRequest(tenant, actor, amount, operation_ref))`, which stores the new key, or `allot_for_delivery(...)`, which hands it to the caller ([payment keys](#payment-keys)) | `POST /v1/api-keys` with `grant_id`, the tenant's id (atomic: allocation + key + funding) | the [ledger](#repeat-safe-commands), and a provider key derived from the actor, so two references for one actor still meet at Batteries. An actor already allotted is 409 `already_allotted`; top it up instead |
 | `top_up(…, TopUpRequest(amount, operation_ref))` | `POST /v1/allocations/{id}/fund` | the [ledger](#repeat-safe-commands), and `base64url(sha256(engine_id:fund:{allocation}:{operation_ref}:fund))` |
 | `top_up_grant(tenant, TopUpRequest(amount, operation_ref))` | `POST /v1/grants/{tenant}/fund` | the ledger, and `base64url(sha256(engine_id:fund-grant:{tenant}:{operation_ref}:fund))` |
 | `tenants.onboard(name, amount, operation_ref=…)` (the tenant desk, `payments.tenants`) | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation`; then the tenant admin key, an engine record | the ledger; Batteries has no key on grants, so a resume finds the tagged grant (Q5) |
@@ -387,10 +389,21 @@ checks stop that:
 | `tenants.set_status(tenant, active / paused, operation_ref=…)` | `PATCH /v1/grants/{tenant}/status` with `LPB_BATTERIES_GRANTS_TOKEN` | the ledger; the call itself sets a state |
 | `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
-| `rotate_payment_key(operation_ref)` | `POST /v1/api-keys` with `allocation_id`, then revoke the old key; then the actor's [payment key](#payment-keys) is replaced, an engine record | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
+| `rotate_payment_key(operation_ref)`, which stores the new key, or `rotate_for_delivery(operation_ref)`, which hands it to the caller | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit top-up.
+- **A resume names the allocation as the first run did.** An allotment is saved with a label: the
+  request's `label`, else the name the person last signed in with (D48), else none. Batteries is sent
+  that label as the allocation's name, or `{tenant_id}/{actor_id}` when there is none. The label is
+  noted in the command's record as the record begins, before the provider call (`sent_label` in its
+  context), and every run of the command sends the noted one and saves the actor with it, whatever the
+  person's sign-in name is by then. It matters because Batteries replays a saved success only to the
+  request it was first given: another name under the first run's idempotency key is its 409, every
+  time. So a person who signs in for the first time, or under a new name, between a run that funded
+  the allocation and the resume that saves the actor does not stop the resume. A record written before
+  the label was noted has none, and its resume reads the name again: it finishes when the name is
+  what the first run sent, and is refused by Batteries (409) when it is not, keeping its reference.
 - **One command never undoes another on the same actor (#115, C4).** `allot`, `top_up`, `set_status`,
   `revoke` and `rotate_payment_key` read the actor, call the provider, then write. Each writes only its own
   columns, with its condition in the SQL statement:
@@ -398,7 +411,7 @@ checks stop that:
   | Command | Writes | Only where |
   | --- | --- | --- |
   | `set_status`, `revoke` | `status`, `updated_at` | the actor is not `revoked` |
-  | `rotate_payment_key` | `api_key_id`, `secret_ref`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
+  | `rotate_payment_key` | `api_key_id`, `secret_ref`, `credential_custody`, `updated_at` | the actor is not `revoked` and still holds the key the rotation began from (or already holds the rotation's own) |
   | `top_up` | `status` = `active`, `updated_at` | the status is `exhausted` |
   | `allot` | the whole row | the actor is as allotment read it: it has no row, or it still has the `revoked` row being replaced |
 
@@ -498,7 +511,9 @@ checks stop that:
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
   the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
-  which is opaque text of any length (#115): a supplied secret store may return a long path.
+  which is opaque text of any length (#115): a supplied secret store may return a long path. A key
+  handed to an enterprise's engine goes into no store: the actor then holds a receipt in place of a
+  store handle, and `credential_custody` says which it is ([payment keys](#payment-keys)).
 - **Which grant.** The tenant's: a tenant's id is its grant's id ([Tenants](#tenants)), and no request
   names a grant. Before #165 the request named it, or the grant of the caller's own allocation was used;
   the caller's allocation chooses nothing now. Batteries still applies `grants.fund` to every grant on the
@@ -515,139 +530,122 @@ checks stop that:
 
 ## Payment keys
 
-A payment key is what an enterprise's engine presents when it asks a clearinghouse to sign a payment for
-one actor (D87, #166). It may ask for that actor's payments and nothing else. The clearinghouse swaps it
-for the actor's Batteries key (`lpg_`), which never leaves the clearinghouse. It is presented at the
-signer's two paths, which the clearinghouse serves
-([signing through a clearinghouse](#signing-through-a-clearinghouse)).
+A payment key is the allocation's own Batteries key (`lpg_`): the bearer an engine presents to the
+signer to pay for one actor's work ([payment path](#payment-path)). Allotment mints it and a rotation
+replaces it. There is no second payment credential: a clearinghouse issues no key of its own and serves
+no signer path (D85 point 1 and D87 point 1, as Mike amended them on 19 and 23 November 2026; #166).
 
-- **Its form.** `lpp_` and 32 random bytes as URL-safe text, 47 characters in all. An access key is
-  `lpk_` and a Batteries key `lpg_`, so the three are told apart at sight.
-- **Issued at allotment, once.** `POST .../actors/{actor_id}/allocation` answers `201` with the
-  allocation, every field where it was, and `payment_key`: `{"token": "lpp_...", "replayed": false}`
-  (`KeyedAllocation`). The enterprise's engine stores the token where it stores a Batteries key today.
-- **Only its hash is kept.** `lpb_payment_keys` holds the SHA-256 of the token, never the token, as
-  `lpb_access_keys` does for an access key: one row for each actor, with the allocation the key was
-  issued for. The token is in the answer of the run that issued the key and nowhere else: not in the
-  actor's record, the operation ledger, any read, or a log line.
-- **A repeat shows none.** A repeat of a finished allotment or rotation is answered from the ledger with
-  `"token": null` and `"replayed": true`, as a repeated key issue is
-  ([repeat-safe commands](#repeat-safe-commands)). A resumed allotment, whose first run stopped before
-  it finished, issues the key only where the allocation has none yet, and shows it: nobody was shown
-  one. Where the first run did issue it, the answer is `"token": null`. An admin who lost the token
-  rotates the payment key.
-- **Rotation replaces both keys.** `POST .../allocation/rotate-payment-key` first rotates the Batteries
-  key as before (a new key on the same allocation, then the old one revoked), and then replaces the
-  payment key. The old payment key stops in the statement that stores the new one, and the answer
-  carries the new token, once. The Batteries key is still rotated because it is the one that spends:
-  with self-hosted payments it is the only key in use, and a clearinghouse that suspects a leak must be
-  able to retire it. The payment key is replaced last, so a rotation that stops part-way leaves the old
-  payment key working, on whichever Batteries key the actor holds, until the same request finishes it.
-- **Revoking the allocation stops it.** The key is removed. A key also finds its actor only while that
-  actor still holds the allocation the key was issued for and it is not revoked, so the key of a revoked
-  allocation finds nobody whether or not it was removed, and never finds an allocation allotted later.
-  A paused or exhausted allocation keeps its key: Batteries refuses the payment (403, 402), not the
-  clearinghouse the key.
-- **Not an access key.** As a bearer on any route but the signer's two paths, a payment key gets what no
-  credential gets: 401. And on those two paths nothing else is a credential: an access key is 401 there.
-- **Finding the actor.** `payments.resolve_payment_key(token)` returns the actor's `ActorAllocation`
-  for a live key, and raises `NotAuthenticated` for anything else: a key never issued, one a rotation
-  replaced, one of a revoked allocation, an access key, a Batteries key.
-- **Self-hosted payments is unchanged.** One engine has both halves: the work half's
-  `CredentialResolver` returns the stored Batteries key, and the runner call presents that to the
-  signer, as before. The payment key the allotment returned is not used there.
-- **An allocation allotted before #166** has no payment key. Rotating its payment key issues its first.
-  The repeat of its allotment still answers from the ledger, with `"token": null`.
-- **A supplied store** keeps payment keys when it implements `PaymentKeyRepo`
-  ([persistence.md](persistence.md#store)). Without it nothing is issued and none is recognized:
-  `payment_key` is `null`.
-- **Every change is logged**, never with the token or its hash: `payments.payment_key_issued`,
-  `payments.payment_key_replaced` and `payments.payment_key_stopped`, each with the tenant, the actor
-  and the allocation.
+The engine that runs an actor's jobs keeps that actor's key:
 
-## Signing through a clearinghouse
-
-A payment clearinghouse serves the signer's two paths at the root of its listener, each called with a
-payment key (D87 point 3, as Mike amended it on 19 November 2026; #166). With a public and a private
-listener (#167) they are at the root of both, and take a payment key on both
-([access.md](access.md#listeners)):
-
-| Route | What it does |
-| --- | --- |
-| `POST /sign-orchestrator-info` | Who the clearinghouse's signer is: its address and a signature. The call every payment begins with. It signs no payment |
-| `POST /generate-live-payment` | Signs one payment against the allocation of the actor whose payment key it is. Fixed work calls it once. Live work calls it every payment cycle (3 seconds), with the signer's `state` from the cycle before |
-
-They are at the root, and there is no `POST /v1/clearinghouse/payments`, because the gateway SDK calls a
-signer at these two paths of the signer address's origin and drops any path in that address
-(`livepeer_gateway.remote_signer` and `http._http_origin` at the pin). So the SDK is not changed: an
-enterprise's engine gives it the clearinghouse's address where the signer's goes, and an actor's payment
-key where the Batteries key goes.
-
-**The credential.** `Authorization: Bearer lpp_...`, as the SDK sends a signer its credential on both
-calls (`adapters/sdk.py`; the scheme's case does not matter). Anything else is 401 on both paths, the
-identity path included, with `WWW-Authenticate: Bearer` and nothing forwarded: no header, another scheme,
-an access key (`lpk_`), a Batteries key (`lpg_`), and a payment key that was never issued, was replaced by
-a rotation, or belongs to a revoked allocation.
-
-**The swap.** The clearinghouse finds the actor of the payment key, reads that actor's Batteries key
-from its own secret store and calls its signer with it, once. A key signs for its own actor only: no
-other actor's Batteries key is ever read for it.
-
-- **What goes to the signer:** the request body as it arrived, byte for byte (the signer's `state` is
-  signed, and a price is a float the SDK wrote), its content type, and the Batteries key as the bearer.
-  No other header of the caller's is sent, since the signer hands every header to the Batteries webhook.
-  The payment key is not sent.
-- **What comes back:** the signer's answer as it is, whatever its status: the status, the body and the
-  content type, with `Cache-Control: no-store` and no other header. The Batteries key is in no answer and
-  no log line; an answer that held it would be withheld as an unknown outcome.
-- **The body is bounded** at 1 MiB, as the signer bounds it (`signer/service.go`), with the signer's
-  answer for a larger one: 400. Nothing is forwarded.
-
-**The clearinghouse decides nothing about money.** Whether an allocation can pay is Batteries' decision,
-which the signer asks for before it signs, and the answer comes back as the signer gave it. So the SDK
-and the engine read each case as they do with self-hosted payments ([who answers what](#who-answers-what)):
-
-| The allocation | The clearinghouse answers | The engine reports |
+| | Self-hosted payments | A standalone clearinghouse |
 | --- | --- | --- |
-| is empty: exhausted, or its balance is below the fee | the signer's 402 | `payment` / `allowance_exhausted` |
-| is paused, or its tenant is (the grant is inactive) | the signer's 403 | `payment` / `not_authorized` |
-| was revoked at the clearinghouse | 401: its payment key stopped, and nothing is forwarded | `payment` / `not_authorized` |
-| has a Batteries key that Batteries revoked | the signer's 401 | `payment` / `not_authorized` |
+| Keeps the key | The engine, in its `SecretStore` | The enterprise's engine. The clearinghouse keeps none |
+| The commands | `payments.allot`, `payments.rotate_payment_key` | `payments.allot_for_delivery`, `payments.rotate_for_delivery` |
+| They answer | `ActorAllocation` | `DeliveredAllocation`: the allocation, and `allocation_api_key`, `replayed` and `resumed` |
+| `credential_custody` on the allocation | `secret_store` | `work_engine` |
+| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` for one listener and for each of two ([access.md](access.md#listeners)) | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
+| Signs at the signer | The engine, with the stored key | The enterprise's engine, with the key it was handed |
 
-Every other signer answer passes through the same way: 400 and 481 (`payment_refused`), 480 (the engine
-asks the runner for a fresh challenge), 482 (the SDK skips a payment cycle) and a 5xx.
+`lpb serve` runs the combined app, so its allotment and rotation store the key and answer none. The role
+setting that serves a clearinghouse by itself is #169. The enterprise's engine that stores a handed key
+and pays with it is built (#168): [the remote adapters](#the-remote-adapters).
 
-**When the signer gives no answer.** The gateway SDK gives a signer call 5 seconds and does not retry.
-The clearinghouse's own call ends after 4 seconds, connecting after 2, on a connection of its own, with
-no retry, no redirect followed and no proxy read from the environment. What it answers by itself is in the signer's error shape
-(`{"error": {"message": ...}}`), with a `code` for the two failures a signer cannot have:
+- **Custody is recorded, never read from a reference.** `ActorAllocation.credential_custody`
+  (`lpb_actors.credential_custody`, migration 0015) says who holds the key that `secret_ref` names.
+  `secret_store`: the engine's configured `SecretStore` issued the reference, and resolves and deletes
+  it. `work_engine`: the key was handed to the enterprise's engine, and the reference is a receipt that
+  no store resolves. Every answer and read of an allocation carries the field. Nothing is inferred from
+  the text of a reference, since a supplied store may issue any handle. An allocation written before
+  migration 0015 is `secret_store`. The operation ledger notes the custody beside each secret reference
+  it records, and every delete follows it: a store's handle is deleted on the store that issued it, and a
+  receipt never reaches a store.
+- **The handover.** On a standalone clearinghouse `POST .../actors/{actor_id}/allocation` answers `201`
+  and `POST .../allocation/rotate-payment-key` answers `200`, each with the allocation, every field
+  where it was, and three more:
 
-| What happened | Sent to the signer? | Answer | At `/sign-orchestrator-info` the engine reports | While signing, the engine reports |
-| --- | --- | --- | --- | --- |
-| No live payment key | No | 401 | `payment` / `not_authorized` | `payment` / `not_authorized`, unpaid |
-| A body over 1 MiB | No | 400 | `payment_refused` | `payment_refused`, unpaid |
-| The signer answered | Yes | The signer's own | As with self-hosted payments | As with self-hosted payments |
-| The signer was not reached: the connection was never made (refused, no such host, no connection in 2 seconds), or the actor's key could not be read from the secret store | No | 503, `code: signer_not_reached`, `Retry-After: 10` | `payment` / `signer_unavailable`: retry | `payment` / `signer_unavailable`, with nothing paid, at an engine that uses a clearinghouse: it reads the `code` (#168). A transport that was not told the address is a clearinghouse's reads no code: `payment_unknown` / `signer_unknown`, as any 5xx while signing |
-| The call left and no usable answer came back: a timeout, a dropped connection, a redirect, an answer that held the key | Yes, or perhaps | 502, `code: signer_outcome_unknown` | `payment` / `signer_unavailable` (nothing is signed at this path) | `payment_unknown` / `signer_unknown`: it may have charged |
+  | Field | What it holds |
+  | --- | --- |
+  | `allocation_api_key` | The key (`lpg_...`), or `null` |
+  | `replayed` | `true` exactly when `allocation_api_key` is `null`. The enterprise's engine checks it before it stores anything |
+  | `resumed` | `true` when this call finished a run that an earlier attempt left unfinished |
 
-The `code` is in the body, which the SDK keeps on the error it raises (`LivepeerHTTPError.body`), so an
-engine reads it with the SDK unmodified. A 5xx with no `code` is never read as "nothing was sent": a
-proxy in front of the clearinghouse answers 502, 503 and 504 of its own. When in doubt the clearinghouse
-says `signer_outcome_unknown`.
-
-- **A rotation ends an actor's live work.** Batteries binds a payment session to the key that opened
-  it, and rotating the payment key rotates the Batteries key too, so the next cycle of a stream that is
-  running is refused and its funding stops. The same holds with self-hosted payments.
-- **Each call is logged** as `payments.signer_call`, with the tenant, the actor, the allocation, the
-  path and what came of it (`answered` and the status, `not_reached` or `unknown`), never with a key. The
-  signer's address and the reason for a failure are in that line and in no answer.
-- **Optional.** The two paths are present on an engine whose runner transport forwards a signer call
-  (`SignerForwarder` in `protocols`, which `SdkRunnerTransport` has) and has a signer
-  (`LPB_SIGNER_URL`). On any other engine they are absent, and `engine.payments.signing` is `None`. An
-  engine with self-hosted payments serves them too: it has both halves.
-- **What the clearinghouse sees:** the payment's terms, which are the orchestrator's payment parameters,
-  the capability (`app`), the price ceiling and the payment's id. Never the job, its prompt or its
-  result.
+  The answers to allotment and rotation carry `Cache-Control: no-store`, on a self-hosted engine too.
+- **The clearinghouse keeps no key.** While a delivering command runs, the key is in a buffer of that one
+  call (`DeliverySecrets` in `services/allocation_delivery.py`), which is emptied when the call ends,
+  answered or failed. It reaches no secret store, no table, no ledger record and no log line, and two
+  commands at the same moment share no buffer. `DeliveredAllocation.allocation_api_key` is a `SecretStr`,
+  so a dump or a log of the model shows it masked; only the route's answer writes it out
+  (`http/delivered.py`). The clearinghouse cannot pay for such an actor: its own `CredentialResolver`
+  answers `NotProvisioned` (HTTP 402, "allocation credential is held by the work engine") and asks no
+  store.
+- **A repeat of a finished command hands over nothing.** It is answered from the ledger, whose record
+  holds the allocation alone: the original status, `allocation_api_key: null`, `replayed: true` and
+  `Idempotent-Replayed: true` ([repeat-safe commands](#repeat-safe-commands)). An admin whose engine
+  lost the key rotates it, under a new reference.
+- **A resumed command hands the key over** (Mike, 23 November 2026). A run that stopped before it
+  finished answered nobody. The repeat that resumes it sends its provider call again under the
+  idempotency key the first run recorded, and Batteries replays the original success, the secret
+  included, and never expires it ([batteries-api.md](../references/batteries-api.md)). Nothing is
+  allotted, funded or minted twice, and the answer carries that key with `resumed: true` and
+  `replayed: false`, without `Idempotent-Replayed`. An allotment whose first run had already saved the
+  actor still sends that call, only to be handed the key again.
+- **Two delivering allotments of one actor under two references,** at the provider at the same moment,
+  get one allocation and one key from Batteries. Each answer carries that key only while the actor
+  still holds it. The allotment that did not write the row answers from the actor as stored, by the
+  table under [an allotment that another command overtook](#allotment): an actor rotated or allotted
+  again since is 409 `already_allotted`, and one revoked since is answered as the revoked actor, or 404,
+  with no key. For either allotment, the answer of an actor that has moved past the key carries none
+  (next). An allotment under a new reference that begins after the actor is allotted is 409
+  `already_allotted`. When the two are one of each kind, the allotment that wrote the row keeps the key:
+  a delivering one's caller is handed it, and the other answers the allocation, `work_engine`; a storing
+  one (`allot`) keeps it in the store, and the delivering one's answer has `replayed: true` and no key.
+- **Never the key of an allocation the actor has moved past.** Just before it answers, a delivering
+  command reads the actor again (`delivered()`). The answer carries the key only while the actor is not
+  `revoked` and still holds the allocation, the key and the receipt the answer names. An actor that was
+  revoked, rotated or allotted again meanwhile gets `allocation_api_key: null` and `replayed: true`,
+  without `Idempotent-Replayed`: the command ran, and its key is no longer the actor's.
+- **Only the kind of command that began a run resumes it** (Mike, 23 November 2026). The two kinds are
+  the commands that store the key (`allot`, `rotate_payment_key`) and the ones that hand it over
+  (`allot_for_delivery`, `rotate_for_delivery`), and one `operation_ref` is one record for both. The
+  record notes which kind began it when it begins, before any provider call (`begun_for` in its context:
+  `secret_store` or `work_engine`). While the run is unfinished, the same request from the other kind is
+  409 `OperationConflict`, `code: operation_conflict`, in the stale window and after it. Nothing is sent
+  to the provider and nothing is written, so the record stays as it was, and the command that began it
+  still resumes it. The error names that command. It matters only where both kinds are called for one
+  actor: in embedded mode, or on two apps over one database. Finished by the other kind, a delivering
+  run's key would be handed to nobody, and a storing run's would stay in the store while the delivering
+  caller is answered with none.
+  - A repeat of a *finished* command is not a resume. Either kind is answered from the ledger, the
+    delivering one with `allocation_api_key: null` and `replayed: true`.
+  - A record written before the kind was noted is the kind that the custody of its stored secret
+    implies (`new_secret_custody`). One that notes neither was begun by `allot` or `rotate_payment_key`.
+  - Two references are two commands, so the rule does not join them: an allotment of each kind for one
+    actor, under two references, ends as the bullet on two allotments above says.
+- **A rotation ends an actor's live work.** It mints a new key on the same allocation and revokes the old
+  one. Batteries binds a payment session to the key that opened it (`internal/store/auth.go`: 403,
+  "session is revoked or binding does not match"), so the next payment cycle of a stream that is
+  running is refused and its funding stops. The same holds in both configurations.
+- **Revoking the allocation** revokes it at Batteries, which then refuses every payment with its key
+  ([who answers what](#who-answers-what)). A key the store holds is deleted there before the actor
+  is marked revoked, so a store that fails leaves the actor active and a retry deletes it. A key an
+  enterprise's engine holds is not the clearinghouse's to delete: no store is asked, and that engine
+  drops its own copy.
+- **Whether an allocation can pay is Batteries' decision alone.** The signer asks Batteries'
+  authorization webhook before it signs, and at a standalone clearinghouse that is the only check at
+  signing: the clearinghouse's engine is not in the path. So the signer is reachable by every
+  enterprise's engine, and it keeps that webhook configured. An enterprise's engine reads each refusal
+  as a self-hosted one does ([who answers what](#who-answers-what)): an empty allocation is the signer's
+  402 (`payment` / `allowance_exhausted`), and a paused or revoked allocation, a paused tenant and a
+  revoked key are its 403 or 401 (`payment` / `not_authorized`).
+- **What a clearinghouse sees of a payment.** Its signer and Batteries see the payment's terms: the
+  orchestrator's payment parameters, the capability (`app`), the price ceiling and the payment's id.
+  Never the job, its prompt or its result. Its engine sees no payment as it happens; it reads the
+  records afterwards ([a tenant's usage](#a-tenants-usage)).
+- **Self-hosted payments is unchanged.** One engine has both halves: allotment and rotation store the
+  key, the work half's `CredentialResolver` returns it, and the runner call presents it to the signer.
+- **A supplied store** records custody with the key write: `ActorCommandRepo.set_actor_key` takes
+  `credential_custody`, and a store without the conditional writes gets it as a field of the actor it
+  saves ([persistence.md](persistence.md#store)).
 
 ## Repeat-safe commands
 
@@ -662,6 +660,7 @@ Provider calls keep their derived idempotency keys, so a resumed command replays
 | --- | --- |
 | is new | Runs the command |
 | was used with another command or request | 409 `OperationConflict`, `code: operation_conflict`, before any provider call |
+| names an allotment or a payment key rotation still `started`, which the other kind of command began | 409 `OperationConflict`, `code: operation_conflict`, before any provider call and any write: repeat the command that began it ([payment keys](#payment-keys)) |
 | names a command that ended | The recorded result, with the original status and `Idempotent-Replayed: true` |
 | names a command still `started`, for less than `LPB_OPERATION_STALE_S` (120 s) | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After`: the seconds until a repeat may resume it |
 | names a command still `started` for longer | **Resumes** it: runs every step again from the top; each step is safe to repeat |
@@ -677,6 +676,8 @@ What a repeat of an allotment or of a grant's creation recorded before #165 gets
 A 409 for an admin command carries `operation: {command, operation_ref, state}` instead of a job, and
 no `Livepeer-Job-Id`. In embedded mode the replay is the return value; `OPERATION_REPLAYED` (a context
 variable in `livepeer_builder.contracts`) is `True` right after a call answered from the ledger.
+`OPERATION_RESUMED`, beside it, is `True` right after a command that resumed a run an earlier attempt
+left unfinished; a replay of a finished command is not a resume.
 
 - **Refused or unknown.** A command refused outright (an invalid request, an unknown actor or grant, a
   provider 4xx other than 408) before any step applied anything: the engine deletes its record, so the
@@ -773,9 +774,9 @@ variable in `livepeer_builder.contracts`) is `True` right after a call answered 
   pause is answered from its record, so it never pauses again a tenant that was resumed since.
 - **Access keys** are written in the same transaction as their record, so they are never `started`:
   a replay returns the key with `token: null` ([access.md](access.md#repeated-key-commands)).
-- **A payment key's token** is never in a record either. An allotment's and a rotation's recorded
-  result is the allocation alone, so a replay answers `payment_key` with `token: null` and
-  `replayed: true` ([payment keys](#payment-keys)).
+- **A payment key** is never in a record either. An allotment's and a rotation's recorded result is the
+  allocation alone, so a replay hands over no key: on a standalone clearinghouse it answers
+  `allocation_api_key: null` and `replayed: true` ([payment keys](#payment-keys)).
 - **Lifetime.** Ledger records are kept; there is no purge in M3.
 
 Which commands take a reference:
@@ -1078,32 +1079,31 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Configuration | Who runs Batteries, the signer and the wallet | State |
 | --- | --- | --- |
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
-| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, and reaches the clearinghouse only for signing, allotment, allowance and usage | Built (M4, #162 to #169). The two Compose projects that run it on one host are in [deploy/](../../deploy/README.md) |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, which reaches the clearinghouse for allotment, the allowance, usage and the runner list, and signs at the clearinghouse's signer itself | Built (M4, #162 to #169). The two Compose projects that run it on one host are in [deploy/](../../deploy/README.md) |
 
 **The engine's role says which side a deployment is** (`LPB_ROLE`, D84, #169):
 
-| `LPB_ROLE` | Configuration | Routes | The payment ports reach |
-| --- | --- | --- | --- |
-| `both`, the default | Self-hosted payments | The work routes and the clearinghouse routes | Batteries and the signer |
-| `work` | The enterprise's side of a payment clearinghouse | The work routes | The payment clearinghouse |
-| `clearinghouse` | The clearinghouse | The clearinghouse routes, on a public and a private listener | Batteries and the signer |
+| `LPB_ROLE` | Configuration | Routes | Allotment and rotation | Payment ports | Signs |
+| --- | --- | --- | --- | --- | --- |
+| `both`, the default | Self-hosted payments | The work routes and the clearinghouse routes | The engine stores each key for its own jobs and returns none | Batteries and its signer | At its signer |
+| `work` | The enterprise's side of a payment clearinghouse | The work routes | No route allots. The engine's own commands store the key the clearinghouse hands over | The clearinghouse, for allocations, the allowance and usage; its own store for keys | At the clearinghouse's published signer, `LPB_SIGNER_URL` |
+| `clearinghouse` | The clearinghouse | The clearinghouse routes, on a public and a private listener | Each key is handed to the caller once, and none is stored | Batteries | Nothing: it never runs a job |
 
 A deployment that sets nothing new is in its `both` role, and nothing it served or wired changed. What
 each role needs, refuses and starts is in [RELIABILITY.md](../RELIABILITY.md#roles), and the routes of
 each role are in [access.md](access.md#listeners).
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
-([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166):
-[the signer's two paths](#signing-through-a-clearinghouse), with a [payment key](#payment-keys);
-[a tenant's usage](#a-tenants-usage); and the [runner list](discovery.md#the-clearinghouses-runner-list).
-The engine that calls them is #168: it reaches the usage, the runner list and the tenant's
-allocation routes through [the remote adapters](#the-remote-adapters), and
-[signs at the two paths](#what-signs-for-an-engine-that-uses-a-clearinghouse) with the SDK's transport.
+([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166): allotment
+and rotation that hand over each actor's [payment key](#payment-keys); [a tenant's usage](#a-tenants-usage);
+and the [runner list](discovery.md#the-clearinghouses-runner-list). The engine that calls them is built
+too (#168): it reaches them through [the remote adapters](#the-remote-adapters). It reaches the signer
+with those keys, and Batteries never: only the clearinghouse's own engine does.
 
 The engine's routes are two sets (D84, #164). The **clearinghouse routes** are tenants and their grants,
 a tenant's actors and their allocations, and a tenant's access keys and usage, all under
-`/v1/clearinghouse/tenants` since #165 ([Tenants](#tenants)), the runner list at
-`/v1/clearinghouse/discovery`, and the signer's two paths at the root. The
+`/v1/clearinghouse/tenants` since #165 ([Tenants](#tenants)), and the runner list at
+`/v1/clearinghouse/discovery`. The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
 engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets; an
@@ -1112,26 +1112,51 @@ clearinghouse routes alone (#169). The
 old paths of the routes that moved are under
 [Upgrading to the work routes and the clearinghouse routes](index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
 
+### Mode B
+
+"Mode B" was the M2 name for the second configuration: a hosted payment operator, one Batteries
+instance serving many enterprises (D23). "Mode A" was self-hosted payments. The gap D23 recorded is
+that Batteries management credentials are global (a permission covers every grant), so an operator
+cannot safely give an engine a management credential.
+
+D74 (13 November 2026) answered it with a separately operated engine in `per_application` mode. That
+was not built. D82 (18 November 2026) replaces it with the payment clearinghouse, which needs no scoped
+credential: only the clearinghouse's own engine reaches Batteries' management API, and no management
+credential leaves it. What leaves is each allocation's own key, handed once to the engine of the tenant
+it belongs to ([payment keys](#payment-keys)).
+
+### Provisioning
+
+"Provisioning" was the name of allotment until 18 November 2026 (D83, #163): an admin allots an
+allocation to an actor, where the engine said it provisioned the actor. See [Allotment](#allotment).
+The failure kind `not_provisioned` keeps its name: the failure table belongs to ISS-28. Every name that
+changed with it is under
+[Upgrading to the domain-language names](index.md#upgrading-to-the-domain-language-names).
+
 ## The remote adapters
 
-An engine that uses a payment clearinghouse (#168, D84) points its payment ports at the clearinghouse in
-place of Batteries and the signer. It is an engine in its `work` role: `LPB_ROLE=work` selects the
-remote adapters (#169), and three settings, set together, say which clearinghouse:
+An engine that uses a payment clearinghouse (#168, D84) reaches the clearinghouse, in place of Batteries,
+for allotment, the allowance and usage. It keeps each actor's key itself and signs at the clearinghouse's
+signer itself ([payment keys](#payment-keys)). It is an engine in its `work` role: `LPB_ROLE=work`
+selects the remote adapters (#169), and three settings, set together, say which clearinghouse:
 
 | Setting | Meaning |
 | --- | --- |
-| `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port]` and nothing after it: a path, a query, a fragment or userinfo is refused at startup, and the refusal does not echo the value. The gateway SDK, which the engine signs through, keeps that much of an address and drops the rest, so the signer's two paths are called at the root. A trailing slash alone is taken off |
+| `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port]` and nothing after it: a path, a query, a fragment or userinfo is refused at startup, and the refusal does not echo the value. The engine calls the clearinghouse's routes at the root of this address. A trailing slash alone is taken off |
 | `LPB_CLEARINGHOUSE_TOKEN` | The tenant admin key the clearinghouse admin handed over at onboarding. A secret: it is sent as a bearer to the clearinghouse and is in no log line, error text or `repr` |
 | `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83) |
 
-- **A half setting is refused at startup**, and so is any of them beside `LPB_BATTERIES_URL`,
-  `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` or `LPB_SIGNER_URL`: an engine that uses a
-  clearinghouse holds no address or credential of Batteries or a signer. The refusal names the
-  settings and echoes no value.
+- **`LPB_SIGNER_URL` names the clearinghouse's signer.** It is set as on any engine that pays, and it is
+  a second address: the clearinghouse's engine serves no signer path, and its address never stands in for
+  the signer's. With it unset the engine does not pay, as a self-hosted engine without it, and
+  [`lpb payments check`](#lpb-payments-check) fails.
+- **A half setting is refused at startup**, and so is any of the three beside `LPB_BATTERIES_URL`,
+  `LPB_BATTERIES_TOKEN` or `LPB_BATTERIES_GRANTS_TOKEN`: only the clearinghouse's own engine reaches
+  Batteries. The refusal names the settings and echoes no value.
 - **The role and the three settings go together** (#169). `LPB_ROLE=work` without them is refused, and
   so are they with `LPB_ROLE` unset, `both` or `clearinghouse`: the role is the one switch, and the
   three settings alone do not turn an engine into a clearinghouse's tenant.
-- **`LPB_SECRET_KEY` is required**, as with Batteries: the engine keeps each actor's payment key.
+- **`LPB_SECRET_KEY` is required**, as with Batteries: the engine keeps each actor's key.
 - **`LPB_CLEARINGHOUSE_TIMEOUT_S`** (30) bounds each request. `LPB_OPERATION_STALE_S` must be at least
   four times it, as for `LPB_BATTERIES_TIMEOUT_S`.
 - **`LPB_DISCOVERY_URL` defaults to the clearinghouse's runner list** (D87), and the reader carries the
@@ -1140,68 +1165,143 @@ remote adapters (#169), and three settings, set together, say which clearinghous
 
 ### Each port and its route
 
-`{t}` is the tenant and `{a}` the actor. Every path but the two signer paths begins
+The work half reaches payments through five ports (D84). Three have a remote adapter. Two are the
+engine's own in both configurations.
+
+| Port | Self-hosted payments | With a payment clearinghouse |
+| --- | --- | --- |
+| Signing, inside `RunnerTransport` | The engine's signer, at `LPB_SIGNER_URL`, with the actor's key | The clearinghouse's signer, directly, at `LPB_SIGNER_URL`, with the actor's key. Nothing of the clearinghouse's engine is in this path |
+| `CredentialResolver` | The engine's stored key (`PaymentsService`) | The same: the key the clearinghouse handed over at allotment or rotation, kept in this engine's `SecretStore` |
+| `AllocationManager` | Batteries' management API | `ClearinghouseAllocations`: the clearinghouse's tenant routes, with the tenant admin key. Allotment and rotation answer the actor's key, once |
+| `AllowanceReader` | Batteries | `ClearinghouseAllowances`: the actor's allocation at the clearinghouse |
+| `UsageSource` | Batteries' usage feed, for every tenant | `ClearinghouseUsage`: the usage route, for the caller's tenant only |
+
+Member by member: `{t}` is the tenant and `{a}` the actor, and every path begins
 `/v1/clearinghouse/tenants/{t}`.
 
 | Port and member | Route | The answer becomes |
 | --- | --- | --- |
-| `AllocationManager.create_key_for_grant` | `POST /actors/{a}/allocation` with `amount`, `label`, `operation_ref` | The allocation's id, the id of the Batteries key behind it, and the actor's payment key as the secret |
-| `AllocationManager.create_key` | `POST /actors/{a}/allocation/rotate-payment-key` with `operation_ref` | The same, with the new payment key |
-| `AllocationManager.revoke_key` | None: the rotation ended the old key | Nothing is sent |
+| `AllocationManager.create_key_for_grant` | `POST /actors/{a}/allocation` with `amount`, `label`, `operation_ref` | The allocation's id, its key's id, and `allocation_api_key` as the secret: the port's new key ([the key](#the-key-an-enterprises-engine-is-handed)) |
+| `AllocationManager.create_key` | `POST /actors/{a}/allocation/rotate-payment-key` with `operation_ref` | The same, with the new key. The clearinghouse ends the old key in the same command |
+| `AllocationManager.revoke_key` | `GET /actors/{a}/allocation`. Then, only for the key the allocation holds now, `POST /actors/{a}/allocation/rotate-payment-key` | Nothing ([two rotations](#two-rotations-of-one-actor-through-a-clearinghouse)) |
 | `AllocationManager.top_up_allocation` | `POST /actors/{a}/allocation/top-up` with `amount`, `operation_ref` | Nothing |
 | `AllocationManager.set_allocation_status` | `POST /actors/{a}/allocation/status` with `status` | Nothing |
 | `AllocationManager.revoke_allocation` | `POST /actors/{a}/allocation/revoke` | Nothing |
 | `AllocationManager.read_allocation`, `AllowanceReader.read_allowance` | `GET /actors/{a}/allocation` | The `allowance` of the answer ([Allowance](#allowance)). `null` there is `ProviderUnavailable`: unknown, never zero |
 | `AllocationManager.read_grant` | `GET /grant` | `TenantGrant` |
 | `AllocationManager.top_up_grant`, `set_grant_status`, `create_grant`, `list_grants`, `grant_page`, `grant_balances` | None | `AccessDenied` (403) in the engine, with nothing sent: only a clearinghouse admin does these, at the clearinghouse |
-| `AllowanceReader.allocation_for` | None: the engine's own actor record | The allocation whose payment key the engine holds |
+| `AllowanceReader.allocation_for` | None: the engine's own actor record | The allocation whose key the engine holds |
 | `UsageSource.page` | `GET /usage?cursor=&limit=` | The route's page, which is the port's own. A refused cursor is `CursorMismatch` |
-| `CredentialResolver.credential` | None: the engine's own actor record and secret store | The actor's payment key (`lpp_`), and never any other secret |
-| Signing, inside `RunnerTransport` | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, at the root of the address, with the actor's payment key | The signer's own answer ([what signs](#what-signs-for-an-engine-that-uses-a-clearinghouse)) |
+| `CredentialResolver.credential` | None: the engine's own actor record and secret store | The actor's key |
+| Signing, inside `RunnerTransport` | None at the clearinghouse's engine. `POST /sign-orchestrator-info` and `POST /generate-live-payment` at `LPB_SIGNER_URL`, with the actor's key | The signer's own answer ([payment path](#payment-path)) |
 
 - **The port names an allocation and the routes name an actor.** `AllocationManager` was written for
   Batteries, which takes an allocation's id. A manager that needs the actor has the optional protocol
-  `AllocationsByActor`: the engine calls `for_actor(tenant_id, actor_id)` and sends the command to the
-  manager that returns. The Batteries adapter does not have it. No member of `AllocationManager`
-  changed.
-- **The engine's idempotency key is the route's `operation_ref`.** The engine derives one key for each
-  provider write, as it always has ([Repeat-safe commands](#repeat-safe-commands)), and the adapter
-  sends it unchanged. A repeat at the enterprise's engine is therefore a repeat at the clearinghouse,
-  which answers it from its own operation ledger. The adapter itself never sends a request twice.
+  `AllocationsByActor`: the engine calls `for_actor(tenant_id, actor_id, operation_ref)` and sends the
+  command to the manager that returns. The Batteries adapter does not have it. No member of
+  `AllocationManager` changed.
+- **The reference a command carries.** The clearinghouse keys its own operation ledger on the
+  `operation_ref` it is sent, for the tenant admin key that sent it
+  ([repeat-safe commands](#repeat-safe-commands)). It knows nothing of the idempotency key the engine
+  derives for a provider.
+  - A top-up and a rotation carry the engine's idempotency key as it is: it names the engine, the
+    allocation and the admin's `operation_ref`.
+  - An allotment carries `base64url(sha256(<the engine's idempotency key>:<the admin's operation_ref>))`.
+    The engine's key for an allotment is derived from the actor alone, so that two references for one
+    actor meet at Batteries. A clearinghouse answers a reference it finished without the key, for good,
+    so the admin's reference is folded in: a new reference at the engine is a new command at the
+    clearinghouse, which judges it by its own record of the actor (409 `already_allotted` while the
+    actor holds an allocation there).
+
+  A repeat at the enterprise's engine is therefore a repeat at the clearinghouse, which answers it from
+  its own ledger. The adapter itself never sends a request twice.
 - **The allocation is checked before a write.** The routes act on whichever allocation the actor holds
   at the clearinghouse. Before a top-up, a status change or a rotation the adapter reads the actor's
-  allocation there, and refuses with 404 when it is not the one the engine names. A revoke of an
-  allocation the clearinghouse has already ended sends nothing.
+  allocation there, and refuses with 404 when it is not the one the engine names. A rotation answered
+  for another allocation is refused the same way, and its key is not kept. A revoke of an allocation the
+  clearinghouse has already ended sends nothing.
 - **No work route of the clearinghouse is called.** The allowance is read from the actor's allocation
   route, which answers it with the record ([Allowance](#allowance)). The remote adapters, the discovery
-  reader and `lpb payments check` call the tenant's routes, the runner list and the signer's two paths,
-  and nothing else: `tests/unit/test_clearinghouse_without_work_routes.py` runs them against a
-  clearinghouse's app built with no work route.
+  reader and `lpb payments check` call the tenant's routes and the runner list, and nothing else of the
+  clearinghouse's engine: `tests/unit/test_clearinghouse_without_work_routes.py` runs them against a
+  standalone clearinghouse's app, which has no work route and no signer path.
 - **Only an actor's current allocation can be read.** The route names an actor. An allocation the
   actor no longer holds is a 404 in the engine, with nothing asked, so reconciling an earlier
   allocation of an actor has no provider figure at an engine that uses a clearinghouse (tech debt T40).
 
-### Where the payment key is kept
+### The key an enterprise's engine is handed
 
-The clearinghouse shows an actor's payment key once, in the answer to the allotment and to a rotation.
-The enterprise's engine keeps it where it keeps a Batteries key with self-hosted payments: in its
-`SecretStore`, with the `SecretRef` on the actor's record. The key is in no answer of the enterprise's
-engine, in no record and in no log line, and the engine issues no payment key of its own: its answers
-to an allotment and a rotation carry `payment_key: null`.
+The clearinghouse hands an actor's key over once, in the answer to an allotment or a rotation, and keeps
+none ([payment keys](#payment-keys)). The enterprise's engine runs its ordinary commands, `payments.allot`
+and `payments.rotate_payment_key`, over the remote manager, which returns `allocation_api_key` as the
+port's new key. So the key goes where a self-hosted engine's goes: into the engine's own `SecretStore`,
+with the `SecretRef` on the actor's record and `credential_custody: secret_store`. For the enterprise's
+engine, its own store holds the key; the clearinghouse's record of the same allocation says
+`work_engine`. The key is in no answer of the enterprise's engine, no record, no ledger context, no log
+line and no error, and no error raised while an answer is read can lead to it
+(`adapters/clearinghouse_wire.py`).
 
-| What happened | What the engine does |
+What the engine does depends on what the answer carries:
+
+| The clearinghouse answers | The engine |
 | --- | --- |
-| The answer to an allotment or a rotation never arrived | The command fails as an unknown outcome and its reference stays held. The repeat, once `LPB_OPERATION_STALE_S` has passed, is answered by the clearinghouse `token: null, replayed: true`. The adapter then rotates the payment key there under a new reference and keeps the key that rotation shows. Nothing is allotted twice, and a rotation moves no money |
-| The actor is already allotted at the clearinghouse under another reference | The clearinghouse's 409, passed on. Nothing is applied and the amount is not added. The tenant admin revokes that allocation at the clearinghouse and allots again |
-| The actor was revoked and allotted again at the clearinghouse, behind the engine | The engine's commands about its own allocation are refused (404) before anything is sent. Revoking it succeeds and sends nothing: it has ended there |
-| The clearinghouse keeps no payment keys (`payment_key: null` in its answer) | An answer the engine cannot use, and no refusal: the reference stays held |
+| A key | Stores it, and saves the actor or points it at the key |
+| A key, with `resumed: true`: the clearinghouse's own run had not finished, and this repeat finished it | The same. This is the ordinary recovery from a failure at the clearinghouse |
+| No key, `replayed: true`, and the engine's own record of the actor names the allocation and the key of the answer, with the secret in its store | Finishes from its own copy: its run was handed the key and died afterwards. A rotation resumed after it stored the key ends this way |
+| No key, `replayed: true`, otherwise | Refused, `InvalidRequest` (400). Nothing is stored, and no actor record is saved or changed. The message says what replaces the key (below) |
+| No key and no `replayed`: the clearinghouse's routes are mounted to keep each key with its own engine | `ProviderError`, an answer the engine cannot use and no refusal: the allocation exists there, and the reference stays held |
+
+**A key that never arrived.** A clearinghouse that finished a command answers its repeat without the
+key, so a lost answer loses the key: nobody holds it. A lost key is replaced by a rotation (D87 point 1).
+
+- **A lost rotation.** The repeat is refused in those words. The engine still holds the key the
+  rotation replaced, which pays for nothing now. Rotate again under a new `operation_ref`: the engine is
+  handed the new key and stores it. The first rotation's record never finishes. Its repeat is refused
+  the same way for good and changes nothing, so leave it.
+- **A lost allotment.** The engine has no record of the actor, so it can neither rotate nor revoke it:
+  both are 404 here. The tenant's admin revokes the allocation at the clearinghouse
+  (`POST .../allocation/revoke` with the tenant admin key), which returns what it has not spent to the
+  grant, and allots again at the engine under a new `operation_ref`. The first allotment's record then
+  finishes: its repeat is 409 `already_allotted`, which frees the reference.
+- **Under a new reference without the revoke,** an allotment is the clearinghouse's 409
+  `already_allotted`, passed on. Nothing is applied and the amount is not added.
+
+**The engine's own resume.** A run of the engine that died after the clearinghouse answered repeats
+the same reference there.
+
+| The clearinghouse's command | Its answer | The engine |
+| --- | --- | --- |
+| Is still running, or stopped less than `LPB_OPERATION_STALE_S` ago | 409 `operation_in_progress` | `ProviderOutcomeUnknown`: the reference stays held, for a later repeat |
+| Stopped unfinished | The key, with `resumed: true` | Stores it and finishes |
+| Finished | No key, `replayed: true` | Finishes from its own copy when its run had stored the key and pointed the actor at it; otherwise the refusal above. An allotment resumed after the engine saved the actor asks the clearinghouse nothing |
+
+#### Two rotations of one actor through a clearinghouse
+
+The engine writes a rotation's key only over the key that rotation began from
+([two rotations](#allotment)), and a rotation that another one overtook revokes its own new key
+(`revoke_key`). A clearinghouse has no route that revokes a key by its id: a rotation there ends the key
+before it, and a revoked allocation takes none. So `revoke_key` reads the actor's allocation.
+
+- A key the allocation no longer holds has ended already, and nothing is sent. This is the old key of
+  every rotation the engine finishes.
+- The key the allocation holds now is replaced, by one more rotation at the clearinghouse under a
+  reference derived from the key, and nothing of that answer is read or kept. Only an overtaken
+  rotation asks this, about its own new key, which the engine is about to forget. So no key the engine
+  stored and then dropped stays live.
+
+When the clearinghouse ran two rotations one after the other and the engine wrote the earlier one's key,
+the later one is refused in the engine (`InvalidRequest`, "another key rotation finished"), and the
+actor holds a key the clearinghouse has ended. Its payments are refused by the signer until the next
+rotation, which the refusal asks for: under a new `operation_ref` the engine is handed the key the
+clearinghouse takes. Two rotations that overlap at the clearinghouse are settled there, and the engine
+keeps the key of the one the clearinghouse kept.
 
 **Rows a deployment already has.** An actor allotted while the engine ran self-hosted payments holds a
-Batteries key and an allocation the clearinghouse does not know. Its key is never sent to a
-clearinghouse: the resolver answers `not_provisioned`, before any payment. Its commands are refused by
-the clearinghouse, which holds no such allocation. Nothing is rewritten or deleted (T30). When the
-clearinghouse's engine holds the same actor record, because the deployment moved its own Batteries
-behind a clearinghouse, rotating the actor's payment key gives it one.
+Batteries key and an allocation the clearinghouse does not know. Its commands are refused before
+anything is sent, since the clearinghouse holds no such allocation, and nothing is rewritten or deleted
+(T30). Its jobs still present the stored key, to the signer the engine now names: the clearinghouse's,
+which refuses a key its Batteries never minted (`not_authorized`). Revoke such actors before the engine
+is pointed at a clearinghouse, and allot them again there.
 
 ### Who the engine is at the clearinghouse
 
@@ -1219,10 +1319,11 @@ pause a tenant, whatever it is asked.
 ### What a failure at the clearinghouse means
 
 A clearinghouse failure is classified like a signer failure (D87): unreachable or not ready is `retry`,
-an unknown outcome is `check`, and a refusal keeps its reason. On the tenant's routes, which four of the
-five ports call, that is three errors. The words `retry` and `check` are ISS-28's, which will read them
-from these. What a failed signer call means is under
-[what signs](#what-signs-for-an-engine-that-uses-a-clearinghouse).
+an unknown outcome is `check`, and a refusal keeps its reason. That covers the admin calls and the reads
+an engine makes at a clearinghouse, which all go through `adapters/clearinghouse_wire.py`, and it is
+three errors. The words `retry` and `check` are ISS-28's, which will read them from these. A failure
+while signing is the signer's own, and is read as a self-hosted engine reads it
+([who answers what](#who-answers-what)).
 
 | What happened | A read | A command |
 | --- | --- | --- |
@@ -1236,70 +1337,17 @@ from these. What a failed signer call means is under
 | 400 with `code: cursor_mismatch` | `CursorMismatch` | |
 | A 2xx that is not the expected shape, or a redirect | `ProviderError` with the answer's status. Its body is not quoted | The same, and no refusal: the command may have been applied |
 
-- `ProviderOutcomeUnknown` is new, and is a `ProviderUnavailable` (503): callers that catch that keep
-  working. It says a command left and no answer says whether it was applied. The operation ledger keeps
-  the reference, as it does for any failure that is not a refusal, and the repeat is answered by the
+- `ProviderOutcomeUnknown` is a `ProviderUnavailable` (503): callers that catch that keep working. It
+  says a command left and no answer says whether it was applied. The operation ledger keeps the
+  reference, as it does for any failure that is not a refusal, and the repeat is answered by the
   clearinghouse's own ledger. Under a new reference the command could apply twice.
 - A refusal frees the reference when nothing was applied, as with Batteries.
 - No redirect is followed, so the tenant admin key goes to the clearinghouse's address only.
 - An answer is read strictly: a field the engine does not know makes it unreadable. The two engines run
   the same release (tech debt T37).
-
-### What signs for an engine that uses a clearinghouse
-
-Signing is the fifth port, and it is inside the runner transport. An engine that uses a clearinghouse
-signs with the transport every engine signs with, the gateway SDK's, unmodified (#168). A clearinghouse
-serves the signer's two paths at the root of its listener
-([Signing through a clearinghouse](#signing-through-a-clearinghouse)), so the engine gives the transport
-`LPB_CLEARINGHOUSE_URL` where a signer's address goes, and each job's credential is its actor's payment
-key, where a Batteries key goes. That is why the address names a scheme, a host and a port and nothing
-more: the SDK keeps that much of it.
-
-| Credential | Sent on | Never sent on |
-| --- | --- | --- |
-| The actor's payment key (`lpp_`) | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, for that actor's job | Any other route; any runner |
-| The tenant admin key | The tenant's routes under `/v1/clearinghouse`, and the runner list | The two signer paths; any runner |
-| A Batteries key | Nothing: the engine holds none | |
-
-- **A fixed job pays once and a live job pays every payment cycle**, as with self-hosted payments. The
-  clearinghouse swaps the payment key for the actor's Batteries key and hands the call to its signer.
-  The job, its attempts, its failure and its cost are recorded in the enterprise's engine as always.
-- **A rotated payment key is picked up by the next job.** The key is resolved when a job starts, and the
-  SDK asks the clearinghouse who the signer is again under a key it has not used.
-- **A refusal reads as it does with self-hosted payments:** an empty allocation is the signer's 402
-  (`allowance_exhausted`) and a paused one its 403 (`not_authorized`). A payment key that was rotated or
-  revoked is the clearinghouse's 401 (`not_authorized`).
-- **There is no local signer:** `LPB_SIGNER_URL` is refused beside a clearinghouse.
-
-**What a failed signer call means** (D87 point 7), on an engine that uses a clearinghouse. The first
-column is what the engine met at the clearinghouse's two signer paths.
-
-| The engine met | At the identity call | While signing |
-| --- | --- | --- |
-| No connection to the clearinghouse | `payment` / `signer_unavailable` | `payment` / `signer_unavailable`: the request was never written |
-| 503 with `code: signer_not_reached` (the clearinghouse sent its signer nothing) | `payment` / `signer_unavailable` | `payment` / `signer_unavailable`, `payment_sent: false`. The job is `failed`, its manifest `unpaid`, and a retry is safe |
-| 502 with `code: signer_outcome_unknown` | `payment` / `signer_unavailable`: nothing is signed at this call | `payment_unknown` / `signer_unknown`: the job is `uncertain` and nobody else is paid |
-| Any other 5xx: the signer's own, passed on, or one a proxy in front of the clearinghouse made, with or without a `code` | `payment` / `signer_unavailable` | `payment_unknown` / `signer_unknown` |
-| A timeout or a dropped connection | `payment` / `signer_unavailable` | `payment_unknown` / `signer_unknown` |
-| 401: the payment key was rotated or revoked, or the signer refused the key | `payment` / `not_authorized` | `payment` / `not_authorized` |
-| 402: the allocation is empty | | `payment` / `allowance_exhausted` |
-| 403: the allocation is paused | | `payment` / `not_authorized` |
-| 400, 481: this orchestrator's payment parameters | | `payment_refused`: another orchestrator is tried |
-
-- **Only the clearinghouse's own 503 with its own code says nothing was sent.** A 502 or a 500 that
-  carries the code, a 503 with another code, with the code somewhere else in the body, or with no JSON
-  body, is an unknown outcome while signing. When in doubt the answer is "unknown", never "nothing was
-  sent".
-- **A self-hosted engine does not read the code.** Its signer is livepeer/node's, which never sends
-  one. Whatever answers with it at a signer's address is not the signer, and its word is no reason to
-  pay somebody twice. The transport reads the code only when the engine's settings name a clearinghouse
-  (`SdkRunnerTransport(..., signer_is_clearinghouse=True)`, which the engine passes itself).
-- Every row is tested against the clearinghouse's real routes with its signer scripted
-  (`tests/unit/test_clearinghouse_signing_failures.py`).
-- **The engine is nobody's clearinghouse.** Its transport could forward a signer call and answer a
-  signer probe, as a clearinghouse's does. It offers neither: `payments.signing` and `payments.wallet`
-  are `None`, so it serves neither the two signer paths nor the wallet report, whatever parts it was
-  supplied.
+- No error carries a credential. An error is built where the request or the answer is in hand and
+  raised from a frame that holds neither, so it chains no error of the HTTP client or the parser, and
+  no frame of its traceback holds the tenant admin key or a handed key.
 
 ### `lpb payments check`
 
@@ -1310,12 +1358,11 @@ its configuration is `self_hosted`; an engine in its `work` role has the configu
 
 | Configuration | Probe | Request | Passes when |
 | --- | --- | --- | --- |
-| Self-hosted | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
+| Both | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
 | Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
 | Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
 | Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
-| Clearinghouse | `clearinghouse_signer` | `GET /sign-orchestrator-info` at the clearinghouse's address, with no credential | The answer is 405, as at a signer: the clearinghouse serves the signer's two paths, where the engine signs. A clearinghouse with no signer answers 404 |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings
@@ -1325,30 +1372,13 @@ its configuration is `self_hosted`; an engine in its `work` role has the configu
   `refused`, `unavailable`, `unexpected` or `not_configured`.
 - **Never printed:** a credential, an address, or anything the other side said. A probe names the
   setting to look at.
+- **An engine that uses a clearinghouse probes the clearinghouse and its signer.** The signer is asked
+  at `LPB_SIGNER_URL`, as a self-hosted engine asks its own, and never at the clearinghouse's address.
+  With `LPB_SIGNER_URL` unset the probe is `not_configured` and the check fails: the engine cannot pay.
 - **No work route is called,** and the tenant admin key is sent to the tenant's routes and the runner
-  list only, never to a signer path.
+  list only, never to the signer.
 - **What the signer probe proves.** The signer's identity call is a `POST`, so it cannot be made here.
   livepeer/node registers that path for `POST` alone, so a signer answers a `GET` with 405. That says
   an HTTP server is at the address and has the signer's identity route. It does not say the signer
   signs, that its wallet is funded, or that it is ready.
 - `check_payments(settings)` in `livepeer_builder.runtime` returns the same report to an embedding app.
-
-### Mode B
-
-"Mode B" was the M2 name for the second configuration: a hosted payment operator, one Batteries
-instance serving many enterprises (D23). "Mode A" was self-hosted payments. The gap D23 recorded is
-that Batteries management credentials are global (a permission covers every grant), so an operator
-cannot safely give an engine a management credential.
-
-D74 (13 November 2026) answered it with a separately operated engine in `per_application` mode. That
-was not built. D82 (18 November 2026) replaces it with the payment clearinghouse, which needs no scoped
-credential: only the clearinghouse's own engine reaches Batteries and the signer, and no Batteries
-credential leaves it.
-
-### Provisioning
-
-"Provisioning" was the name of allotment until 18 November 2026 (D83, #163): an admin allots an
-allocation to an actor, where the engine said it provisioned the actor. See [Allotment](#allotment).
-The failure kind `not_provisioned` keeps its name: the failure table belongs to ISS-28. Every name that
-changed with it is under
-[Upgrading to the domain-language names](index.md#upgrading-to-the-domain-language-names).

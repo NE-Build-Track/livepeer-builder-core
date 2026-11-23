@@ -7,7 +7,7 @@ engine, the work half or the clearinghouse half, and ``ROUTE_GROUPS`` says which
 | ``LPB_ROLE`` | Serves |
 | --- | --- |
 | ``both``, the default | The groups of both halves: self-hosted payments |
-| ``work`` | The work half's groups, and no clearinghouse route or signer path (404) |
+| ``work`` | The work half's groups, and no clearinghouse route (404) |
 | ``clearinghouse`` | The clearinghouse half's groups, and no job route or other work route (404) |
 
 **The listeners** (#167) choose within what the role serves. A clearinghouse admin onboards tenants and
@@ -26,10 +26,9 @@ to every kind of credential, as it did before #167. An engine in its ``clearingh
 two: its settings refuse to load without the private port, and ``mount_listener_routes`` refuses to
 build it the app of one listener.
 
-The rule about kinds is a rule about access credentials. The signer's two paths (``http/signing.py``,
-#166) take a payment key, which is no access credential and has no kind: they are served on every
-listener of a role that has them, a live payment key signs on each, and anything else is 401 there, a
-clearinghouse admin credential included.
+Every app this module builds keeps each allocation's key with the engine
+(``deliver_allocation_keys=False``), on one listener or two. No listener serves a signer path: no engine
+signs for another.
 
 To serve a new group of routes, add a ``RouteGroup`` to ``ROUTE_GROUPS`` with its half, and
 ``private=True`` when only a clearinghouse admin calls it. A group that is not in the table is served by
@@ -51,12 +50,14 @@ from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import ActorContext, Role
 from livepeer_builder.errors import AccessDenied
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_admin_routes, mount_tenant_routes
-from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
 
 ListenerName = Literal["only", "public", "private"]
 Half = Literal["work", "clearinghouse"]
-Mount = Callable[[FastAPI, EngineApi], None]  # each is typed against its own half of the facade (api.py)
+# A group's mount function: each takes the app and the engine, typed against its own half of the facade
+# (api.py, tests/structure/test_two_halves.py). ``mount_tenant_routes`` also takes
+# ``deliver_allocation_keys``, which ``mount_listener_routes`` passes.
+Mount = Callable[..., None]
 WORK_HALF: Half = "work"
 CLEARINGHOUSE_HALF: Half = "clearinghouse"
 
@@ -76,8 +77,6 @@ ROUTE_GROUPS: tuple[RouteGroup, ...] = (
     RouteGroup(mount_work_routes, WORK_HALF),
     # what a tenant's own admin or auditor calls, and the runner list a clearinghouse publishes
     RouteGroup(mount_tenant_routes, CLEARINGHOUSE_HALF),
-    # the signer's two paths, which an enterprise's engine calls with a payment key (#166)
-    RouteGroup(mount_signing_routes, CLEARINGHOUSE_HALF),
     # what only a clearinghouse admin does: never served on the public listener
     RouteGroup(mount_clearinghouse_admin_routes, CLEARINGHOUSE_HALF, private=True),
 )
@@ -90,6 +89,7 @@ ROLE_HALVES: dict[Role, frozenset[Half]] = {
 # Read from the table: served on every listener, and never served on the public one.
 EVERY_LISTENER: tuple[Mount, ...] = tuple(group.mount for group in ROUTE_GROUPS if not group.private)
 PRIVATE_ONLY: tuple[Mount, ...] = tuple(group.mount for group in ROUTE_GROUPS if group.private)
+
 
 PRIVATE_TAG = "private listener"
 """The OpenAPI tag on every route of ``PRIVATE_ONLY``, so a published schema says where it is served."""
@@ -104,8 +104,8 @@ _TAGS = [
     {
         "name": HALF_TAGS[CLEARINGHOUSE_HALF],
         "description": "Served by an engine in its `both` or its `clearinghouse` role (`LPB_ROLE`): "
-        "these routes are 404 on an engine in its `work` role, which pays through a payment "
-        "clearinghouse and is not one.",
+        "these routes are 404 on an engine in its `work` role, which uses a payment clearinghouse "
+        "and is not one.",
     },
     {
         "name": PRIVATE_TAG,
@@ -157,7 +157,10 @@ def mount_listener_routes(app: FastAPI, engine: EngineApi, name: ListenerName = 
         if group.half not in halves or (group.private and not listener.serves_private_routes):
             continue
         before = len(app.routes)
-        group.mount(app, engine)
+        if group.mount is mount_tenant_routes:  # the one group that allots and rotates
+            mount_tenant_routes(app, engine, deliver_allocation_keys=False)
+        else:
+            group.mount(app, engine)
         # Tagged here, from the table, and not on each route: a route added to a group is tagged too.
         tags = [HALF_TAGS[group.half], *([PRIVATE_TAG] if group.private else [])]
         for route in app.routes[before:]:

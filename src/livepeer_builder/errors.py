@@ -58,11 +58,16 @@ class OperationInProgress(OperationExists):
 
 
 class OperationConflict(EngineError):
-    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it."""
+    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it.
 
-    def __init__(self, holder: Job | OperationRecord) -> None:
+    Also the answer to an allotment or a payment key rotation that would resume a run the other kind of
+    command began (docs/contracts/payments.md, "Payment keys"): ``message`` then says which command began
+    it."""
+
+    def __init__(self, holder: Job | OperationRecord, message: str | None = None) -> None:
         super().__init__(
-            f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
+            message
+            or f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
         )
         self.job, self.operation = _held(holder)
 
@@ -132,16 +137,6 @@ class ProviderError(EngineError):
 
 class CursorMismatch(EngineError):
     """The provider rejected a usage cursor for this route or filter set."""
-
-
-class SignerNotReached(EngineError):
-    """A clearinghouse could not hand a signer call to its signer: the connection was never made, or the
-    actor's key could not be read. Nothing was sent, so nothing was signed (503, ``signer_not_reached``)."""
-
-
-class SignerOutcomeUnknown(EngineError):
-    """A signer call left the clearinghouse and no usable answer came back: a timeout, a dropped
-    connection, a redirect. The signer may have signed (502, ``signer_outcome_unknown``)."""
 
 
 class NotImplementedInMilestone(EngineError):

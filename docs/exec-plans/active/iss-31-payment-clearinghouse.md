@@ -163,6 +163,14 @@ Each pull request ticks its own line here in the same change.
   engine (`deliver_allocation_keys=False`), on one listener or two: there is no role setting yet, and
   the engine behind a listener runs jobs. Handing keys to the caller is the `clearinghouse` role's
   (#169). Source: the amended ticket; the `False` on both listeners is for Mike's review.
+- **23 November 2026, P6.** Cancelling `serve()` with two listeners is a forced exit, as a listener
+  that ended by itself is: both hang up on their open connections, and the task ends with its
+  cancellation. A first SIGINT or SIGTERM still ends them in order. Source: Mike, after review of #181.
+- **23 November 2026, P6.** The wallet report's unspent grants are exact. A grant counts as its
+  unallocated balance and what each of its allocations still holds, an overdrawn allocation as nothing.
+  `TenantGrant` gains the required field `allocated_unspent` for it. This replaces "each grant's total
+  less what its allocations spent" in the entry of 19 November, which read too low when an allocation
+  was overdrawn and the grant had a balance left to allot. Source: Mike, after review of #181.
 - **23 November 2026, P7, carried forward.** The direct-signer design is merged into P7's branch, and
   what the two entries of 19 November built on the withdrawn design is taken out: signing through the
   clearinghouse, the reading of `signer_not_reached`, the `lpp_` key and its resolver. An enterprise's

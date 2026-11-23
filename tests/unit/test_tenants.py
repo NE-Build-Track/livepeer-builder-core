@@ -209,7 +209,7 @@ async def test_the_tenants_id_is_the_grants_id_and_no_route_takes_a_separate_gra
     grant = (await house.client.get(house.one.path("/grant"), headers=house.one.admin)).json()
     assert grant == {
         "tenant_id": house.one.id, "name": "one", "status": "active",
-        "total": usd("100"), "unallocated": usd("95"), "spent": usd("0"),
+        "total": usd("100"), "unallocated": usd("95"), "spent": usd("0"), "allocated_unspent": usd("5"),
     }  # fmt: skip
     # no request of any route has a grant id: not in a path, a query string or a body
     schema = create_app(house.engine, manage_lifecycle=False).openapi()
@@ -633,3 +633,25 @@ async def test_the_fake_provider_keeps_each_grants_balance_as_batteries_does() -
     assert [grant.id for grant in await provider.list_grants()] == ["t-1", made.id]
     assert provider.held == {"t-1", made.id}
     assert [tenant.unallocated.amount for tenant in await provider.grant_balances()] == [3, 5]
+
+
+async def test_the_fake_provider_states_what_each_grants_allocations_still_hold() -> None:
+    """As Batteries' figures give it: each allocation's amount less what it spent, and nothing for one
+    that spent more, which a builder's test sets on the fake's allocation. A revoked one holds nothing."""
+    provider = FakeAllocationManager()
+    provider.add_grant("t-1", total=100)
+    provider.add_grant("idle", total=7)
+
+    def amount(value: int) -> Money:
+        return Money(amount=Decimal(value), currency="USD")
+
+    overdrawn = await provider.create_key_for_grant("t-1", "n", amount(30), "k1")
+    await provider.create_key_for_grant("t-1", "n", amount(20), "k2")
+    revoked = await provider.create_key_for_grant("t-1", "n", amount(10), "k3")
+    provider.allocations[overdrawn.allocation_id].spent = Decimal(40)  # charged after it was authorized
+    provider.allocations[revoked.allocation_id].spent = Decimal(4)
+    await provider.revoke_allocation(revoked.allocation_id)
+    provider.allocations[revoked.allocation_id].spent = Decimal(5)  # a late charge
+    read = await provider.read_grant("t-1")
+    assert (read.unallocated.amount, read.allocated_unspent.amount, read.spent.amount) == (46, 20, 45)
+    assert [tenant.allocated_unspent for tenant in await provider.grant_balances()] == [amount(20), amount(0)]

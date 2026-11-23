@@ -43,6 +43,7 @@ GRANT = {
     "total": {"amount": "100", "currency": "USD"},
     "unallocated": {"amount": "60", "currency": "USD"},
     "spent": {"amount": "12.5", "currency": "USD"},
+    "allocated_unspent": {"amount": "27.5", "currency": "USD"},
 }
 USAGE = {"items": [], "set_aside": [], "next_cursor": ""}
 Answer = tuple[int, Any]

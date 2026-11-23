@@ -27,9 +27,10 @@ clearinghouse's address only.
 request's headers, and the allocation's own Batteries key, which the answer to an allotment or a payment
 key rotation hands over once. Neither is in an error's text, a log line or a ``repr``. Nor can an error
 lead to one: every error is *built* where the request or the answer is in hand (``_exchange``,
-``_parsed``) and *returned*, and it is raised by ``_raised``, a frame that holds the error and nothing
-else. So no error chains httpx's or pydantic's own, which hold the request and the whole answer, and no
-frame of an error's traceback has the request or the answer among its locals.
+``_parsed``) and *returned*, and it is raised by ``raised`` (``adapters/clean_errors.py``), a frame that
+holds the error and nothing else. So no error chains httpx's or pydantic's own, which hold the request
+and the whole answer, and no frame of an error's traceback has the request or the answer among its
+locals.
 """
 
 import asyncio
@@ -39,6 +40,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from livepeer_builder.adapters.clean_errors import raised
 from livepeer_builder.errors import (
     CursorMismatch,
     EngineError,
@@ -88,21 +90,21 @@ class ClearinghouseWire:
 
     async def read(self, path: str, params: Mapping[str, str] | None = None) -> httpx.Response:
         """One ``GET``. It applies nothing, so its failure is never an unknown outcome."""
-        return _raised(await self._exchange("GET", path, params=params))
+        return raised(await self._exchange("GET", path, params=params))
 
     async def write(self, path: str, body: Mapping[str, Any] | None = None) -> httpx.Response:
         """One ``POST``, sent once. A failure after it left is ``ProviderOutcomeUnknown``."""
-        return _raised(await self._exchange("POST", path, body=dict(body or {})))
+        return raised(await self._exchange("POST", path, body=dict(body or {})))
 
     async def read_as[T: BaseModel](
         self, model: type[T], path: str, params: Mapping[str, str] | None = None
     ) -> T:
-        return _raised(_parsed(model, await self.read(path, params)))
+        return raised(_parsed(model, await self.read(path, params)))
 
     async def write_as[T: BaseModel](
         self, model: type[T], path: str, body: Mapping[str, Any] | None = None
     ) -> T:
-        return _raised(_parsed(model, await self.write(path, body)))
+        return raised(_parsed(model, await self.write(path, body)))
 
     async def _exchange(
         self,
@@ -170,14 +172,6 @@ class ClearinghouseWire:
         return ProviderError(status, message)
 
 
-def _raised[T](outcome: "T | EngineError") -> T:
-    """``outcome``, unless it is the error a request or an answer came to, which is raised here: from a
-    frame whose only local is the error itself."""
-    if isinstance(outcome, EngineError):
-        raise outcome
-    return outcome
-
-
 def _no_answer(method: Method, what: str) -> ProviderUnavailable:
     if method == "POST":
         return ProviderOutcomeUnknown(f"{what}; {_APPLIED_OR_NOT}")
@@ -208,7 +202,7 @@ def _problem(response: httpx.Response) -> tuple[str, str | None]:
 def _parsed[T: BaseModel](model: type[T], response: httpx.Response) -> T | ProviderError:
     """A 2xx answer as ``model``, or the ``ProviderError`` an answer the engine cannot read comes to, with
     the answer's own status: an unknown outcome to the ledger, never a refusal. Its text does not quote
-    the body, which may hold a key. It is returned, for ``_raised``: raised here it would chain
+    the body, which may hold a key. It is returned, for ``raised``: raised here it would chain
     pydantic's error, which holds the whole body, and carry this frame, which holds the answer."""
     try:
         return model.model_validate_json(response.content)

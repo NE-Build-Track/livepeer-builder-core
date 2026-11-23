@@ -12,10 +12,17 @@ being read must carry neither:
 - **its traceback's frames.** A tracker that records the local variables of each frame reads whatever
   the raising frames still hold. No frame of this package that an error passes through has the answer,
   the request or the key among its locals.
+
+The discovery reader carries the same tenant admin key, to the clearinghouse's runner list, and a 401 or
+a timeout there is an ordinary failed refresh. Its errors are held to the same, over every frame of the
+traceback, the HTTP client's own included: an error of a read that carried the key is a new error, of the
+kind the reader always raised, that was never inside the HTTP client.
 """
 
+import asyncio
 import logging
 import traceback
+from collections.abc import AsyncIterator, Callable
 from types import TracebackType
 from typing import Any
 
@@ -24,6 +31,7 @@ import pytest
 
 from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
+from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.contracts import DeliveredAllocation, Money
 from livepeer_builder.errors import EngineError, ProviderError, ProviderOutcomeUnknown, ProviderUnavailable
 from livepeer_builder.testing import MemorySecretStore
@@ -176,3 +184,167 @@ async def test_a_rotation_whose_answer_is_lost_carries_nothing_of_the_request() 
     with pytest.raises(ProviderOutcomeUnknown) as unknown:
         await manager_over(wire(httpx.MockTransport(handle))).create_key("alloc_1", "n", "k")
     assert clean(unknown.value)
+
+
+# -- the discovery reader, which carries the key to the clearinghouse's runner list -----------------------
+
+RUNNER_LIST = BASE + "/v1/clearinghouse/discovery"
+Handler = Callable[[httpx.Request], Any]
+
+
+def everywhere(error: BaseException) -> str:
+    """Everything reachable from ``error``: its own words and attributes, the request and the answer an
+    httpx error holds, the locals of every frame of its traceback outside this file (the HTTP client's
+    frames too), and the same for every error it chains, however deep."""
+    seen: list[str] = []
+    pending: list[BaseException] = [error]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        seen += [
+            str(current),
+            repr(current),
+            repr(vars(current)),
+            "".join(traceback.format_exception(current)),
+        ]
+        seen += [held(getattr(current, name, None)) for name in ("_request", "response")]
+        step: TracebackType | None = current.__traceback__
+        while step is not None:
+            if step.tb_frame.f_code.co_filename != __file__:
+                seen += [held(value) for value in step.tb_frame.f_locals.values()]
+            step = step.tb_next
+        pending += [chained for chained in (current.__cause__, current.__context__) if chained is not None]
+    return "\n".join(seen)
+
+
+def reader(handler: Handler, *, bearer: str | None = TOKEN, timeout_s: float = 5.0) -> HttpDiscoverySource:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return HttpDiscoverySource(RUNNER_LIST, client=client, bearer=bearer, timeout_s=timeout_s)
+
+
+def answers(status: int, **more: Any) -> Handler:
+    return lambda request: httpx.Response(status, **more)
+
+
+def fails(failure: type[httpx.TransportError]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise failure("the network failed", request=request)
+
+    return handler
+
+
+class NotGzip(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"this is not gzip"
+
+
+async def never_answers(request: httpx.Request) -> httpx.Response:
+    await asyncio.sleep(30)
+    return httpx.Response(200, json=[])
+
+
+FAILED_READS: list[Any] = [
+    pytest.param(
+        answers(401, json={"error": f"unknown key {TOKEN}"}), httpx.HTTPStatusError, "401", id="401"
+    ),
+    pytest.param(answers(503, json={"error": "no list yet"}), httpx.HTTPStatusError, "503", id="503"),
+    pytest.param(answers(500, text=f"boom {TOKEN}"), httpx.HTTPStatusError, "500", id="500"),
+    pytest.param(
+        answers(307, headers={"Location": "https://elsewhere.test/discovery"}),
+        httpx.HTTPStatusError,
+        "307",
+        id="a redirect",
+    ),
+    pytest.param(fails(httpx.ReadTimeout), TimeoutError, "no inventory", id="a timeout of the client"),
+    pytest.param(never_answers, TimeoutError, "no inventory", id="a timeout of the whole read"),
+    pytest.param(fails(httpx.ConnectError), httpx.ConnectError, "the network failed", id="no connection"),
+    pytest.param(fails(httpx.ReadError), httpx.ReadError, "the network failed", id="a dropped connection"),
+    pytest.param(answers(200, json={"runners": []}), ValueError, "not a JSON list", id="not the document"),
+    pytest.param(answers(200, text="<html>a proxy's page</html>"), ValueError, "", id="not JSON"),
+    pytest.param(
+        lambda request: httpx.Response(200, headers={"Content-Encoding": "gzip"}, stream=NotGzip()),
+        ValueError,
+        "did not decode",
+        id="a body that does not decode",
+    ),
+]
+
+
+@pytest.mark.parametrize(("handler", "kind", "words"), FAILED_READS)
+async def test_a_failed_read_of_the_runner_list_leads_to_no_tenant_admin_key(
+    handler: Handler, kind: type[Exception], words: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The error is of the kind the reader always raised, with the same words, and nothing reachable from
+    it holds the key: not the error, not what it chains, not a frame of its traceback, not a log record."""
+    caplog.set_level(logging.DEBUG)
+    sent: list[str | None] = []
+
+    async def recorded(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers.get("Authorization"))
+        answer = handler(request)
+        return await answer if asyncio.iscoroutine(answer) else answer
+
+    source = reader(recorded, timeout_s=0.05 if handler is never_answers else 5.0)
+    with pytest.raises(kind) as failed:
+        await source.fetch()
+
+    assert sent == [f"Bearer {TOKEN}"]  # the key was on the request that failed
+    assert words in str(failed.value)
+    assert TOKEN not in everywhere(failed.value)
+    assert TOKEN not in "\n".join(f"{record.getMessage()} {vars(record)}" for record in caplog.records)
+    assert TOKEN not in repr(source) + repr(vars(source))
+    assert source.document() is None
+
+
+async def test_an_error_status_of_the_runner_list_still_says_its_status_and_its_address() -> None:
+    """What a caller read from the reader's error before still reads: the status, on the answer, and the
+    address, on the request. Neither is the one that carried the key."""
+    with pytest.raises(httpx.HTTPStatusError) as refused:
+        await reader(answers(401, headers={"WWW-Authenticate": "Bearer"})).fetch()
+    assert refused.value.response.status_code == 401
+    assert str(refused.value.request.url) == RUNNER_LIST and refused.value.request.method == "GET"
+    assert "authorization" not in refused.value.request.headers
+    assert refused.value.response.request is refused.value.request
+
+
+async def test_a_timeout_of_the_runner_list_names_what_timed_out_by_its_kind_alone() -> None:
+    with pytest.raises(TimeoutError) as slow:
+        await reader(fails(httpx.ReadTimeout)).fetch()
+    cause = slow.value.__cause__
+    assert type(cause) is httpx.ReadTimeout and cause.__traceback__ is None
+    with pytest.raises(RuntimeError):  # no request is set on it
+        _ = cause.request
+
+
+async def test_a_plain_discovery_address_fails_as_it_always_did() -> None:
+    """With no credential there is nothing to keep off an error, and nothing changes: the client's own
+    error is raised, with the request it sent and the answer it got, and a timeout chains the client's."""
+    requests: list[httpx.Request] = []
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(401, json={"error": "no"}, headers={"WWW-Authenticate": "Bearer"})
+
+    with pytest.raises(httpx.HTTPStatusError) as refused:
+        await reader(refuse, bearer=None).fetch()
+    assert refused.value.request is requests[0] and "authorization" not in requests[0].headers
+    assert refused.value.response.headers["WWW-Authenticate"] == "Bearer"
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ReadTimeout("", request=request)
+
+    with pytest.raises(TimeoutError, match="no inventory") as timed_out:
+        await reader(slow, bearer=None).fetch()
+    cause = timed_out.value.__cause__
+    assert isinstance(cause, httpx.ReadTimeout) and cause.request is requests[1]
+
+    def refused_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(httpx.ConnectError) as unreachable:
+        await reader(refused_connection, bearer=None).fetch()
+    assert unreachable.value.request is not None

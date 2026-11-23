@@ -10,8 +10,12 @@ delivering command, by the work engine, which gets it once in the command's answ
 kept with its custody, in the actor row and in the ledger's context, and every delete follows it: a
 ``secret_store`` handle is deleted on the configured store that issued it, and a ``work_engine`` receipt
 never reaches a store. Nothing is read from the text of a reference (#186 review).
+
+Two kinds of command mint a key: the admin ones, which keep it in the configured store, and the delivering
+ones. A record notes which kind began it, and only that kind resumes it (``PaymentKeys.resumes``).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,9 +24,10 @@ from livepeer_builder.contracts import (
     ActorAllocation,
     CredentialCustody,
     NewAllocationKey,
+    OperationRecord,
     SecretRef,
 )
-from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound
+from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound, OperationConflict
 from livepeer_builder.protocols import AllocationManager, SecretStore, WritableSecretStore
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets
@@ -32,6 +37,12 @@ BEGAN_ON = "allocation_id"  # in a rotation's record: the allocation the actor h
 PREVIOUS_CUSTODY = "previous_credential_custody"  # in a rotation's record: who held the key it began from
 _NEW_CUSTODY = "new_secret_custody"  # in a record: who holds the secret ``new_secret_ref`` names
 _LOST_TO = "lost_to_api_key_id"  # in a rotation's record: the key another rotation gave the actor first
+# In a record, from the moment it begins: who the command that began it keeps the key with, which is the
+# kind of command it is. ``secret_store``: ``allot`` or ``rotate_payment_key``. ``work_engine``: their
+# delivering twins.
+BEGUN_FOR = "begun_for"
+_DELIVERING = {"allot": "allot_for_delivery", "rotate_payment_key": "rotate_for_delivery"}
+_KEEPS = {"secret_store": "stores the key in the engine's secret store", "work_engine": "hands the key over"}
 
 
 @dataclass(frozen=True)
@@ -58,6 +69,28 @@ class PaymentKeys:
         """Who holds a secret this object stores."""
         return "work_engine" if self._delivery is not None else "secret_store"
 
+    def begins(self, context: Mapping[str, str] | None = None) -> dict[str, str]:
+        """What a command's record notes as it begins, before any provider call: ``context``, and which
+        kind of command this is. A run that died at any point has it."""
+        return {**(context or {}), BEGUN_FOR: self.custody}
+
+    def resumes(self, held: OperationRecord) -> None:
+        """Refuse to resume a run the other kind of command began (Mike, 23 November 2026). Finished by
+        the other kind, a delivering run's key would be handed to nobody, and an admin run's would stay
+        in the store while the delivering caller is answered with none. The ledger asks before it takes
+        the record over: nothing is sent or written, and the command that began the run still resumes it.
+
+        A record written before the kind was noted is the kind its stored secret's custody implies. One
+        that notes neither was begun by an admin command: there was no other kind then."""
+        began = _custody(held.context, BEGUN_FOR if BEGUN_FOR in held.context else _NEW_CUSTODY)
+        if began != self.custody:
+            first, this = _command(held, began), _command(held, self.custody)
+            raise OperationConflict(
+                held,
+                f"operation_ref {held.operation_ref!r} was begun by {first}, which {_KEEPS[began]}, and "
+                f"has not finished. Only the command that began it resumes it: repeat {first}, not {this}",
+            )
+
     async def stored(
         self, run: RunningOperation, tenant_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
     ) -> HeldSecret:
@@ -67,11 +100,9 @@ class PaymentKeys:
         orphaned. A resume that got another key (a second allotment after a revoke) stores that key's
         secret.
 
-        A resume keeps the custody recorded with the reference, never its own: a rotation begun by a
-        delivering command and resumed by the admin one keeps its receipt ``work_engine``'s, and the
-        reverse keeps a stored secret the store's. A resume that delivers holds the secret the provider
-        replayed under the recorded receipt, so its answer carries the key the first run never answered
-        with."""
+        A resume is the kind of command that began the record (``resumes``), so the custody recorded with
+        the reference is its own. A resume that delivers holds the secret the provider replayed under
+        the recorded receipt, so its answer carries the key the first run never answered with."""
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             recorded = recorded_secret(run)
             self._redeliver(recorded, key)
@@ -284,6 +315,11 @@ def _custody(context: dict[str, Any], name: str) -> CredentialCustody:
         if value == custody:
             return custody
     raise ValueError(f"the operation record names an unknown credential custody {value!r}")
+
+
+def _command(held: OperationRecord, custody: CredentialCustody) -> str:
+    """The name of the command of one kind that runs under ``held``'s ledger command."""
+    return _DELIVERING.get(held.command, held.command) if custody == "work_engine" else held.command
 
 
 def _lost_rotation(actor_id: str, held: str) -> InvalidRequest:

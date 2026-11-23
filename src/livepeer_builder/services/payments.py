@@ -26,7 +26,6 @@ from livepeer_builder.contracts import (
     Currency,
     DeliveredAllocation,
     KnownActor,
-    NewAllocationKey,
     Operation,
     PaymentKey,
     ResourceRef,
@@ -50,7 +49,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets, delivered
-from livepeer_builder.services.grants import idempotency_key
+from livepeer_builder.services.grants import allotted_from_grant, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PREVIOUS_CUSTODY, PaymentKeys, recorded_secret
 from livepeer_builder.services.tenant_usage import TenantUsage
@@ -61,6 +60,7 @@ _LOG = logging.getLogger(__name__)
 _ACTOR = TypeAdapter(ActorAllocation)
 _NOTHING = TypeAdapter(type(None))
 _UNREADABLE = "the allowance could not be read"  # what a builder reads when the provider fails (D58)
+_SENT_LABEL = "sent_label"  # in an allotment's record, from the moment it begins: the label its runs send
 
 
 class PaymentsService:
@@ -177,7 +177,15 @@ class PaymentsService:
             return target | {"grant_id": request.tenant_id if actor is None else actor.grant_id}
 
         return await self._ledger.run(
-            admin, "allot", request.operation_ref, target, steps, _ACTOR, earlier_request=as_recorded
+            admin,
+            "allot",
+            request.operation_ref,
+            target,
+            steps,
+            _ACTOR,
+            context=keys.begins({_SENT_LABEL: await self._label(request)}),  # before any provider call
+            earlier_request=as_recorded,
+            resumable=keys.resumes,
         )
 
     async def _allot(
@@ -200,12 +208,13 @@ class PaymentsService:
             # provider call again, under the idempotency key it recorded: Batteries replays the original
             # success, the secret included, and never expires it (docs/references/batteries-api.md), so
             # nothing is allotted twice and the answer carries the key. It replays only the request that run
-            # sent and refuses any other (409): the name sent was the label the actor was saved with.
+            # sent and refuses any other (409): the name sent was the label the record noted, which is the
+            # label the actor was saved with (all a record from before the label was noted has).
             replayed = None
             sent_as = run.context.get("new_secret_sent_as")
             if keys.delivers(existing) and sent_as is not None:
-                sent = request.model_copy(update={"label": existing.label})
-                replayed = await self._allotted_from_grant(manager, sent, sent_as)
+                sent = request.model_copy(update={"label": run.context.get(_SENT_LABEL, existing.label)})
+                replayed = await allotted_from_grant(manager, sent, sent_as)
             return await keys.shared(existing, recorded_secret(run), replayed)
         if existing is not None and existing.grant_id != request.tenant_id:
             # A record from before a tenant's id was its grant's id (#165). Its allocation was allotted
@@ -215,10 +224,10 @@ class PaymentsService:
                 f"tenant {request.tenant_id!r}'s: a tenant's id is its grant's id, and an allocation is "
                 "never moved to another grant"
             )
-        if not request.label:  # a person who signed in is labelled with their name (D48)
-            seen = await self._store.get_sighting(request.tenant_id, request.actor_id)
-            if seen is not None and seen.name:
-                request = request.model_copy(update={"label": seen.name})
+        # A resume sends the label the record noted: the sign-in name may have changed, and Batteries refuses
+        # another name under the first run's key for good. A record from before the note reads it again.
+        label = run.context[_SENT_LABEL] if _SENT_LABEL in run.context else await self._label(request)
+        request = request.model_copy(update={"label": label})
         # Actor-derived, so two references for one actor still meet at the provider. This text is hashed
         # into the provider's idempotency key, here and in the other commands: it keeps its first wording,
         # or a command resumed after an upgrade would apply twice (tests/unit/test_hashed_forms.py).
@@ -227,7 +236,7 @@ class PaymentsService:
             operation += f":{existing.updated_at.isoformat()}"
         sent_as = idempotency_key(self._engine_id, operation, "api-key")
         await keys.require_writable(run, sent_as)
-        key = await self._allotted_from_grant(manager, request, sent_as)
+        key = await allotted_from_grant(manager, request, sent_as)
         new = await keys.stored(run, request.tenant_id, request.actor_id, key, sent_as)
         now = self._clock.now()
         allotted = ActorAllocation(
@@ -249,23 +258,11 @@ class PaymentsService:
             return await keys.overtaken(request.actor_id, current, key, new)
         return allotted
 
-    @staticmethod
-    async def _allotted_from_grant(
-        manager: AllocationManager, request: AllotRequest, sent_as: str
-    ) -> NewAllocationKey:
-        """The allocation and its key, allotted from the tenant's grant: one id (D83). The provider's
-        refusal is passed on with its reason (an allocation larger than the grant's unallocated balance
-        is its 409); a grant it does not hold is said as the tenant that was never onboarded."""
-        name = request.label or f"{request.tenant_id}/{request.actor_id}"
-        try:
-            return await manager.create_key_for_grant(request.tenant_id, name, request.amount, sent_as)
-        except ProviderError as refused:
-            if refused.status_code != 404:
-                raise
-            raise NotFound(
-                f"tenant {request.tenant_id!r} has no grant at the payment provider: a tenant's id is its "
-                "grant's id, and a clearinghouse admin onboards a tenant before anything is allotted to it"
-            ) from refused
+    async def _label(self, request: AllotRequest) -> str:
+        """The label an allotment is saved with, and names its allocation by at the provider: the
+        request's, else the name the person last signed in with (D48), else none."""
+        seen = None if request.label else await self._store.get_sighting(request.tenant_id, request.actor_id)
+        return request.label or (seen.name if seen is not None else "")
 
     # -- admin reads (Operation.ADMIN_READ, D46) ----------------------------------------------------
 
@@ -422,7 +419,14 @@ class PaymentsService:
 
         target = {"tenant_id": tenant_id, "actor_id": actor_id}
         return await self._ledger.run(
-            admin, "rotate_payment_key", operation_ref, target, steps, _ACTOR, context=previous
+            admin,
+            "rotate_payment_key",
+            operation_ref,
+            target,
+            steps,
+            _ACTOR,
+            context=keys.begins(previous),
+            resumable=keys.resumes,
         )
 
     async def _rotate(

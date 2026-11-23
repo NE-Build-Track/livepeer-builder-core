@@ -308,6 +308,17 @@ checks stop that:
 
 - **Zero amount** sets up identity without money. Batteries marks the allocation `exhausted` until an
   explicit top-up.
+- **A resume names the allocation as the first run did.** An allotment is saved with a label: the
+  request's `label`, else the name the person last signed in with (D48), else none. Batteries is sent
+  that label as the allocation's name, or `{tenant_id}/{actor_id}` when there is none. The label is
+  noted in the command's record as the record begins, before the provider call (`sent_label` in its
+  context), and every run of the command sends the noted one and saves the actor with it, whatever the
+  person's sign-in name is by then. It matters because Batteries replays a saved success only to the
+  request it was first given: another name under the first run's idempotency key is its 409, every
+  time. So a person who signs in for the first time, or under a new name, between a run that funded
+  the allocation and the resume that saves the actor does not stop the resume. A record written before
+  the label was noted has none, and its resume reads the name again: it finishes when the name is
+  what the first run sent, and is refused by Batteries (409) when it is not, keeping its reference.
 - **One command never undoes another on the same actor (#115, C4).** `allot`, `top_up`, `set_status`,
   `revoke` and `rotate_payment_key` read the actor, call the provider, then write. Each writes only its own
   columns, with its condition in the SQL statement:
@@ -447,7 +458,7 @@ The engine that runs an actor's jobs keeps that actor's key:
 | The commands | `payments.allot`, `payments.rotate_payment_key` | `payments.allot_for_delivery`, `payments.rotate_for_delivery` |
 | They answer | `ActorAllocation` | `DeliveredAllocation`: the allocation, and `allocation_api_key`, `replayed` and `resumed` |
 | `credential_custody` on the allocation | `secret_store` | `work_engine` |
-| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` | `mount_clearinghouse_routes(app, engine)`, where `deliver_allocation_keys` is `True` unless it is passed |
+| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
 | Signs at the signer | The engine, with the stored key | The enterprise's engine, with the key it was handed |
 
 `lpb serve` runs the combined app, so its allotment and rotation store the key and answer none. The role
@@ -500,19 +511,31 @@ key and pays with it is #168.
   again since is 409 `already_allotted`, and one revoked since is answered as the revoked actor, or 404,
   with no key. For either allotment, the answer of an actor that has moved past the key carries none
   (next). An allotment under a new reference that begins after the actor is allotted is 409
-  `already_allotted`, and when the allotment that wrote the row stored the key (`allot`), the other
-  one's answer has `replayed: true` and no key.
+  `already_allotted`. When the two are one of each kind, the allotment that wrote the row keeps the key:
+  a delivering one's caller is handed it, and the other answers the allocation, `work_engine`; a storing
+  one (`allot`) keeps it in the store, and the delivering one's answer has `replayed: true` and no key.
 - **Never the key of an allocation the actor has moved past.** Just before it answers, a delivering
   command reads the actor again (`delivered()`). The answer carries the key only while the actor is not
   `revoked` and still holds the allocation, the key and the receipt the answer names. An actor that was
   revoked, rotated or allotted again meanwhile gets `allocation_api_key: null` and `replayed: true`,
   without `Idempotent-Replayed`: the command ran, and its key is no longer the actor's.
-- **A resume keeps the custody its record noted, not the resuming command's.** It matters only to an
-  engine that calls both kinds of command for one actor, in embedded mode. A command begun by `allot` or
-  `rotate_payment_key` and resumed by its delivering twin keeps the key in the store: the answer has
-  `replayed: true`, `resumed: true` and no key. One begun by a delivering command and resumed by `allot`
-  or `rotate_payment_key` stays `work_engine`, and its answer, an `ActorAllocation`, hands the key to
-  nobody: rotate again under a new reference (T49).
+- **Only the kind of command that began a run resumes it** (Mike, 23 November 2026). The two kinds are
+  the commands that store the key (`allot`, `rotate_payment_key`) and the ones that hand it over
+  (`allot_for_delivery`, `rotate_for_delivery`), and one `operation_ref` is one record for both. The
+  record notes which kind began it when it begins, before any provider call (`begun_for` in its context:
+  `secret_store` or `work_engine`). While the run is unfinished, the same request from the other kind is
+  409 `OperationConflict`, `code: operation_conflict`, in the stale window and after it. Nothing is sent
+  to the provider and nothing is written, so the record stays as it was, and the command that began it
+  still resumes it. The error names that command. It matters only where both kinds are called for one
+  actor: in embedded mode, or on two apps over one database. Finished by the other kind, a delivering
+  run's key would be handed to nobody, and a storing run's would stay in the store while the delivering
+  caller is answered with none.
+  - A repeat of a *finished* command is not a resume. Either kind is answered from the ledger, the
+    delivering one with `allocation_api_key: null` and `replayed: true`.
+  - A record written before the kind was noted is the kind that the custody of its stored secret
+    implies (`new_secret_custody`). One that notes neither was begun by `allot` or `rotate_payment_key`.
+  - Two references are two commands, so the rule does not join them: an allotment of each kind for one
+    actor, under two references, ends as the bullet on two allotments above says.
 - **A rotation ends an actor's live work.** It mints a new key on the same allocation and revokes the old
   one. Batteries binds a payment session to the key that opened it (`internal/store/auth.go`: 403,
   "session is revoked or binding does not match"), so the next payment cycle of a stream that is
@@ -552,6 +575,7 @@ Provider calls keep their derived idempotency keys, so a resumed command replays
 | --- | --- |
 | is new | Runs the command |
 | was used with another command or request | 409 `OperationConflict`, `code: operation_conflict`, before any provider call |
+| names an allotment or a payment key rotation still `started`, which the other kind of command began | 409 `OperationConflict`, `code: operation_conflict`, before any provider call and any write: repeat the command that began it ([payment keys](#payment-keys)) |
 | names a command that ended | The recorded result, with the original status and `Idempotent-Replayed: true` |
 | names a command still `started`, for less than `LPB_OPERATION_STALE_S` (120 s) | 409 `OperationInProgress`, `code: operation_in_progress`, `Retry-After`: the seconds until a repeat may resume it |
 | names a command still `started` for longer | **Resumes** it: runs every step again from the top; each step is safe to repeat |

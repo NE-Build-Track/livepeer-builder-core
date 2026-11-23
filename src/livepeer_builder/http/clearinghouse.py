@@ -3,6 +3,12 @@ tenant's actors and their allocations (allot, top up, status, revoke, rotate the
 access keys and its usage. Beside them, ``/v1/clearinghouse/discovery``: the runner list the clearinghouse
 publishes (#166).
 
+Allotment and payment key rotation answer the allocation. Mounted for a standalone clearinghouse
+(``deliver_allocation_keys``, the default) they also hand the allocation's own Batteries key to the caller,
+once: the enterprise's engine keeps it and signs at the signer itself, and the clearinghouse stores none
+(D85 point 1, D87 point 1; docs/contracts/payments.md, "Payment keys"). No route here signs or forwards a
+payment.
+
 One unit, mounted by itself or beside the work set (D84). It is typed against ``ClearinghouseApi``, so it
 cannot run a job. Routes are thin: each authenticates, then makes one engine call, and authorization
 lives in the services' AccessPolicy checks: the path names the tenant, the service passes it to the
@@ -63,10 +69,11 @@ DISCOVERY = "/v1/clearinghouse/discovery"
 def mount_clearinghouse_routes(
     app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool = True
 ) -> None:
-    """Mount both groups. Standalone clearinghouses deliver allocation credentials to work engines.
+    """Mount both groups. With ``deliver_allocation_keys``, for a standalone clearinghouse, allotment and
+    rotation hand each allocation's key to the caller once and store none.
 
-    The combined self-hosted app passes False because its own work engine owns the secret store.
-    Listener/role composition must preserve that distinction.
+    ``create_app`` passes ``False``: an engine with both halves stores the key for its own jobs and returns
+    none. Any app that mounts this set on an engine that also runs jobs passes ``False`` too.
     """
     mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
     mount_clearinghouse_admin_routes(app, engine)

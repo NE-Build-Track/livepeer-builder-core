@@ -454,9 +454,8 @@ class PaymentsService:
         actor = await keys.began_on(run, await self._require_actor(tenant_id, actor_id))
         sent_as = idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key")
         await keys.require_writable(run, sent_as, actor)
-        key = await manager.create_key(  # the provider replays it on a resume
-            actor.allocation_id, f"{tenant_id}/{actor_id}", sent_as
-        )
+        # the provider replays it on a resume, or the engine reads back the one it was handed once
+        key = await keys.rotation_key(run, manager, actor, f"{tenant_id}/{actor_id}", sent_as)
         return await keys.rotated(run, manager, actor, key, sent_as)
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:

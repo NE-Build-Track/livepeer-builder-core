@@ -29,7 +29,7 @@ from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations, Cl
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest, UsageRow
 from livepeer_builder.errors import AccessDenied, InvalidRequest, ProviderError, ProviderOutcomeUnknown
-from livepeer_builder.protocols import ActorRepo, AllocationManager, AllocationsByActor
+from livepeer_builder.protocols import ActorRepo, AllocationManager, AllocationsByActor, OneKeyPerAllocation
 from livepeer_builder.services.grants import idempotency_key
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.testing import FixedClock, MemorySecretStore
@@ -453,6 +453,7 @@ async def test_a_member_that_names_an_allocation_or_a_key_needs_its_actor(ports:
         manager.revoke_allocation("alloc_1"),
         manager.read_allocation("alloc_1"),
         manager.revoke_key("key_1"),
+        manager.holds_key("alloc_1", "key_1"),  # type: ignore[attr-defined]
     ]
     for call in needing:
         with pytest.raises(InvalidRequest, match="for_actor"):
@@ -464,8 +465,8 @@ async def test_a_member_that_names_an_allocation_or_a_key_needs_its_actor(ports:
 
 
 async def test_revoking_a_key_the_allocation_no_longer_holds_sends_nothing(ports: Ports) -> None:
-    """What every finished rotation asks about the key it replaced: the clearinghouse ended that key in
-    the rotation's own command. It is read, not assumed."""
+    """A key the allocation no longer holds has ended already: the clearinghouse ended it in the
+    rotation that replaced it. It is read, not assumed."""
     allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
     rotated = await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
     assert ports.provider.keys[allotted.api_key_id][2] is True  # ended by the clearinghouse's rotation
@@ -479,24 +480,42 @@ async def test_revoking_a_key_the_allocation_no_longer_holds_sends_nothing(ports
     assert ports.provider.keys[rotated.api_key_id][2] is False  # the live key is untouched
 
 
-async def test_revoking_the_key_the_allocation_holds_replaces_it_once_and_keeps_nothing(ports: Ports) -> None:
+async def test_revoking_the_key_the_allocation_holds_is_refused_and_nothing_is_sent_or_minted(
+    ports: Ports,
+) -> None:
     """No route revokes a key by its id, and a key is ended there only by the rotation that replaces it.
-    So the key is replaced, under a reference derived from it: a repeat replaces nothing more."""
+    The adapter mints nothing to end a key: it says so, and the key stays the one the allocation takes."""
     allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
     actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    sent = len(ports.sent())
 
-    await actor.revoke_key(allotted.api_key_id)
+    with pytest.raises(InvalidRequest) as refused:
+        await actor.revoke_key(allotted.api_key_id)
 
-    assert ports.provider.keys[allotted.api_key_id][2] is True
-    [replaced] = bodies(ports, ALLOCATION + "/rotate-payment-key")
-    assert replaced == {"operation_ref": folded("revoke-key", allotted.api_key_id)}
-    assert len(ports.provider.keys) == 2
-    # nothing of the replacement reached the engine: its record and its store are as they were
-    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == allotted
-    assert ports.secrets is not None and len(ports.secrets.values) == 1
+    assert "rotate the payment key of actor 'alice'" in str(refused.value)
+    assert len(ports.sent()) == sent and len(ports.provider.keys) == 1
+    assert ports.provider.keys[allotted.api_key_id][2] is False
 
-    await actor.revoke_key(allotted.api_key_id)  # a repeat: the key is not the one held now
-    assert len(bodies(ports, ALLOCATION + "/rotate-payment-key")) == 1 and len(ports.provider.keys) == 2
+
+async def test_the_manager_says_which_key_an_allocation_takes_now(ports: Ports) -> None:
+    """``OneKeyPerAllocation``: true of the key the actor's allocation holds at the clearinghouse, and of
+    no other key, no other allocation, and no revoked allocation."""
+    allotted = await ports.engine.payments.allot(ports.admin, allot_request(ports))
+    actor = cast(AllocationsByActor, ports.manager).for_actor(ports.tenant_id, "alice")
+    assert isinstance(actor, OneKeyPerAllocation) and not isinstance(ports.provider, OneKeyPerAllocation)
+    with pytest.raises(InvalidRequest, match="for_actor"):
+        await cast(OneKeyPerAllocation, ports.manager).holds_key(allotted.allocation_id, allotted.api_key_id)
+    sent = len(ports.sent())
+
+    assert await actor.holds_key(allotted.allocation_id, allotted.api_key_id) is True
+    assert await actor.holds_key(allotted.allocation_id, "key_of_another_rotation") is False
+    assert await actor.holds_key("alloc_of_another_allotment", allotted.api_key_id) is False
+    rotated = await ports.engine.payments.rotate_payment_key(ports.admin, ports.tenant_id, "alice", "r-1")
+    assert await actor.holds_key(allotted.allocation_id, allotted.api_key_id) is False
+    assert await actor.holds_key(allotted.allocation_id, rotated.api_key_id) is True
+    await ports.engine.payments.revoke(ports.admin, ports.tenant_id, "alice")
+    assert await actor.holds_key(allotted.allocation_id, rotated.api_key_id) is False
+    assert [path.rsplit("/", 1)[1] for path in ports.sent()[sent:]] == ["rotate-payment-key", "revoke"]
 
 
 async def test_no_key_of_a_revoked_allocation_is_replaced(ports: Ports) -> None:
@@ -589,7 +608,9 @@ async def test_a_clearinghouse_admin_key_is_refused_on_the_public_listener(ports
 
 
 def scripted(
-    answers: dict[str, httpx.Response], actors: ActorRepo | None = None
+    answers: dict[str, httpx.Response],
+    actors: ActorRepo | None = None,
+    secrets: MemorySecretStore | None = None,
 ) -> tuple[AllocationManager, list[httpx.Request]]:
     """The manager for alice over a clearinghouse that answers each path ending as the test says."""
     seen: list[httpx.Request] = []
@@ -603,7 +624,9 @@ def scripted(
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
     wire = ClearinghouseWire("http://clearinghouse.test", "lpk_made-up", "grant_1", client)
-    whole = ClearinghouseAllocations(wire, cast(ActorRepo, actors or NoActors()), MemorySecretStore())
+    whole = ClearinghouseAllocations(
+        wire, cast(ActorRepo, actors or NoActors()), secrets or MemorySecretStore()
+    )
     return whole.for_actor("grant_1", "alice"), seen
 
 
@@ -661,6 +684,37 @@ async def test_an_answer_that_says_it_is_a_repeat_is_never_a_key_even_when_it_ca
     with pytest.raises(InvalidRequest) as refused:
         await manager.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "k")
     assert KEY not in str(refused.value) and "never reached this engine" in str(refused.value)
+
+
+async def test_a_repeat_answered_without_the_key_the_engine_already_holds_is_its_own_copy() -> None:
+    """For a caller of the port alone: the clearinghouse finished this reference and hands nothing over
+    again, and the engine's record of the actor names the allocation and the key of that answer, with the
+    secret in its own store. The engine's own rotation never asks (``PaymentKeys.rotation_key``)."""
+    secrets = MemorySecretStore()
+    ref = await secrets.put("lpg/grant_1/alice", KEY)
+    mine = ActorAllocation.model_validate(
+        ALLOTTED | {"secret_ref": {"ref": ref.ref}, "credential_custody": "secret_store"}
+    )
+
+    class OneActor(NoActors):
+        async def get_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation | None:  # NOSONAR
+            return mine if (tenant_id, actor_id) == ("grant_1", "alice") else None
+
+    replayed = ALLOTTED | {"allocation_api_key": None, "replayed": True, "resumed": False}
+    manager, _ = scripted(
+        {"/allocation": httpx.Response(201, json=replayed)}, cast(ActorRepo, OneActor()), secrets
+    )
+    key = await manager.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "k")
+    assert (key.allocation_id, key.api_key_id, key.secret.get_secret_value()) == ("alloc_1", "key_1", KEY)
+
+    # another key than the one the engine holds is the key that never arrived
+    elsewhere, _ = scripted(
+        {"/allocation": httpx.Response(201, json=replayed | {"api_key_id": "key_2"})},
+        cast(ActorRepo, OneActor()),
+        secrets,
+    )
+    with pytest.raises(InvalidRequest, match="never reached this engine"):
+        await elsewhere.create_key_for_grant("grant_1", "grant_1/alice", usd(5), "k")
 
 
 async def test_a_rotation_answered_for_another_allocation_is_refused_and_its_key_not_kept() -> None:

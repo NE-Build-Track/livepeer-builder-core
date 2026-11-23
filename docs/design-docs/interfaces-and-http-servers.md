@@ -68,8 +68,9 @@ classDiagram
 `ActorApi`. `WorkApi` is the work half: the actor API, and the engine's own access keys, reconciliation
 and cost sync. `ClearinghouseApi` is the clearinghouse half: tenants and their grants, allotment and top-ups. In
 `http/` each set of routes is typed against its half, and `create_app` against `EngineApi`, which is both. Optional capabilities are `X?` members decided once at construction:
-`jobs.streaming` (the transport can stream), `keys` (engine API keys are on) and `payments.tenants`
-(the tenant desk is on). Callers check for `None`; nothing probes with `hasattr`.
+`jobs.streaming` (the transport can stream), `keys` (engine API keys are on), `payments.tenants`
+(the tenant desk is on), `payments.usage` (the usage source reads one tenant's records) and `runner_list`
+(the discovery source holds the document it read). Callers check for `None`; nothing probes with `hasattr`.
 
 ```mermaid
 classDiagram
@@ -96,6 +97,7 @@ classDiagram
         <<interface>>
         +payments PaymentsAdminApi
         +keys KeysApi?
+        +runner_list RunnerListApi?
         +authenticator Authenticator
         +health() EngineHealth
         +async start() None
@@ -153,12 +155,15 @@ classDiagram
     class PaymentsAdminApi {
         <<interface>>
         +async allot(admin, request) ActorAllocation
+        +async allot_for_delivery(admin, request) DeliveredAllocation
         +async top_up(admin, tenant_id, actor_id, request) ActorAllocation
         +async set_status(admin, tenant_id, actor_id, status) ActorAllocation
         +async rotate_payment_key(admin, tenant_id, actor_id, operation_ref) ActorAllocation
+        +async rotate_for_delivery(admin, tenant_id, actor_id, operation_ref) DeliveredAllocation
         +async revoke(admin, tenant_id, actor_id) ActorAllocation
         +async top_up_grant(admin, tenant_id, request) None
         +tenants TenantsApi?
+        +usage TenantUsageApi?
     }
     class TenantsApi {
         <<interface>>
@@ -725,7 +730,7 @@ classDiagram
     }
     class clearinghouse_py {
         <<module>>
-        +mount_clearinghouse_routes(app, engine) None
+        +mount_clearinghouse_routes(app, engine, deliver_allocation_keys) None
     }
     class auth_py {
         <<module>>
@@ -785,7 +790,10 @@ classDiagram
 The routes are two sets (D84). `mount_work_routes` adds the work half's routes to an app and
 `mount_clearinghouse_routes` the clearinghouse half's, each typed against its half of the facade.
 `shared_app` builds the app both need: the lifecycle, the error answers, the request limit and health.
-`create_app` mounts both sets on it. Every route is a closure over `engine`: nothing is looked up from a
+`create_app` mounts both sets on it, the clearinghouse set with `deliver_allocation_keys=False`: an
+engine with both halves stores each payment key and returns none. Mounted by itself with
+`deliver_allocation_keys=True`, that set hands each key to the caller once. The keyword is required
+([payments.md](../contracts/payments.md#payment-keys)). Every route is a closure over `engine`: nothing is looked up from a
 global or from `app.state`. `actor_dependency(engine)` is the authentication dependency, and routes you
 add with `extend` use the same one.
 
@@ -815,9 +823,8 @@ clearinghouse set.
 | `GET /v1/events`, `POST /v1/sessions` | `events.after`, `sessions.open` | `501`: the events feed is held (D60), sessions are M4 |
 | `POST, GET /v1/keys`, `GET /v1/keys/{id}`, `POST /v1/keys/{id}/rotate`, `POST /v1/keys/{id}/revoke` | `keys.*` | only when `engine.keys` is set |
 | `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `payments.list_actors`, `payments.get_actor` | `KnownActor[]` (allotted, signed in, or both: D46, D48), `ActorAllocation` |
-| `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key` | `ActorAllocation`; allot and rotate answer `KeyedAllocation`, the allocation with the actor's payment key, shown once (#166) |
+| `POST /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` (and `/top-up`, `/status`, `/revoke`, `/rotate-payment-key`) | `payments.allot`, `top_up`, `set_status`, `revoke`, `rotate_payment_key`; mounted with `deliver_allocation_keys`, allot and rotate call `payments.allot_for_delivery` and `rotate_for_delivery` | `ActorAllocation`; with `deliver_allocation_keys`, allot and rotate answer the allocation with `allocation_api_key` (the actor's payment key, once), `replayed` and `resumed` (#166) |
 | `GET /v1/clearinghouse/tenants/{tenant}/usage` | `payments.usage.page` | `UsagePage`; only when `payments.usage` is set |
-| `POST /sign-orchestrator-info`, `POST /generate-live-payment` | `payments.signing.payer`, then `payments.signing.forward` | the signer's own answer, passed on; a payment key is the credential; only when `payments.signing` is set |
 | `GET /v1/clearinghouse/discovery` | `runner_list.document` | livepeer/node's `/discovery` document, as the clearinghouse read it; only when `runner_list` is set |
 | `POST, GET /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants/{tenant}/grant`, `POST /v1/clearinghouse/tenants/{tenant}/status` | `payments.tenants.onboard`, `list_tenants`, `grant`, `set_status` | `OnboardedTenant`, `TenantGrant[]`, `TenantGrant`, `TenantState`; only when `payments.tenants` is set |
 | `POST /v1/clearinghouse/tenants/{tenant}/grant/top-up` | `payments.top_up_grant` | `204` |

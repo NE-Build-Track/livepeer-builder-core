@@ -5,12 +5,15 @@ The engine is one program with two halves (docs/design-docs/m4-guides/iss-31-pay
 
 - the **work half**: network capabilities, runner choice, the runner call, streaming, job records and the
   cost of each job;
-- the **clearinghouse half**: tenants, grants, allocations, payment keys, signing and usage.
+- the **clearinghouse half**: tenants, grants, allocations, payment keys, usage and the runner list. It
+  mints each payment key and hands it over; it signs nothing.
 
 The work half reaches payments through five ports and nothing else: signing inside ``RunnerTransport``,
 ``CredentialResolver``, ``AllocationManager``, ``AllowanceReader`` and ``UsageSource``. An enterprise that
-uses a payment clearinghouse runs the work half alone, with each port pointed at the clearinghouse, so
-whatever the work half reached another way would have nothing behind it there.
+uses a payment clearinghouse runs the work half alone: allocations, the allowance and usage come from the
+clearinghouse, the payment keys from its own store, where the clearinghouse's answers put them, and
+signing goes to the clearinghouse's signer. Whatever the work half reached another way would have nothing
+behind it there.
 
 The halves live in ``services/`` and ``http/``, and every module of the two is named below as work,
 clearinghouse or shared. This file then holds five things:
@@ -36,7 +39,6 @@ from fastapi import FastAPI
 
 from livepeer_builder import api, protocols
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
-from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
 from livepeer_builder.protocols import clearinghouse, conditional_writes, persistence
 from livepeer_builder.services.costs import CostService, CostSyncWorker
@@ -64,20 +66,19 @@ WORK = {
     "http/streaming.py",
     "http/work.py",
 }
-# Tenants, grants, allocations, payment keys, signing and usage.
+# Tenants, grants, allocations, payment keys, usage and the runner list.
 CLEARINGHOUSE = {
     "services/actor_writes.py",
+    "services/allocation_delivery.py",
     "services/grants.py",
-    "services/issued_payment_keys.py",
     "services/payment_keys.py",
-    "services/payment_signing.py",  # the key swap: a payment key for the actor's Batteries key
     "services/payments.py",
     "services/runner_list.py",  # the list a clearinghouse publishes: it reaches no work module
     "services/tenant_usage.py",
     "services/tenants.py",
     "services/wallet.py",  # the wallet report, which only a clearinghouse admin reads (#167)
     "http/clearinghouse.py",
-    "http/signing.py",  # the signer's two paths, called with a payment key
+    "http/delivered.py",  # a delivered allocation as the clearinghouse's answer
 }
 # What both halves use: access (policy, access keys, who signed in), the operation ledger, and the app
 # that mounts the sets. A shared module may be imported by either half.
@@ -106,26 +107,20 @@ SIGNING_INSIDE = {"RunnerTransport", "StreamingRunnerTransport", "RunnerStream"}
 PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceReader", "UsageSource"}
 # Payment protocols that are not ports: where payment keys and allocation records are kept. The work
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
-# both: a work module asks for the narrow repo it needs (JobRepo, CostRepo).
-# PaymentKeyRepo is where a clearinghouse keeps the payment keys it issues (#166): the work half is
-# handed one through CredentialResolver and never looks one up. TenantUsageSource is how a clearinghouse
-# reads one tenant's usage at the provider: the work half reads usage through UsageSource.
+# both: a work module asks for the narrow repo it needs (JobRepo, CostRepo). TenantUsageSource is how a
+# clearinghouse reads one tenant's usage at the provider: the work half reads usage through UsageSource.
 # EscrowSource and SignerProbe are what the wallet report reads (#167): the wallet's deposit and reserve at
 # the provider, and whether the signer answers. They are the clearinghouse half's, for its admin: the work
 # half pays through the signer inside RunnerTransport and has no use for either.
-# SignerForwarder hands a signer call to the signer with an actor's Batteries key, for a clearinghouse
-# (#166): the work half signs inside RunnerTransport and never forwards another engine's call.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
     "SecretRepo",
     "ActorRepo",
     "ActorCommandRepo",
-    "PaymentKeyRepo",
     "TenantUsageSource",
     "EscrowSource",
     "SignerProbe",
-    "SignerForwarder",
     "EngineStore",
 }
 NOT_PAYMENTS = {
@@ -243,7 +238,9 @@ def members(protocol: type) -> set[str]:
 
 def test_every_service_and_route_module_belongs_to_a_half_or_is_shared() -> None:
     found = {
-        str(path.relative_to(SRC)) for folder in ("services", "http") for path in (SRC / folder).glob("*.py")
+        path.relative_to(SRC).as_posix()
+        for folder in ("services", "http")
+        for path in (SRC / folder).glob("*.py")
     }
     named = WORK | CLEARINGHOUSE | SHARED
     assert not (WORK & CLEARINGHOUSE) and not (WORK & SHARED) and not (CLEARINGHOUSE & SHARED), (
@@ -318,14 +315,12 @@ def test_each_set_of_routes_is_typed_against_its_own_half() -> None:
     """Each set is one function that adds its routes to an app, so a deployment can mount one set. Typed
     against its half, mypy refuses a work route that calls a clearinghouse command, and the other way
     round."""
-    sets = (
-        (mount_work_routes, api.WorkApi),
-        (mount_clearinghouse_routes, api.ClearinghouseApi),
-        (mount_signing_routes, api.ClearinghouseApi),  # the signer's two paths: the clearinghouse half's
-    )
-    for mount, half in sets:
+    for mount, half in ((mount_work_routes, api.WorkApi), (mount_clearinghouse_routes, api.ClearinghouseApi)):
         hints = typing.get_type_hints(mount)
-        assert hints == {"app": FastAPI, "engine": half, "return": type(None)}, (
+        expected = {"app": FastAPI, "engine": half, "return": type(None)}
+        if mount is mount_clearinghouse_routes:
+            expected["deliver_allocation_keys"] = bool
+        assert hints == expected, (
             f"{mount.__name__}(app, engine) takes engine: {half.__name__}, the facade of its half "
             "(src/livepeer_builder/api.py). Typed as EngineApi, the set could call the other half."
         )

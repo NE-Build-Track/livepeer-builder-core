@@ -24,18 +24,8 @@ from livepeer_builder.adapters.runner_call import (
     json_object,
 )
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
-from livepeer_builder.adapters.signer_forward import HttpSignerForwarder
-from livepeer_builder.contracts import (
-    JobRequest,
-    Runner,
-    RunnerReply,
-    SignerAnswer,
-    SignerCall,
-    SignerNotReady,
-    SignerReadiness,
-)
+from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
-from livepeer_builder.errors import SignerNotReached
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
@@ -124,7 +114,6 @@ class SdkRunnerTransport:
     def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
-        self._forwarder = HttpSignerForwarder(signer_url) if signer_url is not None else None
 
     @property
     def pays(self) -> bool:
@@ -156,16 +145,6 @@ class SdkRunnerTransport:
             )
             return SignerReadiness(ready=False, reason=reason)
         return SignerReadiness(ready=True)
-
-    async def forward_signer_call(
-        self, call: SignerCall, credential: str, body: bytes, content_type: str
-    ) -> SignerAnswer:
-        """One signer call for a clearinghouse (``SignerForwarder``, #166), to the signer this transport
-        pays the engine's own jobs through, with ``credential`` as its bearer. An engine whose transport
-        does not pay serves neither signer path, so the first branch is a supplied wiring's."""
-        if self._forwarder is None:
-            raise SignerNotReached("this engine has no signer (LPB_SIGNER_URL)")
-        return await self._forwarder.forward_signer_call(call, credential, body, content_type)
 
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents

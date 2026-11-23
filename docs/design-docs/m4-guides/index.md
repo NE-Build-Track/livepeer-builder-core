@@ -23,8 +23,9 @@ answers that did:
   confirmed that reconciliation otherwise stops balancing.
 
 **ISS-31 was replaced on 18 November 2026** (D82 to D86). The second payment configuration is a payment
-clearinghouse: an engine in front of Batteries and the signer that does payments only, with tenants,
-tenant admins and a clearinghouse admin. `per_actor` is the only allocation mode, and names follow the
+clearinghouse: an engine in front of Batteries that does payments only, with tenants, tenant admins and a
+clearinghouse admin, and a signer that enterprise engines reach directly (D85 point 1, as amended on 19
+November). `per_actor` is the only allocation mode, and names follow the
 domain language. The ISS-31 guide is rewritten, and every other guide carries an "Amended on 18 November
 2026" section. What each one takes:
 
@@ -52,7 +53,7 @@ depend on it: they route by app ID, as today, and each guide notes where the sta
 
 **No M4 guide needs an upstream change.** ISS-27 vendors two SDK functions (the reserve-response parser
 and `stop_runner_session`), fingerprinted as D53 did. The payment clearinghouse needs no grant-scoped
-Batteries credentials, because no Batteries credential leaves the clearinghouse (ISS-31).
+Batteries credentials, because no Batteries management credential leaves the clearinghouse (ISS-31).
 
 ## Review agenda
 

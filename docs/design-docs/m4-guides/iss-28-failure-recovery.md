@@ -296,10 +296,13 @@ in two. The tables above are changed.
 - **One value, not two.** The engine cannot always tell which admin must act, so it reports `admin` and
   the `reason` carries the detail.
 - **Self-hosted payments.** Both admins are the same party, so the value reads correctly there too.
-- **Failures of the clearinghouse itself**, as an enterprise's engine sees them, take the place of signer
-  failures: unreachable or not ready is `signer_unavailable` and `retry`, an unknown outcome is
+- **Failures of the clearinghouse itself**, as an enterprise's engine sees them, are classified like
+  signer failures: unreachable or not ready is `signer_unavailable` and `retry`, an unknown outcome is
   `signer_unknown` and `check`, and a refusal keeps its reason. Locked on 18 November (D87). The remote
   adapters build it (#168).
+- **A failure while signing is the signer's own,** with a clearinghouse as with self-hosted payments: an
+  enterprise's engine signs at the clearinghouse's signer directly (D85 point 1, as Mike amended it on 19
+  November 2026).
 
 ## Delivery slices
 

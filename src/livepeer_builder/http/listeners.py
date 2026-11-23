@@ -14,10 +14,10 @@ with an app of its own over the one engine:
 Without ``LPB_HTTP_PRIVATE_PORT`` the engine has **one listener**, which serves every group to every
 kind of credential, as it did before #167.
 
-The rule about kinds is a rule about access credentials. The signer's two paths (``http/signing.py``,
-#166) take a payment key, which is no access credential and has no kind: they are served on every
-listener, a live payment key signs on each, and anything else is 401 there, a clearinghouse admin
-credential included.
+Every app this module builds keeps each allocation's key with the engine
+(``deliver_allocation_keys=False``): the engine behind a listener runs jobs, on one listener or two. A
+standalone clearinghouse, which hands each key to the caller and stores none, is the ``clearinghouse``
+role's (#169).
 
 To serve a new group of routes, add its mount function to ``EVERY_LISTENER`` or to ``PRIVATE_ONLY``. A
 group in neither is served nowhere (tests/unit/test_listeners.py). ``mount_clearinghouse_routes`` still
@@ -39,15 +39,15 @@ from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.errors import AccessDenied
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_admin_routes, mount_tenant_routes
-from livepeer_builder.http.signing import mount_signing_routes
 from livepeer_builder.http.work import mount_work_routes
 
 ListenerName = Literal["only", "public", "private"]
-Mount = Callable[[FastAPI, EngineApi], None]
+# A group's mount function: each takes the app and the engine, and ``mount_tenant_routes`` also takes
+# ``deliver_allocation_keys``, which ``mount_listener_routes`` passes.
+Mount = Callable[..., None]
 
-# Served on every listener: the work half's routes, what a tenant's own admin or auditor calls, and the
-# signer's two paths, which an enterprise's engine calls with a payment key (#166).
-EVERY_LISTENER: tuple[Mount, ...] = (mount_work_routes, mount_tenant_routes, mount_signing_routes)
+# Served on every listener: the work half's routes, and what a tenant's own admin or auditor calls.
+EVERY_LISTENER: tuple[Mount, ...] = (mount_work_routes, mount_tenant_routes)
 # Never served on the public listener: what only a clearinghouse admin does.
 PRIVATE_ONLY: tuple[Mount, ...] = (mount_clearinghouse_admin_routes,)
 
@@ -92,7 +92,12 @@ def mount_listener_routes(app: FastAPI, engine: EngineApi, name: ListenerName = 
     listener = LISTENERS[name]
     app.state.listener = listener
     for mount in EVERY_LISTENER:
-        mount(app, engine)
+        if mount is mount_tenant_routes:
+            # False on every listener: this engine runs jobs, so it stores each allocation's key for
+            # them and returns none. Handing keys to the caller is the clearinghouse role's (#169).
+            mount_tenant_routes(app, engine, deliver_allocation_keys=False)
+        else:
+            mount(app, engine)
     if not listener.serves_private_routes:
         return
     public = len(app.routes)

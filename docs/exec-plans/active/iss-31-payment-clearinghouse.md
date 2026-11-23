@@ -162,3 +162,11 @@ Each pull request ticks its own line here in the same change.
   address stays a scheme, a host and a port; and `lpb payments check` probes the signer at
   `LPB_SIGNER_URL`, beside the clearinghouse. Source: Mike's amendments of 19 and 23 November 2026 (D85
   point 1, D87 points 1 and 3) and #168 as amended.
+- **23 November 2026, P7.** When two rotations of one actor overlap at a clearinghouse, the
+  clearinghouse's order decides which key the engine keeps. Source: Mike, after review of #182. Built:
+  the optional protocol `OneKeyPerAllocation` on the allocation manager; an overtaken rotation asks
+  which key the allocation takes and keeps its own while it is that one; no rotation is made to end a
+  key, and the remote `revoke_key` refuses the key an allocation holds; a resume reads its key back from
+  the engine's store. The stale window of an engine that uses a clearinghouse is six timeouts of a
+  call, for the three calls of an overtaken rotation, and the default timeout is 20 seconds so that the
+  defaults meet it. This replaces what the entry above says of `revoke_key`.

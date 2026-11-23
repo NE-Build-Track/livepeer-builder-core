@@ -87,6 +87,10 @@ classDiagram
         <<interface>>
         +for_actor(tenant_id, actor_id, operation_ref) AllocationManager
     }
+    class OneKeyPerAllocation {
+        <<interface>>
+        +async holds_key(allocation_id, api_key_id) bool
+    }
     class UsageSource {
         <<interface>>
         +async page(cursor, limit) UsagePage
@@ -203,6 +207,7 @@ classDiagram
     AllocationManager <|.. BatteriesClient
     AllocationManager <|.. ClearinghouseAllocations
     AllocationsByActor <|.. ClearinghouseAllocations
+    OneKeyPerAllocation <|.. ClearinghouseAllocations
     UsageSource <|.. BatteriesUsageSource
     UsageSource <|.. ClearinghouseUsage
     TenantUsageSource <|.. BatteriesUsageSource
@@ -243,6 +248,7 @@ classDiagram
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `AllocationManager` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationsByActor` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
+| `OneKeyPerAllocation` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `ClearinghouseUsage` | `livepeer_builder.adapters.clearinghouse` |
 | `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

@@ -22,6 +22,12 @@ if TYPE_CHECKING:
     from livepeer_builder.contracts.discovery import PriceInfo
 
 AllocationStatus = Literal["active", "paused", "exhausted", "revoked"]
+# Who holds an allocation's credential (D85 point 1, D87 point 1). ``secret_store``: this engine's configured
+# SecretStore issued the actor's ``secret_ref``, and resolves and deletes it. ``work_engine``: the credential
+# was delivered once to the work engine, and ``secret_ref`` is an opaque receipt no store resolves. The
+# handle's text never says which: a store's handles are opaque (#186 review).
+CredentialCustody = Literal["secret_store", "work_engine"]
+CREDENTIAL_CUSTODIES: tuple[CredentialCustody, ...] = ("secret_store", "work_engine")
 
 
 class PaymentKey(Contract):
@@ -32,7 +38,8 @@ class PaymentKey(Contract):
 
 
 class SecretRef(Contract):
-    """A local SecretStore handle, or an opaque delivered: receipt for work-engine-owned credentials."""
+    """A SecretStore handle, or an opaque receipt for a credential the work engine holds. Which one is the
+    actor's ``credential_custody``, never the text of ``ref``."""
 
     ref: str = Field(min_length=1)  # opaque, and read back from stored rows: no length rule here
 
@@ -122,6 +129,9 @@ class ActorAllocation(Contract):
     created_at: datetime
     updated_at: datetime
     label: str = Field(default="", max_length=200)  # a readable name beside an opaque actor_id (D46)
+    # Who holds the credential ``secret_ref`` names. The default is the configured store: every row and
+    # recorded answer written before custody was recorded (migration 0015) was the store's.
+    credential_custody: CredentialCustody = "secret_store"
 
 
 class SeenActor(Contract):
@@ -141,11 +151,19 @@ class SeenActor(Contract):
 class DeliveredAllocation(ActorAllocation):
     """Allocation metadata and a one-response credential for the work engine.
 
-    Only the work engine persists the credential. A completed replay has no token;
-    rotate under a new operation reference if the first response was lost.
+    Only the work engine persists the credential. ``allocation_api_key`` is a ``SecretStr``, so a dump or
+    log of this model shows it masked; only the HTTP answer writes it out.
+
+    - ``replayed`` is ``True`` exactly when the answer carries no key: a repeat of a finished command, or
+      a resume that has no secret in hand. The work engine checks it before persisting the actor.
+    - ``resumed`` is ``True`` when the command finished a run an earlier attempt left unfinished. That
+      attempt's answer was lost, so a resumed answer that carries a key hands over the key the provider
+      returned again, which may be one the work engine already saw.
     """
 
-    allocation_api_key: str | None = Field(default=None, repr=False)
+    allocation_api_key: SecretStr | None = None
+    replayed: bool = False  # no key in this answer, as an issued access key's ``replayed`` (D57)
+    resumed: bool = False  # this answer finishes a run an earlier attempt left unfinished
 
 
 class KnownActor(Contract):

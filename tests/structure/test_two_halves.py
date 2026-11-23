@@ -74,6 +74,7 @@ CLEARINGHOUSE = {
     "services/tenant_usage.py",
     "services/tenants.py",
     "http/clearinghouse.py",
+    "http/delivered.py",  # a delivered allocation as the clearinghouse's answer
 }
 # What both halves use: access (policy, access keys, who signed in), the operation ledger, and the app
 # that mounts the sets. A shared module may be imported by either half.

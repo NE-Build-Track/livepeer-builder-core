@@ -49,3 +49,9 @@ class OperationRecord(Contract):
 OPERATION_REPLAYED: ContextVar[bool] = ContextVar("lpb_operation_replayed", default=False)
 """Whether the last admin command run in this context was answered from the ledger (a replay). Read it
 right after the call: the REST service turns it into ``Idempotent-Replayed: true``. Each command resets it."""
+
+OPERATION_RESUMED: ContextVar[bool] = ContextVar("lpb_operation_resumed", default=False)
+"""Whether the last admin command run in this context resumed a run an earlier attempt left unfinished
+(its record was taken over). That attempt's outcome is unknown: it may have applied steps, and its answer
+was lost. Read it right after the call. Each command resets it; a replay of a finished command is not a
+resume."""

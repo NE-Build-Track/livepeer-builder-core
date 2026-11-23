@@ -8,9 +8,7 @@ from livepeer_builder.store.schema import metadata
 
 
 async def render_openapi() -> str:
-    from livepeer_builder.http.app import shared_app
-    from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
-    from livepeer_builder.http.work import mount_work_routes
+    from livepeer_builder.http.app import create_app
     from livepeer_builder.runtime.assembly import EngineSupply
     from livepeer_builder.testing import FakeAllocationManager
 
@@ -23,10 +21,9 @@ async def render_openapi() -> str:
     )
     engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
     try:
-        app = shared_app(engine, manage_lifecycle=False)
-        mount_work_routes(app, engine)
-        mount_clearinghouse_routes(app, engine)
-        schema = app.openapi()
+        # The app ``lpb serve`` runs, built the same way, so the spec documents what ships (#186 review).
+        # Delivering allocation keys belongs to the clearinghouse role, which P8 mounts.
+        schema = create_app(engine, manage_lifecycle=False).openapi()
     finally:
         await engine.stop()
     schema["info"]["version"] = "generated"  # keep the file stable across dev versions

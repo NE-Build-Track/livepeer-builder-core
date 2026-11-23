@@ -90,6 +90,15 @@
             "title": "Created At",
             "type": "string"
           },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
           "currency": {
             "enum": [
               "USD",
@@ -487,94 +496,6 @@
           "jobs_pending"
         ],
         "title": "CostSummary",
-        "type": "object"
-      },
-      "DeliveredAllocation": {
-        "additionalProperties": false,
-        "description": "Allocation metadata and a one-response credential for the work engine.\n\nOnly the work engine persists the credential. A completed replay has no token;\nrotate under a new operation reference if the first response was lost.",
-        "properties": {
-          "actor_id": {
-            "title": "Actor Id",
-            "type": "string"
-          },
-          "allocation_api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Allocation Api Key"
-          },
-          "allocation_id": {
-            "title": "Allocation Id",
-            "type": "string"
-          },
-          "api_key_id": {
-            "title": "Api Key Id",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "currency": {
-            "enum": [
-              "USD",
-              "ETH"
-            ],
-            "title": "Currency",
-            "type": "string"
-          },
-          "grant_id": {
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "label": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "secret_ref": {
-            "$ref": "#/components/schemas/SecretRef"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "paused",
-              "exhausted",
-              "revoked"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "tenant_id": {
-            "title": "Tenant Id",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "tenant_id",
-          "actor_id",
-          "grant_id",
-          "allocation_id",
-          "api_key_id",
-          "secret_ref",
-          "currency",
-          "status",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "DeliveredAllocation",
         "type": "object"
       },
       "EngineEvent": {
@@ -2137,7 +2058,7 @@
       },
       "SecretRef": {
         "additionalProperties": false,
-        "description": "A local SecretStore handle, or an opaque delivered: receipt for work-engine-owned credentials.",
+        "description": "A SecretStore handle, or an opaque receipt for a credential the work engine holds. Which one is the\nactor's ``credential_custody``, never the text of ``ref``.",
         "properties": {
           "ref": {
             "minLength": 1,
@@ -2944,7 +2865,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DeliveredAllocation"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3064,7 +2985,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DeliveredAllocation"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },

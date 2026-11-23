@@ -30,7 +30,6 @@ from livepeer_builder.contracts import (
     ActorContext,
     AllocationStatus,
     AllotRequest,
-    DeliveredAllocation,
     IssuedKey,
     KnownActor,
     OnboardedTenant,
@@ -50,6 +49,7 @@ from livepeer_builder.http.bodies import (
     TenantKeyBody,
     TenantStatusBody,
 )
+from livepeer_builder.http.delivered import DeliveredAllocationBody, delivered_body
 from livepeer_builder.http.params import GrantTenantId, PathId, QueryId
 from livepeer_builder.http.replies import replay, replayed
 
@@ -182,7 +182,7 @@ def mount_tenant_routes(
     @app.post(
         ALLOCATION,
         status_code=201,
-        response_model=DeliveredAllocation if deliver_allocation_keys else ActorAllocation,
+        response_model=DeliveredAllocationBody if deliver_allocation_keys else ActorAllocation,
     )
     async def allot(
         actor: Actor,
@@ -199,8 +199,9 @@ def mount_tenant_routes(
             label=body.label,
             operation_ref=body.operation_ref,
         )
-        command = engine.payments.allot_for_delivery if deliver_allocation_keys else engine.payments.allot
-        return replay(response, await command(actor, request))
+        if deliver_allocation_keys:  # the key is written out here, and only here
+            return replay(response, delivered_body(await engine.payments.allot_for_delivery(actor, request)))
+        return replay(response, await engine.payments.allot(actor, request))
 
     @app.post(ALLOCATION + "/top-up")
     async def top_up(
@@ -220,19 +221,17 @@ def mount_tenant_routes(
 
     @app.post(
         ALLOCATION + "/rotate-payment-key",
-        response_model=DeliveredAllocation if deliver_allocation_keys else ActorAllocation,
+        response_model=DeliveredAllocationBody if deliver_allocation_keys else ActorAllocation,
     )
     async def rotate_payment_key(
         actor: Actor, tenant_id: PathId, actor_id: PathId, body: RotateBody, response: Response
     ) -> ActorAllocation:
         response.headers["Cache-Control"] = "no-store"
-        command = (
-            engine.payments.rotate_for_delivery
-            if deliver_allocation_keys
-            else engine.payments.rotate_payment_key
-        )
-        rotated = await command(actor, tenant_id, actor_id, body.operation_ref)
-        return replay(response, rotated)
+        ref = body.operation_ref
+        if deliver_allocation_keys:  # the key is written out here, and only here
+            rotated = await engine.payments.rotate_for_delivery(actor, tenant_id, actor_id, ref)
+            return replay(response, delivered_body(rotated))
+        return replay(response, await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, ref))
 
     if engine.keys is None:  # API keys off: a tenant has no access keys to manage (decision 2)
         return

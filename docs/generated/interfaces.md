@@ -110,7 +110,7 @@ classDiagram
     class ActorCommandRepo {
         <<interface>>
         +async allot_actor(actor, replacing) bool
-        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ActorAllocation?
+        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from, credential_custody) ActorAllocation?
         +async set_actor_status(tenant_id, actor_id, allocation_id, status, updated_at, only_from) ActorAllocation?
     }
     class UsageOnceRepo {

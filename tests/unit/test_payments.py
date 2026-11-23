@@ -541,7 +541,7 @@ async def test_such_a_record_is_still_asked_when_the_actor_does_not_hold_its_key
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     before = await engine.payments.allot(admin, allot_request())
 
-    async def lost(*_: object) -> None:
+    async def lost(*_: object, **__: object) -> None:
         raise ConnectionError("the database went away")
 
     with monkeypatch.context() as losing:
@@ -682,7 +682,7 @@ async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_
     await engine.payments.allot(admin, allot_request())
     set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(*_: object) -> None:
+    async def lost(*_: object, **__: object) -> None:
         monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 

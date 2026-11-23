@@ -1,18 +1,21 @@
 """Generators for docs/generated. CI runs ``lpb gen-docs --check`` so committed docs never drift."""
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import Role
 from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store.schema import metadata
 
 if TYPE_CHECKING:
     from livepeer_builder.http.listeners import ListenerName
 
+# The roles a schema is published for. ``work`` has none of its own: it serves the work routes of the
+# ``both`` role's document and nothing else.
+PublishedRole = Literal["both", "clearinghouse"]
 
-async def render_openapi(role: Role = "both") -> str:
+
+async def render_openapi(role: PublishedRole = "both") -> str:
     """The schema of the app ``lpb serve`` runs for an engine in ``role``, built the same way.
 
     ``both``, the default, is ``openapi.json``: every route, on one listener. Its allotment and rotation

@@ -304,7 +304,12 @@ route list this contract covers.
   ticket. Renaming app IDs to capabilities stays with ISS-48.
 - **The access sweep** adds the kinds `tenant_admin` and `clearinghouse_admin`, and the public and private
   listeners (#167).
-- **The current-state table above** still names today's routes. It needs a pass after #163 and #164.
+- **The current-state table above** is the state at `d3df806` and still names that day's routes. Three
+  of its admin routes have final paths in the work half (D87): the engine's own access keys are under
+  `/v1/keys`, `GET /v1/admin/reconciliation` is `GET /v1/costs/reconciliation`, and
+  `POST /v1/admin/costs/sync` is `POST /v1/costs/sync`. The ISS-31 guide's Routes section says who may
+  call each. `GET /v1/admin/actors` becomes the tenant's actor list among the clearinghouse routes. The
+  rest of the table needs a pass after #163 and #164.
 
 ## Delivery slices
 

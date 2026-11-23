@@ -260,6 +260,31 @@ async def test_an_allotment_recorded_before_165_that_matches_no_record_is_a_conf
     assert manager.calls == []
 
 
+async def test_an_allotment_left_started_before_165_for_a_revoked_actor_is_a_conflict_and_never_resumed(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    store: SqlStore,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+) -> None:
+    """An actor revoked and allotted again before #165, with the second allotment left ``started``. Its
+    record names the grant the request named, so the repeat matches the record's earlier form. It is
+    still never resumed (#165 review): resumed, it would be refused for the grant that is not the
+    tenant's id, a resumed run is never abandoned, and the reference would answer 400 for good. It is 409
+    ``operation_conflict`` before any provider call, however old and however often repeated."""
+    engine = await make_engine(engine_id="engine-1")
+    revoked = alice_from("grant_1", clock.now()).model_copy(update={"status": "revoked"})
+    await store.save_actor(revoked)
+    await store.begin_operation(recorded("provision", clock, state="started"))
+    clock.advance(3600)  # long past the stale window: a record of this release's form would be resumed
+    for _ in range(2):
+        with pytest.raises(OperationConflict):
+            await engine.payments.allot(admin, ALLOT_ALICE)
+    assert manager.calls == []
+    held = await store.get_operation("default", "operator", "provision")
+    assert held is not None and held.state == "started" and held.fencing_token == 1  # never taken over
+
+
 @pytest.mark.parametrize("state", ["done", "started"])
 async def test_a_grant_creation_recorded_before_165_is_never_run_again_as_an_onboarding(
     make_engine: EngineFactory,

@@ -382,12 +382,11 @@ async def test_a_tenant_admin_key_never_acts_on_another_tenants_keys(house: Hous
     for path, body in (
         (two.path("/keys"), {"actor_id": "spy", "operation_ref": "k1"}),
         ("/v1/keys", {"kind": "auditor", "actor_id": "spy", "tenant_id": two.id, "operation_ref": "k2"}),
-        (
-            "/v1/keys",
-            {"kind": "actor", "actor_id": "spy", "operation_ref": "k3"},
-        ),  # the body's default tenant
     ):
         assert (await client.post(path, json=body, headers=one.admin)).status_code == 403, path
+    # a body that names no tenant was put in "default", another tenant's: now it is refused as it is read
+    unnamed = {"kind": "actor", "actor_id": "spy", "operation_ref": "k3"}
+    assert (await client.post("/v1/keys", json=unnamed, headers=one.admin)).status_code == 422
     # reading another tenant's keys
     assert (await client.get(two.path("/keys"), headers=one.admin)).status_code == 403
     assert (await client.get(f"/v1/keys?tenant_id={two.id}", headers=one.admin)).status_code == 403
@@ -449,6 +448,30 @@ async def test_a_tenant_admin_changes_no_admin_key_and_manages_its_tenants_other
     assert (await client.post(one.path("/keys"), json=named, headers=house.admin)).status_code == 422
 
 
+async def test_a_key_rotation_repeated_under_another_tenants_path_is_400_and_shows_no_key(
+    house: House, store: SqlStore
+) -> None:
+    """The repeat of a rotation is answered from its record. Under another tenant's path it reads as
+    missing, as the first run there would have (#165 review): a clearinghouse admin may name any tenant,
+    so only the key's own tenant stops it."""
+    client, one, two = house.client, house.one, house.two
+    issued = await client.post(
+        one.path("/keys"), json={"actor_id": "dashboard", "operation_ref": "aud"}, headers=one.admin
+    )
+    auditor = issued.json()["key"]["key_id"]
+    rotate = {"operation_ref": "rotate-aud"}
+    first = await client.post(one.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    assert first.status_code == 201 and first.json()["token"]
+    elsewhere = await client.post(two.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    assert elsewhere.status_code == 400 and first.json()["key"]["key_id"] not in elsewhere.text
+    again = await client.post(one.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    assert again.headers["Idempotent-Replayed"] == "true"
+    assert (again.json()["key"], again.json()["token"]) == (first.json()["key"], None)
+    assert (
+        len(await store.list_access_keys(one.id)) == 3
+    )  # its admin key, the auditor key and its replacement
+
+
 # -- the work set -------------------------------------------------------------------------------------------
 
 
@@ -469,7 +492,8 @@ async def test_on_the_work_set_a_tenant_admin_is_an_admin_of_its_own_tenant_only
     reconciliation = "/v1/costs/reconciliation?actor_id=alice&tenant_id="
     assert (await client.get(reconciliation + one.id, headers=one.admin)).status_code == 200
     assert (await client.get(reconciliation + two.id, headers=one.admin)).status_code == 403
-    assert (await client.get("/v1/costs/reconciliation?actor_id=alice", headers=one.admin)).status_code == 403
+    # no tenant named: once read as "default", another tenant's; now refused as it is read (#163 review)
+    assert (await client.get("/v1/costs/reconciliation?actor_id=alice", headers=one.admin)).status_code == 422
     assert (await client.get("/v1/allowance?actor_id=alice", headers=one.admin)).status_code == 200
     assert (await client.get("/v1/allowance?actor_id=bob", headers=one.admin)).status_code == 404
     assert (await client.post("/v1/costs/sync", headers=one.admin)).status_code == 403

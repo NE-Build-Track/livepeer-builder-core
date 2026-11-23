@@ -106,10 +106,63 @@ must use its Batteries authorization webhook. Fixed and live work retain their e
 
 ### Routes
 
+Kinds: `clearinghouse_admin` (every tenant, private listener only), `tenant_admin` (one tenant),
+`auditor` (one tenant, read-only) and `actor` (itself). The allocation API key is held by the work
+engine and presented to the signer.
+
 Standalone clearinghouse allotment and rotation return `DeliveredAllocation`, including an
 `allocation_api_key` only in the issuing response, with `Cache-Control: no-store`. No secret is
 persisted by the clearinghouse. Completed retries return no token; explicit rotation recovers a lost
 response. Reads return metadata only. There is no clearinghouse payments/signing route.
+
+**Clearinghouse half, public listener.** Another tenant's id in the path is 403, and a
+`clearinghouse_admin` credential is 403 on this listener.
+
+| Route | Who may call | What it does |
+| --- | --- | --- |
+| `GET /v1/me` | Any credential | The caller's kind and tenant. From ISS-29 (D72) |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | The grant's total, unallocated balance and status |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations |
+| `GET …/actors/{actor_id}/allocation` | That tenant's admin or auditor | One allocation: allotted, spent, available and status |
+| `POST …/actors/{actor_id}/allocation` | That tenant's admin | Allots an allocation from the tenant's grant and returns `DeliveredAllocation`, with `allocation_api_key` once |
+| `POST …/allocation/top-up`, `…/status`, `…/revoke`, `…/rotate-payment-key` | That tenant's admin | Adds to, pauses, ends or re-keys one allocation. Rotation returns the new `allocation_api_key` once |
+| Key routes under `/v1/clearinghouse/tenants/{tenant_id}/keys` | That tenant's admin | Manages the tenant's auditor keys. A tenant admin cannot issue tenant admin keys |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records |
+| `GET /v1/clearinghouse/discovery` | Any credential of a tenant | The clearinghouse's runner list |
+
+**Clearinghouse half, private listener.** For a `clearinghouse_admin` only. Every public route is also
+served here, for any tenant.
+
+| Route | What it does |
+| --- | --- |
+| `POST /v1/clearinghouse/tenants` | Onboards a tenant: creates its grant and returns the tenant's id and its first tenant admin key, once |
+| `GET /v1/clearinghouse/tenants` | Every tenant, with its grant's balance and payment usage |
+| `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | Adds to the tenant's grant |
+| `POST /v1/clearinghouse/tenants/{tenant_id}/status` | Pauses or resumes a tenant by pausing its grant |
+| `POST /v1/clearinghouse/tenants/{tenant_id}/keys` with kind `tenant_admin` | Issues another tenant admin key |
+| `GET /v1/clearinghouse/wallet` | The deposit and reserve, the total of unspent grants, and the signer's readiness |
+
+**Work half.** The job, offering, runner, cost and allowance routes keep their paths. Reconciliation and
+cost sync move here from `/v1/admin`, and the access keys of an enterprise's own engine get routes of
+their own. These are the admin routes of the work half. Each takes an admin credential of the engine that
+serves it, and an actor's or a service's key is 403. The engine's first admin key is of kind
+`clearinghouse_admin` in every role (`lpb bootstrap-admin`), so on an enterprise's own engine that key is
+the clearinghouse admin of this table. On an engine with two listeners, a clearinghouse admin credential
+is accepted on the private one only.
+
+| Route | Who may call it | What it does |
+| --- | --- | --- |
+| `GET /v1/costs/reconciliation` | `admin.read` on the tenant named: a clearinghouse admin for any tenant, a tenant admin or an auditor for its own | Compares what the provider says one allocation spent with the engine's cost records. `tenant_id` is required; `actor_id` names the actor and `allocation_id` an earlier allocation of that actor |
+| `POST /v1/costs/sync` | `admin.costs`: a clearinghouse admin only. A tenant admin and an auditor are 403, because a sync reads the usage of every tenant | Runs one cost sync now, without waiting for the background sync |
+| `POST /v1/keys` | `admin.keys` on the tenant the body names: a clearinghouse admin for any tenant and kind, a tenant admin for its own tenant and for no admin kind | Issues an access key and returns its token once |
+| `GET /v1/keys`, `GET /v1/keys/{key_id}` | `admin.read`: a clearinghouse admin for every tenant's keys, a tenant admin or an auditor for its own tenant's | Lists the access keys, or reads one. Never a token |
+| `POST /v1/keys/{key_id}/rotate`, `POST /v1/keys/{key_id}/revoke` | `admin.keys` on the key's tenant and kind, as for issuing: a tenant admin changes no admin key, and another tenant's key reads as missing | Replaces a key at once, or revokes it |
+
+The `/v1/keys` routes exist only while engine API keys are on.
+
+The names follow D83. Usage, discovery, tenant status, both sets of key routes, reconciliation and
+cost sync keep the paths D87 locked. The 19 November amendment supersedes D87's payments path: the
+work engine calls `/sign-orchestrator-info` and `/generate-live-payment` on the signer origin.
 
 ### What builder-core can do without an upstream change
 

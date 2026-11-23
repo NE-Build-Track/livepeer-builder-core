@@ -185,7 +185,8 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
     async def run(server: "uvicorn.Server", sock: socket.socket) -> SystemExit | None:
         try:
             await server.serve(sockets=[sock])
-        except SystemExit as asked:  # raised inside a task, it would end the event loop where it stands
+        # Raised inside a task, it would end the event loop where it stands: serve() raises it, below.
+        except SystemExit as asked:  # NOSONAR - re-raised by _serve_together, once both servers have ended
             return asked
         return None
 
@@ -236,7 +237,7 @@ async def _all_ended(
             server.force_exit = server.force_exit or forced
         try:
             await _ended(servers, tasks)
-        except asyncio.CancelledError as cancel:
+        except asyncio.CancelledError as cancel:  # NOSONAR - re-raised below, once the servers have ended
             cancelled, forced = cancel, True
             continue
         if cancelled is not None:

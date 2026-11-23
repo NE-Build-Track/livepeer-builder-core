@@ -58,14 +58,14 @@ def unspent_grants(grants: list[TenantGrant]) -> tuple[UnspentGrants, ...]:
     total less what was spent: the provider charges after it authorizes and reserves nothing, so an
     allocation can spend more than it held. That overdraft is charged already, and it takes nothing off
     what another allocation holds or off what the grant has left to allot. A figure too low is the unsafe
-    one: the deposit is held above this total (D82). A grant never counts below zero, so it never hides
-    another grant's unspent amount. Every grant counts, whatever its status: a paused grant can be
-    resumed."""
+    one: the deposit is held above this total (D82). Neither part counts below zero, so a balance stated
+    below zero never hides another grant's unspent amount, or what the same grant's allocations still
+    hold. Every grant counts, whatever its status: a paused grant can be resumed."""
     totals: dict[Currency, tuple[Decimal, int]] = {}
     for grant in grants:
         currency = grant.total.currency
         amount, count = totals.get(currency, (Decimal(0), 0))
-        unspent = max(grant.unallocated.amount + grant.allocated_unspent.amount, Decimal(0))
+        unspent = max(grant.unallocated.amount, Decimal(0)) + max(grant.allocated_unspent.amount, Decimal(0))
         totals[currency] = (amount + unspent, count + 1)
     return tuple(
         UnspentGrants(unspent=Money(amount=amount, currency=currency), grants=count)

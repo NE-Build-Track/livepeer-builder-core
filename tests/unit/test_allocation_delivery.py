@@ -235,8 +235,8 @@ async def test_a_work_engines_credential_is_never_asked_of_the_store(
 async def test_rotating_a_stored_key_for_delivery_deletes_it_from_the_store(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext
 ) -> None:
-    """First review, finding 1: the previous secret is deleted on the store that issued it, not on the
-    request's buffer."""
+    """The previous secret is deleted on the store that issued it, not on the request's buffer (#186
+    review)."""
     vault = StrictVault()
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     before = await engine.payments.allot(admin, allot_request())
@@ -265,8 +265,8 @@ async def test_rotating_a_delivered_key_sends_nothing_to_the_store(
 async def test_revoking_a_delivered_allocation_never_asks_the_store_to_delete(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
-    """First review finding 2, second review finding 1: a store that refuses a handle it never issued
-    cannot keep a revoked allocation listed as active."""
+    """A store that refuses a handle it never issued cannot keep a revoked allocation listed as active
+    (#186 review)."""
     vault = StrictVault()
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     delivered = await allot_delivered(engine, admin, allot_request())
@@ -353,8 +353,8 @@ async def test_a_store_that_fails_to_delete_keeps_the_revoke_repeatable(
 # -- resumed and overtaken deliveries -------------------------------------------------------------------
 
 
-# Where a delivering command's first run dies, and whether the write it dies in had applied (Mike's review
-# of #186, item 1). Each resume must answer with the key Batteries gave the first run.
+# Where a delivering command's first run dies, and whether the write it dies in had applied (D87 point 1,
+# #186 review). Each resume must answer with the key Batteries gave the first run.
 RESUMES = [
     pytest.param("allot", "store", "allot_actor", False, id="allot-before-the-actor-row"),
     pytest.param("allot", "store", "allot_actor", True, id="allot-the-actor-row-written-then-lost"),
@@ -485,8 +485,8 @@ async def test_two_allotments_of_one_actor_both_carry_the_key_the_provider_gave_
     manager: FakeAllocationManager,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Follow-up review, finding 2: another reference wrote the actor while this one was at the
-    provider. Both got the same actor-derived key, so both answers carry it; neither is a silent null."""
+    """Another reference wrote the actor while this one was at the provider. Both got the same
+    actor-derived key, so both answers carry it; neither is a silent null (#186 review)."""
     engine = await make_engine()
     original = manager.create_key_for_grant
     other: list[DeliveredAllocation] = []
@@ -712,7 +712,8 @@ async def test_a_resumed_delivery_is_marked_in_the_http_answer(
 
 async def test_the_shipped_app_keeps_the_key_in_its_own_store(make_engine: EngineFactory) -> None:
     """``lpb serve`` (``create_app``) is the combined engine: its own work half holds the key, so its
-    allotment answers metadata. Delivering is the clearinghouse role's, which P8 mounts."""
+    allotment answers the allocation alone. Handing keys over is the clearinghouse role's, which #169
+    mounts."""
     engine = await make_engine()
     assert engine.keys is not None
     key = await engine.keys.bootstrap_admin()
@@ -725,7 +726,7 @@ async def test_the_shipped_app_keeps_the_key_in_its_own_store(make_engine: Engin
 
 
 async def test_the_published_spec_documents_the_shipped_app() -> None:
-    """Follow-up review, finding 3: the committed spec is ``create_app``'s, so it never promises a key the
+    """The committed spec is ``create_app``'s (#186 review), so it never promises a key the
     served routes do not return."""
     rendered = await render_openapi()
     committed = Path(__file__).parents[2] / "docs" / "generated" / "openapi.json"

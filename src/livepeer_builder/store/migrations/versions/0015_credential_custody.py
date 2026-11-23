@@ -11,8 +11,10 @@ receipt no store resolves). Every existing row was written through the configure
 handle, a ``delivered:`` one included (#186 review). A downgrade drops the column.
 
 This revision replaces the stack's earlier 0015 (a ``lpb_payment_keys`` table for clearinghouse-issued
-payment keys) and 0016 (which dropped it again). Neither was released: a database that ran them is at a
-revision that no longer exists and is recreated.
+payment keys) and 0016 (which dropped it again). Neither was released, and a database that ran either is
+recreated. Its revision does not always show it: the earlier 0015 had this revision's id, so a database
+that stopped there records ``0015``, the head, while it has ``lpb_payment_keys`` and no
+``credential_custody``. Only one that also ran 0016 is at a revision that no longer exists.
 """
 
 from collections.abc import Sequence

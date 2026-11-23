@@ -87,7 +87,9 @@ app, so a deployment can serve one half: the role setting that chooses is #169.
 
 The work half reaches payments through five ports and nothing else: signing inside `RunnerTransport`,
 `CredentialResolver`, `AllocationManager`, `AllowanceReader` and `UsageSource`. An enterprise that uses a
-payment clearinghouse runs the work half alone, with management/read ports pointed at the clearinghouse (#168), local credential storage, and direct signer access.
+payment clearinghouse runs the work half alone (#168): `AllocationManager`, `AllowanceReader` and
+`UsageSource` point at the clearinghouse, `CredentialResolver` returns the payment keys the clearinghouse
+handed to the enterprise's own engine, and signing goes to the clearinghouse's signer directly.
 `tests/structure/test_two_halves.py` enforces the seam and prints how to fix a violation: no module of
 one half imports the other, a work module names no payment protocol but the five ports, every protocol
 is classified, and each set of routes is typed against its own half of the facade.
@@ -106,6 +108,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |
 | `EngineStore` (+ repos) | `SqlStore` | — (one store; two databases) |
+| `TenantUsageSource`, `DiscoveryDocumentSource` (optional, #166) | `BatteriesUsageSource`, `HttpDiscoverySource` | read one tenant's usage, or hold the discovery document a clearinghouse serves. A supplied part without one runs without what it serves |
 | `EventFeed`, `SessionManager` | reserved (raise 501) | — events held in M3 (D60); sessions in M4 |
 
 How to replace each default with an enterprise implementation, with class diagrams and runnable
@@ -136,7 +139,7 @@ Each third-party package is confined to one module so a dependency change has on
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
 | Discovery | `services/discovery.py`; `services/runner_list.py` (the list a clearinghouse serves) | [engine](docs/contracts/engine.md#discovery), [discovery](docs/contracts/discovery.md#the-clearinghouses-runner-list) |
 | Jobs | `services/jobs.py`, `services/admission.py` | [engine](docs/contracts/engine.md) |
-| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/tenant_usage.py` (a tenant's payment records), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
+| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back, and recording who holds it), `services/allocation_delivery.py` (handing a key to an enterprise's engine in place of storing it), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/tenant_usage.py` (a tenant's payment records), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |
 | Persistence | `store/` | [persistence](docs/contracts/persistence.md) |

@@ -5,12 +5,15 @@ The engine is one program with two halves (docs/design-docs/m4-guides/iss-31-pay
 
 - the **work half**: network capabilities, runner choice, the runner call, streaming, job records and the
   cost of each job;
-- the **clearinghouse half**: tenants, grants, allocations, payment keys, signing and usage.
+- the **clearinghouse half**: tenants, grants, allocations, payment keys, usage and the runner list. It
+  mints each payment key and hands it over; it signs nothing.
 
 The work half reaches payments through five ports and nothing else: signing inside ``RunnerTransport``,
 ``CredentialResolver``, ``AllocationManager``, ``AllowanceReader`` and ``UsageSource``. An enterprise that
-uses a payment clearinghouse runs the work half alone, with each port pointed at the clearinghouse, so
-whatever the work half reached another way would have nothing behind it there.
+uses a payment clearinghouse runs the work half alone: allocations, the allowance and usage come from the
+clearinghouse, the payment keys from its own store, where the clearinghouse's answers put them, and
+signing goes to the clearinghouse's signer. Whatever the work half reached another way would have nothing
+behind it there.
 
 The halves live in ``services/`` and ``http/``, and every module of the two is named below as work,
 clearinghouse or shared. This file then holds five things:
@@ -63,7 +66,7 @@ WORK = {
     "http/streaming.py",
     "http/work.py",
 }
-# Tenants, grants, allocations, payment keys, signing and usage.
+# Tenants, grants, allocations, payment keys, usage and the runner list.
 CLEARINGHOUSE = {
     "services/actor_writes.py",
     "services/allocation_delivery.py",
@@ -102,9 +105,8 @@ SIGNING_INSIDE = {"RunnerTransport", "StreamingRunnerTransport", "RunnerStream"}
 PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceReader", "UsageSource"}
 # Payment protocols that are not ports: where payment keys and allocation records are kept. The work
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
-# both: a work module asks for the narrow repo it needs (JobRepo, CostRepo).
-# handed one through CredentialResolver and never looks one up. TenantUsageSource is how a clearinghouse
-# reads one tenant's usage at the provider: the work half reads usage through UsageSource.
+# both: a work module asks for the narrow repo it needs (JobRepo, CostRepo). TenantUsageSource is how a
+# clearinghouse reads one tenant's usage at the provider: the work half reads usage through UsageSource.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",

@@ -282,8 +282,9 @@ is not the grant's total less what was spent. Batteries charges after it authori
 can spend more than it held. That overdraft is charged already, and it takes nothing off what another
 allocation holds or off what the grant has left to allot: a grant of 100 with 60 allotted, of which 70
 was spent, still has 40 to allot and spend, and counts as 40, not 30. A figure that is too low is the
-unsafe one, since the deposit is held above this total. No grant counts below zero, so none hides
-another grant's unspent amount. The figure is read as the tenant list is (T31): the grants, then every
+unsafe one, since the deposit is held above this total. Neither part of a grant counts below zero, so a
+balance stated below zero hides nothing: not another grant's unspent amount, and not what the same
+grant's allocations still hold. The figure is read as the tenant list is (T31): the grants, then every
 allocation, so a command that lands between the reads can put it off by its amount.
 
 **The deposit and reserve need Batteries' on-chain listener.** Batteries records escrow only with

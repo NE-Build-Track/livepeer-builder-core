@@ -137,9 +137,11 @@ class EscrowAccount(Contract):
 
 class UnspentGrants(Contract):
     """What the tenants whose grants are in one currency may still spend (#167): for every grant the
-    provider holds in that currency, whatever its status, the grant's total less what its allocations
-    have spent, and never less than zero for one grant. ``grants`` is how many grants were summed.
-    Nothing is converted: a deployment with grants in two currencies has two of these."""
+    provider holds in that currency, whatever its status, what is not yet allotted (``unallocated``) and
+    what its allocations still hold (``allocated_unspent``), neither counted below zero. It is not the
+    grant's total less what was spent: an allocation that spent more than it held takes nothing off the
+    rest. ``grants`` is how many grants were summed. Nothing is converted: a deployment with grants in two
+    currencies has two of these."""
 
     unspent: Money
     grants: int

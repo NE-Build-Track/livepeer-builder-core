@@ -218,7 +218,9 @@ async def test_a_paused_grant_counts_and_an_overdrawn_one_counts_as_zero(
 
 def test_a_grant_stated_below_zero_never_hides_what_another_has_left() -> None:
     """The packaged providers state no balance below zero. A supplied ``AllocationManager`` that does
-    (a grant whose top-up it has not read yet) counts as zero, and takes nothing off another grant."""
+    (a grant whose top-up it has not read yet) has that balance counted as zero: it takes nothing off
+    another grant, and nothing off what the same grant's allocations still hold, which is still payable.
+    A figure too low is the unsafe one."""
 
     def stated(tenant: str, unallocated: str, allocated_unspent: str) -> TenantGrant:
         return TenantGrant(
@@ -232,7 +234,8 @@ def test_a_grant_stated_below_zero_never_hides_what_another_has_left() -> None:
         )
 
     grants = [stated("behind", "-5", "2"), stated("whole", "4", "6")]
-    assert unspent_grants(grants) == (UnspentGrants(unspent=money("10"), grants=2),)
+    assert unspent_grants(grants) == (UnspentGrants(unspent=money("12"), grants=2),)
+    assert unspent_grants([stated("below", "3", "-1")]) == (UnspentGrants(unspent=money("3"), grants=1),)
 
 
 async def test_a_provider_with_no_grant_and_no_escrow_reports_none(

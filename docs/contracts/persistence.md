@@ -88,8 +88,9 @@ like a source checkout. Version table: `lpb_alembic_version`.
   withdrawn migration was numbered 0015 too, so a database that stopped there records the head
   revision: the engine starts without a refusal, `lpb revision` reports it current and `lpb migrate`
   changes nothing, yet it has `lpb_payment_keys` and no `lpb_actors.credential_custody`. Look at the
-  tables, not the revision: a database that has `lpb_payment_keys`, or lacks
-  `lpb_actors.credential_custody`, is recreated.
+  tables, not the revision: a database that has `lpb_payment_keys` is recreated. One that also ran the
+  withdrawn 0016 records a revision this package does not know, and the engine refuses to start on it.
+  A database at 0014 or earlier has neither the table nor the column, and is migrated as usual.
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

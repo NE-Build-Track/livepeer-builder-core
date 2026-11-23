@@ -213,8 +213,8 @@ code of an existing route changed.
   created a table `lpb_payment_keys`; it was never released, and it is deleted, not undone by a later
   revision (Mike, 23 November 2026). The revision check will not tell you: that revision had the same
   number, so such a database records 0015, the engine starts on it and `lpb migrate` changes nothing.
-  A database that has `lpb_payment_keys`, or lacks `lpb_actors.credential_custody`, is recreated
-  ([persistence.md](persistence.md#migrations)).
+  A database that has `lpb_payment_keys` is recreated. One at revision 0014 or earlier never ran that
+  work and is migrated as usual ([persistence.md](persistence.md#migrations)).
 
 **What a repeat gets.** The repeat of an allotment or a rotation recorded before the upgrade is answered
 from its record, as before, with `credential_custody: secret_store`. No repeat of a finished command

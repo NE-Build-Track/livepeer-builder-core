@@ -6,7 +6,7 @@ touches the HTTP client, sends no body and follows no redirect, so a credential 
 setting names and to no other. ``tests/unit/test_payments_check.py`` records every request and reads
 this file to hold that.
 
-A self-hosted engine probes:
+Every engine that pays signs at its signer itself, so both configurations probe:
 
 - **the signer**, at the root of ``LPB_SIGNER_URL`` as the SDK reads it (scheme, host and port). The
   signer's identity call is not a GET, so it cannot be made here. ``GET /sign-orchestrator-info`` is
@@ -14,15 +14,18 @@ A self-hosted engine probes:
   only, so a signer answers 405 and names the method it takes in ``Allow``. That says an HTTP server
   is at the address and has the signer's identity route. It does not say the signer signs, that its
   wallet is funded, or that it is ready: only a payment, or the signer's own ``/readyz`` on its metrics
-  listener, says those;
+  listener, says those. No credential is sent.
+
+A self-hosted engine also probes:
+
 - **Batteries** with the engine's credential: ``GET /v1/usage?limit=1``, the read cost sync makes;
 - **Batteries** with the grants credential, when one is set: ``GET /v1/grants?limit=1``.
 
-An engine that uses a payment clearinghouse probes the clearinghouse with its tenant admin key: its
-grant (who it is there), one page of its usage, and the runner list when that is its discovery address.
-It also asks, with no credential, whether the clearinghouse serves the signer's identity path, where the
-engine signs: the same GET a signer is asked, and the same 405. Every one is a clearinghouse route: no
-work route is called.
+An engine that uses a payment clearinghouse probes the clearinghouse instead, with its tenant admin
+key: its grant (who it is there), one page of its usage, and the runner list when that is its discovery
+address. Every one is a clearinghouse route: no work route is called. Its signer is the clearinghouse's
+published one, at ``LPB_SIGNER_URL``, and is asked there, never at the clearinghouse's address: a
+clearinghouse's engine serves no signer path (D85 point 1, as amended).
 
 Nothing the other side says is repeated: a probe reports a status and the engine's own words.
 """
@@ -189,7 +192,7 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     probes = [
         grant_probe,
         await _tenant_usage(client, base, tenant_path, headers),
-        await _clearinghouse_signer(client, base),
+        await _signer(settings, client),  # the clearinghouse's signer, asked as an engine asks its own
     ]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
         probes.append(await _runner_list(client, settings.discovery_url, headers))
@@ -239,30 +242,6 @@ async def _runner_list(client: httpx.AsyncClient, url: str, headers: Mapping[str
         return _unexpected(name, request, "the runner list could not be read", answer)
     detail = "the clearinghouse answered with its runner list"
     return _probe(name, "LPB_DISCOVERY_URL", request, "ok", detail, 200)
-
-
-async def _clearinghouse_signer(client: httpx.AsyncClient, base: str) -> PaymentProbe:
-    """Whether the clearinghouse serves the signer's two paths, where the engine signs. Asked as a
-    signer is asked: its identity path with a GET, which it takes with another method only, so the answer
-    is 405. No credential is sent: the tenant admin key is not for a signer path, and a payment key is
-    an actor's. A clearinghouse with no signer serves neither path and answers 404."""
-    name, setting, request = "clearinghouse_signer", "LPB_CLEARINGHOUSE_URL", f"GET {SIGNER_IDENTITY}"
-    answer = await _get(client, base + SIGNER_IDENTITY)
-    if answer is None:
-        return _probe(name, setting, request, "unavailable", "the clearinghouse did not answer")
-    status = answer.status_code
-    if status == 405:
-        detail = (
-            "the clearinghouse serves the signer's identity path. Whether its signer signs, and whether "
-            "its wallet is funded, only a payment shows"
-        )
-        return _probe(name, setting, request, "ok", detail, status)
-    if status >= 500:
-        return _probe(
-            name, setting, request, "unavailable", f"the clearinghouse answered HTTP {status}", status
-        )
-    detail = f"HTTP {status}: what answers at this address does not serve the signer's two paths"
-    return _probe(name, setting, request, "unexpected", detail, status)
 
 
 def _answered(name: str, request: str, answer: Answer) -> PaymentProbe | httpx.Response:

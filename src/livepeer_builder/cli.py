@@ -13,7 +13,7 @@ lpb bootstrap-admin    issue the first admin key (one time; printed once)
 lpb gen-secret-key     print a new LPB_SECRET_KEY
 lpb smoke              import, migrate, start, health-check, stop, on a throwaway database (CI)
 lpb serve              run the REST service (needs the [server] extra)
-lpb payments check     probe what payments need, with GET requests only: the signer and Batteries, or
+lpb payments check     probe what payments need, with GET requests only: the signer, and Batteries or
                        the payment clearinghouse (exit 0 ready, 1 a probe failed, 2 settings refused)
 lpb gen-docs [--check] regenerate docs/generated (openapi.json, db-schema.md, interfaces.md, contracts.md)
 """
@@ -70,7 +70,7 @@ def _parser() -> argparse.ArgumentParser:
         required=True, metavar="CHECK"
     )
     payments.add_parser(
-        "check", help="probe the signer and Batteries, or the payment clearinghouse; never writes"
+        "check", help="probe the signer, and Batteries or the payment clearinghouse; never writes"
     ).set_defaults(handler=_payments_check)
     docs = command("gen-docs", _gen_docs, "regenerate docs/generated")
     docs.add_argument("--out", type=Path, default=Path("docs/generated"))

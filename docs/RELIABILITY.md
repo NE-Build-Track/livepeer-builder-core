@@ -59,27 +59,47 @@ One program covers three deployments (D84, #169). `LPB_ROLE` says which one this
 | | `both`, the default | `work` | `clearinghouse` |
 | --- | --- | --- | --- |
 | Who runs it | An enterprise with self-hosted payments | An enterprise that uses a payment clearinghouse, as an engine server or an embedded engine | A payment clearinghouse |
-| Routes | The work routes and the clearinghouse routes | The work routes. Every clearinghouse route and the signer's two paths are 404 | The clearinghouse routes. Every work route is 404: jobs, the catalog (`GET /v1/offerings`), runners, costs, the allowance read and `/v1/keys` |
-| The payment ports reach | Batteries and the signer | The payment clearinghouse | Batteries and the signer |
+| Routes | The work routes and the clearinghouse routes | The work routes. Every clearinghouse route is 404 | The clearinghouse routes. Every work route is 404: jobs, the catalog (`GET /v1/offerings`), runners, costs, the allowance read and `/v1/keys` |
+| Allotment and rotation | The engine stores each allocation's key for its own jobs and answers none (`deliver_allocation_keys=False`) | No route allots. The engine's own commands store the key its clearinghouse hands over | Each key is handed to the caller once, and none is stored (`deliver_allocation_keys=True`) |
+| Payment ports | Batteries and its signer | The clearinghouse, for allocations, the allowance and usage; its own secret store for keys | Batteries |
+| Signs | At its signer, `LPB_SIGNER_URL` | At the clearinghouse's published signer, `LPB_SIGNER_URL` | Nothing: it never runs a job. Its transport can only ask the signer's identity, for the wallet report |
 | Listeners | One, or two with `LPB_HTTP_PRIVATE_PORT` | One, or two with `LPB_HTTP_PRIVATE_PORT` | Two, always |
-| Needs | Nothing new | `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` and `LPB_SECRET_KEY` | `LPB_HTTP_PRIVATE_PORT`, `LPB_SIGNER_URL`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` and `LPB_SECRET_KEY` |
-| Refuses | The `LPB_CLEARINGHOUSE_*` settings | Any Batteries or signer setting | The `LPB_CLEARINGHOUSE_*` settings: a clearinghouse is no tenant of another |
+| Needs, or it does not start | With Batteries, `LPB_SECRET_KEY` | `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` and `LPB_SECRET_KEY` | `LPB_HTTP_PRIVATE_PORT`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_BATTERIES_GRANTS_TOKEN`. No `LPB_SECRET_KEY`: it stores no allocation's key |
+| `LPB_SIGNER_URL` unset | It starts, and runs its jobs unpaid | It starts, and runs its jobs unpaid | It starts, and its wallet report says the signer is `not_configured` |
+| Refuses | The `LPB_CLEARINGHOUSE_*` settings | Any Batteries setting | The `LPB_CLEARINGHOUSE_*` settings: a clearinghouse is no tenant of another |
 | Starts | Resolving interrupted jobs, discovery, cost sync, retention | The same | Discovery alone, for the runner list it publishes. It holds no job: nothing is resolved, synced or purged, and `LPB_COST_SYNC_INTERVAL_S` and the retention settings do nothing |
 | Runs jobs | Yes | Yes | No. `jobs.run` and `jobs.streaming.stream` refuse an embedding caller too (`InvalidRequest`), before anything is recorded |
-| Serves the signer's two paths, the wallet report and the runner list | Yes, with a signer and Batteries | No: it is nobody's clearinghouse, and it issues no payment key | Yes |
+| Serves the wallet report and the runner list | Yes, with Batteries | No: it is nobody's clearinghouse | Yes |
 
-- **What a `clearinghouse` engine needs is judged on the parts it will run with.** A signer is a runner
-  transport that forwards signer calls, and Batteries an allocation manager and a grants manager, so a
-  part supplied through `EngineSupply` counts. Without one the engine does not start, and the error
-  names the settings.
+- **One place decides who keeps the keys.** `delivers_allocation_keys(role)` in `http/listeners.py`.
+  `create_app` asks it for every app, on one listener and on two, and nothing else chooses.
+- **The secret key is needed where the engine stores allocation keys:** in its `both` role, the keys
+  its Batteries mints, and in its `work` role, the keys its clearinghouse hands over. Without it such an
+  engine does not start (#112, C2). An engine in its `clearinghouse` role stores none and is not asked.
+- **No role is refused for a missing signer address.** `lpb payments check` fails for it in every role,
+  and says what follows: a `both` or a `work` engine runs its jobs unpaid, and a clearinghouse's wallet
+  report cannot say whether the signer answers.
+- **A clearinghouse runs the signer and signs nothing.** Its `LPB_SIGNER_URL` is the address its own
+  engine reaches the signer at, where the wallet report reads the signer's readiness. Enterprise
+  engines reach the signer at its published address, which may be another one: neither the wallet
+  report nor the clearinghouse's `lpb payments check` tests that address. An enterprise's
+  `lpb payments check` does, from its own side. The signer keeps its Batteries authorization webhook,
+  which is the only check at signing ([SECURITY.md](SECURITY.md)).
+- **What a `clearinghouse` engine needs is judged on the parts it will run with.** Batteries is an
+  allocation manager and a grants manager, so a part supplied through `EngineSupply` counts. Without
+  one the engine does not start, and the error names the settings.
+- **An engine in its `work` role must name an engine in its `clearinghouse` role.** Pointed at an
+  engine that keeps the keys itself, a `both` engine, its allotment is answered without a key: the
+  command fails with a `ProviderError` that says which role `LPB_CLEARINGHOUSE_URL` must name, and the
+  allocation exists there.
 - **`/livez` and `/readyz` are served in every role, on every listener.** `/readyz` names the role.
 - **`create_app(engine)` mounts the routes of the engine's role.** For an engine in its `clearinghouse`
   role it takes `listener="public"` or `listener="private"`; the app of one listener is refused.
 - **An engine server in its `work` role serves no route that allots.** The allocation routes are the
   clearinghouse half's. An embedding app allots through `engine.payments.allot`, which calls the
-  clearinghouse and keeps the actor's payment key (tech debt T41).
-- **Health, the two Compose projects and a proof runbook** for a clearinghouse and an enterprise on one
-  host are in [deploy/README.md](../deploy/README.md).
+  clearinghouse and stores the key it hands over (tech debt T41).
+- **The two Compose projects and a proof runbook** for a clearinghouse and an enterprise on one host
+  are in [deploy/README.md](../deploy/README.md).
 
 ## Operations
 
@@ -88,7 +108,8 @@ that would not load does not stop them. `lpb purge`, `bootstrap-admin` and `smok
 do not need `LPB_DISCOVERY_URL`, since they serve nothing. `lpb serve`, and any engine an application
 starts from its settings, still require it (#112, C23). With a payment provider, `purge` and
 `bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing; `smoke` and `serve` do.
-`gen-secret-key`, `verify` and `gen-docs` read no setting.
+`gen-secret-key`, `verify` and `gen-docs` read no setting. An engine in its `clearinghouse` role needs no
+`LPB_SECRET_KEY` for any command.
 
 | Command | When |
 | --- | --- |

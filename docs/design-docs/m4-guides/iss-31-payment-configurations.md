@@ -260,11 +260,12 @@ reference, which ISS-37 documents.
 
 Built in P8 (#169) as `deploy/clearinghouse` and `deploy/enterprise`
 ([deploy/README.md](../../../deploy/README.md)), with two differences from the list above. There is no
-proxy: the clearinghouse project publishes the engine's public listener itself, on `127.0.0.1`, and
-the enterprise project reaches it over one Docker network that carries nothing else (T43). And the
-enterprise project is the engine server alone, with no enterprise app in front of it: an engine server
-in its `work` role serves no route that allots, so the project allots with a script that calls the
-embedded API (T41).
+proxy: the clearinghouse project publishes the engine's public listener itself, and the signer through
+a TCP relay of its one port, each on `127.0.0.1` and on one Docker network the enterprise project
+joins, which carries nothing else (T43). The relay is there because the signer shares Batteries'
+network namespace, and nothing of Batteries is published. And the enterprise project is the engine
+server alone, with no enterprise app in front of it: an engine server in its `work` role serves no
+route that allots, so the project allots with a script that calls the embedded API (T41).
 
 **`lpb payments check`** is kept from the 13 November design as a read-only command (D87). It prints the
 role and probes what that role needs. A self-hosted engine probes the signer and Batteries. An engine

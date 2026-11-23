@@ -85,15 +85,16 @@ live in `http/` and `services/`. Every module of the two is one half's or shared
 Each set is one function that adds its routes to an app, so a deployment can serve one half. The
 engine's role chooses (`LPB_ROLE`, #169), and `create_app` mounts the routes of that role:
 
-| `LPB_ROLE` | Serves | The payment ports reach | Starts |
-| --- | --- | --- | --- |
-| `both`, the default | Both halves' routes: self-hosted payments | Batteries and the signer | Everything |
-| `work` | The work half's routes | A payment clearinghouse (`runtime/payment_defaults.py`) | Everything; it is nobody's clearinghouse (`runtime/assembly.py`) |
-| `clearinghouse` | The clearinghouse half's routes, on a public and a private listener | Batteries and the signer | Discovery alone: it runs no jobs (`runtime/engine.py`, `services/admission.py`) |
+| `LPB_ROLE` | Serves | Allocation keys | The payment ports reach | Signs | Starts |
+| --- | --- | --- | --- | --- | --- |
+| `both`, the default | Both halves' routes: self-hosted payments | Stored by the engine, for its own jobs | Batteries and its signer | At its signer | Everything |
+| `work` | The work half's routes | Handed over by its clearinghouse, and stored by the engine | A payment clearinghouse, for allocations, the allowance and usage (`runtime/payment_defaults.py`) | At the clearinghouse's published signer | Everything; it is nobody's clearinghouse (`runtime/assembly.py`) |
+| `clearinghouse` | The clearinghouse half's routes, on a public and a private listener | Handed to the caller once; none stored (`http/listeners.py`) | Batteries | Nothing | Discovery alone: it runs no jobs (`runtime/engine.py`, `services/admission.py`) |
 
 The role is read in four places and nowhere else: the settings check that the other settings agree with
 it (`config.py`), `payment_defaults` chooses the adapters, `assemble` leaves out what the role does not
-offer, and the listener table mounts its routes. What each role needs and refuses is in
+offer and asks for the secret store only where keys are stored, and the listener table mounts its routes
+and says who keeps the keys. What each role needs and refuses is in
 [RELIABILITY.md](docs/RELIABILITY.md#roles).
 
 The work half reaches payments through five ports and nothing else: signing inside `RunnerTransport`,

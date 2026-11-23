@@ -179,3 +179,18 @@ Each pull request ticks its own line here in the same change.
   address stays a scheme, a host and a port; and `lpb payments check` probes the signer at
   `LPB_SIGNER_URL`, beside the clearinghouse. Source: Mike's amendments of 19 and 23 November 2026 (D85
   point 1, D87 points 1 and 3) and #168 as amended.
+- **23 November 2026, P8, carried forward.** The direct-signer design is merged into P8's branch, and
+  the role follows it. Only an engine in its `clearinghouse` role hands allocation keys over, on both
+  of its listeners; an engine in its `both` role keeps them, on one listener or two; one function
+  decides (`delivers_allocation_keys`). Built where the amended decisions are silent, for Mike's
+  review: a clearinghouse needs no `LPB_SECRET_KEY`, since it stores no allocation's key; it is given
+  no transport that could pay, only the signer's identity call for its wallet report; no role is
+  refused at startup for a missing `LPB_SIGNER_URL`, and `lpb payments check` fails for it and says
+  what follows in each role; the wallet report and a clearinghouse's own check read the signer where
+  the clearinghouse's engine reaches it, never at its published address; the `clearinghouse` role's
+  schema is published as a second generated file, which closes T48; and the clearinghouse project
+  publishes the signer through a TCP relay of its one port, because the signer shares Batteries'
+  network namespace and nothing of Batteries is published. The paid proofs of 19 November through a
+  clearinghouse ran on the withdrawn signer proxy and are to be run again from the rewritten runbook;
+  the proof of the `both` role stands. Source: #169 as amended on 19 November 2026, D84 point 2, D85
+  point 1 and D87 point 1.

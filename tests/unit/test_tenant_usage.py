@@ -27,8 +27,16 @@ from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource
 from tests.conftest import EngineFactory
 from tests.unit.clearinghouse_house import open_house
 from tests.unit.test_tenants import House, Tenant, allotted
+from tests.unit.test_usage_set_aside import (
+    BLANK_IDS,
+    NOT_A_FEE_AS_BATTERIES_WRITES_ONE,
+    PAST_THE_DECODER,
+    STILL_NO_PAGE,
+    page_text,
+)
 
 BASE = "https://batteries.test"
+JSON = {"content-type": "application/json"}
 
 
 def item(row_id: str, allocation_id: str | None, **changes: Any) -> dict[str, Any]:
@@ -80,7 +88,8 @@ class BatteriesUsage:
             following = base64.urlsafe_b64encode(
                 json.dumps({"grant_id": grant, "seq": end}).encode()
             ).decode()
-        return httpx.Response(200, json={"items": rows[start:end], "next_cursor": following})
+        body = json.dumps({"items": rows[start:end], "next_cursor": following})  # an Infinity literal too
+        return httpx.Response(200, content=body, headers=JSON)
 
     def source(self) -> BatteriesUsageSource:
         http = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(self.handle))
@@ -279,6 +288,76 @@ async def test_records_of_an_allocation_allotted_before_a_tenants_id_was_its_gra
     assert batteries.requests[-1] == {"grant_id": "default", "limit": "1000"}
     by_grant = await house.client.get(usage(house.one), headers=house.admin)
     assert {row["allocation_id"] for row in by_grant.json()["items"]} == {alice}
+
+
+# -- #158: what Batteries answers oddly, on a tenant's page as on the cost-sync page ------------------------
+
+
+@pytest.mark.parametrize("field", ["computed_fee_eth", "computed_fee_usd"])
+@pytest.mark.parametrize("name", NOT_A_FEE_AS_BATTERIES_WRITES_ONE)
+async def test_a_tenants_row_whose_fee_is_not_a_plain_decimal_string_is_set_aside_on_its_page(
+    house: House, batteries: BatteriesUsage, name: str, field: str
+) -> None:
+    """One reader takes every Batteries usage item, so a tenant's page reads a fee as the cost-sync page
+    does: the row is in ``set_aside`` with the fee the engine could read, and the page's other rows are
+    served."""
+    alice, _ = await two_tenants_with_usage(house, batteries, rows=1)
+    bad = item("one-bad", alice, **{field: NOT_A_FEE_AS_BATTERIES_WRITES_ONE[name]})
+    batteries.items += [bad, item("one-1", alice)]
+    answer = await house.client.get(usage(house.one), headers=house.one.admin)
+    assert answer.status_code == 200, answer.text
+    page = answer.json()
+    assert [row["id"] for row in page["items"]] == ["one-0", "one-1"] and page["next_cursor"] == ""
+    [aside] = page["set_aside"]
+    kept = (None, "0.25") if field == "computed_fee_eth" else ("7E-18", None)  # the fee it could read
+    assert (aside["id"], aside["reason"]) == ("one-bad", "unreadable_fee")
+    assert (aside["computed_fee_eth"], aside["computed_fee_usd"]) == kept
+
+
+@pytest.mark.parametrize("row_id", BLANK_IDS.values(), ids=BLANK_IDS)
+async def test_a_tenants_row_whose_id_is_blank_is_set_aside_on_its_page(
+    house: House, batteries: BatteriesUsage, row_id: str
+) -> None:
+    alice, _ = await two_tenants_with_usage(house, batteries, rows=1)
+    batteries.items.append(item(row_id, alice))
+    page = (await house.client.get(usage(house.one), headers=house.one.admin)).json()
+    assert [row["id"] for row in page["items"]] == ["one-0"]
+    [aside] = page["set_aside"]
+    assert aside["id"].startswith("sha256:") and aside["reason"] == "missing_id"
+
+
+@pytest.mark.parametrize("name", PAST_THE_DECODER)
+async def test_a_tenants_item_the_json_decoder_cannot_read_is_set_aside_and_the_rest_of_its_page_is_served(
+    house: House, batteries: BatteriesUsage, name: str
+) -> None:
+    """An integer past the decoder's digit limit, or a field nested past its depth, in one item of a
+    tenant's page: that item is set aside under a digest of its text, with no fee, and the page is 200
+    with its other rows and its cursor."""
+    bad = PAST_THE_DECODER[name]
+    body = page_text(item("one-0", "a1"), bad, item("one-1", "a1"), next_cursor="next")
+    batteries.answer = httpx.Response(200, content=body.encode(), headers=JSON)
+    answer = await house.client.get(usage(house.one), headers=house.one.admin)
+    assert answer.status_code == 200, answer.text
+    page = answer.json()
+    assert [row["id"] for row in page["items"]] == ["one-0", "one-1"] and page["next_cursor"] == "next"
+    [aside] = page["set_aside"]
+    assert aside["id"].startswith("sha256:") and len(aside["id"]) == 71  # nothing of it is read
+    assert (aside["reason"], aside["computed_fee_eth"], aside["computed_fee_usd"]) == (
+        "unreadable_row",
+        None,
+        None,
+    )
+    assert aside["raw"] == bad[:2000]  # the start of the item's own text, for the reader's log
+    assert batteries.requests == [{"grant_id": house.one.id, "limit": "1000"}]
+
+
+@pytest.mark.parametrize("name", STILL_NO_PAGE)
+async def test_a_tenants_page_that_is_malformed_is_still_502_whatever_its_items(
+    house: House, batteries: BatteriesUsage, name: str
+) -> None:
+    batteries.answer = httpx.Response(200, content=STILL_NO_PAGE[name].encode(), headers=JSON)
+    refused = await house.client.get(usage(house.one), headers=house.one.admin)
+    assert refused.status_code == 502 and "items" not in refused.json()
 
 
 class EveryTenant:

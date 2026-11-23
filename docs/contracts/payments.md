@@ -194,6 +194,15 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   keeps no second copy and decides no row itself. A row with no payment session, which Batteries could
   tie to no allocation, is in no tenant's usage: only the unfiltered feed has it, and only the
   clearinghouse's own cost sync reads that.
+- **A row the engine cannot read is set aside, here as on the cost-sync page.** One reader takes every
+  Batteries usage item, for both pages, so the reasons are the same closed set
+  ([cost classification](#cost-classification)): a fee that is not a decimal string as Batteries writes
+  one is `unreadable_fee`, a blank id is `missing_id`, and an item the JSON decoder's limits refuse is
+  `unreadable_row`, under a digest of its text and with no fee. The answer is 200: the row is in
+  `set_aside`, with at most 2000 characters of its content as `raw`, and the page's other rows are in
+  `items`. The clearinghouse records and logs nothing of such a row: its reader does, as cost sync does
+  for its own page. A page that is not JSON, or whose `items` or `next_cursor` the engine cannot read,
+  is 502.
 - **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
   refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
   Batteries' is about 135 for a grant id it issues.

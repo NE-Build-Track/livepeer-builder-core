@@ -784,7 +784,55 @@ async def test_an_access_key_command_after_a_resumed_command_is_not_marked_resum
     engine = await make_engine()
     assert engine.keys is not None
     issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
-    await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    replacement = await engine.keys.rotate(admin, issued.key.key_id, operation_ref="rotate-key-1")
+    await a_resumed_top_up(engine, admin, manager, clock)
+
+    fresh = "replayed" not in command
+    if command.startswith("issue"):
+        ref = "key-2" if fresh else "key-1"
+        answer = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref=ref)
+    else:
+        ref = "rotate-key-2" if fresh else "rotate-key-1"
+        # the active key, by the rotation's own answer: both keys were created at one instant of the clock
+        key_id = replacement.key.key_id if fresh else issued.key.key_id
+        answer = await engine.keys.rotate(admin, key_id, operation_ref=ref)
+    assert not OPERATION_RESUMED.get()
+    assert OPERATION_REPLAYED.get() is answer.replayed is (not fresh)
+
+
+OTHER_TENANTS_ADMIN = ActorContext(actor_id="operator", tenant_id="other", credential_kind="tenant_admin")
+
+
+@pytest.mark.parametrize("command", ["issue", "rotate"])
+async def test_an_access_key_command_refused_for_its_tenant_still_resets_the_markers(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    command: str,
+) -> None:
+    """The markers are reset before the caller is authorized (John, #192 review). A key command refused
+    for a tenant the caller may not reach raises before it does anything, and a caller that catches the
+    refusal must not read the markers of the payment command that ran before it."""
+    engine = await make_engine()
+    assert engine.keys is not None
+    issued = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="key-1")
+    await a_resumed_top_up(engine, admin, manager, clock)
+    OPERATION_REPLAYED.set(True)  # no one command leaves both set: this one stands for an earlier replay
+    keys, other = engine.keys, OTHER_TENANTS_ADMIN
+    if command == "issue":
+        refused = keys.issue(other, kind="actor", actor_id="bob", tenant_id="default", operation_ref="key-2")
+    else:
+        refused = keys.rotate(other, issued.key.key_id, operation_ref="rotate-key-2", tenant_id="default")
+    with pytest.raises(AccessDenied):
+        await refused
+    assert not OPERATION_RESUMED.get() and not OPERATION_REPLAYED.get()
+
+
+async def a_resumed_top_up(
+    engine: BuilderEngine, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
+) -> None:
+    """A payment command that resumed an unfinished run: ``OPERATION_RESUMED`` is true after it."""
     await engine.payments.allot(admin, allot_request(amount="0"))
     request = TopUpRequest(amount=usd("10"), operation_ref="topup-1")
     manager.fail_once("top_up_allocation", ProviderUnavailable("Batteries unreachable: timed out"))
@@ -793,17 +841,6 @@ async def test_an_access_key_command_after_a_resumed_command_is_not_marked_resum
     clock.advance(120)
     await engine.payments.top_up(admin, "default", "alice", request)
     assert OPERATION_RESUMED.get() and not OPERATION_REPLAYED.get()
-
-    fresh = "replayed" not in command
-    if command.startswith("issue"):
-        ref = "key-2" if fresh else "key-1"
-        answer = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref=ref)
-    else:
-        ref = "rotate-key-2" if fresh else "rotate-key-1"
-        key_id = (await engine.keys.list_keys(admin))[-1].key_id if fresh else issued.key.key_id
-        answer = await engine.keys.rotate(admin, key_id, operation_ref=ref)
-    assert not OPERATION_RESUMED.get()
-    assert OPERATION_REPLAYED.get() is answer.replayed is (not fresh)
 
 
 async def test_a_repeat_that_found_the_ref_free_but_lost_the_write_answers_from_the_winner(

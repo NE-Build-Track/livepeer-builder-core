@@ -492,7 +492,8 @@ runner's body unbuffered, with `Livepeer-Job-Id` in the headers.
 
   A transport you supply is held to the same rule (#158). The engine keeps the `content_type` it reports
   when a response header can hold it: at least one character, each a tab, a space, visible ASCII or
-  U+0080 to U+00FF. Any other value is `application/octet-stream`, in `JobResult.content_type`,
+  U+0080 to U+00FF, with no tab or space first or last (the server cannot write such a header, and the
+  answer of a job that had run would be lost). Any other value is `application/octet-stream`, in `JobResult.content_type`,
   `JobStream.content_type`, the stored `ResultRef.content_type` and the REST answer alike; the job
   succeeds and its body is unchanged. Before, a character Latin-1 cannot encode (`title="日本"` as text,
   not as bytes) or a lone surrogate was a 500 after the job ran: the streamed job stayed `running`, and a

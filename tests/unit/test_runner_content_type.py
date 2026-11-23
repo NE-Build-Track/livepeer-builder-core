@@ -15,12 +15,14 @@ from collections.abc import AsyncIterator
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import h11
 import httpx
 import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, JobResult, Money, Runner
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript, runner
 from tests.conftest import EngineFactory
@@ -295,8 +297,39 @@ NOT_A_HEADER = [
     "text/plain\r\nX-Injected: 1",
     "text/plain; t=\x7f",
     "",
+    "text/plain ",  # outer whitespace: the server cannot write the header, and the answer is lost
+    " text/plain",
+    "\ttext/plain",
+    " ",
 ]
-NOT_A_HEADER_IDS = ["above latin-1", "lone surrogate", "line break", "DEL", "empty"]
+NOT_A_HEADER_IDS = [
+    "above latin-1",
+    "lone surrogate",
+    "line break",
+    "DEL",
+    "empty",
+    "trailing space",
+    "leading space",
+    "leading tab",
+    "only a space",
+]
+
+
+KEPT = ["text/plain; t=\xe9", "text/plain; t=\x80\xff", "text/plain;\tt=1", "a", "text/plain; a b"]
+
+
+@pytest.mark.parametrize("reported", [*KEPT, *NOT_A_HEADER], ids=ascii)
+def test_every_content_type_the_engine_keeps_is_one_the_server_writes(reported: str) -> None:
+    """The route tests here run the app in process, which never writes a header to a socket (John, #187
+    review). uvicorn writes it with h11, which refuses a value that begins or ends with whitespace: the
+    job had run, and its answer was lost. So what the engine keeps is checked against h11 itself."""
+    kept = response_content_type(reported)
+    assert kept == (reported if reported in KEPT else OCTETS.decode())
+    server = h11.Connection(h11.SERVER)
+    server.receive_data(b"GET / HTTP/1.1\r\nHost: engine.test\r\n\r\n")
+    assert isinstance(server.next_event(), h11.Request)
+    written = server.send(h11.Response(status_code=200, headers=[("content-type", kept.encode("latin-1"))]))
+    assert written is not None and b"content-type: " + kept.encode("latin-1") + b"\r\n" in written.lower()
 
 
 @pytest.mark.parametrize("reported", NOT_A_HEADER, ids=NOT_A_HEADER_IDS)

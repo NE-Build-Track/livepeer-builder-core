@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -234,6 +234,32 @@ async def test_a_default_summary_window_is_judged_by_the_instant_of_end_whatever
         datetime(1, 1, 31, 1, tzinfo=UTC),
     )
     assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
+
+
+class NoOffset(tzinfo):
+    """A ``tzinfo`` that names no offset: Python reads a datetime that carries it as naive."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return None
+
+
+async def test_a_default_summary_window_reads_an_end_whose_tzinfo_names_no_offset_as_naive(
+    side: Side,
+) -> None:
+    """Such an ``end`` is naive to Python, whatever ``tzinfo`` it carries. Judged by ``tzinfo is None``
+    it was measured from an aware first instant, and the subtraction raised ``TypeError``, for an input
+    the summary took before #158 (John, #187 review)."""
+    async with side() as engine:
+        late = await engine.costs.summary(ALICE, None, datetime(2026, 11, 23, 12, tzinfo=NoOffset()))
+        with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
+            await engine.costs.summary(ALICE, None, datetime(1, 1, 15, tzinfo=NoOffset()))
+    assert late.end - late.start == timedelta(days=30)
 
 
 async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -> None:

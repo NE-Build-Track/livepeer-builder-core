@@ -23,7 +23,8 @@ def summary_window(now: datetime, start: datetime | None, end: datetime | None) 
     end = end or now
     if start is not None:
         return start, end
-    first = datetime.min.replace(tzinfo=None if end.tzinfo is None else UTC)  # the first time UTC holds
+    # The first time UTC holds. An ``end`` is naive when it names no offset, whatever ``tzinfo`` it carries.
+    first = datetime.min.replace(tzinfo=None if end.utcoffset() is None else UTC)
     since_first = end - first  # between two instants: no offset makes this overflow
     if since_first < SUMMARY_WINDOW:
         raise InvalidRequest("end: must be 0001-01-31T00:00:00Z or later when no start is given")

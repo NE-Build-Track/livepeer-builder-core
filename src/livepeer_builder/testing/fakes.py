@@ -26,6 +26,7 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import NotFound, ProviderError, RunnerCallError
 from livepeer_builder.protocols import OnSigned
+from livepeer_builder.testing.wallet import FakeEscrow, FakeSignerProbe
 
 
 class FixedClock:
@@ -75,7 +76,7 @@ async def report_signed(on_signed: OnSigned | None, manifest_ids: Sequence[str],
 
 
 @dataclass
-class ScriptedTransport:
+class ScriptedTransport(FakeSignerProbe):
     """Returns or raises the scripted steps in order and records every call."""
 
     steps: list[Step] = field(default_factory=list)
@@ -250,7 +251,7 @@ class _Grant:
     unallocated: Decimal
 
 
-class FakeAllocationManager:
+class FakeAllocationManager(FakeEscrow):
     """Mimics Batteries management semantics: idempotent replays, and a grant's unallocated balance.
     A success is saved under the call's idempotency key and replayed to the same request under that key;
     any other request under it is refused as Batteries refuses it (409), and nothing is applied.
@@ -443,16 +444,14 @@ class FakeAllocationManager:
 
     async def read_grant(self, grant_id: str) -> TenantGrant:  # NOSONAR - async by protocol
         self._called("read_grant")
-        return _tenant_grant(self._grant(grant_id), self._spent(grant_id))
+        return _tenant_grant(self._grant(grant_id), self._allocations_of(grant_id))
 
     async def grant_balances(self) -> list[TenantGrant]:  # NOSONAR - async by protocol
         self._called("grant_balances")
-        return [_tenant_grant(self._held[grant.id], self._spent(grant.id)) for grant in self.grants]
+        return [_tenant_grant(self._held[grant.id], self._allocations_of(grant.id)) for grant in self.grants]
 
-    def _spent(self, grant_id: str) -> Decimal:
-        """What the grant's allocations have spent, the revoked ones included, as Batteries reports it."""
-        spent = (held.spent for held in self.allocations.values() if held.grant_id == grant_id)
-        return sum(spent, Decimal(0))
+    def _allocations_of(self, grant_id: str) -> list[_Allocation]:  # the revoked ones included
+        return [held for held in self.allocations.values() if held.grant_id == grant_id]
 
     async def set_grant_status(self, grant_id: str, status: str) -> None:  # NOSONAR - async by protocol
         self._called("set_grant_status")
@@ -484,8 +483,11 @@ class FakeAllocationManager:
         return NewAllocationKey(allocation_id=allocation_id, api_key_id=key_id, secret=SecretStr(secret))
 
 
-def _tenant_grant(grant: _Grant, spent: Decimal) -> TenantGrant:
+def _tenant_grant(grant: _Grant, allocations: list[_Allocation]) -> TenantGrant:
+    """As Batteries reports it: an allocation that spent more than it holds adds nothing to the unspent."""
     currency: Currency = "USD" if grant.record.currency == "USD" else "ETH"
+    spent = sum((held.spent for held in allocations), Decimal(0))
+    unspent = sum((max(held.granted - held.spent, Decimal(0)) for held in allocations), Decimal(0))
     return TenantGrant(
         tenant_id=grant.record.id,
         name=grant.record.name,
@@ -493,4 +495,5 @@ def _tenant_grant(grant: _Grant, spent: Decimal) -> TenantGrant:
         total=Money(amount=grant.total, currency=currency),
         unallocated=Money(amount=grant.unallocated, currency=currency),
         spent=Money(amount=spent, currency=currency),
+        allocated_unspent=Money(amount=unspent, currency=currency),
     )

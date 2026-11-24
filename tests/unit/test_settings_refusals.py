@@ -37,6 +37,10 @@ SIGNER_URL_REFUSED = "Value error, signer_url must not carry userinfo, a query o
 STALE_WINDOW_REFUSED = (
     "Value error, LPB_OPERATION_STALE_S must be at least four times LPB_BATTERIES_TIMEOUT_S"
 )
+PRIVATE_PORT_REFUSED = (  # #167
+    "LPB_HTTP_PRIVATE_PORT is the public listener's port (LPB_HTTP_PORT) on the same host: the private "
+    "listener needs an address of its own"
+)
 # The model validator that hides what was given (config.py). Every other must run inside it.
 REDACTION = "_a_refusal_holds_no_value"
 
@@ -87,6 +91,11 @@ REFUSED_IN_CODE = [
         {"auth": "jwt"},
         ("value_error", (), "Value error, LPB_JWT_ISSUER is required when LPB_AUTH includes jwt"),
         id="the rule on JWT settings",
+    ),
+    pytest.param(  # #167
+        {"http_private_port": 8080},
+        ("value_error", (), f"Value error, {PRIVATE_PORT_REFUSED}"),
+        id="the rule on the two listeners",
     ),
     pytest.param(  # #163 review: neither tenant source has a default
         {"auth": "jwt", "jwt_issuer": "https://idp.invalid/", "jwt_audience": "engine"},
@@ -352,6 +361,14 @@ RULE_REFUSALS: dict[str, list[Refused]] = {
                 "set: the claim that names each token's tenant, or the one tenant every token is in; both "
                 "are set",
             ),
+        ),
+    ],
+    "_two_listeners_have_two_addresses": [  # #167
+        Refused(
+            "a private listener on the public listener's address",
+            {"http_port": 18473, "http_private_port": 18473},
+            value_error(None, PRIVATE_PORT_REFUSED),
+            numerals=("18473",),
         ),
     ],
 }

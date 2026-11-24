@@ -54,6 +54,7 @@ from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PREVIOUS_CUSTODY, PaymentKeys, recorded_secret
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
+from livepeer_builder.services.wallet import Wallet
 from livepeer_builder.utils import BODY_LIMIT
 
 _LOG = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ class PaymentsService:
         manager: AllocationManager | None = None,
         tenants: TenantDesk | None = None,
         usage: TenantUsage | None = None,
+        wallet: Wallet | None = None,
         currency: Currency = "USD",
     ) -> None:
         self._store = store
@@ -89,6 +91,7 @@ class PaymentsService:
         self._manager = manager
         self.tenants = tenants  # None: the tenant desk is off (no grants manager)
         self.usage = usage  # None: no source reads one tenant's usage (#166)
+        self.wallet = wallet  # None: a part cannot report the escrow or probe the signer (#167)
         self._currency = currency
 
     # -- delivering commands (D85 point 1, D87 point 1) ----------------------------------------------

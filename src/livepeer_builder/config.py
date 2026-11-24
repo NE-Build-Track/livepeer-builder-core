@@ -160,7 +160,7 @@ class EngineSettings(Contract):
     http_port: int = Field(default=8080, ge=1, le=65535)
     # The private listener (D84, #167). Unset: one listener, which serves every route. Set: http_host and
     # http_port are the public listener, without the routes only a clearinghouse admin calls, and this
-    # one serves every route to a clearinghouse admin only. Loopback unless the deployment says otherwise.
+    # one serves a clearinghouse admin only, without a tenant's own routes. Loopback unless set otherwise.
     http_private_host: str = "127.0.0.1"
     http_private_port: int | None = Field(default=None, ge=1, le=65535)
     # A /v1/ body over this is refused with 413 before it is read (D59); fits an 8 MiB raw_body as base64

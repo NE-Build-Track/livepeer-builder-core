@@ -250,10 +250,11 @@ in one process:
   `work half` or `clearinghouse half`, whose description names the roles that serve it. The routes of
   the private group also carry the tag `private listener`, and a tenant's own routes the tag
   `public listener`. Its allotment and rotation answer the allocation alone, as that engine does.
-  `docs/generated/openapi-clearinghouse.json` is generated from an engine in its `clearinghouse` role,
-  for its private listener: the routes that listener serves and no other, with the answer that hands an
-  allocation's key over ([payments.md](payments.md#payment-keys)). An engine's own `/openapi.json`
-  names the routes of its role and its listener, and no other.
+  `docs/generated/openapi-clearinghouse.json` is generated from an engine in its `clearinghouse` role:
+  the routes of that role and no other, with the answer that hands an allocation's key over
+  ([payments.md](payments.md#payment-keys)). No one listener of that role serves them all, so the
+  document is its two listeners' put together, and the two tags say which serves each route. An
+  engine's own `/openapi.json` names the routes of its role and its listener, and no other.
 - **A clearinghouse has no route that issues a second clearinghouse admin key** (#169). `/v1/keys`,
   which issues every kind, is a work route. The first clearinghouse admin key is `lpb bootstrap-admin`'s,
   once. It is kept under the tenant `default`, so its holder lists, rotates and revokes it on the private

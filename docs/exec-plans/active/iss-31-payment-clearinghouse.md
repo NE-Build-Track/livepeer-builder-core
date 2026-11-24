@@ -239,6 +239,7 @@ Each pull request ticks its own line here in the same change.
   clearinghouse admin at the path that names the tenant, since that engine stores no key and an answer
   without it would leave the key with nobody. In the `both` role both forms store the key and answer
   none. The listener table says which groups allot (`allots`), and each of them is handed
-  `deliver_allocation_keys`. The signer's two paths are no group of the table. D87 point 3 is one text
-  for both of Mike's amendments of 19 November. Source: Mike's amendments (D85 point 1, D87 points 1
-  and 3); what the decisions are silent on is for his review.
+  `deliver_allocation_keys`. The `clearinghouse` role's published schema is its two listeners' put
+  together, because neither serves every route of the role now. The signer's two paths are no group of
+  the table. D87 point 3 is one text for both of Mike's amendments of 19 November. Source: Mike's
+  amendments (D85 point 1, D87 points 1 and 3); what the decisions are silent on is for his review.

@@ -15,7 +15,8 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 The REST surface is generated into [../generated/openapi.json](../generated/openapi.json): every route
 of an engine in its `both` role, each tagged with its half. The routes of an engine in its
 `clearinghouse` role, whose allotment and rotation answer the allocation with its key, are generated
-into [../generated/openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) (#169).
+into [../generated/openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) (#169): its
+public and its private listener's routes in one document, each tagged with its listener.
 
 ## Upgrading to the M4 hardening (#112 to #115)
 

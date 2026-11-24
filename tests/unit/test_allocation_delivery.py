@@ -1014,19 +1014,38 @@ async def test_the_published_spec_documents_the_shipped_app() -> None:
 
 async def test_the_clearinghouse_roles_spec_is_published_too() -> None:
     """Tech debt T48, closed by #169. ``docs/generated/openapi-clearinghouse.json`` is the schema of an
-    engine in its ``clearinghouse`` role, built by the same ``create_app``, for its private listener,
-    which serves every route of the role. It is where the answer that hands an allocation's key over is
-    published: ``allocation_api_key``, ``replayed`` and ``resumed``, on allotment and on rotation."""
+    engine in its ``clearinghouse`` role, built by the same ``create_app``. No one listener of that role
+    serves every route of it (D87 point 3, as amended on 19 November 2026), so the document is its two
+    listeners' put together: a tenant's own routes, which an enterprise's engine calls on the public
+    listener, and the paths a clearinghouse admin names a tenant in, on the private one, each tagged
+    with its listener. It is where the answer that hands an allocation's key over is published:
+    ``allocation_api_key``, ``replayed`` and ``resumed``, on allotment and on rotation, in both forms."""
     rendered = await render_openapi("clearinghouse")
     committed = Path(__file__).parents[2] / "docs" / "generated" / "openapi-clearinghouse.json"
     assert committed.read_text() == rendered, "run `uv run lpb gen-docs`"
     spec = json.loads(rendered)
-    allocation = "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation"
     delivered = {"$ref": "#/components/schemas/DeliveredAllocationBody"}
-    allot = spec["paths"][allocation]["post"]["responses"]["201"]
-    rotate = spec["paths"][allocation + "/rotate-payment-key"]["post"]["responses"]["200"]
-    assert allot["content"]["application/json"]["schema"] == delivered
-    assert rotate["content"]["application/json"]["schema"] == delivered
+    forms = {
+        "/v1/clearinghouse/actors/{actor_id}/allocation": "public listener",
+        "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": "private listener",
+    }
+    for allocation, listener in forms.items():
+        allot = spec["paths"][allocation]["post"]
+        rotate = spec["paths"][allocation + "/rotate-payment-key"]["post"]
+        assert allot["responses"]["201"]["content"]["application/json"]["schema"] == delivered, allocation
+        assert rotate["responses"]["200"]["content"]["application/json"]["schema"] == delivered, allocation
+        assert {"clearinghouse half", listener} == set(allot["tags"]) == set(rotate["tags"]), allocation
+    # every route of the role: both forms of each of a tenant's routes, and what both listeners serve
+    for rest in ("/grant", "/usage", "/actors", "/keys", "/keys/{key_id}"):
+        own = spec["paths"]["/v1/clearinghouse" + rest]["get"]
+        named = spec["paths"]["/v1/clearinghouse/tenants/{tenant_id}" + rest]["get"]
+        assert "public listener" in own["tags"] and "private listener" in named["tags"], rest
+    assert [tag["name"] for tag in spec["tags"]] == [
+        "clearinghouse half",
+        "public listener",
+        "private listener",
+    ]
+    assert spec["paths"]["/v1/clearinghouse/discovery"]["get"]["tags"] == ["clearinghouse half"]
     body = spec["components"]["schemas"]["DeliveredAllocationBody"]["properties"]
     assert {"allocation_api_key", "replayed", "resumed", "credential_custody"} <= body.keys()
     # the role's routes and no other: every path is health or a clearinghouse route, the private group

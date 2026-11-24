@@ -14,6 +14,7 @@ The files are read as text, as tests/structure/test_dev_stack.py reads the dev s
 
 import ipaddress
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def test_the_published_signer_keeps_its_batteries_authorization_webhook() -> Non
     assert "[credentials.webhook]" in credential and "authorize = true" in credential
     batteries = tomllib.loads((CLEARINGHOUSE / "config" / "batteries.toml").read_text())
     assert batteries["EnableAuthWebhook"] and batteries["EnableAccounting"] is True
-    assert "/run/secrets:ro" in service(CLEARINGHOUSE, "signer")
+    assert {"webhook-url", "webhook-headers"} <= secret_files("signer")  # read-only, each by itself
 
 
 def test_the_two_projects_and_the_dev_stack_run_side_by_side() -> None:
@@ -372,3 +373,84 @@ def test_what_is_not_committed_is_ignored_by_git_and_kept_out_of_the_image() -> 
         assert line in dockerignore, (
             f".dockerignore lacks {line}: the engine image is built from the repository root"
         )
+
+
+# -- who can read which credential (the reviewer's comments on #183) ----------------------------------------
+
+SECRET_FILE = re.compile(
+    r"- \{type: bind, source: \./secrets/([\w.-]+), target: /run/secrets/([\w.-]+), read_only: true, "
+    r"bind: \{create_host_path: false\}\}"
+)
+
+
+def secret_files(name: str) -> set[str]:
+    """The files of ``secrets/`` a service of the clearinghouse project is given, each mounted by itself,
+    read-only, under its own name, and refused when it is not there."""
+    mounts = SECRET_FILE.findall(service(CLEARINGHOUSE, name))
+    assert all(source == target for source, target in mounts), f"{name} mounts a secret under another name"
+    return {source for source, _ in mounts}
+
+
+def test_no_service_is_given_the_secrets_folder_and_each_is_given_only_the_files_it_reads() -> None:
+    """``secrets/`` holds every Batteries credential, and the runbook keeps the clearinghouse admin's key
+    and each tenant's admin key there. The signer, which answers the internet through the relay and runs
+    as root, was given the whole folder, and so was Batteries. Each is given the files its own
+    configuration names, and nothing is given the folder."""
+    text = compose(CLEARINGHOUSE)
+    assert not re.search(r"\./secrets/?[:,\s]", text), "a service is given the whole secrets folder"
+    named = set(
+        re.findall(r'"/run/secrets/([\w.-]+)"', (CLEARINGHOUSE / "config" / "signer.toml").read_text())
+    )
+    assert named == {"rpc-url", "webhook-url", "webhook-headers", "kafka-username", "kafka-password"}
+    assert secret_files("signer") == named
+    batteries = tomllib.loads((CLEARINGHOUSE / "config" / "batteries.toml").read_text())
+    registry = Path(batteries["CredsFile"])
+    assert registry.parent == Path("/run/secrets")
+    assert "- /run/secrets/rpc-url" in service(CLEARINGHOUSE, "batteries")  # its on-chain listener's
+    assert secret_files("batteries") == {registry.name, "rpc-url"}
+    for name in ("signer-relay", "discovery", "engine", "private"):
+        given = service(CLEARINGHOUSE, name)
+        assert "./secrets" not in given and "/run/secrets" not in given, f"{name} is given a file of secrets/"
+    # so the keys the runbook keeps there reach no container
+    for kept in ("batteries.toml", "engine-token", "grant-desk-token", "admin-key", "tenant-one-key"):
+        assert kept not in secret_files("signer")
+
+
+def runbook() -> str:
+    return (DEPLOY / "README.md").read_text()
+
+
+def test_the_runbook_never_empties_a_saved_key() -> None:
+    """``command | jq -r .token > file`` empties the file before the command runs. A repeat of
+    ``lpb bootstrap-admin`` is refused, a repeat of an onboarding or of a key answers without the token,
+    and the one saved copy of the key was gone. Every key the runbook saves goes through ``keep``."""
+    text = runbook()
+    assert not re.search(r"token[^\n|]*>\s*\$[CE]S/", text), "a key is redirected straight into its file"
+    assert not re.search(r">\s*\$[CE]S/[^\n]*\.json", text), "an answer that holds a key is written to a file"
+    for saved in ("$CS/admin-key", "$CS/tenant-$1-key", "$ES/admin-key", "$ES/$1-key"):
+        assert f"| keep {saved}" in text, f"{saved} is not saved through keep"
+
+
+def keep(folder: Path, given: str, into: str = "a-key") -> tuple[int, str]:
+    """Run the runbook's own ``keep`` on ``given``, and say how it ended and what the file holds."""
+    definition = re.search(r"^keep\(\) \{.*?^\}$", runbook(), flags=re.S | re.M)
+    assert definition is not None, "the runbook defines keep"
+    script = f'umask 077\n{definition.group(0)}\nprintf \'%s\' "$1" | keep "$2"'
+    ended = subprocess.run(  # noqa: S603 - the runbook's own function, on a file of this test
+        ["/bin/bash", "-c", script, "keep", given, str(folder / into)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    file = folder / into
+    return ended.returncode, file.read_text() if file.exists() else "(no file)"
+
+
+def test_keep_saves_a_token_and_leaves_a_saved_key_when_none_comes_back(tmp_path: Path) -> None:
+    assert keep(tmp_path, "") == (1, "(no file)")  # nothing came back and nothing is saved: say so
+    assert keep(tmp_path, "null") == (1, "(no file)")  # jq's word for a field that is not there
+    assert keep(tmp_path, "lpk_first\n") == (0, "lpk_first\n")
+    assert (tmp_path / "a-key").stat().st_mode & 0o777 == 0o600
+    assert keep(tmp_path, "") == (0, "lpk_first\n")  # a refused repeat: the saved key stays
+    assert keep(tmp_path, "null") == (0, "lpk_first\n")
+    assert keep(tmp_path, "lpk_second") == (0, "lpk_second\n")  # a key that was issued replaces the old one

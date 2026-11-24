@@ -538,6 +538,12 @@ STILL_NO_PAGE = {
     "a page that is a list": "[" + PAST_THE_DECODER["a 5000-digit integer"] + "]",
     "an item that is null beside one": page_text("null", PAST_THE_DECODER["a 5000-digit integer"]),
     "a cursor that is a 5000-digit integer": '{"items": [], "next_cursor": ' + "9" * 5000 + "}",
+    # The decoder keeps the last of a repeated key: the first list's row was dropped, the item cut from the
+    # second accounted for every marker, and the page's cursor was followed past the row (John, #189 review).
+    "items named twice, with a row in the first list": '{"items": [' + json.dumps(item("u-good")) + '], "items": ['
+    + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p2"}',
+    "a cursor named twice": '{"items": [' + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p1", '
+    + '"next_cursor": "p2"}',
 }  # fmt: skip
 
 

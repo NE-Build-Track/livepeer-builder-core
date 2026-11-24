@@ -220,7 +220,8 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   `set_aside`, with at most 2000 characters of its content as `raw`, and the page's other rows are in
   `items`. The clearinghouse records and logs nothing of such a row: its reader does, as cost sync does
   for its own page. A page that is not JSON, or whose `items` or `next_cursor` the engine cannot read,
-  is 502.
+  is 502. So is a page with such an item whose own object names a key twice: read with the last of the
+  two, the rows of a first `items` list would be dropped and the cursor followed past them.
 - **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
   refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
   Batteries' is about 135 for a grant id it issues.

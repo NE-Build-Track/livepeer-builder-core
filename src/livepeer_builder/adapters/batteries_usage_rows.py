@@ -41,16 +41,26 @@ def page_past_the_decoder(content: bytes) -> tuple[dict[str, Any], list[SetAside
     Nothing of such an item is read, its id and its fees included.
 
     None when that is not why the page was refused: it is not UTF-8 or not JSON, or what the decoder
-    cannot read is no object in the page's ``items``. Such a page is still no page."""
+    cannot read is no object in the page's ``items``. Such a page is still no page. So is one whose own
+    object names a key twice: the decoder keeps the last, so a first ``items`` list was dropped with
+    its rows while the item cut from the second accounted for every marker (#189 review)."""
     try:
         text = content.decode()
     except UnicodeDecodeError:
         return None
     marker = secrets.token_hex(16)  # a key no item has: it marks where an item was cut out
     kept, cut = _without_items_past_the_decoder(text, marker)
+    objects: list[list[tuple[str, Any]]] = [[]]  # the keys of the object decoded last: the page's own
+
+    def keep_last(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        objects[0] = pairs
+        return dict(pairs)
+
     try:
-        body = json.loads(kept) if cut else None
+        body = json.loads(kept, object_pairs_hook=keep_last) if cut else None
     except (ValueError, RecursionError):
+        return None
+    if isinstance(body, dict) and len(body) != len(objects[0]):  # a key named twice
         return None
     items = body.get("items") if isinstance(body, dict) else None
     if not isinstance(body, dict) or not isinstance(items, list):

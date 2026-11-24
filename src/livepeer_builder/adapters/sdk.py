@@ -29,7 +29,7 @@ from livepeer_builder.adapters.runner_call import (
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
 from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
-from livepeer_builder.errors import InvalidRequest
+from livepeer_builder.errors import InvalidRequest, ProviderError
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
@@ -99,8 +99,6 @@ class HttpDiscoverySource:
         return self._document
 
     async def fetch(self) -> tuple[Runner, ...]:
-        if self._confirm is not None:  # whose key ``bearer`` is, before a list is read with it
-            await self._confirm()
         body = raised(await self._read())
         runners = read_inventory(body)
         self._document = body  # kept only once it read: the document the snapshot is built from
@@ -111,9 +109,14 @@ class HttpDiscoverySource:
         ``raised``, and never raised from here: this frame's callee holds the request, whose headers
         carry ``bearer``, and the HTTP client's own errors hold it too."""
         try:
-            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a
+            # refresh. Nor can the question of whose key ``bearer`` is, asked before a list is read with it.
             async with asyncio.timeout(self._timeout_s):
+                if self._confirm is not None:
+                    await self._confirm()
                 return await self._body(self._client)
+        except ProviderError as error:  # the answer to that question, which holds no request
+            return error
         except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
             slow = TimeoutError(f"no inventory from {self._discovery_url} within {self._timeout_s:g}s")
             slow.__cause__ = error if self._bearer is None else bare(error)

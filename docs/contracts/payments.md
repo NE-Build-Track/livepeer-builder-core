@@ -252,6 +252,9 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   its credential, and a clearinghouse admin for any tenant at the path that names it. A tenant
   credential at a path that names a tenant is 403, and a clearinghouse admin at the path that names
   none, before Batteries is asked. The tenant is named to the access policy first. An actor key is 403.
+  A credential whose tenant id is no grant id is 403 here and at the grant read, as the path that names
+  a tenant refuses such an id with 422: the id goes into Batteries' URL path, and a key may carry one a
+  grant id may not.
 - **When Batteries fails.** Unreachable is 503. An error status, or an answer the engine cannot read, is
   502 (Batteries' own 400, 404, 409 or 422 keeps its status). Never an empty page.
 - **No orchestrator.** A Batteries usage row names no orchestrator at v0.0.3. Batteries keeps it on the
@@ -1460,7 +1463,12 @@ all of it under its own tenant. So:
   first request is, not at start: an engine starts with its clearinghouse unreachable, as before. A read
   that fails is that request's failure (`ProviderUnavailable`, or what the clearinghouse answered) and
   says nothing about the key, so the next request reads again. Once one read has answered for the
-  engine's tenant, no other is made: a process has one key.
+  engine's tenant, no other is made while every answer agrees with it: a process has one key. Requests
+  that arrive together before that share one read, since each read has the clearinghouse read the
+  grant's balances: those that waited for a read that failed fail with it, and the next request reads
+  again. An answer that states another tenant ends what the engine knew of its key, so the next
+  request reads the grant again before anything else: a usage page and the runner list state no tenant,
+  and are not taken on a word the clearinghouse has since contradicted.
 - **A command makes that read before its record is begun.** An allotment, a top-up and a payment key
   rotation run on the operation ledger, inside half of `LPB_OPERATION_STALE_S`, which is sized for the
   three calls the longest of them makes ([the remote adapters](#the-remote-adapters)). So the payments

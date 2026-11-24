@@ -25,7 +25,14 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from livepeer_builder import BuilderEngine, EngineApi, EngineSettings, EngineSupply
-from livepeer_builder.http.server import _bound, _listener_server, _serve_together, build_app, serve
+from livepeer_builder.http.server import (
+    _bound,
+    _listener_server,
+    _serve_one_listener,
+    _serve_together,
+    build_app,
+    serve,
+)
 from livepeer_builder.store import SqlStore
 from tests.unit.test_service_mode_example import settings
 
@@ -440,8 +447,8 @@ async def test_a_cancelled_serve_ends_while_a_request_is_held_open(
     signals: dict[int, object], held_on: str
 ) -> None:
     """Cancelling is how an embedder stops ``serve``, and off the main thread it is the only way. It is
-    a forced exit, as it is for one listener, where uvicorn's ``serve`` raises at once (#181 review): the
-    listeners hang up on their open connections, so a request that never ends does not hold the task."""
+    a forced exit (#181 review): the listeners hang up on their open connections, so a request that
+    never ends does not hold the task."""
     apps = [Held(), Held()] if held_on == "both listeners" else [Held()]
     servers, ports = two_servers(*apps)
     with _bound(servers) as sockets:
@@ -532,6 +539,142 @@ async def test_a_cancel_after_a_first_signal_stops_waiting_for_an_open_connectio
     assert handlers == signals
     assert servers[0].force_exit  # the listener that still had a caller was forced
     assert serving.cancelled()
+
+
+def one_server(app: App = hello) -> tuple[uvicorn.Server, int]:
+    """One server as ``serve`` builds it for one listener: uvicorn's own, which takes the signals itself."""
+    port = free_port()
+    return uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_config=None)), port  # type: ignore[arg-type]
+
+
+async def test_a_cancelled_serve_closes_its_one_listener(signals: dict[int, object]) -> None:
+    """uvicorn leaves a cancelled ``serve()`` where it stood, with its listening socket open: the port
+    stayed taken for the rest of the process and went on accepting, with the engine stopped (#184
+    review). One listener ends on a cancel as two do."""
+    server, port = one_server()
+    serving = asyncio.create_task(_serve_one_listener(server))
+    await started([server])
+    assert listening(port)
+    serving.cancel()
+    ended, _ = await asyncio.wait([serving], timeout=10)
+    still_listening, left = listening(port), listener_tasks()
+    await gone(left)
+    assert ended, "serve() had not ended 10 s after it was cancelled"
+    assert not still_listening, "the listener still accepted connections after serve() ended"
+    assert not left, "the server was left running after serve() ended"
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+    assert serving.cancelled()  # the caller sees its own cancellation, and nothing else
+
+
+async def test_a_cancelled_serve_with_one_listener_ends_while_a_request_is_held_open(
+    signals: dict[int, object],
+) -> None:
+    """The cancel is a forced exit for one listener too: it hangs up on its open connections, and a
+    request that never ends is told its caller is gone."""
+    held = Held()
+    server, port = one_server(held)
+    serving = asyncio.create_task(_serve_one_listener(server))
+    await started([server])
+    writer = await held_open(port, held)
+    try:
+        serving.cancel()
+        ended, _ = await asyncio.wait([serving], timeout=10)
+        told, still_listening, left = held.disconnected.is_set(), listening(port), listener_tasks()
+    finally:  # a serve() left waiting ends once its caller hangs up, so a failure is an assertion
+        await hung_up(writer)
+        await asyncio.wait([serving], timeout=10)
+        await gone(left)
+    assert ended, "serve() still waited for a held request 10 s after it was cancelled"
+    assert told and server.force_exit
+    assert not still_listening and not left
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+    assert serving.cancelled()
+
+
+async def test_a_second_cancel_while_one_listener_ends_still_closes_it(signals: dict[int, object]) -> None:
+    held = Held()
+    server, port = one_server(held)
+    serving = asyncio.create_task(_serve_one_listener(server))
+    await started([server])
+    writer = await held_open(port, held)
+    try:
+        serving.cancel()
+        await asyncio.sleep(0)  # the first cancel is in, and the server is being ended
+        ending = not serving.done()
+        serving.cancel()
+        ended, _ = await asyncio.wait([serving], timeout=10)
+        still_listening, left = listening(port), listener_tasks()
+    finally:
+        await hung_up(writer)
+        await asyncio.wait([serving], timeout=10)
+        await gone(left)
+    assert ending, "the second cancel must arrive while the server is still being ended"
+    assert ended, "serve() had not ended 10 s after it was cancelled twice"
+    assert not still_listening and not left
+    assert held.disconnected.is_set()
+    assert serving.cancelled()
+
+
+async def test_a_signal_still_ends_one_listener_in_order(signals: dict[int, object]) -> None:
+    """Unchanged: uvicorn takes the signal, stops accepting and waits for the request in flight."""
+    held = Held()
+    server, port = one_server(held)
+    serving = asyncio.create_task(_serve_one_listener(server))
+    await started([server])
+    writer = await held_open(port, held)
+    try:
+        signal.raise_signal(signal.SIGTERM)
+        await nothing_listens([port])
+        done, _ = await asyncio.wait([serving], timeout=1)
+        assert not done and not held.disconnected.is_set()  # the request in flight is waited for
+    finally:
+        await hung_up(writer)
+    await asyncio.wait_for(serving, timeout=10)
+    assert not server.force_exit
+    assert not listener_tasks()
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
+async def test_one_listener_whose_app_cannot_start_exits_as_uvicorn_does(signals: dict[int, object]) -> None:
+    """uvicorn exits with status 3 when an app's startup fails. The server runs in a task, where that
+    exit would end the event loop where it stands: it is raised from ``serve`` instead."""
+    server, port = one_server(failing_startup)
+    with pytest.raises(SystemExit) as exited:
+        await asyncio.wait_for(_serve_one_listener(server), timeout=10)
+    assert exited.value.code == 3
+    assert not listening(port) and not listener_tasks()
+
+
+async def test_a_cancelled_serve_leaves_nothing_listening_and_the_engine_stopped(
+    store: SqlStore, signals: dict[int, object]
+) -> None:
+    """The whole of it, through ``serve()`` with its default of one listener."""
+    port = free_port()
+    built: list[EngineApi] = []
+    serving = asyncio.create_task(
+        serve(
+            settings(http_host="127.0.0.1", http_port=port),
+            supply=EngineSupply(store=store),
+            extend=lambda _, engine: built.append(engine),
+        )
+    )
+    await nothing_listens_yet_then_does(port)
+    serving.cancel()
+    ended, _ = await asyncio.wait([serving], timeout=10)
+    still_listening, left = listening(port), listener_tasks()
+    await gone(left)
+    assert ended and serving.cancelled()
+    assert not still_listening and not left
+    with pytest.raises(RuntimeError, match="engine is stopped"):
+        await built[0].start()
+
+
+async def nothing_listens_yet_then_does(port: int) -> None:
+    for _ in range(200):
+        if listening(port):
+            return
+        await asyncio.sleep(0.02)
+    pytest.fail("the listener did not accept a connection within 4 s")
 
 
 async def test_off_the_main_thread_no_signal_handler_is_installed(signals: dict[int, object]) -> None:

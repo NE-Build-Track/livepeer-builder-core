@@ -1468,7 +1468,11 @@ all of it under its own tenant. So:
   grant's balances: those that waited for a read that failed fail with it, and the next request reads
   again. An answer that states another tenant ends what the engine knew of its key, so the next
   request reads the grant again before anything else: a usage page and the runner list state no tenant,
-  and are not taken on a word the clearinghouse has since contradicted.
+  and are not taken on a word the clearinghouse has since contradicted. Nor is what was already on its
+  way when that answer arrived: a read of the grant sent before it confirms nothing when it comes back,
+  and a usage page sent before it is refused (403) and none of its rows is stored, whatever a later
+  read of the grant has said by then. The error of an answer for another tenant holds no answer: it is
+  raised from a frame that never held one, so a handed key is not reachable from it.
 - **A command makes that read before its record is begun.** An allotment, a top-up and a payment key
   rotation run on the operation ledger, inside half of `LPB_OPERATION_STALE_S`, which is sized for the
   three calls the longest of them makes ([the remote adapters](#the-remote-adapters)). So the payments

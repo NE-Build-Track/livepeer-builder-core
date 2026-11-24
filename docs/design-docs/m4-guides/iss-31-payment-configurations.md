@@ -288,9 +288,10 @@ route that allots, so the project allots with a script that calls the embedded A
 **`lpb payments check`** is kept from the 13 November design as a read-only command (D87). It prints the
 role and probes what that role needs. Every role probes the signer's address. An engine that reaches
 Batteries itself, in its `both` or its `clearinghouse` role, also probes Batteries, and its grants
-credential when one is set, which a clearinghouse always needs. An engine in its `work` role probes the
-clearinghouse it uses instead: its grant, which says who it is there, its usage, and the runner list
-when that is its discovery address. It never writes, and ISS-36's runbook uses it as a precondition.
+credential: when one is set, and always in the `clearinghouse` role, where the check fails without it.
+An engine in its `work` role probes the clearinghouse it uses instead: its grant, which says who it is
+there, its usage, and the runner list when that is its discovery address. It never writes, and ISS-36's
+runbook uses it as a precondition.
 
 ### Docs to change
 

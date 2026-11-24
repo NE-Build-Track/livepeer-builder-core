@@ -10,7 +10,6 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import Awaitable, Callable
 
 import httpx
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
@@ -25,7 +24,7 @@ from livepeer_builder.adapters.runner_call import PaidRequest, PaymentEvents, Sd
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
 from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
-from livepeer_builder.errors import InvalidRequest, ProviderError
+from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
@@ -49,10 +48,7 @@ class HttpDiscoverySource:
     """Reads ``GET LPB_DISCOVERY_URL`` as livepeer/node's ``/discovery`` contract (D63). Sends no
     credentials; the signer is not involved in discovery (#45). The one exception is ``bearer``: the
     tenant admin key of an engine whose discovery address is its clearinghouse's runner list, which needs
-    one (D87, #168). It goes to the discovery address only, since no redirect is followed. The runner
-    list states no tenant, so a reader that carries the key is given ``confirm`` too, which is awaited
-    before every read and refuses when the key belongs to another tenant than the engine's
-    (``adapters/clearinghouse_tenant.py``, #165): then no list is read.
+    one (D87, #168). It goes to the discovery address only, since no redirect is followed.
 
     The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
@@ -72,11 +68,9 @@ class HttpDiscoverySource:
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
         bearer: str | None = None,
-        confirm: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._discovery_url = discovery_url
         self._bearer = SecretStr(bearer) if bearer else None  # never a plain attribute, never in a repr
-        self._confirm = confirm
         self._client = client or httpx.AsyncClient(
             timeout=timeout_s
         )  # one per source: polls reuse its connection
@@ -105,14 +99,9 @@ class HttpDiscoverySource:
         ``raised``, and never raised from here: this frame's callee holds the request, whose headers
         carry ``bearer``, and the HTTP client's own errors hold it too."""
         try:
-            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a
-            # refresh. Nor can the question of whose key ``bearer`` is, asked before a list is read with it.
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
             async with asyncio.timeout(self._timeout_s):
-                if self._confirm is not None:
-                    await self._confirm()
                 return await self._body(self._client)
-        except ProviderError as error:  # the answer to that question, which holds no request
-            return error
         except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
             slow = TimeoutError(f"no inventory from {self._discovery_url} within {self._timeout_s:g}s")
             slow.__cause__ = error if self._bearer is None else bare(error)

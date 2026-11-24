@@ -265,10 +265,21 @@ Each pull request ticks its own line here in the same change.
   and another tenant than the setting's is a refusal (403) of whatever was asked, with nothing sent; it
   reads the tenant every answer states, and another tenant after a command is a `ProviderError` with
   the answer's 2xx, as #182 chose for a command applied to another allocation, with nothing saved and a
-  handed key dropped. The discovery reader asks the same question before it reads the clearinghouse's
-  runner list. The read is made at the first request and not at start, so an engine still starts with
+  handed key dropped. The discovery reader asked the same question before it read the clearinghouse's
+  runner list, until 24 November (below). The read is made at the first request and not at start, so an engine still starts with
   its clearinghouse unreachable. `lpb payments check` fails the grant probe and the usage probe for
   such a key. Source: the review of #185; the choices are for Mike's review.
+- **24 November 2026, a tenant's routes from the credential: the runner list and a command under way.**
+  Two points of John's review of `7bde160`, both accepted by Mike. (1) The discovery reader no longer
+  asks whose key it carries: the runner list is the same for every tenant, so a wrong key withheld
+  nothing but the catalog, and each first refresh spent a grant read inside its deadline. The reader
+  sends the key and reads no grant. (2) A command confirmed the key before each of its calls, so one
+  that was under way when another request was answered for another tenant went on as soon as a third
+  request had read the grant again: a top-up sent its payment. A command now goes by a count of such
+  answers taken when it was made ready, compares it before each call, and stops for good when it has
+  moved: a refusal (403, the reference freed) before it sent a write, an unknown outcome
+  (`ProviderOutcomeUnknown`, the reference kept) after one. It reads no grant inside its record's
+  budget. Source: the review of #185.
 - **23 November 2026, a tenant's routes from the credential: the tenant read and the ledger's budget.**
   The second review of #185 found that the read of the key's grant, made inside the first command of a
   process, was a fourth clearinghouse call in a budget sized for three: a first top-up wrote at its

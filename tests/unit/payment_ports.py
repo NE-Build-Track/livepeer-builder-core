@@ -110,11 +110,6 @@ class Ports:
             vars(held).clear()
             vars(held).update(vars(fresh))
 
-    async def confirm_tenant(self) -> None:
-        """Whose key the engine holds, as its discovery reader asks before it reads the clearinghouse's
-        runner list (remote)."""
-        await self.manager._wire.confirm()  # type: ignore[attr-defined]
-
     def sent(self, method: str = "POST") -> list[str]:
         """The paths of the requests that crossed the wire with ``method``, in order (remote)."""
         return [request.url.path for request in self.requests if request.method == method]

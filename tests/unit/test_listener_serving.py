@@ -802,6 +802,113 @@ async def nothing_listens_yet_then_does(port: int) -> None:
     pytest.fail("the listener did not accept a connection within 4 s")
 
 
+class WithLifespan:
+    """An ASGI app with a lifespan of its own, as the engine's app has, that notes what it is told. A
+    request it takes is held until it is cancelled or its caller hangs up."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.arrived = asyncio.Event()
+        self.disconnected = asyncio.Event()
+
+    async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        if scope["type"] == "lifespan":
+            await receive()
+            self.events.append("startup")
+            await send({"type": "lifespan.startup.complete"})
+            await receive()
+            self.events.append("shutdown")
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        self.arrived.set()
+        try:
+            await asyncio.Event().wait()  # a handler that awaits a runner, and is told nothing
+        finally:
+            self.events.append("request ended")
+
+
+def lifespan_tasks() -> "list[asyncio.Task[Any]]":
+    """uvicorn's task for an app's lifespan, while one is still waiting to be told to shut down."""
+    return [
+        task
+        for task in asyncio.all_tasks()
+        if "LifespanOn.main" in getattr(task.get_coro(), "__qualname__", "") and not task.done()
+    ]
+
+
+ENDED_IN_ORDER = ["startup", "request ended", "shutdown"]
+
+
+async def test_a_cancelled_serve_with_one_listener_finishes_its_apps_lifespan(
+    signals: dict[int, object],
+) -> None:
+    """uvicorn's forced exit skips the app's shutdown, and its lifespan task then waits for the rest of
+    the process, holding the app and the engine it closes over (#184 review). ``serve()`` finishes the
+    lifespan once the listener has closed and its requests have ended."""
+    app = WithLifespan()
+    server, port = one_server(app)  # type: ignore[arg-type]
+    serving = asyncio.create_task(_serve_one_listener(server))
+    await started([server])
+    writer = await held_open(port, app)  # type: ignore[arg-type]
+    try:
+        serving.cancel()
+        ended, _ = await asyncio.wait([serving], timeout=10)
+        events, left = list(app.events), lifespan_tasks()
+    finally:
+        await hung_up(writer)
+        await asyncio.wait([serving], timeout=10)
+        for task in lifespan_tasks():
+            task.cancel()
+    assert ended and serving.cancelled()
+    assert events == ENDED_IN_ORDER
+    assert not left, "the app's lifespan was still waiting after serve() returned"
+    assert not listening(port)
+
+
+@pytest.mark.parametrize("forced_by", ["a cancel", "a second interrupt", "a listener that ended"])
+async def test_two_listeners_forced_to_exit_finish_their_apps_lifespans(
+    signals: dict[int, object], forced_by: str
+) -> None:
+    apps = [WithLifespan(), WithLifespan()]
+    servers, ports = two_servers(*apps)  # type: ignore[arg-type]
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writer = await held_open(ports[0], apps[0])  # type: ignore[arg-type]
+        try:
+            if forced_by == "a cancel":
+                serving.cancel()
+            elif forced_by == "a second interrupt":
+                signal.raise_signal(signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
+            else:
+                servers[1].should_exit = True
+            ended, _ = await asyncio.wait([serving], timeout=10)
+            events, left = [list(app.events) for app in apps], lifespan_tasks()
+        finally:
+            await hung_up(writer)
+            await asyncio.wait([serving], timeout=10)
+            for task in lifespan_tasks():
+                task.cancel()
+    assert ended
+    assert events == [ENDED_IN_ORDER, ["startup", "shutdown"]]
+    assert not left, "an app's lifespan was still waiting after serve() returned"
+    assert not any(listening(port) for port in ports)
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
+async def test_a_listener_that_ends_in_order_is_told_to_shut_down_once(signals: dict[int, object]) -> None:
+    """Unchanged: uvicorn shuts the app down itself, and it is not told a second time."""
+    app = WithLifespan()
+    server, port = one_server(app)  # type: ignore[arg-type]
+    serving = asyncio.create_task(_serve_one_listener(server))
+    await started([server])
+    signal.raise_signal(signal.SIGTERM)
+    await asyncio.wait_for(serving, timeout=10)
+    assert app.events == ["startup", "shutdown"]
+    assert not lifespan_tasks() and not listening(port)
+
+
 async def test_off_the_main_thread_no_signal_handler_is_installed(signals: dict[int, object]) -> None:
     """Python delivers signals to the main thread only, and refuses a handler set from another. An
     embedder that serves from a worker thread ends the listeners itself."""

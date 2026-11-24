@@ -72,7 +72,7 @@ async def test_the_reader_of_an_engine_reads_the_runner_list_whatever_tenant_its
     """The reader an engine is built with, from its settings alone. The clearinghouse would say the key
     is another tenant's than ``LPB_CLEARINGHOUSE_TENANT_ID``, and the reader does not ask: the list is
     the same for every tenant, so each refresh sends the key, reads the list and reads no grant. What
-    that key cannot do is pay (``test_clearinghouse_key_of_another_tenant.py``)."""
+    that key is refused is a tenant admin's traffic (``test_clearinghouse_key_of_another_tenant.py``)."""
     async with discovery_server("/v1/clearinghouse/discovery", key_of="grant_8") as (url, seen):
         async with parts_of(with_clearinghouse(url)) as parts:
             for _ in range(2):

@@ -289,8 +289,8 @@ async def test_cost_sync_with_another_tenants_key_stores_nothing(
 async def test_the_runner_list_is_read_with_the_key_and_asks_nothing_of_the_grant(ports: Ports) -> None:
     """The runner list is the same for every tenant, so whose key the reader carries changes nothing of
     it: the reader sends the key, which the route needs, and does not read the key's grant first. With
-    another tenant's key the engine still has a catalog, and every payment request is refused (John,
-    #185 review; it asked first, and a wrong key left the engine with no catalog)."""
+    another tenant's key the engine still has a catalog, and the key is refused everything else it is
+    sent with (John, #185 review; the reader asked first, and a wrong key left the engine no catalog)."""
     await given_another_tenants_key(ports)
     assert ports.wire is not None
     client = httpx.AsyncClient(transport=ports.wire._client._transport)

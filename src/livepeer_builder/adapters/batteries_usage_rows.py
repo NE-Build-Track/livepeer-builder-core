@@ -50,17 +50,9 @@ def page_past_the_decoder(content: bytes) -> tuple[dict[str, Any], list[SetAside
         return None
     marker = secrets.token_hex(16)  # a key no item has: it marks where an item was cut out
     kept, cut = _without_items_past_the_decoder(text, marker)
-    objects: list[list[tuple[str, Any]]] = [[]]  # the keys of the object decoded last: the page's own
-
-    def keep_last(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        objects[0] = pairs
-        return dict(pairs)
-
     try:
-        body = json.loads(kept, object_pairs_hook=keep_last) if cut else None
+        body = loads_naming_each_key_once(kept) if cut else None
     except (ValueError, RecursionError):
-        return None
-    if isinstance(body, dict) and len(body) != len(objects[0]):  # a key named twice
         return None
     items = body.get("items") if isinstance(body, dict) else None
     if not isinstance(body, dict) or not isinstance(items, list):
@@ -72,6 +64,27 @@ def page_past_the_decoder(content: bytes) -> tuple[dict[str, Any], list[SetAside
     return body, [
         set_aside_record("unreadable_row", item, row_id=None, fee_eth=None, fee_usd=None) for item in cut
     ]
+
+
+class KeyNamedTwice(ValueError):
+    """An answer whose own object names a key twice."""
+
+
+def loads_naming_each_key_once(text: str | bytes) -> Any:
+    """``json.loads``, refusing an answer whose own object names a key twice (``KeyNamedTwice``). The
+    decoder keeps the last of the two and says nothing: of a page that names ``items`` twice, the rows
+    of the first list are gone and its cursor is followed past them (#189 review). Only the answer's own
+    object is judged. An item that repeats a key is read as the decoder reads it, and never fails its page."""
+    last: list[list[tuple[str, Any]]] = [[]]  # the keys of the object decoded last, which is the outermost
+
+    def keep(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        last[0] = pairs
+        return dict(pairs)
+
+    value = json.loads(text, object_pairs_hook=keep)
+    if isinstance(value, dict) and len(value) != len(last[0]):
+        raise KeyNamedTwice("an object that names a key twice")
+    return value
 
 
 def _without_items_past_the_decoder(text: str, marker: str) -> tuple[str, list[str]]:

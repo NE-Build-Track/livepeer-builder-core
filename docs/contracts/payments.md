@@ -220,8 +220,8 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   `set_aside`, with at most 2000 characters of its content as `raw`, and the page's other rows are in
   `items`. The clearinghouse records and logs nothing of such a row: its reader does, as cost sync does
   for its own page. A page that is not JSON, or whose `items` or `next_cursor` the engine cannot read,
-  is 502. So is a page with such an item whose own object names a key twice: read with the last of the
-  two, the rows of a first `items` list would be dropped and the cursor followed past them.
+  is 502. So is a page whose own object names a key twice, with such an item or not: read with the last
+  of the two, the rows of a first `items` list would be dropped and the cursor followed past them.
 - **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
   refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
   Batteries' is about 135 for a grant id it issues.
@@ -735,7 +735,9 @@ left unfinished; a replay of a finished command is not a resume.
   or a signer's error body has (`BODY_LIMIT`, #158).
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
   answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
-  nested deeper than the decoder reads (that one answered 500) is none. A list page must have `items` as
+  nested deeper than the decoder reads (that one answered 500) is none, and so is an object that names
+  one of its own keys twice (#158: the decoder keeps the last, and a page that named `items` twice lost
+  the rows of its first list). A list page must have `items` as
   a list of JSON objects and `next_cursor` as a string, or no `next_cursor`. Anything else is a
   `ProviderError`: HTTP 502 from the REST service, `invalid_answer` as `cost_sync_error`, and an unknown
   outcome to the ledger, so the reference stays held. Before, a 2xx that was not a JSON object answered

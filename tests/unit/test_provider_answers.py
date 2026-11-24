@@ -56,6 +56,9 @@ NOT_AN_OBJECT = {
     "a number": b"7",
     "not UTF-8": b"\xff\xfe",
     "too deep": b"[" * 100_000 + b"]" * 100_000,
+    # The decoder keeps the last of a repeated key: which id, which status, which list was meant?
+    "an object that names a key twice": b'{"id": "a1", "id": "a2", "status": "active", "items": []}',
+    "a page that names its items twice": b'{"items": [{"id": "u1"}], "items": [], "next_cursor": "p2"}',
 }
 CALLS: dict[str, Callable[[BatteriesClient], Awaitable[object]]] = {
     "create_key_for_grant": lambda client: client.create_key_for_grant("g1", "alice", USD, "idem-1"),

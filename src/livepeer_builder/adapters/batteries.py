@@ -19,7 +19,12 @@ import httpx
 from pydantic import SecretStr
 
 from livepeer_builder.adapters.batteries_escrow import read_escrow_report
-from livepeer_builder.adapters.batteries_usage_rows import page_past_the_decoder, read_usage_item
+from livepeer_builder.adapters.batteries_usage_rows import (
+    KeyNamedTwice,
+    loads_naming_each_key_once,
+    page_past_the_decoder,
+    read_usage_item,
+)
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
@@ -317,7 +322,11 @@ def json_value(response: httpx.Response) -> object:
     if not response.is_success:
         raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
     try:
-        return response.json()
+        return loads_naming_each_key_once(response.content)
+    except KeyNamedTwice:  # the decoder would keep the last, and drop what the first held (#189 review)
+        raise ProviderError(
+            response.status_code, "Batteries answered with a JSON object that names a key twice"
+        ) from None
     except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
         return None
 

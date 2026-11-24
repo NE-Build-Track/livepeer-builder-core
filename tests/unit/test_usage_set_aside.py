@@ -544,6 +544,9 @@ STILL_NO_PAGE = {
     + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p2"}',
     "a cursor named twice": '{"items": [' + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p1", '
     + '"next_cursor": "p2"}',
+    # and with no item past the decoder, where the decoder took the page and the first list's row was gone
+    "items named twice, and nothing past the decoder": '{"items": [' + json.dumps(item("u-good"))
+    + '], "items": [], "next_cursor": "p2"}',
 }  # fmt: skip
 
 

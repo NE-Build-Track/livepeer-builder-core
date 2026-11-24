@@ -5,13 +5,13 @@ The port fakes import contracts, errors and protocols only; supply them through
 over them (in-memory SQLite), and ``FakeEngine`` scripts the actor API at the engine level.
 """
 
+from livepeer_builder.testing.clock import FixedClock
 from livepeer_builder.testing.discovery import FAKE_DISCOVERY_URL, FakeDiscoveryService, serve
 from livepeer_builder.testing.engine import make_engine
 from livepeer_builder.testing.fake_engine import FakeEngine
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.fakes import (
     FakeAllocationManager,
-    FixedClock,
     MemorySecretStore,
     ScriptedStream,
     ScriptedStreamTransport,

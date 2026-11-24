@@ -16,7 +16,8 @@ from pydantic import (
     model_validator,
 )
 
-from livepeer_builder.contracts import Contract, Currency, Operation, Role
+from livepeer_builder.contracts import Contract, Currency, Role
+from livepeer_builder.contracts.access import reserved_scope
 from livepeer_builder.contracts.common import GrantId
 
 ENV_PREFIX = "LPB_"
@@ -30,11 +31,6 @@ _CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_ten
 _BATTERIES = ("batteries_url", "batteries_token", "batteries_grants_token")
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
-# Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
-RESERVED_SCOPES = frozenset(
-    {"openid", "profile", "email", "address", "phone", "offline_access"}
-    | {operation.value for operation in Operation}
-)
 # JWT signatures the engine accepts: asymmetric only, so a verification key can never sign (D45).
 ASYMMETRIC_ALGORITHMS = frozenset(
     {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
@@ -46,12 +42,6 @@ _ORDINARY_SCOPE = (
     "a scope ordinary tokens carry (an operation's name or a standard scope, as written or after "
     "LPB_JWT_SCOPE_PREFIX)"
 )
-
-
-def _reserved(scope: str, prefix: str) -> bool:
-    """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
-    with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
-    return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
 
 
 def _env(name: str) -> str:
@@ -85,8 +75,7 @@ class EngineSettings(Contract):
     auto_migrate: bool = True  # production can set False and run `lpb migrate` explicitly
     retention_jobs_days: int | None = Field(default=None, ge=1)  # None keeps completed jobs forever
     retention_usage_days: int | None = Field(default=None, ge=1)  # None keeps cached usage rows forever
-    # A stored async result's bytes go after this many days; the job keeps its record (D69). None keeps
-    # them as long as the job.
+    # a stored async result's bytes go after this many days (D69); None keeps them as long as the job
     retention_results_days: int | None = Field(default=7, ge=1)
     retention_interval_s: float = Field(default=6 * 3600, gt=0)  # how often the retention purge runs
 
@@ -420,10 +409,10 @@ class EngineSettings(Contract):
                     raise ValueError(
                         f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
                     )
-        if self.jwt_admin_scope is not None and _reserved(self.jwt_admin_scope, self.jwt_scope_prefix):
+        if self.jwt_admin_scope is not None and reserved_scope(self.jwt_admin_scope, self.jwt_scope_prefix):
             raise ValueError(f"jwt_admin_scope is {_ORDINARY_SCOPE}, so every user would be an admin")
         read = self.jwt_admin_read_scope
-        if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
+        if read is not None and (reserved_scope(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
             raise ValueError(
                 f"jwt_admin_read_scope is {_ORDINARY_SCOPE}, or the admin scope, so it would not mark a "
                 "read-only admin"

@@ -4,7 +4,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from pydantic import SecretStr
@@ -27,19 +27,6 @@ from livepeer_builder.contracts import (
 from livepeer_builder.errors import NotFound, ProviderError, RunnerCallError
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.testing.wallet import FakeEscrow, FakeSignerProbe
-
-
-class FixedClock:
-    """A controllable clock. ``advance`` moves it forward."""
-
-    def __init__(self, start: datetime | None = None) -> None:
-        self._now = start or datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
-
-    def now(self) -> datetime:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += timedelta(seconds=seconds)
 
 
 def runner(

@@ -31,6 +31,20 @@ DEFAULT_ACTOR_PERMISSIONS: frozenset[str] = frozenset(
     {Operation.DISCOVER, Operation.JOBS_RUN, Operation.JOBS_READ, Operation.COSTS_READ}
 )
 
+# Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
+RESERVED_SCOPES = frozenset(
+    {"openid", "profile", "email", "address", "phone", "offline_access"}
+    | {operation.value for operation in Operation}
+)
+
+
+def reserved_scope(scope: str, prefix: str) -> bool:
+    """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
+    with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds. The settings
+    refuse one as an admin scope (``config.py``)."""
+    return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
+
+
 # clearinghouse_admin: an admin of every tenant. tenant_admin: an admin of one tenant, its own (D83, #165).
 # auditor: a read-only admin of one tenant (D46)
 CredentialKind = Literal["actor", "clearinghouse_admin", "tenant_admin", "auditor", "service"]

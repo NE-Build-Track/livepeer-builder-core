@@ -14,13 +14,9 @@ from livepeer_builder.config import EngineSettings, generate_secret_key
 from livepeer_builder.contracts import Runner
 from livepeer_builder.runtime.assembly import UNSET, Decorate, EngineParts, EngineSupply
 from livepeer_builder.runtime.engine import BuilderEngine
+from livepeer_builder.testing.clock import FixedClock
 from livepeer_builder.testing.discovery import FAKE_DISCOVERY_URL, serve
-from livepeer_builder.testing.fakes import (
-    FakeAllocationManager,
-    FixedClock,
-    ScriptedStreamTransport,
-    runner,
-)
+from livepeer_builder.testing.fakes import FakeAllocationManager, ScriptedStreamTransport, runner
 from livepeer_builder.testing.usage import FakeUsageSource
 
 MEMORY_URL = "sqlite+aiosqlite:///:memory:"

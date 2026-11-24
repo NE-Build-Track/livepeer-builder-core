@@ -13,11 +13,18 @@ never reaches a store. Nothing is read from the text of a reference (#186 review
 
 Two kinds of command mint a key: the admin ones, which keep it in the configured store, and the delivering
 ones. A record notes which kind began it, and only that kind resumes it (``PaymentKeys.resumes``).
+
+Two kinds of provider (``OneKeyPerAllocation``). Batteries keeps every key live until it is revoked, so
+a rotation revokes the old key and an overtaken one revokes its own. A provider that keeps one key for
+an allocation, a payment clearinghouse, ended them itself, and its own order of two rotations decides
+which key the engine keeps (``PaymentKeys.overtaken_rotation``).
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from pydantic import SecretStr
 
 from livepeer_builder.contracts import (
     CREDENTIAL_CUSTODIES,
@@ -28,7 +35,12 @@ from livepeer_builder.contracts import (
     SecretRef,
 )
 from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound, OperationConflict
-from livepeer_builder.protocols import AllocationManager, SecretStore, WritableSecretStore
+from livepeer_builder.protocols import (
+    AllocationManager,
+    OneKeyPerAllocation,
+    SecretStore,
+    WritableSecretStore,
+)
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
@@ -37,6 +49,10 @@ BEGAN_ON = "allocation_id"  # in a rotation's record: the allocation the actor h
 PREVIOUS_CUSTODY = "previous_credential_custody"  # in a rotation's record: who held the key it began from
 _NEW_CUSTODY = "new_secret_custody"  # in a record: who holds the secret ``new_secret_ref`` names
 _LOST_TO = "lost_to_api_key_id"  # in a rotation's record: the key another rotation gave the actor first
+# In a rotation's record, noted before it points the actor at its key over another rotation's ended one:
+# that key's secret and who holds it, so a resume drops it (``PaymentKeys.overtaken_rotation``).
+_SUPERSEDED = "superseded_secret_ref"
+_SUPERSEDED_CUSTODY = "superseded_credential_custody"
 # In a record, from the moment it begins: who the command that began it keeps the key with, which is the
 # kind of command it is. ``secret_store``: ``allot`` or ``rotate_payment_key``. ``work_engine``: their
 # delivering twins.
@@ -230,6 +246,31 @@ class PaymentKeys:
             "that allocation's key under a new reference"
         )
 
+    async def rotation_key(
+        self,
+        run: RunningOperation,
+        manager: AllocationManager,
+        actor: ActorAllocation,
+        name: str,
+        sent_as: str,
+    ) -> NewAllocationKey:
+        """The key of the rotation's provider call (``sent_as``, its idempotency key). Batteries replays
+        it to a resume, so it is asked each time. A provider that hands a key over once
+        (``OneKeyPerAllocation``) answers the repeat of a finished command without it: when this record
+        notes the stored key of that very call, the engine holds it, and it is read back from the store
+        and not asked for. A noted secret that is gone was dropped by this rotation as it lost: the
+        provider is asked, and says so."""
+        if isinstance(manager, OneKeyPerAllocation) and run.context.get("new_secret_sent_as") == sent_as:
+            noted = recorded_secret(run)
+            if noted.custody == "secret_store":
+                try:
+                    secret = SecretStr(await self._retiring.get(noted.ref))
+                except NotFound:
+                    return await manager.create_key(actor.allocation_id, name, sent_as)
+                key_id = run.context["new_secret_key_id"]
+                return NewAllocationKey(allocation_id=actor.allocation_id, api_key_id=key_id, secret=secret)
+        return await manager.create_key(actor.allocation_id, name, sent_as)
+
     async def rotated(
         self,
         run: RunningOperation,
@@ -241,12 +282,17 @@ class PaymentKeys:
         """Store the rotation's key (``key``, which the provider replays on a resume), point ``actor`` at
         it and retire the key the rotation began from, which the record noted. The new key is written
         only over that old key: when another rotation gave the actor a key meanwhile, this one writes
-        nothing, revokes its own key and is refused, ``InvalidRequest``."""
+        nothing, revokes its own key and is refused, ``InvalidRequest``. With a provider that keeps one
+        key for an allocation, its order decides instead (``overtaken_rotation``), and no key is revoked
+        by its id."""
         previous_key = run.context["previous_api_key_id"]
+        ends_keys_itself = isinstance(manager, OneKeyPerAllocation)
         if actor.api_key_id != key.api_key_id:  # not stored yet
             new = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
             actor = await self._pointed_at(actor, key.api_key_id, new, previous_key)
-            if actor.api_key_id != key.api_key_id:
+            if actor.api_key_id != key.api_key_id and isinstance(manager, OneKeyPerAllocation):
+                actor = await self.overtaken_rotation(run, manager, actor, key, new)
+            elif actor.api_key_id != key.api_key_id:
                 # Another rotation's key: this one wrote nothing, so its own key must not stay live. The
                 # revoke comes first: a key still live keeps its secret stored, and a revoke that fails
                 # leaves the record open for a repeat, which gets the same key replayed and comes back here.
@@ -256,9 +302,14 @@ class PaymentKeys:
             # A resume after this rotation pointed the actor at its key: the answer the first run never
             # gave still carries the key, which the provider replayed.
             self._redeliver(HeldSecret(actor.secret_ref, actor.credential_custody), key)
+        if _SUPERSEDED in run.context and run.context[_SUPERSEDED] != actor.secret_ref.ref:
+            # The ended key this rotation replaced on the actor, noted before that write: its secret goes.
+            ended = SecretRef(ref=run.context[_SUPERSEDED])
+            await self._drop(HeldSecret(ended, _custody(run.context, _SUPERSEDED_CUSTODY)))
         # The key this rotation began from is revoked in either case, unless the actor holds it: when this
         # rotation stored its key, failed here and was then replaced by a newer one, nothing else revokes it.
-        if previous_key not in (key.api_key_id, actor.api_key_id):  # never the live key (B1)
+        # A provider that keeps one key for an allocation ended it when it minted this one.
+        if previous_key not in (key.api_key_id, actor.api_key_id) and not ends_keys_itself:  # never live (B1)
             await manager.revoke_key(previous_key)  # repeat-safe upstream
         previous = HeldSecret(
             SecretRef(ref=run.context["previous_secret_ref"]), _custody(run.context, PREVIOUS_CUSTODY)
@@ -269,6 +320,34 @@ class PaymentKeys:
             # Noted, and never freed: under a free reference the provider would replay the revoked key.
             await run.remember(**{_LOST_TO: actor.api_key_id})
             raise _lost_rotation(actor.actor_id, actor.api_key_id)
+        return actor
+
+    async def overtaken_rotation(
+        self,
+        run: RunningOperation,
+        provider: OneKeyPerAllocation,
+        actor: ActorAllocation,
+        key: NewAllocationKey,
+        new: HeldSecret,
+    ) -> ActorAllocation:
+        """The actor after a rotation that another one overtook in the engine, at a provider that keeps
+        one key for an allocation: the provider's order decides which key the engine keeps (Mike, 23
+        November 2026). ``actor`` holds the other rotation's key; ``key`` is this one's, stored as ``new``.
+
+        While the allocation takes this rotation's key, the provider ran it last: the actor's key is
+        ended, and the actor is pointed at this one, over the key it holds at that moment and no other.
+        That key's secret is noted first, so a resume drops it (``rotated``). A third rotation that wrote
+        the actor in between is asked about again. When the allocation does not take this key, the
+        provider ended it: nothing is live to keep, and its secret is dropped. Nothing is ever minted
+        or revoked here, and every step is safe to repeat."""
+        while actor.api_key_id != key.api_key_id and await provider.holds_key(
+            actor.allocation_id, key.api_key_id
+        ):
+            ended = {_SUPERSEDED: actor.secret_ref.ref, _SUPERSEDED_CUSTODY: actor.credential_custody}
+            await run.remember(**ended)
+            actor = await self._pointed_at(actor, key.api_key_id, new, actor.api_key_id)
+        if actor.api_key_id != key.api_key_id:
+            await self._drop(new)
         return actor
 
     async def _pointed_at(

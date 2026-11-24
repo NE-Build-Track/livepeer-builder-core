@@ -33,6 +33,7 @@ from tests.store.test_async_restart import PaysThenWaits, until
 from tests.unit.test_listener_serving import (  # noqa: F401 - the two fixtures are used by name
     both_listen,
     free_port,
+    lifespan_tasks,
     listening,
     signals,
     the_root_logger_as_it_was,
@@ -44,8 +45,10 @@ QUEUED = JobRequest(app="example/echo", mode="async", payload={"n": 1})
 
 
 def engine_tasks() -> list[str]:
-    """The tasks the engine, its worker and ``serve()`` name, while one is still running."""
-    return sorted(task.get_name() for task in asyncio.all_tasks() if task.get_name().startswith("lpb-"))
+    """The tasks the engine, its worker and ``serve()`` name, while one is still running, and uvicorn's
+    task for an app's lifespan, which has no name of its own: a forced exit used to leave it waiting."""
+    named = [task.get_name() for task in asyncio.all_tasks() if task.get_name().startswith("lpb-")]
+    return sorted(named + ["an app's lifespan" for _ in lifespan_tasks()])
 
 
 class Served:

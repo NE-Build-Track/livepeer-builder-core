@@ -1,5 +1,6 @@
 """Grants at the payment provider: the idempotency keys the engine sends Batteries, the tag that finds
-a grant the engine created (D57), and the provider call that allots an allocation from a grant.
+a grant the engine created (D57), the provider call that allots an allocation from a grant, and the
+allocation manager a command about one actor is sent to.
 
 A grant is a tenant's prepaid budget, and its id is the tenant's id (D83). ``tenants.py`` holds what an
 admin does to a tenant; ``payments.py`` allots and tops up one actor's allocation from the grant.
@@ -10,7 +11,7 @@ import hashlib
 
 from livepeer_builder.contracts import AllotRequest, GrantRecord, NewAllocationKey
 from livepeer_builder.errors import NotFound, ProviderError
-from livepeer_builder.protocols import AllocationManager
+from livepeer_builder.protocols import AllocationManager, AllocationsByActor, ReadyBeforeCommands
 from livepeer_builder.services.ledger import RunningOperation
 
 GRANT_TAG = "lpb_operation"  # the metadata key that tags a grant the engine created (D57, Q5)
@@ -20,6 +21,24 @@ def idempotency_key(engine_id: str, operation: str, step: str) -> str:
     """base64url(sha256(engine_id:operation:step)): 43 chars, inside Batteries' 256-char limit."""
     digest = hashlib.sha256(f"{engine_id}:{operation}:{step}".encode()).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+async def manager_for_command(
+    manager: AllocationManager, tenant_id: str, actor_id: str, operation_ref: str | None = None
+) -> AllocationManager:
+    """The manager a command about one actor's allocation is sent to, made ready for it.
+
+    Awaited before the command's record is begun. A manager that must learn something of its provider
+    first learns it here (``ReadyBeforeCommands``, #165), outside the ledger's budget, which is sized for
+    the command's own calls: its error refuses the command with no record and its reference free. A
+    provider that names an actor and not an allocation id, as a payment clearinghouse does, is then told
+    which (``AllocationsByActor``, #168), and an allotment's ``operation_ref`` with it. Batteries' client
+    has neither, and is returned as it is."""
+    if isinstance(manager, ReadyBeforeCommands):
+        await manager.ready_for_commands()
+    if isinstance(manager, AllocationsByActor):
+        return manager.for_actor(tenant_id, actor_id, operation_ref)
+    return manager
 
 
 async def allotted_from_grant(

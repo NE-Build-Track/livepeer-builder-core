@@ -268,7 +268,19 @@ Each pull request ticks its own line here in the same change.
   handed key dropped. The discovery reader asks the same question before it reads the clearinghouse's
   runner list. The read is made at the first request and not at start, so an engine still starts with
   its clearinghouse unreachable. `lpb payments check` fails the grant probe and the usage probe for
-  such a key. The stale-window rule is unchanged: the one read more comes before a command's own calls.
+  such a key. Source: the review of #185; the choices are for Mike's review.
+- **23 November 2026, a tenant's routes from the credential: the tenant read and the ledger's budget.**
+  The second review of #185 found that the read of the key's grant, made inside the first command of a
+  process, was a fourth clearinghouse call in a budget sized for three: a first top-up wrote at its
+  third call, and an overtaken first rotation was cut short at the read that decides which key the
+  engine keeps. Built: the payments service asks the allocation manager to be ready before it begins a
+  command's record (the optional protocol `ReadyBeforeCommands`, which the remote manager has and
+  Batteries' client does not), so the read is made before the ledger's clock starts and before the
+  reference is claimed. A wrong tenant or an unreachable clearinghouse there leaves no record. The
+  six-timeouts rule, its three-call argument and the 20-second default stand as Mike confirmed them;
+  `config.py` is not touched. Built where the finding is silent: the repeat of a finished command is
+  made ready too, so in a process that has not yet read the grant it costs one read and fails while the
+  clearinghouse is unreachable; a manager called through the port alone still reads the grant itself.
   Source: the review of #185; the choices are for Mike's review.
 - **23 November 2026, a tenant's routes from the credential, the runbook.** The paid proofs of 23
   November were run on P8's branch, where a tenant's admin called the paths that name its tenant on the

@@ -15,6 +15,7 @@ and runs no job. ``open_ports("remote", house=...)`` puts another engine where t
 be: a test of what an enterprise's engine meets there.
 """
 
+import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
@@ -145,10 +146,15 @@ class Lossy(httpx.AsyncBaseTransport):
         # answered with this id in place of the key's tenant's. No engine does this; a test of what the
         # adapters make of a later answer for another tenant sets it.
         self.grant_says: str | None = None
+        # How long the clearinghouse takes over a request, in seconds, when a test says: its answer is
+        # held back that long.
+        self.takes: Callable[[httpx.Request], float] | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self._requests.append(request)
         response = await self._app.handle_async_request(request)
+        if self.takes is not None:
+            await asyncio.sleep(self.takes(request))
         if self.grant_says and request.url.path == "/v1/clearinghouse/grant" and response.is_success:
             said = json.loads(await response.aread()) | {"tenant_id": self.grant_says}
             response = httpx.Response(response.status_code, json=said, request=request)

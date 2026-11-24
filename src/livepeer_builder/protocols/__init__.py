@@ -298,6 +298,25 @@ class OneKeyPerAllocation(Protocol):
         ...
 
 
+@runtime_checkable
+class ReadyBeforeCommands(Protocol):
+    """Optional for an allocation manager: what it must learn of its provider before any command (#165).
+
+    A command runs on the operation ledger inside half of ``LPB_OPERATION_STALE_S``, and that budget is
+    sized for the calls the command itself makes at the provider. A manager that must first learn
+    something that is the same for every command has this. ``PaymentsService`` awaits
+    ``ready_for_commands`` before it begins a command's record: the call spends none of the command's
+    budget, and an error it raises refuses the command with no record begun and its reference free. It
+    is awaited before every command, so it answers from what it has learned once it has learned it.
+
+    ``ClearinghouseAllocations`` has it: whose tenant admin key the engine holds, which it reads from
+    the clearinghouse once in a process. ``BatteriesClient`` does not, and nothing is awaited for it or
+    for a supplied manager without it. A manager is never relied on to have been asked: one whose
+    command arrives unready must still be safe by itself."""
+
+    async def ready_for_commands(self) -> None: ...
+
+
 class UsageSource(Protocol):
     """Pages the provider's usage rows (Batteries ``GET /v1/usage``). Raises CursorMismatch."""
 

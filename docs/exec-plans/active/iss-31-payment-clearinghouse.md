@@ -11,7 +11,7 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P4 are merged into `releases/m4`. P5 is built and in review. P6 to P8 follow in
+- **Progress:** P1 to P5 are merged into `releases/m4`. P6 is built and in review. P7 and P8 follow in
   order.
 
 ## Goal
@@ -52,12 +52,12 @@ Funded evidence for both configurations is ISS-36, not this plan.
   on 20 November 2026: [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
 - [x] **P4 (#165).** Tenants at the clearinghouse. Merged into `releases/m4` on 20 November 2026:
   [#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179).
-- [ ] **P5 (#166).** What an enterprise's engine needs from the clearinghouse: each actor's payment key,
-  handed over once, the tenant's usage and the runner list. Built and in review:
-  [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180), with
-  [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186) merged into its branch on 23
-  November 2026.
-- [ ] **P6 (#167).** A public and a private listener.
+- [x] **P5 (#166).** What an enterprise's engine needs from the clearinghouse: each actor's payment key,
+  handed over once, the tenant's usage and the runner list. Merged into `releases/m4` on 23 November
+  2026: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180), with
+  [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186).
+- [ ] **P6 (#167).** A public and a private listener. Built and in review:
+  [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
 - [ ] **P7 (#168).** Remote adapters for the payment ports that reach the clearinghouse, the payment keys
   an enterprise's engine is handed, and `lpb payments check`.
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
@@ -100,6 +100,14 @@ Each pull request ticks its own line here in the same change.
   reachable by enterprise engines and keeps its Batteries authorization webhook configured, which is now
   the only check at signing. There is no payments route. This replaces the same day's earlier amendment
   of D87 point 3. Source: Mike.
+- **19 November 2026, P6.** Two listeners are a deployment's choice until the role setting (#169): with
+  `LPB_HTTP_PRIVATE_PORT` unset one listener serves everything, so self-hosted payments is unchanged.
+  The private listener takes a clearinghouse admin credential only, as the guide's routes say ("for a
+  `clearinghouse_admin` only"): a tenant's admin is refused there. The wallet report converts nothing
+  and computes no margin. "Unspent" is each grant's total less what its allocations spent, summed for
+  each currency over every grant; the deposit and reserve are Batteries' own on-chain listener's, which
+  a deployment must turn on; "ready" is the signer's identity call. Source: D82, D84 and the guide; where
+  they are silent the stricter or the plainer reading was built, for Mike's review.
 - **23 November 2026, D87 point 1.** A resumed allotment or rotation hands the key over whenever
   Batteries returns it again: Batteries replays the original success, the secret included, for a
   matching idempotency key, and never expires it. A repeat of a finished command answers without the key
@@ -113,3 +121,16 @@ Each pull request ticks its own line here in the same change.
 - **23 November 2026, P5.** [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186),
   John's code change for the amendment of 19 November, is merged into P5's branch. The hand-written
   documents and the comments in code follow it in one sweep.
+- **23 November 2026, P6.** Neither listener carries a signer path: a clearinghouse serves none (#167,
+  as Mike amended it on 19 November 2026). Every listener's app keeps each allocation's key with the
+  engine (`deliver_allocation_keys=False`), on one listener or two: there is no role setting yet, and
+  the engine behind a listener runs jobs. Handing keys to the caller is the `clearinghouse` role's
+  (#169). Source: the amended ticket; the `False` on both listeners is for Mike's review.
+- **23 November 2026, P6.** Cancelling `serve()` with two listeners is a forced exit, as a listener
+  that ended by itself is: both hang up on their open connections, and the task ends with its
+  cancellation. A first SIGINT or SIGTERM still ends them in order. Source: Mike, after review of #181.
+- **23 November 2026, P6.** The wallet report's unspent grants are exact. A grant counts as its
+  unallocated balance and what each of its allocations still holds, an overdrawn allocation as nothing.
+  `TenantGrant` gains the required field `allocated_unspent` for it. This replaces "each grant's total
+  less what its allocations spent" in the entry of 19 November, which read too low when an allocation
+  was overdrawn and the grant had a balance left to allot. Source: Mike, after review of #181.

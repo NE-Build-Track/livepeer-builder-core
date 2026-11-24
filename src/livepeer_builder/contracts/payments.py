@@ -86,7 +86,10 @@ class TenantGrant(Contract):
     """A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's
     id. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation
     larger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked
-    ones included (#166)."""
+    ones included (#166). ``allocated_unspent`` is what its allocations still hold (#167): for each one,
+    what it was allotted less what it has spent, and nothing for one that has spent more, so an overdrawn
+    allocation takes nothing off another's. A revoked allocation holds nothing: what it had not spent is
+    back in ``unallocated``. The two together are what the tenant may still spend."""
 
     tenant_id: str
     name: str
@@ -94,6 +97,7 @@ class TenantGrant(Contract):
     total: Money
     unallocated: Money
     spent: Money
+    allocated_unspent: Money
 
 
 class OnboardedTenant(Contract):
@@ -112,6 +116,63 @@ class TenantState(Contract):
 
     tenant_id: str
     status: TenantStatus
+
+
+class EscrowAccount(Contract):
+    """One on-chain escrow account of the clearinghouse's wallet, as the payment provider reports it
+    (#167): the TicketBroker deposit and reserve of one sender on one chain. Both are in ETH, exact to
+    the wei. They are what the provider's on-chain listener has confirmed through
+    ``confirmed_through_block``, not the chain's head: the engine reads no chain itself.
+
+    ``sender`` is the wallet's public address, which the provider already reports. No key material, no
+    keystore path and no RPC address is here."""
+
+    chain_id: str
+    contract_address: str
+    sender: str
+    deposit: Money
+    reserve: Money
+    confirmed_through_block: int  # -1: the provider's first snapshot, from before the chain's first block
+
+
+class UnspentGrants(Contract):
+    """What the tenants whose grants are in one currency may still spend (#167): for every grant the
+    provider holds in that currency, whatever its status, what is not yet allotted (``unallocated``) and
+    what its allocations still hold (``allocated_unspent``), neither counted below zero. It is not the
+    grant's total less what was spent: an allocation that spent more than it held takes nothing off the
+    rest. ``grants`` is how many grants were summed. Nothing is converted: a deployment with grants in two
+    currencies has two of these."""
+
+    unspent: Money
+    grants: int
+
+
+# Why a signer is not ready. "not_configured": the engine has no signer address. "unavailable": the
+# signer could not be reached, timed out or answered a 5xx. "no_identity": it answered, but not with its
+# address and a signature.
+SignerNotReady = Literal["not_configured", "unavailable", "no_identity"]
+
+
+class SignerReadiness(Contract):
+    """Whether the signer answered its identity call just now (#167): the unauthenticated call every
+    payment begins with. ``ready`` says the signer is reachable where the engine calls it and answered
+    with an address and a signature, which the engine does not check. It does not say the wallet is
+    funded, that the signer's price feed or event stream is up, or that it can reach the payment
+    provider: those are the signer's own ``/readyz``, on a listener the engine is not given."""
+
+    ready: bool
+    reason: SignerNotReady | None = None  # None when ready
+
+
+class WalletReport(Contract):
+    """What a clearinghouse admin watches the wallet by (D82, #167): the deposit and reserve, the total
+    of unspent grants, and the signer's readiness. Each amount is in its own currency. Nothing is
+    converted between ETH and a grant's currency, and no margin is computed: the report states, and a
+    person judges."""
+
+    escrow: tuple[EscrowAccount, ...]  # empty: the provider follows no escrow account (its listener is off)
+    unspent_grants: tuple[UnspentGrants, ...]  # one for each currency a grant is in, by currency
+    signer: SignerReadiness
 
 
 class ActorAllocation(Contract):

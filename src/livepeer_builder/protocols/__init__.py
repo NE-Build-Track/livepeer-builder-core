@@ -33,6 +33,8 @@ from livepeer_builder.contracts import (
     UsagePage,
 )
 from livepeer_builder.protocols.clearinghouse import DiscoveryDocumentSource as DiscoveryDocumentSource
+from livepeer_builder.protocols.clearinghouse import EscrowSource as EscrowSource
+from livepeer_builder.protocols.clearinghouse import SignerProbe as SignerProbe
 from livepeer_builder.protocols.clearinghouse import TenantUsageSource as TenantUsageSource
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo
 from livepeer_builder.protocols.conditional_writes import UsageOnceRepo as UsageOnceRepo
@@ -219,7 +221,7 @@ class AllocationManager(Protocol):
         """Create a grant carrying ``metadata``, which ``list_grants`` returns (the engine's tag, D57)."""
         ...
 
-    async def read_grant(self, grant_id: str) -> TenantGrant: ...  # total, unallocated balance, status
+    async def read_grant(self, grant_id: str) -> TenantGrant: ...  # its balances, as TenantGrant says
 
     async def grant_balances(self) -> list[TenantGrant]: ...  # every grant, oldest first
 

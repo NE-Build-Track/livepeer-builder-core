@@ -9,8 +9,11 @@ a lost signer reply would skip (docs/references/sdk-gateway.md)."""
 import asyncio
 import contextlib
 import json
+import logging
 
 import httpx
+from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
+from livepeer_gateway.remote_signer import get_signer_info
 
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_address import runner_address
@@ -20,9 +23,15 @@ from livepeer_builder.adapters.runner_call import (
     SdkRunnerStream,
     json_object,
 )
-from livepeer_builder.contracts import JobRequest, Runner, RunnerReply
+from livepeer_builder.adapters.signer_failures import unavailable_before_signing
+from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.protocols import OnSigned
+
+_LOG = logging.getLogger(__name__)
+# The SDK's identity call without its cache, which remembers a signer for the life of the process: a
+# probe has to ask the signer, not the memory of one (tests/unit/test_signer_probe.py).
+_ask_signer_identity = get_signer_info.__wrapped__
 
 
 def memory_discovery_client(body: bytes) -> httpx.AsyncClient:
@@ -110,6 +119,32 @@ class SdkRunnerTransport:
     def pays(self) -> bool:
         """A credential pays the runner only through a signer; with none, every call is unpaid."""
         return self._signer_url is not None
+
+    async def signer_readiness(self) -> SignerReadiness:
+        """Whether the signer answers its identity call now (``SignerProbe``, #167): the call every paid
+        job begins with, at the root of the signer address, as the SDK makes it. It carries no
+        credential, signs no payment, and its answer (the wallet's address and a signature) is not kept.
+        The SDK's own words for a failure hold the signer address and the signer's body, so only the
+        kind of failure is logged."""
+        if self._signer_url is None:
+            return SignerReadiness(ready=False, reason="not_configured")
+        try:
+            await _ask_signer_identity(self._signer_url)
+        except (LivepeerGatewayError, ValueError) as error:  # ValueError: an address the SDK cannot call
+            answered = isinstance(error, LivepeerGatewayError) and not unavailable_before_signing(error)
+            reason: SignerNotReady = "no_identity" if answered else "unavailable"
+            status = error.status_code if isinstance(error, LivepeerHTTPError) else None
+            _LOG.warning(
+                "signer not ready",
+                extra={
+                    "event": "signer.not_ready",
+                    "reason": reason,
+                    "status_code": status,
+                    "error": type(error).__name__,
+                },
+            )
+            return SignerReadiness(ready=False, reason=reason)
+        return SignerReadiness(ready=True)
 
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents

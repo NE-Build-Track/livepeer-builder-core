@@ -3,8 +3,9 @@ tenant admin key it calls them with (#165).
 
 The routes name no tenant: the clearinghouse takes it from the tenant admin key (D87 point 3, as amended
 on 19 November 2026). Two things follow, and both are settled here, for the remote adapters
-(``adapters/clearinghouse.py``), the discovery reader that carries the key (``adapters/sdk.py``) and the
-probes of ``lpb payments check`` (``adapters/payment_probes.py``), which takes its paths from here.
+(``adapters/clearinghouse.py``) and the probes of ``lpb payments check``
+(``adapters/payment_probes.py``), which takes its paths from here. The discovery reader carries the key
+too and asks nothing here: the clearinghouse's runner list is the same for every tenant.
 
 **A command about another tenant cannot be sent.** Sent, it would act on this tenant. ``own_tenant``
 refuses it before anything is sent, as the clearinghouse refused a path that named another tenant: 403,
@@ -17,8 +18,8 @@ goes through ``TenantWire``, which holds the engine to one tenant:
 
 - **Before the first request of a process** it reads the key's grant, which states the tenant
   (``confirm``). Another tenant than the setting's is a refusal of whatever was asked (403), and nothing
-  of it is sent. This is what keeps an answer that states no tenant, a usage page or the runner list,
-  from being another tenant's. A read that fails says nothing about the key: its error is the caller's,
+  of it is sent. This is what keeps an answer that states no tenant, a usage page, from being another
+  tenant's. A read that fails says nothing about the key: its error is the caller's,
   and the next request asks again. Once one read has answered for this tenant, no other is made while
   every answer agrees with it. An answer that states another tenant ends that: the next request reads
   the grant again first, a read of the grant that was already on its way does not count, and an answer
@@ -28,6 +29,10 @@ goes through ``TenantWire``, which holds the engine to one tenant:
   the command's record (``ReadyBeforeCommands``), which is ``confirm``, so the read spends none of the
   ledger's budget, which is sized for the command's own calls. Asked through the port alone, the
   adapters still confirm before their first request, as every read does.
+- **A command goes by what was known when it was made ready** (``for_command``). It asks nothing of the
+  grant between its calls, and an answer for another tenant, to any request of the engine, stops it
+  before its next call for good: a read of the grant that names this tenant again does not start it
+  again. Before it sent a write that is a refusal (403); after one, an unknown outcome.
 - **Every answer that states a tenant is read** (``tenant_id``: an allocation, a grant). Another tenant
   is never a success. After a read nothing was applied, and it is the same refusal. After a command the
   clearinghouse has applied it at the other tenant: a ``ProviderError`` with the answer's 2xx, which is
@@ -46,7 +51,7 @@ from livepeer_builder.adapters.batteries import segment
 from livepeer_builder.adapters.clean_errors import bare, raised
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import TenantGrant
-from livepeer_builder.errors import ProviderError
+from livepeer_builder.errors import ProviderError, ProviderOutcomeUnknown
 
 OWN_TENANT = "/v1/clearinghouse"  # the tenant's own routes: no tenant in the path, the key's is used
 GRANT_PATH = OWN_TENANT + "/grant"
@@ -93,6 +98,11 @@ class TenantWire:
     @property
     def tenant_id(self) -> str:
         return self._wire.tenant_id
+
+    def for_command(self) -> "TenantWire":
+        """This wire for the calls of one command, which an answer for another tenant stops for good
+        (``_OneCommand``)."""
+        return _OneCommand(self)
 
     async def confirm(self) -> None:
         """Know that the key is this tenant's, or refuse (403). The key's grant is read until one read
@@ -160,6 +170,76 @@ class TenantWire:
         if self._questioned != questioned and not hasattr(answer, "tenant_id"):
             return _in_question(self.tenant_id)
         return checked
+
+
+class _OneCommand(TenantWire):
+    """The wire as one command sends on it, from when the command was made ready (``ready_for_commands``,
+    before its record was begun) to its last call.
+
+    The command goes by what was known of the key then. An answer for another tenant, to any request on
+    the shared wire, ends that for this command for good: it sends nothing more, and a later read of the
+    grant that names this tenant does not start it again (John, #185 review: it asked whose key it was
+    before each call, so it went on once the key was confirmed again, and a top-up sent its payment).
+    The check is a comparison of two counts: the command reads no grant inside the budget of its record.
+
+    Stopped before it sent a write, the command applied nothing: a refusal (403), so the operation ledger
+    frees the reference and the same request runs as new. Stopped after one, the clearinghouse may have
+    applied it: ``ProviderOutcomeUnknown``, and the reference is kept. A write that was sent is answered
+    as it always was.
+
+    A command nobody made ready (a manager called through the port alone) asks whose key it is at its
+    first call, and goes by that."""
+
+    def __init__(self, shared: TenantWire) -> None:
+        super().__init__(shared._wire)
+        self._shared = shared
+        self._since = shared._questioned if shared._confirmed else None
+        self._wrote = False
+
+    def for_command(self) -> TenantWire:
+        return self
+
+    async def confirm(self) -> None:
+        await self._shared.confirm()
+
+    async def grant(self) -> TenantGrant:
+        return await self._shared.grant()
+
+    async def read_as[T: BaseModel](
+        self, model: type[T], path: str, params: Mapping[str, str] | None = None
+    ) -> T:
+        since = await self._still()
+        return raised(self._shared._held(await self._wire.read_as(model, path, params), None, since))
+
+    async def write_as[T: BaseModel](
+        self, model: type[T], path: str, body: Mapping[str, Any] | None = None
+    ) -> T:
+        since, command = await self._still(), path.rpartition(_ALLOCATION)[2]
+        self._wrote = True
+        return raised(self._shared._held(await self._wire.write_as(model, path, body), command, since))
+
+    async def _still(self) -> int:
+        """The count of contradictions this command goes by, or the error that stops it."""
+        if self._since is None:
+            await self._shared.confirm()
+            self._since = self._shared._questioned
+        if self._shared._questioned != self._since:
+            raise _stopped(self.tenant_id, wrote=self._wrote)
+        return self._since
+
+
+def _stopped(own: str, *, wrote: bool) -> ProviderError | ProviderOutcomeUnknown:
+    why = (
+        f"whose key LPB_CLEARINGHOUSE_TOKEN is came into question while this command ran: the clearinghouse "
+        f"answered another request for another tenant than {own!r} (LPB_CLEARINGHOUSE_TENANT_ID). The "
+        "command sends nothing more"
+    )
+    if wrote:
+        return ProviderOutcomeUnknown(
+            f"{why}, after a call the clearinghouse may have applied. Repeat the same request, under the "
+            "same operation_ref if it took one"
+        )
+    return ProviderError(403, f"{why}, and had sent nothing that could be applied. Repeat the request")
 
 
 def _in_question(own: str) -> ProviderError:

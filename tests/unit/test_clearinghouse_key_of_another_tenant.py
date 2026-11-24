@@ -18,6 +18,7 @@ again with the other tenant's key.
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime
@@ -31,7 +32,7 @@ from livepeer_builder import EngineSettings
 from livepeer_builder.adapters.payment_probes import probe_payments
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest, UsageRow
-from livepeer_builder.errors import ProviderError, ProviderUnavailable
+from livepeer_builder.errors import ProviderError, ProviderOutcomeUnknown, ProviderUnavailable
 from livepeer_builder.services.ledger import definite_refusal
 from tests.unit.payment_ports import CLEARINGHOUSE_URL, OPERATOR, Ports, open_ports, usd
 
@@ -285,24 +286,23 @@ async def test_cost_sync_with_another_tenants_key_stores_nothing(
     assert "row-2" not in stored and "row-3" not in stored
 
 
-async def test_the_runner_list_is_not_read_with_another_tenants_key(
-    ports: Ports, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The runner list states no tenant either. A reader that carries the tenant admin key asks whose
-    key it is first, and reads no list with another tenant's."""
-    caplog.set_level(logging.DEBUG)
-    before = await given_another_tenants_key(ports)
+async def test_the_runner_list_is_read_with_the_key_and_asks_nothing_of_the_grant(ports: Ports) -> None:
+    """The runner list is the same for every tenant, so whose key the reader carries changes nothing of
+    it: the reader sends the key, which the route needs, and does not read the key's grant first. With
+    another tenant's key the engine still has a catalog, and every payment request is refused (John,
+    #185 review; it asked first, and a wrong key left the engine with no catalog)."""
+    await given_another_tenants_key(ports)
     assert ports.wire is not None
     client = httpx.AsyncClient(transport=ports.wire._client._transport)
-    reader = HttpDiscoverySource(
-        RUNNER_LIST, client=client, bearer=ports.other_token, confirm=ports.confirm_tenant
-    )
+    reader = HttpDiscoverySource(RUNNER_LIST, client=client, bearer=ports.other_token)
+    ports.requests.clear()
 
-    error = await refused(reader.fetch())
+    with contextlib.suppress(httpx.HTTPStatusError):  # this clearinghouse may have read no list yet
+        await reader.fetch()
 
-    await nothing_happened(ports, before, error, caplog)
-    assert reader.document() is None
-    assert RUNNER_LIST not in {str(request.url) for request in ports.requests}
+    [asked] = ports.requests
+    assert str(asked.url) == RUNNER_LIST and asked.headers["authorization"] == f"Bearer {ports.other_token}"
+    assert GRANT not in ports.sent("GET")
 
 
 # -- the engine learns whose key it holds once, and before anything else -------------------------------
@@ -489,6 +489,111 @@ async def test_a_first_read_of_the_grant_that_was_contradicted_on_its_way_confir
     assert ports.sent("GET") == [GRANT, GRANT]  # no page was asked for
 
 
+@pytest.mark.parametrize("then", ["nothing more", "the key is confirmed again"])
+async def test_a_command_overtaken_by_an_answer_for_another_tenant_sends_nothing_more(then: str) -> None:
+    """A command is made ready once, before its record is begun, and then makes its calls. An answer for
+    another tenant that arrives between two of them stops it: the next call is not sent. It went on
+    when the key had been confirmed again by then, and a top-up sent its payment (John, #185 review).
+    It asks nothing of the grant itself either, inside the budget of its record."""
+    async with open_ports("remote") as ports:
+        assert ports.transport is not None
+        allot = AllotRequest(tenant_id=ports.tenant_id, actor_id="alice", amount=usd(5), operation_ref="a-1")
+        await ports.engine.payments.allot(ports.admin, allot)
+        wire = ports.manager._wire  # type: ignore[attr-defined]
+        request = TopUpRequest(amount=usd(3), operation_ref="t-1")
+        ports.requests.clear()
+        slow = [0.2]  # the top-up's read of the allocation, held on its way
+        ports.transport.takes = lambda asked: (
+            slow.pop() if slow and asked.url.path.endswith("/allocation") else 0
+        )
+        top_up = asyncio.create_task(
+            ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", request)
+        )
+        await asyncio.sleep(0.05)
+        ports.transport.grant_says = ports.other_tenant
+        await refused(wire.grant())  # a second request is answered for another tenant
+        ports.transport.grant_says = None
+        if then == "the key is confirmed again":
+            await wire.confirm()  # and a third reads the grant again, which names this tenant
+
+        error = await refused(top_up)
+
+        assert error.status_code == 403 and definite_refusal(error) and "came into question" in error.message
+        assert ports.sent("POST") == []  # no payment was sent
+        own_reads = 2 if then == "the key is confirmed again" else 1
+        assert ports.sent("GET").count(GRANT) == own_reads  # the test's own: the top-up read no grant
+        # nothing was sent that could have been applied, so the reference is free: the same request runs
+        await ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", request)
+        assert ports.sent("POST") == ["/v1/clearinghouse/actors/alice/allocation/top-up"]
+
+
+async def test_a_command_stopped_after_it_wrote_is_an_unknown_outcome_and_not_a_refusal(ports: Ports) -> None:
+    """Once a command has sent a write, the clearinghouse may have applied it: a stop before its next
+    call is no refusal, and the operation ledger keeps the reference."""
+    assert ports.transport is not None
+    allot = AllotRequest(tenant_id=ports.tenant_id, actor_id="alice", amount=usd(5), operation_ref="a-1")
+    await ports.engine.payments.allot(ports.admin, allot)
+    shared = ports.manager._wire  # type: ignore[attr-defined]
+    command = shared.for_command()
+    path = "/v1/clearinghouse/actors/alice/allocation"
+    await command.write_as(ActorAllocation, path + "/status", {"status": "paused"})
+    ports.transport.grant_says = ports.other_tenant
+    await refused(shared.grant())
+    ports.requests.clear()
+
+    with pytest.raises(ProviderOutcomeUnknown, match="came into question") as stopped:
+        await command.read_as(ActorAllocation, path)
+
+    assert not definite_refusal(stopped.value) and ports.requests == []
+
+
+async def test_one_commands_manager_goes_by_the_engines_one_answer_of_whose_key_it_is(ports: Ports) -> None:
+    """The manager of one command is still the engine's manager: made ready, or asked for the grant, it
+    asks the wire all the adapters share, and what it learns there is what the others go by. Called
+    with nobody having made it ready, it asks at its first call, and is stopped as any command is."""
+    assert ports.transport is not None
+    await given_another_tenants_key(ports)
+    ports.transport.grant_says = ports.tenant_id
+    shared = ports.manager._wire  # type: ignore[attr-defined]
+    command = ports.manager.for_actor(ports.tenant_id, "alice")
+    assert command.for_actor(ports.tenant_id, "alice")._wire is command._wire  # type: ignore[attr-defined]
+    ports.requests.clear()
+
+    await command.ready_for_commands()  # type: ignore[attr-defined]
+    assert (await command.read_grant(ports.tenant_id)).tenant_id == ports.tenant_id
+
+    assert shared._confirmed and ports.sent("GET") == [GRANT, GRANT]
+    await refused(command.read_allocation("alloc_none"))  # its first call: it goes by the key as it is now
+    ports.transport.grant_says = ports.other_tenant
+    await refused(shared.grant())
+    ports.requests.clear()
+    error = await refused(command.read_allocation("alloc_none"))
+    assert "came into question while this command ran" in error.message and ports.requests == []
+
+
+async def test_a_write_on_the_shared_wire_asks_whose_key_it_is_first(ports: Ports) -> None:
+    """Every command of the adapters goes through one command's view of the wire. A write sent on the
+    shared wire itself is held to the tenant as a read is: asked first, and not sent with another's key."""
+    await given_another_tenants_key(ports)
+    shared = ports.manager._wire  # type: ignore[attr-defined]
+    ports.requests.clear()
+
+    error = await refused(
+        shared.write_as(ActorAllocation, "/v1/clearinghouse/actors/alice/allocation/revoke")
+    )
+
+    assert error.status_code == 403 and ports.sent("GET") == [GRANT] and ports.sent("POST") == []
+
+
+async def test_a_write_on_the_shared_wire_is_sent_with_the_tenants_own_key(ports: Ports) -> None:
+    allot = AllotRequest(tenant_id=ports.tenant_id, actor_id="alice", amount=usd(5), operation_ref="a-1")
+    await ports.engine.payments.allot(ports.admin, allot)
+    shared = ports.manager._wire  # type: ignore[attr-defined]
+    path = "/v1/clearinghouse/actors/alice/allocation/status"
+
+    assert (await shared.write_as(ActorAllocation, path, {"status": "paused"})).tenant_id == ports.tenant_id
+
+
 async def test_the_first_requests_of_a_process_share_one_read_of_the_keys_grant() -> None:
     """Requests that arrive together before the key's grant has been read wait for one read of it. Each
     started a read of its own, and each of those has the clearinghouse read its balances: a burst at a
@@ -522,31 +627,6 @@ async def test_a_read_of_the_keys_grant_that_fails_fails_those_that_waited_and_i
         assert ports.sent("GET") == [GRANT]  # one read, and no page
         await ports.usage.page(None)
         assert ports.sent("GET") == [GRANT, GRANT, "/v1/clearinghouse/usage"]
-
-
-async def test_the_runner_list_s_deadline_covers_the_question_of_whose_key_it_is() -> None:
-    """Discovery gives a read five seconds. The question came before that clock started, so a slow
-    answer to it held a refresh for the clearinghouse's own timeout and then discovery's (John, #185
-    review). The deadline covers both."""
-    asked: list[str] = []
-
-    async def slow_to_say() -> None:
-        asked.append("whose key")
-        await asyncio.sleep(5)
-
-    def never(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("no list is read before the key's tenant is known")
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(never))
-    reader = HttpDiscoverySource(
-        RUNNER_LIST, client=client, bearer="lpk_x", confirm=slow_to_say, timeout_s=0.1
-    )
-    started = asyncio.get_running_loop().time()
-    with pytest.raises(Exception) as ended:  # noqa: PT011 - the kind is asserted below
-        await asyncio.wait_for(reader.fetch(), timeout=3)
-    assert asyncio.get_running_loop().time() - started < 1
-    assert asked == ["whose key"] and isinstance(ended.value, ProviderUnavailable | TimeoutError)
-    assert not isinstance(ended.value, asyncio.CancelledError)
 
 
 # -- lpb payments check ---------------------------------------------------------------------------------

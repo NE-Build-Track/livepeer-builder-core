@@ -187,7 +187,7 @@ class _ActorAllocation(ClearinghouseAllocations):
         actor_id: str,
         operation_ref: str | None,
     ) -> None:
-        super().__init__(wire, actors, secrets)
+        super().__init__(wire.for_command(), actors, secrets)  # stopped by an answer for another tenant
         self._tenant_id = tenant_id
         self._actor_id = actor_id
         self._operation_ref = operation_ref

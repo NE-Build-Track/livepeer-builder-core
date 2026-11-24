@@ -197,7 +197,7 @@ async def default_parts(
         policy=policy,
         authenticators=authenticators,
         api_keys=api_keys,
-        discovery_source=_discovery_source(settings, stack, defaults.confirm_tenant),
+        discovery_source=_discovery_source(settings, stack),
         transport=_supplied(supply.transport, defaults.transport),
         selection=_supplied(supply.selection, MostCapacityFirst),
         allocation_manager=allocation_manager,
@@ -211,21 +211,16 @@ async def default_parts(
     )
 
 
-def _discovery_source(
-    settings: EngineSettings, stack: contextlib.AsyncExitStack, confirm_tenant: Callable[[], Awaitable[None]]
-) -> DiscoverySource:
+def _discovery_source(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> DiscoverySource:
     """Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
-    carries the tenant admin key only when the address is the clearinghouse's runner list (D87), and
-    then it asks whose key that is before it reads a list with it (#165). Without the address there is
-    nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
+    carries the tenant admin key only when the address is the clearinghouse's runner list (D87). It
+    does not ask whose key that is: the list is the same for every tenant (#165). Without the address
+    there is nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
     from livepeer_builder.adapters.sdk import HttpDiscoverySource  # here: see default_parts
 
     if settings.discovery_url is None:
         return NoDiscoveryAddress()
-    bearer = settings.clearinghouse_runner_list_token
-    http_source = HttpDiscoverySource(
-        settings.discovery_url, bearer=bearer, confirm=confirm_tenant if bearer else None
-    )
+    http_source = HttpDiscoverySource(settings.discovery_url, bearer=settings.clearinghouse_runner_list_token)
     own(stack, http_source, http_source.aclose)
     return http_source
 

@@ -1467,8 +1467,8 @@ all of it under its own tenant. So:
   that arrive together before that share one read, since each read has the clearinghouse read the
   grant's balances: those that waited for a read that failed fail with it, and the next request reads
   again. An answer that states another tenant ends what the engine knew of its key, so the next
-  request reads the grant again before anything else: a usage page and the runner list state no tenant,
-  and are not taken on a word the clearinghouse has since contradicted. Nor is what was already on its
+  request reads the grant again before anything else: a usage page states no tenant, and is not taken
+  on a word the clearinghouse has since contradicted. Nor is what was already on its
   way when that answer arrived: a read of the grant sent before it confirms nothing when it comes back,
   and a usage page sent before it is refused (403) and none of its rows is stored, whatever a later
   read of the grant has said by then. The error of an answer for another tenant holds no answer: it is
@@ -1484,8 +1484,22 @@ all of it under its own tenant. So:
   reference, are made ready the same way. The repeat of a finished command is made ready too, before it
   is answered from the record: in a process that has not yet read the grant it costs that one read, and
   fails while the clearinghouse cannot be reached. A read that is not a command (the allowance, a usage
-  page, the runner list) makes the read itself, and so does a manager that is called through the port
-  alone, by a caller that never asks it to be ready: that is as safe, and spends that caller's own time.
+  page) makes the read itself, and so does a manager that is called through the port alone, by a caller
+  that never asks it to be ready: that is as safe, and spends that caller's own time.
+- **A command that is under way stops when the key comes into question.** Made ready, a command goes by
+  what was known of the key then, and reads no grant between its calls. If the clearinghouse answers
+  any request of the engine for another tenant while the command runs, the command sends nothing more,
+  and a later read of the grant that names the engine's tenant again does not start it again: only a
+  new request does, which is made ready anew. The check is a comparison inside the engine and spends
+  none of the ledger's budget. What the command is answered with depends on what it had sent:
+  - **Nothing that could be applied** (it was stopped before its first write, as a top-up is between
+    the read of the allocation and the payment): a `ProviderError` 403, a refusal. The operation ledger
+    frees the reference, and the same request runs as new.
+  - **A write** (it was stopped after one, as a rotation is before the read that decides which key it
+    holds): `ProviderOutcomeUnknown` (503). The clearinghouse may have applied it, so the reference is
+    kept, and the repeat under the same `operation_ref` is answered from the clearinghouse's record.
+  - **A write that was already on its way** is answered as it always was: by the tenant its answer
+    states, or as an unknown outcome when no answer arrives.
 - **Another tenant than `LPB_CLEARINGHOUSE_TENANT_ID`** is a refusal of whatever was asked: a
   `ProviderError` 403 that names both tenants and both settings, and says to set the key and the id of
   one tenant and start the engine again. Nothing of the request is sent, so nothing is applied anywhere
@@ -1494,9 +1508,12 @@ all of it under its own tenant. So:
 - **This covers the answers that state no tenant.** A usage page is not read, so cost sync fails, stores
   no row and moves no cursor, and a cursor kept from the engine's own tenant is not followed with the
   other tenant's key. `GET /readyz` shows the failure as a code (`cost_sync_error`), the log has the
-  refusal's words, and a cost that was `pending` stays so. The clearinghouse's runner list is not read
-  either, when the engine's discovery address is that list: the refresh fails (`discovery_error`), the
-  engine keeps the snapshot it had, and with none it has no catalog.
+  refusal's words, and a cost that was `pending` stays so.
+- **The clearinghouse's runner list is read with whatever key the engine has.** It is the same list for
+  every tenant, so the discovery reader sends the key, which the route needs, and does not ask whose it
+  is: a refresh reads no grant and spends none of its deadline on one. An engine with another tenant's
+  key therefore has a catalog, and every paid job fails where it pays: its actors' allocations cannot
+  be read or allotted.
 - **Every answer that states a tenant is read too:** each allocation answer and the grant. Another
   tenant after a read is the same refusal. After a command, the clearinghouse has applied it at the
   other tenant, so it is no refusal: a `ProviderError` with the answer's 2xx (502 over REST), as for a

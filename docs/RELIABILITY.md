@@ -135,11 +135,11 @@ the engine still stops in order. The process then ends, where it used to stay up
 connection was held open, with a listener gone and nothing to restart it. `lpb serve` then
 exits 0. An application that runs `serve()` in a task of its own stops it by cancelling that task, and
 off the main thread, where no signal arrives, that is the only way. A cancel does not wait for requests
-in flight, as it does not with one listener: both listeners hang up on their open connections and skip
-their apps' shutdown handlers, the engine stops in order, and the task ends with its cancellation,
+in flight, with one listener or two: each listener is closed, hangs up on its open connections and skips
+its app's shutdown handlers, the engine stops in order, and the task ends with its cancellation,
 within a moment and not when the last request does. A cancel that arrives after a first signal, or a
-second cancel, does the same. Whichever way `serve()` ends, both listeners have ended and the process
-has the signal handlers it had before. Both listeners answer `/livez` and `/readyz`, from the one
+second cancel, does the same. Whichever way `serve()` ends, every listener has ended, its port is free
+again, and the process has the signal handlers it had before. Both listeners answer `/livez` and `/readyz`, from the one
 engine, so a health check may use either. The log line `http.listeners_bound` names both addresses.
 
 Health is reported by `GET /readyz` (and `engine.health()`): the engine's role (#169), discovery

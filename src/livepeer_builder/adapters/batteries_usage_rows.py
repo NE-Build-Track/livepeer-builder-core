@@ -136,7 +136,8 @@ def _past_the_decoder(item: str) -> bool:
 # The decoder's grammar, as it reads by default: no control character in a string, no leading zero, ASCII
 # digits, and the names it takes for numbers that are none. Each pattern is matched where a token starts.
 _SPACE = re.compile(r"[ \t\n\r]*")
-_STRING = re.compile(r'"[^"\\\x00-\x1f]*(?:\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})[^"\\\x00-\x1f]*)*"')
+_PLAIN = re.compile(r'[^"\\\x00-\x1f]*')  # of a string: up to its end, an escape or a control character
+_ESCAPE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})')
 _NUMBER = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?", re.ASCII)
 _NAMES = ("true", "false", "null", "NaN", "Infinity", "-Infinity")
 # the kinds of token
@@ -182,8 +183,24 @@ def _token(text: str, start: int) -> tuple[str, str, int] | None:
     for name in _NAMES:
         if text.startswith(name, at):
             return _SCALAR, name, at + len(name)
-    found = (_STRING if text[at] == '"' else _NUMBER).match(text, at)
-    return None if found is None else (_TEXT if text[at] == '"' else _SCALAR, found.group(), found.end())
+    if text[at] == '"':
+        end = _string_end(text, at)
+        return None if end is None else (_TEXT, text[at:end], end)
+    number = _NUMBER.match(text, at)
+    return None if number is None else (_SCALAR, number.group(), number.end())
+
+
+def _string_end(text: str, opening: int) -> int | None:
+    """Where the string that opens at ``opening`` ends, after its closing quote. None when it does not
+    close, holds a control character, or has an escape the decoder does not read. Read run by run, with
+    no pattern that repeats a choice: a long string costs its length."""
+    position = _PLAIN.match(text, opening + 1).end()  # type: ignore[union-attr]  # it matches no text too
+    while position < len(text) and text[position] == "\\":
+        escape = _ESCAPE.match(text, position)
+        if escape is None:
+            return None
+        position = _PLAIN.match(text, escape.end()).end()  # type: ignore[union-attr]
+    return position + 1 if position < len(text) and text[position] == '"' else None
 
 
 def _closed(opened: list[str]) -> str:

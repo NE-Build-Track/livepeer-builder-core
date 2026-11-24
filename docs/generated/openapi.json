@@ -2424,7 +2424,7 @@
       },
       "SignerReadiness": {
         "additionalProperties": false,
-        "description": "Whether the signer answered its identity call just now (#167): the unauthenticated call every\npayment begins with. ``ready`` says the signer is reachable where the engine calls it and signed\nwith the wallet's key. It does not say the wallet is funded, that the signer's price feed or event\nstream is up, or that it can reach the payment provider: those are the signer's own ``/readyz``, on\na listener the engine is not given.",
+        "description": "Whether the signer answered its identity call just now (#167): the unauthenticated call every\npayment begins with. ``ready`` says the signer is reachable where the engine calls it and answered\nwith an address and a signature, which the engine does not check. It does not say the wallet is\nfunded, that the signer's price feed or event stream is up, or that it can reach the payment\nprovider: those are the signer's own ``/readyz``, on a listener the engine is not given.",
         "properties": {
           "ready": {
             "title": "Ready",

@@ -223,6 +223,90 @@ async def test_an_address_that_cannot_be_bound_stops_both_listeners_and_the_engi
         await built[0].start()
 
 
+async def test_a_wildcard_address_and_a_specific_one_on_one_port_stop_before_the_engine_starts(
+    store: SqlStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Binding alone does not claim an address: uvicorn sets ``SO_REUSEADDR``, and with it Linux lets
+    ``0.0.0.0`` and ``127.0.0.1`` bind one port and refuses the second only when it listens. The
+    settings allow the pair (the private listener's host is loopback unless set). Both sockets listen
+    before the engine starts, so it never starts, where it used to start, recover interrupted work and
+    then fail with an ``OSError`` (#181 review)."""
+    port = free_port()
+    started: list[str] = []
+    built: list[EngineApi] = []
+
+    async def never(self: BuilderEngine) -> None:
+        started.append("start")
+
+    monkeypatch.setattr(BuilderEngine, "start", never)
+    with pytest.raises(SystemExit) as exited:
+        await serve(
+            settings(http_host="0.0.0.0", http_port=port, http_private_port=port),  # noqa: S104 - the case
+            supply=EngineSupply(store=store),
+            extend=lambda _, engine: built.append(engine),
+        )
+    assert exited.value.code == 3  # uvicorn's status for an address it cannot bind
+    assert not started
+    assert not listening(port)
+    monkeypatch.undo()
+    with pytest.raises(RuntimeError, match="engine is stopped"):
+        await built[0].start()
+
+
+def test_a_socket_that_cannot_listen_is_closed_and_ends_the_process_as_one_that_cannot_bind() -> None:
+    """Whichever of the two calls the system refuses at: the one bound before it is closed too."""
+    first, _ = one_server()
+    second, _ = one_server()
+    opened: list[socket.socket] = []
+
+    class Deaf(socket.socket):
+        def listen(self, *_: int) -> None:
+            raise OSError(98, "Address already in use")
+
+    def bind(kind: type[socket.socket]) -> socket.socket:
+        opened.append(kind())
+        opened[-1].bind(("127.0.0.1", 0))
+        return opened[-1]
+
+    first.config.bind_socket = lambda: bind(socket.socket)  # type: ignore[method-assign]
+    second.config.bind_socket = lambda: bind(Deaf)  # type: ignore[method-assign]
+    with pytest.raises(SystemExit) as exited, _bound([first, second]):
+        pytest.fail("nothing is served on a socket that does not listen")
+    assert exited.value.code == 3  # as for an address that cannot be bound
+    assert [sock.fileno() for sock in opened] == [-1, -1]  # both closed
+
+
+class StartsAsOlderUvicornDoes(uvicorn.Server):
+    """uvicorn before 0.50 returns from ``serve()`` when its app's startup fails, where later ones exit
+    with status 3: ``startup()`` asks the server to end and returns, with ``started`` never set."""
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        self.should_exit = True
+
+    @contextlib.contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        yield
+
+
+async def test_a_server_that_returns_from_a_failed_start_is_not_taken_for_one_that_served(
+    signals: dict[int, object],
+) -> None:
+    """``pyproject.toml`` allows uvicorn from 0.30. A start that failed must not end ``lpb serve`` with
+    status 0, with one listener or two (#181 review)."""
+    config = uvicorn.Config(hello, host="127.0.0.1", port=free_port(), log_config=None)  # type: ignore[arg-type]
+    with pytest.raises(SystemExit) as one:
+        await asyncio.wait_for(_serve_one_listener(StartsAsOlderUvicornDoes(config)), timeout=10)
+    assert one.value.code == 3
+
+    servers, ports = two_servers()
+    servers[1] = StartsAsOlderUvicornDoes(servers[1].config)
+    with _bound(servers) as sockets, pytest.raises(SystemExit) as two:
+        await asyncio.wait_for(_serve_together(servers, sockets), timeout=10)
+    assert two.value.code == 3
+    assert not any(listening(port) for port in ports)
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
 Receive = Callable[[], Awaitable[dict[str, Any]]]
 Send = Callable[[dict[str, Any]], Awaitable[None]]
 App = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]

@@ -131,9 +131,11 @@ no setting.
 | `lpb purge` | Apply retention now |
 
 **Two listeners in one process (#167).** With `LPB_HTTP_PRIVATE_PORT` set, `lpb serve` binds both
-addresses before the engine starts. An address that is taken is logged, the one bound before it is
-released, and the process exits with the status it exits with for one listener; the engine has not
-started. The engine starts once, before either listener accepts a request, and stops once, after both
+addresses, and listens on both, before the engine starts. An address that is taken is logged, the one
+opened before it is released, and the process exits with the status it exits with for one listener; the
+engine has not started. That holds for a wildcard host and a specific one on the same port (`0.0.0.0`
+and the private listener's default of `127.0.0.1`), which the system refuses only when the second one
+listens. The engine starts once, before either listener accepts a request, and stops once, after both
 have ended. Neither serves without the other: SIGINT or SIGTERM ends both in order, each waiting for its
 open connections (a second Ctrl-C does not wait for them), and a listener that ends for a reason of its
 own ends the other. That other one does not wait: it hangs up on its open connections, so a request in

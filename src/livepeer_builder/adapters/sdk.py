@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 
 import httpx
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
@@ -52,7 +53,10 @@ class HttpDiscoverySource:
     """Reads ``GET LPB_DISCOVERY_URL`` as livepeer/node's ``/discovery`` contract (D63). Sends no
     credentials; the signer is not involved in discovery (#45). The one exception is ``bearer``: the
     tenant admin key of an engine whose discovery address is its clearinghouse's runner list, which needs
-    one (D87, #168). It goes to the discovery address only, since no redirect is followed.
+    one (D87, #168). It goes to the discovery address only, since no redirect is followed. The runner
+    list states no tenant, so a reader that carries the key is given ``confirm`` too, which is awaited
+    before every read and refuses when the key belongs to another tenant than the engine's
+    (``adapters/clearinghouse_tenant.py``, #165): then no list is read.
 
     The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
@@ -72,9 +76,11 @@ class HttpDiscoverySource:
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
         bearer: str | None = None,
+        confirm: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._discovery_url = discovery_url
         self._bearer = SecretStr(bearer) if bearer else None  # never a plain attribute, never in a repr
+        self._confirm = confirm
         self._client = client or httpx.AsyncClient(
             timeout=timeout_s
         )  # one per source: polls reuse its connection
@@ -93,6 +99,8 @@ class HttpDiscoverySource:
         return self._document
 
     async def fetch(self) -> tuple[Runner, ...]:
+        if self._confirm is not None:  # whose key ``bearer`` is, before a list is read with it
+            await self._confirm()
         body = raised(await self._read())
         runners = read_inventory(body)
         self._document = body  # kept only once it read: the document the snapshot is built from

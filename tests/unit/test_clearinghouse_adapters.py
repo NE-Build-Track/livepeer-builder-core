@@ -17,7 +17,7 @@ The key an allotment or a rotation hands over, and what the engine does without 
 import base64
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
@@ -264,7 +264,8 @@ def reallotted_meanwhile(ports: Ports, monkeypatch: pytest.MonkeyPatch, ending: 
     """Before the adapter's next command whose path ends so reaches the clearinghouse, the actor is
     revoked there and allotted again, by another holder of the tenant admin key: the command arrives
     after the adapter's own read saw the first allocation. The new allocation is appended to the list."""
-    wire = ports.manager._wire  # type: ignore[attr-defined]
+    wire = ports.wire
+    assert wire is not None
     original = wire.write
     there: list[ActorAllocation] = []
 
@@ -599,7 +600,8 @@ async def test_a_clearinghouse_admin_key_is_refused_on_the_public_listener(ports
     the listener an enterprise reaches (#167)."""
     keys = house(ports).keys
     admin_key = (await keys.bootstrap_admin()).token
-    client = cast(httpx.AsyncClient, ports.manager._wire._client)  # type: ignore[attr-defined]
+    assert ports.wire is not None
+    client = ports.wire._client
     wire = ClearinghouseWire("http://clearinghouse.test", admin_key, ports.tenant_id, client)
     with pytest.raises(ProviderError) as refused:
         await ClearinghouseAllocations(wire, ports.engine.store, MemorySecretStore()).read_grant(
@@ -626,12 +628,38 @@ def scripted(
                 return answer
         return httpx.Response(404, json={"error": "no such route"})
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(saying_whose_key_it_is(handle)))
     wire = ClearinghouseWire("http://clearinghouse.test", "lpk_made-up", "grant_1", client)
     whole = ClearinghouseAllocations(
         wire, cast(ActorRepo, actors or NoActors()), secrets or MemorySecretStore()
     )
     return whole.for_actor("grant_1", "alice"), seen
+
+
+GRANT_1 = {
+    "tenant_id": "grant_1",
+    "name": "one",
+    "status": "active",
+    "total": {"amount": "100", "currency": "USD"},
+    "unallocated": {"amount": "100", "currency": "USD"},
+    "spent": {"amount": "0", "currency": "USD"},
+    "allocated_unspent": {"amount": "0", "currency": "USD"},
+}
+
+
+def saying_whose_key_it_is(
+    handle: Callable[[httpx.Request], httpx.Response],
+) -> Callable[[httpx.Request], httpx.Response]:
+    """A scripted clearinghouse that also answers the read of the key's grant, which the adapters make
+    before their first request (#165), with tenant ``grant_1``'s. That read is not passed to ``handle``:
+    these tests are about the answers after it."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if (request.method, request.url.path) == ("GET", "/v1/clearinghouse/grant"):
+            return httpx.Response(200, json=GRANT_1)
+        return handle(request)
+
+    return answer
 
 
 class NoActors:

@@ -44,7 +44,8 @@ async def ports() -> AsyncIterator[Ports]:
 
 
 def client_of(ports: Ports) -> httpx.AsyncClient:
-    return ports.manager._wire._client  # type: ignore[attr-defined,no-any-return]
+    assert ports.wire is not None
+    return ports.wire._client
 
 
 async def allotted(ports: Ports, actor_id: str = "alice", amount: str = "5") -> str:

@@ -51,6 +51,9 @@ class PaymentDefaults(Protocol):
     def credentials(self) -> CredentialResolver | None: ...
     def allowances(self) -> AllowanceReader | None: ...
     def transport(self) -> RunnerTransport: ...
+    async def confirm_tenant(self) -> None:
+        """Know that the tenant admin key the engine holds is its own tenant's, or raise: asked before a
+        read that carries the key and whose answer states no tenant (the clearinghouse's runner list)."""
 
 
 class _OwnSigning:
@@ -112,6 +115,9 @@ class SelfHosted(_OwnSigning):
     def allowances(self) -> AllowanceReader | None:
         return None
 
+    async def confirm_tenant(self) -> None:  # NOSONAR - async by protocol (PaymentDefaults)
+        """It holds no tenant admin key: there is nothing to know."""
+
     def _batteries(self, token: str | None) -> AllocationManager | None:
         from livepeer_builder.adapters.batteries import BatteriesClient
 
@@ -150,6 +156,10 @@ class ThroughClearinghouse(_OwnSigning):
 
     def allowances(self) -> AllowanceReader | None:
         return self._ports().allowances
+
+    async def confirm_tenant(self) -> None:
+        """The same answer the three adapters go by, read once for all of them."""
+        await self._ports().tenant.confirm()
 
     def _ports(self) -> "ClearinghousePorts":
         from livepeer_builder.adapters.clearinghouse import ClearinghousePorts

@@ -420,6 +420,11 @@ names a tenant is a clearinghouse admin's.
     tenant, in each app's own schema too; one listener serves both (19 November)
 [x] the remote adapters and lpb payments check call only paths that name no tenant, and the adapters
     refuse a command about another tenant before anything is sent (19 November)
+[x] an engine whose tenant admin key belongs to another tenant than LPB_CLEARINGHOUSE_TENANT_ID sends
+    nothing with it: no allotment, rotation, top-up, status or revoke, no allowance, usage page or
+    runner list read; cost sync stores nothing; lpb payments check fails (23 November)
+[x] an answer that states another tenant is never a success; nothing is saved, and a handed key is
+    stored nowhere, logged nowhere and in no error (23 November)
 ```
 
 **Definition of done.** Every item `[x]`, `[=]` or `[-]` with a reason; the checks in `AGENTS.md`
@@ -543,7 +548,7 @@ it. The engine compares a command's tenant with it, and the check compares the k
 | `top_up_allocation`, `set_allocation_status`, `revoke_allocation`, `create_key` | The route acts on the allocation the actor holds when the command arrives, which can be another than the one the adapter read just before | The adapter reads the allocation each route answers. Another one than the one named is no success, with both named, and nothing is recorded in the engine. It cannot be prevented without an allocation id in the route (T53) |
 | `read_allocation`, `read_allowance` | The allocation route answered the record alone, with no amounts | Decided by the owner on 19 November: the route answers the amounts as `allowance`, and the adapters read them there. No work route of the clearinghouse is called (T36, closed) |
 | `read_allowance(allocation_id)` for an earlier allocation | The clearinghouse reads an actor's current allocation only. Reconciling an earlier allocation of an actor (#115, C9) reads the provider's `spent` by allocation id | Refused with the provider's 404 (T40). A route that reads an allocation by its id, if the read is wanted |
-| The tenant's id | `UsageSource.page` and the check command name no tenant, and the engine cannot ask who it is | `LPB_CLEARINGHOUSE_TENANT_ID` (T38). Since 19 November no path carries it, and the key's own grant (`GET /v1/clearinghouse/grant`) says it: reading it there at start, or `GET /v1/me` (ISS-29), can replace it |
+| The tenant's id | `UsageSource.page` and the check command name no tenant, and the engine cannot ask who it is | `LPB_CLEARINGHOUSE_TENANT_ID` (T38). Since 19 November no path carries it, and the key's own grant (`GET /v1/clearinghouse/grant`) says whose key it is: the engine reads it before its first request and refuses every request when it is another tenant's than the setting's. The setting is a cross-check, which `GET /v1/me` (ISS-29) can replace |
 | The grant members | Only a clearinghouse admin calls them | Refused in the engine, plainly |
 
 ## Upstream dependencies
@@ -731,4 +736,9 @@ One builder-core issue each, all sub-issues of ISS-31.
    both forms, and both call the same service with the tenant they resolve. The listener table has a
    group for each form and one for the runner list. The remote adapters and `lpb payments check` call the
    short paths with the tenant admin key, and the adapters refuse a command about another tenant before
-   anything is sent. No service rule changed. `LPB_CLEARINGHOUSE_TENANT_ID` stays (T38).
+   anything is sent. No service rule changed. `LPB_CLEARINGHOUSE_TENANT_ID` stays (T38): with no tenant
+   in a path the clearinghouse no longer compares it with the key, so the engine does. It reads the
+   key's grant before its first request, refuses every request when the key belongs to another tenant,
+   and reads the tenant each answer states (`adapters/clearinghouse_tenant.py`). Carried forward onto
+   the direct-signer design and the roles on 23 November 2026: both forms of a tenant's routes hand an
+   allocation's key over on an engine in its `clearinghouse` role and store it on one in its `both` role.

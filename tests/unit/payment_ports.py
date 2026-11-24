@@ -16,6 +16,7 @@ be: a test of what an enterprise's engine meets there.
 """
 
 import contextlib
+import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -66,6 +67,9 @@ class Ports:
     clearinghouse_secrets: MemorySecretStore | None = None  # the clearinghouse's own, which stays empty
     requests: list[httpx.Request] = field(default_factory=list)  # what crossed the wire (remote)
     token: str = ""  # the tenant admin key (remote)
+    other_token: str = ""  # the other tenant's admin key, which the engine was never given (remote)
+    wire: ClearinghouseWire | None = None  # the engine's wire to the clearinghouse (remote)
+    transport: "Lossy | None" = None  # what carries the wire's requests into the clearinghouse (remote)
     lost: list[str] = field(default_factory=list)  # see ``lose_the_answer_to``
     answers: list[tuple[int, bytes]] = field(default_factory=list)  # what the clearinghouse answered (remote)
     # every request that arrived at the clearinghouse's socket, as (path, headers), when it has one
@@ -88,6 +92,27 @@ class Ports:
         """The next request whose path ends so is handled by the clearinghouse, and its answer never
         arrives: the connection drops (remote)."""
         self.lost.append(path_ending)
+
+    def started_again_with(self, token: str) -> None:
+        """The enterprise's engine as a restart leaves it, with ``token`` in ``LPB_CLEARINGHOUSE_TOKEN``
+        and every other setting as it was: its remote adapters are built again over a new wire, and the
+        engine's own records and secret store are the ones it had (remote)."""
+        assert self.wire is not None and self.secrets is not None
+        self.wire = ClearinghouseWire(CLEARINGHOUSE_URL, token, self.tenant_id, self.wire._client)
+        rebuilt = ClearinghousePorts.over(self.wire, self.engine.store, self.secrets)
+        pairs = (
+            (self.manager, rebuilt.allocations),
+            (self.allowances, rebuilt.allowances),
+            (self.usage, rebuilt.usage),
+        )
+        for held, fresh in pairs:  # the engine's services hold these objects: they become the new ones
+            vars(held).clear()
+            vars(held).update(vars(fresh))
+
+    async def confirm_tenant(self) -> None:
+        """Whose key the engine holds, as its discovery reader asks before it reads the clearinghouse's
+        runner list (remote)."""
+        await self.manager._wire.confirm()  # type: ignore[attr-defined]
 
     def sent(self, method: str = "POST") -> list[str]:
         """The paths of the requests that crossed the wire with ``method``, in order (remote)."""
@@ -116,10 +141,17 @@ class Lossy(httpx.AsyncBaseTransport):
         self._requests = requests
         self._lost = lost
         self.answers: list[tuple[int, bytes]] = []
+        # A clearinghouse that says the key is this tenant's whoever it acts for: its grant read is
+        # answered with this id in place of the key's tenant's. No engine does this; a test of what the
+        # adapters make of a later answer for another tenant sets it.
+        self.grant_says: str | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self._requests.append(request)
         response = await self._app.handle_async_request(request)
+        if self.grant_says and request.url.path == "/v1/clearinghouse/grant" and response.is_success:
+            said = json.loads(await response.aread()) | {"tenant_id": self.grant_says}
+            response = httpx.Response(response.status_code, json=said, request=request)
         self.answers.append((response.status_code, await response.aread()))
         for ending in self._lost:
             if request.url.path.endswith(ending):
@@ -198,6 +230,7 @@ async def _remote(
         one = await house.payments.tenants.onboard(OPERATOR, "one", usd(100), operation_ref="onboard-one")
         two = await house.payments.tenants.onboard(OPERATOR, "two", usd(100), operation_ref="onboard-two")
         assert one.admin_key is not None and one.admin_key.token is not None
+        assert two.admin_key is not None and two.admin_key.token is not None
         token = one.admin_key.token
 
         requests: list[httpx.Request] = []
@@ -211,6 +244,12 @@ async def _remote(
         stack.push_async_callback(store.close)
         secrets = MemorySecretStore()
         remote = ClearinghousePorts.over(wire, store, secrets)
+        # The engine learns whose key it holds before its first request, once in a process. Here that
+        # read has been made, as it has in an engine that synced costs once: a test counts the requests
+        # of the command it is about. ``Ports.started_again_with`` is the engine before that read.
+        await remote.tenant.confirm()
+        requests.clear()
+        lossy.answers.clear()
         supply = EngineSupply(
             store=store,
             secret_store=secrets,
@@ -242,6 +281,9 @@ async def _remote(
             clearinghouse_secrets=house_secrets,
             requests=requests,
             token=token,
+            other_token=two.admin_key.token,
+            wire=wire,
+            transport=lossy,
             lost=lost,
             answers=lossy.answers,
         )

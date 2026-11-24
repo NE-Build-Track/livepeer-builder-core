@@ -30,6 +30,9 @@ An engine in its ``work`` role probes the payment clearinghouse it uses instead,
 key: its grant (who it is there), one page of its usage, and the runner list when that is its discovery
 address. The grant and the usage are the tenant's own routes, which name no tenant: the clearinghouse
 answers for the key's tenant, and the grant's id says whether that is ``LPB_CLEARINGHOUSE_TENANT_ID``.
+A key that belongs to another tenant fails the grant probe, plainly, and the usage probe with it: the
+page it read is that tenant's. An engine with such a key refuses every request to the clearinghouse
+(``adapters/clearinghouse_tenant.py``).
 Every one is a clearinghouse route: no work route is called. Its signer is the clearinghouse's
 published one, at ``LPB_SIGNER_URL``, and is asked there, never at the clearinghouse's address: a
 clearinghouse's engine serves no signer path (D85 point 1, as amended). With ``LPB_SIGNER_URL`` unset
@@ -68,6 +71,12 @@ _NO_SIGNER: dict[Role, str] = {
     "clearinghouse": "LPB_SIGNER_URL is not set: the wallet report cannot say whether the signer answers. "
     "Set it to the address this engine reaches the signer at",
 }
+# The grant the clearinghouse answers with is the key's tenant's. The other tenant's id is not repeated.
+_ANOTHER = (
+    "the tenant admin key in LPB_CLEARINGHOUSE_TOKEN belongs to another tenant than "
+    "LPB_CLEARINGHOUSE_TENANT_ID: the clearinghouse answered with that tenant's grant. An engine with "
+    "these settings refuses every request to the clearinghouse. Set the key and the id of one tenant"
+)
 Answer = httpx.Response | None  # None: no answer came
 
 
@@ -209,21 +218,22 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     grant_probe, grant = await _tenant_grant(client, base, tenant_id, headers)
+    own = grant is not None and grant_probe.outcome == "ok"  # the key's tenant is the engine's
     probes = [
         grant_probe,
-        await _tenant_usage(client, base, headers),
+        await _tenant_usage(client, base, headers, of_another_tenant=grant is not None and not own),
         await _signer(settings, client),  # the clearinghouse's signer, asked as an engine asks its own
     ]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
         probes.append(await _runner_list(client, settings.discovery_url, headers))
-    return _checked(settings, "clearinghouse", probes, grant)
+    return _checked(settings, "clearinghouse", probes, grant if own else None)  # no other tenant's grant
 
 
 async def _tenant_grant(
     client: httpx.AsyncClient, base: str, tenant_id: str, headers: Mapping[str, str]
 ) -> tuple[PaymentProbe, TenantGrant | None]:
     """Who the engine is at the clearinghouse: the grant of the key's tenant, when the read answered with
-    it, and when that tenant is the one ``LPB_CLEARINGHOUSE_TENANT_ID`` names."""
+    it. The probe passes only when that tenant is the one ``LPB_CLEARINGHOUSE_TENANT_ID`` names."""
     name, request = "clearinghouse_grant", "GET " + GRANT_PATH
     answer = _answered(name, request, await _get(client, base + GRANT_PATH, headers=headers))
     if isinstance(answer, PaymentProbe):
@@ -233,16 +243,16 @@ async def _tenant_grant(
     except ValidationError:
         return _unexpected(name, request, "the grant could not be read", answer), None
     if grant.tenant_id != tenant_id:
-        detail = (
-            "the tenant admin key is another tenant's than LPB_CLEARINGHOUSE_TENANT_ID's: the clearinghouse "
-            "answered with that tenant's grant"
-        )
-        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", detail, 200), None
+        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", _ANOTHER, 200), grant
     detail = "the clearinghouse answered with this tenant's grant"
     return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "ok", detail, 200), grant
 
 
-async def _tenant_usage(client: httpx.AsyncClient, base: str, headers: Mapping[str, str]) -> PaymentProbe:
+async def _tenant_usage(
+    client: httpx.AsyncClient, base: str, headers: Mapping[str, str], *, of_another_tenant: bool
+) -> PaymentProbe:
+    """One page of the key's tenant's usage. The page states no tenant: the grant probe says whose it
+    is, and a page of another tenant than the engine's is no pass."""
     name, request = "clearinghouse_usage", "GET " + USAGE_PATH
     url = base + USAGE_PATH
     answer = _answered(name, request, await _get(client, url, params={"limit": "1"}, headers=headers))
@@ -251,6 +261,9 @@ async def _tenant_usage(client: httpx.AsyncClient, base: str, headers: Mapping[s
     body = _json(answer)
     if not isinstance(body, dict) or not isinstance(body.get("items"), list):
         return _unexpected(name, request, "the usage page could not be read", answer)
+    if of_another_tenant:
+        detail = "the clearinghouse answered with a page of another tenant's payment records: " + _ANOTHER
+        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", detail, 200)
     detail = "the clearinghouse answered with a page of the key's tenant's payment records"
     return _probe(name, "LPB_CLEARINGHOUSE_TOKEN", request, "ok", detail, 200)
 

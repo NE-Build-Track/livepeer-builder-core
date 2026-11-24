@@ -2,8 +2,8 @@
 
 An enterprise's engine keeps its own jobs and records and reaches the clearinghouse for payments only.
 Three of its five payment ports are here, each calling the tenant's own routes at the clearinghouse with
-the tenant admin key (``adapters/clearinghouse_wire.py``). Those routes name no tenant, so a command
-about another tenant than the engine's is refused here and never sent (``adapters/clearinghouse_tenant.py``):
+the tenant admin key. Those routes name no tenant, so every request goes through ``TenantWire``
+(``adapters/clearinghouse_tenant.py``): nothing is sent for another tenant, or with another tenant's key.
 
 - ``ClearinghouseAllocations`` is the ``AllocationManager``. The port names an allocation by its id and
   the routes name an actor, so the manager is asked for the one actor a command is about
@@ -33,7 +33,7 @@ from typing import NoReturn
 
 from pydantic import SecretStr
 
-from livepeer_builder.adapters.clearinghouse_tenant import GRANT_PATH, USAGE_PATH, allocation_path, own_tenant
+from livepeer_builder.adapters.clearinghouse_tenant import USAGE_PATH, TenantWire, allocation_path, own_tenant
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import (
     ActorAllocation,
@@ -68,8 +68,8 @@ class ClearinghouseAllocations:
     engine's own records and secret store, read only to finish a command from the key the engine already
     stored."""
 
-    def __init__(self, wire: ClearinghouseWire, actors: ActorRepo, secrets: SecretStore) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire, actors: ActorRepo, secrets: SecretStore) -> None:
+        self._wire = TenantWire.over(wire)
         self._actors = actors
         self._secrets = secrets
 
@@ -83,9 +83,10 @@ class ClearinghouseAllocations:
     # nothing to do, before anything is sent. Each says so to SonarQube, as the provider fakes do.
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
-        """The tenant's grant. Another tenant's is refused (403) and never asked for."""
+        """The tenant's grant. Another tenant's is refused (403) and never asked for, and so is the
+        grant of another tenant than this one that the key turns out to belong to."""
         own_tenant(self._wire, grant_id)
-        return await self._wire.read_as(TenantGrant, GRANT_PATH)
+        return await self._wire.grant()
 
     async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager)
         self, grant_id: str, amount: Money, idempotency_key: str
@@ -177,7 +178,7 @@ class _ActorAllocation(ClearinghouseAllocations):
 
     def __init__(
         self,
-        wire: ClearinghouseWire,
+        wire: TenantWire,
         actors: ActorRepo,
         secrets: SecretStore,
         tenant_id: str,
@@ -375,8 +376,8 @@ class ClearinghouseAllowances:
     """``AllowanceReader``. The allocation that pays for an actor is the engine's own record: it is the
     one whose payment key the engine holds. Its allowance is read at the clearinghouse."""
 
-    def __init__(self, wire: ClearinghouseWire, actors: ActorRepo) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire, actors: ActorRepo) -> None:
+        self._wire = TenantWire.over(wire)
         self._actors = actors
 
     async def allocation_for(self, tenant_id: str, actor_id: str) -> str | None:
@@ -396,8 +397,8 @@ class ClearinghouseAllowances:
 class ClearinghouseUsage:
     """``UsageSource``: the tenant's payment records, oldest first. The page is the port's own."""
 
-    def __init__(self, wire: ClearinghouseWire) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire) -> None:
+        self._wire = TenantWire.over(wire)
 
     async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
         params = {"limit": str(limit)} | ({"cursor": cursor} if cursor else {})
@@ -407,24 +408,26 @@ class ClearinghouseUsage:
 @dataclass(frozen=True)
 class ClearinghousePorts:
     """The three remote adapters over one wire. ``allocations`` is also the engine's grants manager: it
-    reads the tenant's grant and refuses the rest."""
+    reads the tenant's grant and refuses the rest. ``tenant`` is the wire as all three use it, held to
+    the engine's tenant: whoever else sends the tenant admin key asks it whose key that is first."""
 
     allocations: ClearinghouseAllocations
     allowances: ClearinghouseAllowances
     usage: ClearinghouseUsage
+    tenant: TenantWire
 
     @classmethod
     def over(cls, wire: ClearinghouseWire, actors: ActorRepo, secrets: SecretStore) -> "ClearinghousePorts":
+        own = TenantWire(wire)
         return cls(
-            ClearinghouseAllocations(wire, actors, secrets),
-            ClearinghouseAllowances(wire, actors),
-            ClearinghouseUsage(wire),
+            ClearinghouseAllocations(own, actors, secrets),
+            ClearinghouseAllowances(own, actors),
+            ClearinghouseUsage(own),
+            own,
         )
 
 
-async def read_allowance(
-    wire: ClearinghouseWire, tenant_id: str, actor_id: str, allocation_id: str
-) -> Allowance:
+async def read_allowance(wire: TenantWire, tenant_id: str, actor_id: str, allocation_id: str) -> Allowance:
     """The allowance of the allocation ``allocation_id``, which ``actor_id`` must hold now: read from the
     actor's allocation route, which answers it with the record. Another tenant's actor is refused (403)
     and never asked for. An allowance the clearinghouse could not read at its own provider (``null``) is

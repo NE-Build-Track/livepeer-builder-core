@@ -86,7 +86,11 @@ See [contracts/access.md](contracts/access.md#boundaries).
   own routes take the tenant from the credential, and a path that names a tenant takes a clearinghouse
   admin only, on the private listener ([access.md](contracts/access.md#listeners)). An engine that uses
   a clearinghouse refuses a command about another tenant than its own before it sends anything, since
-  the clearinghouse would apply it to the key's tenant.
+  the clearinghouse would apply it to the key's tenant. It also reads whose key it holds before its
+  first request, and refuses every request when `LPB_CLEARINGHOUSE_TOKEN` belongs to another tenant
+  than `LPB_CLEARINGHOUSE_TENANT_ID`: no allotment, no stored key, no usage row and no runner list
+  comes from the wrong tenant
+  ([payments.md](contracts/payments.md#who-the-engine-is-at-the-clearinghouse)).
 - **The private listener (D84, #167):** a clearinghouse admin key can onboard tenants and top up grants,
   so a leaked one could spend the wallet. A deployment that sets `LPB_HTTP_PRIVATE_PORT` serves what
   only a clearinghouse admin does (onboarding, the tenant list, a grant's top-up, a tenant's status, the

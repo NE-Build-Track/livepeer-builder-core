@@ -243,3 +243,18 @@ Each pull request ticks its own line here in the same change.
   together, because neither serves every route of the role now. The signer's two paths are no group of
   the table. D87 point 3 is one text for both of Mike's amendments of 19 November. Source: Mike's
   amendments (D85 point 1, D87 points 1 and 3); what the decisions are silent on is for his review.
+- **23 November 2026, a tenant's routes from the credential: whose key the engine holds.** The four
+  review threads of #185 are one finding. With no tenant in a path the clearinghouse no longer compares
+  the tenant an engine means with the key it sends, and the engine compared only the id a caller passes
+  with `LPB_CLEARINGHOUSE_TENANT_ID`. A key of another tenant was answered for that tenant: the engine
+  allotted from its grant, stored the keys of its allocations, answered a revoke of its own actor as
+  done without revoking anything, and synced its usage as its own costs. Built: every request of the remote
+  adapters goes through `TenantWire`. It reads the key's grant before the first request of a process,
+  and another tenant than the setting's is a refusal (403) of whatever was asked, with nothing sent; it
+  reads the tenant every answer states, and another tenant after a command is a `ProviderError` with
+  the answer's 2xx, as #182 chose for a command applied to another allocation, with nothing saved and a
+  handed key dropped. The discovery reader asks the same question before it reads the clearinghouse's
+  runner list. The read is made at the first request and not at start, so an engine still starts with
+  its clearinghouse unreachable. `lpb payments check` fails the grant probe and the usage probe for
+  such a key. The stale-window rule is unchanged: the one read more comes before a command's own calls.
+  Source: the review of #185; the choices are for Mike's review.

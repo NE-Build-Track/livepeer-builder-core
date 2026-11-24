@@ -184,8 +184,12 @@ async def default_parts(
     usage_source = _supplied(supply.usage_source, defaults.usage_source)
 
     # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
-    # carries the tenant admin key only when the address is the clearinghouse's runner list (D87).
-    http_source = HttpDiscoverySource(settings.discovery_url, bearer=settings.clearinghouse_runner_list_token)
+    # carries the tenant admin key only when the address is the clearinghouse's runner list (D87), and
+    # then it asks whose key that is before it reads a list with it (#165).
+    bearer = settings.clearinghouse_runner_list_token
+    http_source = HttpDiscoverySource(
+        settings.discovery_url, bearer=bearer, confirm=defaults.confirm_tenant if bearer else None
+    )
     own(stack, http_source, http_source.aclose)
     discovery_source: DiscoverySource = http_source
 

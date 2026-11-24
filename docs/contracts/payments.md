@@ -1185,7 +1185,7 @@ selects the remote adapters (#169), and three settings, set together, say which 
 | --- | --- |
 | `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port]` and nothing after it: a path, a query, a fragment or userinfo is refused at startup, and the refusal does not echo the value. The engine calls the clearinghouse's routes at the root of this address. A trailing slash alone is taken off |
 | `LPB_CLEARINGHOUSE_TOKEN` | The tenant admin key the clearinghouse admin handed over at onboarding. A secret: it is sent as a bearer to the clearinghouse and is in no log line, error text or `repr` |
-| `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83). No path carries it: the clearinghouse takes the tenant from the key. The engine refuses a command about any other tenant with it, and `lpb payments check` compares it with the key's grant. Tech debt T38 |
+| `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83). No path carries it: the clearinghouse takes the tenant from the key. The engine refuses a command about any other tenant with it, and refuses every request when the key turns out to belong to another tenant ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)). Tech debt T38 |
 
 - **`LPB_SIGNER_URL` names the clearinghouse's signer.** It is set as on any engine that pays, and it is
   a second address: the clearinghouse's engine serves no signer path, and its address never stands in for
@@ -1205,7 +1205,12 @@ selects the remote adapters (#169), and three settings, set together, say which 
   allocation, sends the rotation, and reads which key the allocation takes. Every other command makes
   one or two, and none writes after its second call, so a read that is cut short leaves nothing in
   flight and the resume asks again. Three calls in the half is six timeouts in the window, where
-  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly.
+  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. The first request of a
+  process is preceded by one read more, of the key's grant
+  ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)), which the rule
+  does not count: cost sync usually makes it, soon after start. When a command makes it, its one write
+  is its third request at the latest and still ends in the half, and only the last read of an overtaken
+  rotation can be cut short, which the resume asks again.
 - **`LPB_DISCOVERY_URL` defaults to the clearinghouse's runner list** (D87), and the reader carries the
   tenant admin key there and to no other address ([discovery.md](discovery.md#the-clearinghouses-runner-list)).
 - A caller who supplies a part through `EngineSupply` keeps it: a supplied part is never replaced.
@@ -1249,6 +1254,10 @@ they are the tenant's own routes, which act on the tenant of the key (D87 point 
   `read_grant`, compares the tenant it is given with `LPB_CLEARINGHOUSE_TENANT_ID` first and refuses
   another with a `ProviderError` 403, "resource belongs to another tenant": a refusal that applied
   nothing, as the clearinghouse's own 403 was when the paths named the tenant.
+- **Nothing is sent with another tenant's key.** Every request of the three adapters goes through
+  `TenantWire` (`adapters/clearinghouse_tenant.py`), which reads the key's grant before the first
+  request of a process and reads the tenant every answer states
+  ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)).
 - **The port names an allocation and the routes name an actor.** `AllocationManager` was written for
   Batteries, which takes an allocation's id. A manager that needs the actor has the optional protocol
   `AllocationsByActor`: the engine calls `for_actor(tenant_id, actor_id, operation_ref)` and sends the
@@ -1397,9 +1406,42 @@ gave it: `LPB_CLEARINGHOUSE_TENANT_ID` is that id, and so is `LPB_JWT_TENANT_ID`
 tenant claim, the `tenant_id` of the access keys the engine issues, and the `tenant_id` of the
 `ActorContext` an embedding app builds. Nothing is mapped. An actor in any other tenant is refused by the
 engine, before anything is sent (403): the routes it calls name no tenant, and the clearinghouse acts on
-the tenant of the key. That the key is that tenant's is what `lpb payments check` confirms: the grant
-the clearinghouse answers with is the key's tenant's, and the check fails when it is another than
-`LPB_CLEARINGHOUSE_TENANT_ID`.
+the tenant of the key.
+
+**The engine learns whose key it holds, and holds itself to that tenant** (#165). Nothing at the
+clearinghouse compares `LPB_CLEARINGHOUSE_TENANT_ID` with `LPB_CLEARINGHOUSE_TOKEN`: a key of another
+tenant is simply answered for that tenant. With such a key an engine would allot from that tenant's
+grant, be handed the keys of allocations there, read that tenant's usage as its own costs, and record
+all of it under its own tenant. So:
+
+- **Before the first request of a process** the engine reads the key's grant
+  (`GET /v1/clearinghouse/grant`), whose `tenant_id` says whose key it is. The read is made when the
+  first request is, not at start: an engine starts with its clearinghouse unreachable, as before. A read
+  that fails is that request's failure (`ProviderUnavailable`, or what the clearinghouse answered) and
+  says nothing about the key, so the next request reads again. Once one read has answered for the
+  engine's tenant, no other is made: a process has one key.
+- **Another tenant than `LPB_CLEARINGHOUSE_TENANT_ID`** is a refusal of whatever was asked: a
+  `ProviderError` 403 that names both tenants and both settings, and says to set the key and the id of
+  one tenant and start the engine again. Nothing of the request is sent, so nothing is applied anywhere
+  and a command's reference is free again. The read is repeated at each request while the answer is
+  another tenant's: only a restart changes the key.
+- **This covers the answers that state no tenant.** A usage page is not read, so cost sync fails, stores
+  no row and moves no cursor, and a cursor kept from the engine's own tenant is not followed with the
+  other tenant's key. `GET /readyz` shows the failure as a code (`cost_sync_error`), the log has the
+  refusal's words, and a cost that was `pending` stays so. The clearinghouse's runner list is not read
+  either, when the engine's discovery address is that list: the refresh fails (`discovery_error`), the
+  engine keeps the snapshot it had, and with none it has no catalog.
+- **Every answer that states a tenant is read too:** each allocation answer and the grant. Another
+  tenant after a read is the same refusal. After a command, the clearinghouse has applied it at the
+  other tenant, so it is no refusal: a `ProviderError` with the answer's 2xx (502 over REST), as for a
+  command applied to [another allocation](#the-remote-adapters), and the reference stays held. No actor
+  is saved or changed, and a key the answer handed over is dropped with the answer: it is stored
+  nowhere, logged nowhere and in no error. The message says what was left at the other tenant and who
+  puts it right: after an allotment, that tenant's admin revokes the allocation at the clearinghouse,
+  which returns what it has not spent to its grant. With the first rule in force this needs a
+  clearinghouse that answers the grant read for one tenant and a command for another.
+- **`lpb payments check` says the same, without an engine:** the grant probe fails when the key's
+  grant is another tenant's than the setting names, and the usage probe with it.
 
 The key the engine holds is a tenant admin's. A clearinghouse admin's key does nothing on the public
 listener ([access.md](access.md#listeners)), so the engine can never onboard a tenant, top up a grant or
@@ -1453,8 +1495,8 @@ signer its tenants' engines sign at and reads its readiness there for the
 | Both | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
 | Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
-| Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/grant` with the tenant admin key | The key's tenant's grant is answered, and its id is `LPB_CLEARINGHOUSE_TENANT_ID`. It is printed as `tenant`. Another id fails the probe as `unexpected`, naming that setting; a 403 means the key is not a tenant admin's or an auditor's, and names `LPB_CLEARINGHOUSE_TOKEN` |
-| Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/usage?limit=1` | A usage page is answered |
+| Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/grant` with the tenant admin key | The key's tenant's grant is answered, and its id is `LPB_CLEARINGHOUSE_TENANT_ID`. It is printed as `tenant`. Another id fails the probe as `unexpected`: the key in `LPB_CLEARINGHOUSE_TOKEN` belongs to another tenant, whose grant and id are not printed. A 403 means the key is not a tenant admin's or an auditor's, and names `LPB_CLEARINGHOUSE_TOKEN` |
+| Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/usage?limit=1` | A usage page is answered, and the grant probe did not find the key to be another tenant's: the page states no tenant, and another tenant's page is `unexpected` |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings

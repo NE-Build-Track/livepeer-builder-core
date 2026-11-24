@@ -1,12 +1,16 @@
-# A payment clearinghouse on one host (D82, D87): the engine in its `clearinghouse` role, in front of
-# Batteries and the signer. Optional; not part of CI. See README.md, and ../README.md for the proofs.
+# A payment clearinghouse on one host (D82, D87): the engine in its `clearinghouse` role in front of
+# Batteries, with the signer beside it. Optional; not part of CI. See README.md, and ../README.md for the
+# proofs.
 #
-# Names. The "payment clearinghouse" is this whole project: what an enterprise's engine pays through.
+# Names. The "payment clearinghouse" is this whole project: what an enterprise's engine pays with.
 # "Batteries" is the upstream program livepeer/clearinghouse-batteries, whose binary, config keys and
 # environment variables say `clearinghouse`. Here it is always the service `batteries`.
 #
-# Only the engine's public listener is published. Batteries, the signer and discovery are published
-# nowhere, and the engine's private listener is on its own loopback: the `private` service reaches it.
+# Two things are published, each on 127.0.0.1 and on the edge network an enterprise project joins: the
+# engine's public listener, and the signer, through `signer-relay`. An enterprise's engine signs at the
+# signer itself, with the key it was handed, so the signer's Batteries authorization webhook is the only
+# check at signing. Nothing of Batteries is published, nor discovery, nor the signer's metrics port, and
+# the engine's private listener is on its own loopback: the `private` service reaches it.
 # Upstream sources are pinned to the commits in docs/references/upstream-baseline.md.
 name: lpb-clearinghouse
 
@@ -73,6 +77,24 @@ services:
       batteries:
         condition: service_healthy
 
+  # The published signer: a TCP relay of the signer's one port, and of nothing else. The signer runs in
+  # the batteries network namespace, so putting that namespace on the edge network would publish
+  # Batteries' management API with it. The relay forwards bytes and reads none: the signer still asks
+  # Batteries' authorization webhook for every payment. The image is named by its digest.
+  signer-relay:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    command: ["TCP-LISTEN:8937,fork,reuseaddr", "TCP:batteries:8937"]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    ports:
+      - "127.0.0.1:${CLEARINGHOUSE_SIGNER_PORT:-8137}:8937"  # the signer, for enterprise engines
+    networks:
+      inside: {}
+      edge:
+        aliases: [signer]  # where an enterprise's engine signs: http://signer:8937
+    depends_on: [signer]
+
   discovery:  # livepeer/node's stock discovery, static mode: the runner list the clearinghouse publishes
     image: *node-image
     build:
@@ -102,15 +124,18 @@ services:
       # The public listener (the image sets LPB_HTTP_HOST=0.0.0.0 and LPB_HTTP_PORT=8080), and the
       # private one, which stays on this container's loopback: LPB_HTTP_PRIVATE_HOST is left at 127.0.0.1.
       LPB_HTTP_PRIVATE_PORT: "8081"
-      LPB_SIGNER_URL: http://batteries:8937  # the signer shares the batteries network namespace
+      # Where the wallet report reads the signer's readiness: the signer inside this project, which
+      # shares the batteries network namespace. The engine signs nothing. Enterprise engines reach the
+      # signer at its published address, which this setting does not name and the report does not test.
+      LPB_SIGNER_URL: http://batteries:8937
       LPB_BATTERIES_URL: http://batteries:8081
       LPB_BATTERIES_TOKEN: ${LPB_BATTERIES_TOKEN:?run config/init-secrets.py, which writes .env}
       LPB_BATTERIES_GRANTS_TOKEN: ${LPB_BATTERIES_GRANTS_TOKEN:?run config/init-secrets.py, which writes .env}
-      LPB_SECRET_KEY: ${LPB_SECRET_KEY:?run config/init-secrets.py, which writes .env}
+      # No LPB_SECRET_KEY: a clearinghouse hands each allocation's key to the caller and stores none.
       LPB_DISCOVERY_URL: http://discovery:8939/discovery
       LPB_DEFAULT_CURRENCY: USD
     ports:
-      - "127.0.0.1:${CLEARINGHOUSE_PUBLIC_PORT:-8180}:8080"  # the public listener, and nothing else
+      - "127.0.0.1:${CLEARINGHOUSE_PUBLIC_PORT:-8180}:8080"  # the public listener; never the private one
     volumes: [engine-data:/data]
     networks:
       inside: {}
@@ -121,8 +146,8 @@ services:
   # How a clearinghouse admin reaches the private listener: a curl in the engine's own network
   # namespace, where 127.0.0.1:8081 is that listener. Not started by `up`. There the clearinghouse admin
   # names the tenant in the path; a tenant's own routes, which name none, are on the public listener:
-  #   docker compose run --rm private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants
-  #   docker compose run --rm private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants/$TENANT/grant
+  #   docker compose run --rm --no-deps private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants
+  #   docker compose run --rm --no-deps private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants/$TENANT/grant
   private:
     image: *batteries-image  # for its curl; nothing of Batteries runs here
     profiles: [admin]
@@ -130,9 +155,9 @@ services:
     entrypoint: [curl, -sS]
 
 networks:
-  inside: {}  # the engine, Batteries with the signer, and discovery
+  inside: {}  # the engine, Batteries with the signer, the relay and discovery
   edge:
-    name: lpb-clearinghouse-edge  # the engine alone is on it; an enterprise project joins it
+    name: lpb-clearinghouse-edge  # the engine and the signer's relay; an enterprise project joins it
 
 volumes:
   engine-data:

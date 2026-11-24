@@ -34,8 +34,6 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.protocols.clearinghouse import DiscoveryDocumentSource as DiscoveryDocumentSource
 from livepeer_builder.protocols.clearinghouse import EscrowSource as EscrowSource
-from livepeer_builder.protocols.clearinghouse import PaymentKeyRepo as PaymentKeyRepo
-from livepeer_builder.protocols.clearinghouse import SignerForwarder as SignerForwarder
 from livepeer_builder.protocols.clearinghouse import SignerProbe as SignerProbe
 from livepeer_builder.protocols.clearinghouse import TenantUsageSource as TenantUsageSource
 from livepeer_builder.protocols.conditional_writes import ActorCommandRepo as ActorCommandRepo
@@ -245,7 +243,7 @@ class AllocationManager(Protocol):
         """Create a grant carrying ``metadata``, which ``list_grants`` returns (the engine's tag, D57)."""
         ...
 
-    async def read_grant(self, grant_id: str) -> TenantGrant: ...  # total, unallocated balance, status
+    async def read_grant(self, grant_id: str) -> TenantGrant: ...  # its balances, as TenantGrant says
 
     async def grant_balances(self) -> list[TenantGrant]: ...  # every grant, oldest first
 
@@ -261,9 +259,43 @@ class AllocationsByActor(Protocol):
     actor has this: the engine, which knows the actor of every allocation command, calls ``for_actor``
     and sends that command to the manager it returns. The members that name a grant are called on the
     manager itself. ``ClearinghouseAllocations`` has it; ``BatteriesClient`` does not, and is called as
-    before. Without it nothing changes for a supplied manager."""
+    before. Without it nothing changes for a supplied manager.
 
-    def for_actor(self, tenant_id: str, actor_id: str) -> AllocationManager: ...
+    ``operation_ref`` is the admin's reference of an allotment, and ``None`` for every other command.
+    An allotment's idempotency key is derived from the actor and names no reference, so a manager whose
+    provider keeps a ledger of its own by reference (a clearinghouse) is told the admin's."""
+
+    def for_actor(
+        self, tenant_id: str, actor_id: str, operation_ref: str | None = None
+    ) -> AllocationManager: ...
+
+
+@runtime_checkable
+class OneKeyPerAllocation(Protocol):
+    """Optional for an allocation manager: its provider keeps one key for an allocation, and hands a key
+    over once (#168; Mike, 23 November 2026).
+
+    Batteries keeps every key of an allocation live until it is revoked, and replays a key to the repeat
+    of the call that minted it. The engine's rotation is written for that: it mints, revokes the old key,
+    and a rotation that another one overtook revokes its own. A payment clearinghouse does neither. Its
+    rotation ends the key before it in the same command, so of two rotations it ran one after the other
+    only the later one's key is live, whichever the engine wrote first; and it answers the repeat of a
+    finished command without the key. A manager for such a provider has this, and the rotation then
+    follows the provider (``PaymentKeys``):
+
+    - no key is revoked by its id: the provider ended it;
+    - a rotation that another overtook in the engine asks ``holds_key`` about its own key. While the
+      allocation takes it, the engine keeps it, over the ended key the actor holds; otherwise it is
+      ended, and only its secret is dropped;
+    - a rotation resumed after it stored its key reads the key back from where it is held, and does not
+      ask for it again.
+
+    ``ClearinghouseAllocations`` has it, on the manager ``for_actor`` returns; ``BatteriesClient`` does
+    not, and nothing changes for it or for a supplied manager without it."""
+
+    async def holds_key(self, allocation_id: str, api_key_id: str) -> bool:
+        """Whether ``allocation_id`` is live at the provider and takes ``api_key_id`` now."""
+        ...
 
 
 class UsageSource(Protocol):

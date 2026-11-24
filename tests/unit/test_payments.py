@@ -99,7 +99,7 @@ async def test_repeat_allotment_returns_the_original(
     engine = await make_engine()
     first = await engine.payments.allot(admin, allot_request())
     second = await engine.payments.allot(admin, allot_request())
-    assert first.allocation == second.allocation
+    assert first == second
     assert manager.calls == ["create_key_for_grant"]
     assert len(manager.allocations) == 1
 
@@ -469,7 +469,7 @@ async def test_a_repeat_of_a_finished_allotment_gets_its_result_while_the_store_
     first = await engine.payments.allot(admin, allot_request())
     vault.sealed = True
     again = await engine.payments.allot(admin, allot_request())  # a lost response, repeated
-    assert again.allocation == first.allocation
+    assert again == first
     assert manager.calls == ["create_key_for_grant"]  # no second provider call
 
 
@@ -541,7 +541,7 @@ async def test_such_a_record_is_still_asked_when_the_actor_does_not_hold_its_key
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     before = await engine.payments.allot(admin, allot_request())
 
-    async def lost(*_: object) -> None:
+    async def lost(*_: object, **__: object) -> None:
         raise ConnectionError("the database went away")
 
     with monkeypatch.context() as losing:
@@ -682,7 +682,7 @@ async def test_a_rotation_resumed_on_another_allocation_sends_no_other_provider_
     await engine.payments.allot(admin, allot_request())
     set_actor_key = store.set_actor_key  # the rotation's write since #115 (C4)
 
-    async def lost(*_: object) -> None:
+    async def lost(*_: object, **__: object) -> None:
         monkeypatch.setattr(store, "set_actor_key", set_actor_key)
         raise ConnectionError("the database went away")
 

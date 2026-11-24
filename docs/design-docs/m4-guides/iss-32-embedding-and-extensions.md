@@ -272,8 +272,8 @@ requirement and renames the examples.
 - **One example pays through a payment clearinghouse.** Its engine runs in the `work` role with the remote
   adapters (#168, #169). The amended ISS-32 acceptance asks for this.
 - **The trusted-backend authenticator** (E4, T7) is still not built in M4. A clearinghouse does not need
-  it: an enterprise's engine presents a payment key for each actor, so nobody acts for someone else
-  there. An engine server still needs a credential for each user when the enterprise app's backend calls
+  it: an enterprise's engine calls it with its tenant admin key, and pays at the signer with each actor's
+  own payment key, so nobody acts for someone else there. An engine server still needs a credential for each user when the enterprise app's backend calls
   it for them.
 - **Names.** `application_id` becomes `tenant_id` in `ActorContext`, which every embedded caller builds
   (#163).

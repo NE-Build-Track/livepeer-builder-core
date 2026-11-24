@@ -179,11 +179,15 @@ def test_gen_docs_writes_then_checks(db: Path, tmp_path: Path, capsys: pytest.Ca
     assert run("gen-docs", "--out", str(out)) == 0
     assert {p.name for p in out.iterdir()} == {
         "openapi.json",
+        "openapi-clearinghouse.json",  # the clearinghouse role's schema (#169)
         "db-schema.md",
         "interfaces.md",
         "contracts.md",
     }
     assert run("gen-docs", "--check", "--out", str(out)) == 0
+    (out / "openapi-clearinghouse.json").write_text("{}")  # each generated file is checked, this one too
+    assert run("gen-docs", "--check", "--out", str(out)) == 1
+    assert "openapi-clearinghouse.json" in capsys.readouterr().err
     assert "erDiagram" in (out / "db-schema.md").read_text()
     assert "<<interface>>" in (out / "interfaces.md").read_text()
 

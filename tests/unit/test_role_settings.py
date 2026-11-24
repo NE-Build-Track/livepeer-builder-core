@@ -2,18 +2,19 @@
 
 One program covers three deployments, and the role says which one this is:
 
-- ``both``, the default: an enterprise with self-hosted payments. Its payment ports reach Batteries and
-  the signer, so it holds no clearinghouse setting;
-- ``work``: an enterprise that uses a payment clearinghouse. Its payment ports reach the clearinghouse,
-  so it holds the three clearinghouse settings and nothing of Batteries or a signer;
+- ``both``, the default: an enterprise with self-hosted payments. It reaches Batteries itself, so it
+  holds no clearinghouse setting;
+- ``work``: an enterprise that uses a payment clearinghouse. It allots, reads allowances and reads usage
+  there, so it holds the three clearinghouse settings and nothing of Batteries. It signs at the
+  clearinghouse's published signer itself, so it may hold ``LPB_SIGNER_URL``, as any engine that pays;
 - ``clearinghouse``: a payment clearinghouse. It is nobody's tenant, so it holds no clearinghouse
   setting, and what only its admin does is served on a private listener, which it must have.
 
 A combination that contradicts the role is refused when the settings load, before anything is built. A
 refusal names settings and echoes no value: several of them are secrets.
 
-What a ``clearinghouse`` engine needs of its parts (a signer, Batteries, the tenant desk) is judged on
-the parts it will run with, when it is built (tests/unit/test_roles.py).
+What a ``clearinghouse`` engine needs of its parts (Batteries, the tenant desk) is judged on the parts
+it will run with, when it is built (tests/unit/test_roles.py).
 """
 
 from typing import Any
@@ -32,12 +33,13 @@ THREE = {
     "LPB_CLEARINGHOUSE_TENANT_ID": "grant_7",
 }
 DISCOVERY = {"LPB_DISCOVERY_URL": "http://discovery:8939/discovery"}
-SELF_HOSTED = {
+BATTERIES = {
     "LPB_BATTERIES_URL": "http://batteries-not-to-be-shown:8081",
     "LPB_BATTERIES_TOKEN": "bt_secret-not-to-be-shown",
     "LPB_BATTERIES_GRANTS_TOKEN": "gt_secret-not-to-be-shown",
-    "LPB_SIGNER_URL": "http://signer-not-to-be-shown:8937",
 }
+SIGNER = {"LPB_SIGNER_URL": "http://signer-not-to-be-shown:8937"}
+SELF_HOSTED = BATTERIES | SIGNER
 PRIVATE = {"LPB_HTTP_PRIVATE_PORT": "8081"}
 SECRETS = (TOKEN, "not-to-be-shown", "clearinghouse.example", "grant_7")
 
@@ -102,21 +104,40 @@ def test_the_work_role_with_half_a_clearinghouse_is_refused_and_names_what_is_mi
     assert missing in message
 
 
-@pytest.mark.parametrize("setting", sorted(SELF_HOSTED))
-def test_the_work_role_beside_batteries_or_a_signer_is_refused(setting: str) -> None:
-    """An engine in its work role holds no address or credential of Batteries or a signer: it would
-    allot at one place and pay from the other."""
-    message = refused({"LPB_ROLE": "work", setting: SELF_HOSTED[setting]} | THREE)
+@pytest.mark.parametrize("setting", sorted(BATTERIES))
+def test_the_work_role_beside_a_batteries_setting_is_refused(setting: str) -> None:
+    """An engine in its work role holds no address or credential of Batteries: only the clearinghouse's
+    own engine reaches it (D85 point 1). With both, an actor would be allotted at one and accounted for
+    at the other."""
+    message = refused({"LPB_ROLE": "work", setting: BATTERIES[setting]} | THREE)
     assert setting in message
 
 
-@pytest.mark.parametrize("setting", sorted(SELF_HOSTED))
-def test_the_work_role_with_self_hosted_settings_and_no_clearinghouse_names_both(setting: str) -> None:
+def test_the_work_role_names_the_clearinghouses_signer_or_none() -> None:
+    """The engine signs at the clearinghouse's published signer itself, so ``LPB_SIGNER_URL`` is set
+    beside the clearinghouse settings as on any engine that pays. Unset, the engine runs its jobs
+    unpaid, as any engine without a signer: no rule of the role asks for it."""
+    paying = EngineSettings.from_env({"LPB_ROLE": "work"} | THREE | SIGNER)
+    assert (paying.role, paying.signer_url) == ("work", SIGNER["LPB_SIGNER_URL"])
+    unpaid = EngineSettings.from_env({"LPB_ROLE": "work"} | THREE)
+    assert (unpaid.role, unpaid.signer_url) == ("work", None)
+
+
+@pytest.mark.parametrize("setting", sorted(BATTERIES))
+def test_the_work_role_with_batteries_settings_and_no_clearinghouse_names_both(setting: str) -> None:
     """Somebody set ``LPB_ROLE=work`` on a self-hosted deployment: the refusal says what the role needs
     and what it cannot hold, in one message."""
-    message = refused({"LPB_ROLE": "work", setting: SELF_HOSTED[setting]} | DISCOVERY)
+    message = refused({"LPB_ROLE": "work", setting: BATTERIES[setting]} | DISCOVERY)
     assert all(name in message for name in THREE)
     assert setting in message
+
+
+def test_the_work_role_with_a_signer_and_no_clearinghouse_does_not_name_the_signer() -> None:
+    """The signer is no part of the rule: the refusal names what is missing and nothing the role may
+    hold."""
+    message = refused({"LPB_ROLE": "work"} | SIGNER | DISCOVERY)
+    assert all(name in message for name in THREE)
+    assert "LPB_SIGNER_URL" not in message and "cannot hold" not in message
 
 
 # -- both: self-hosted payments -----------------------------------------------------------------------

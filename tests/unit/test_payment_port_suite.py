@@ -1,14 +1,17 @@
 """#168's "Done when": one suite, run against the local adapters and the remote adapters (D84).
 
 Every test here runs twice. ``local`` is an engine whose payment ports reach the payment provider
-itself. ``remote`` is an enterprise's engine whose ports are the remote adapters, calling a real
-clearinghouse app's public listener in this process (``tests/unit/payment_ports.py``). The same commands
-must leave the same money at the provider and the same records in the engine, whichever way they went.
+itself. ``remote`` is an enterprise's engine whose ports are the remote adapters, calling a standalone
+clearinghouse's public listener in this process: the tenant routes, mounted to hand each allocation's
+key over and store none, over an engine, a store and a secret store of the clearinghouse's own
+(``tests/unit/payment_ports.py``). The same commands must leave the same money at the provider and the
+same records in the engine, whichever way they went.
 
 The suite covers ``AllocationManager`` (allot, top up, pause, resume, revoke, rotate, read the grant),
 ``AllowanceReader``, ``UsageSource`` and ``CredentialResolver``, the refusals, and **signing**, which
 happens inside ``RunnerTransport``: its last section runs a whole fixed job and a whole live job, with a
-real signer and runner on loopback sockets behind both sets (``tests/unit/paying_ports.py``).
+real signer and runner on loopback sockets (``tests/unit/paying_ports.py``). Either engine signs at the
+signer itself, with the allocation's own key; the clearinghouse's engine is in no payment's path.
 """
 
 from collections.abc import AsyncIterator
@@ -416,9 +419,10 @@ async def test_a_fixed_job_and_a_live_job_are_paid_through_each_set_of_adapters(
     paying: Ports, net: Net, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A whole job of each kind, from the engine's ``jobs.run`` to its record and its cost. The same
-    runner and the same signer are behind both sets of adapters, and the signer is called with the
-    Batteries key of the actor's allocation either way: by the engine itself, or by the clearinghouse in
-    place of the payment key it was shown."""
+    runner and the same signer serve both engines, and the signer is called with the Batteries key of
+    the actor's allocation either way, by the engine that runs the job: the key its own Batteries call
+    minted, or the one the clearinghouse handed over at allotment. Nothing of a payment reaches the
+    clearinghouse's engine."""
     ports, alice = paying, paying.actor("alice")
     allocation_id = await allotted(ports)
     signs_with = f"Bearer {batteries_key(ports, allocation_id)}"
@@ -447,12 +451,19 @@ async def test_a_fixed_job_and_a_live_job_are_paid_through_each_set_of_adapters(
     cost = await cost_of(ports, live.job.id, allocation_id, "m-2", "0.5")
     assert cost.status == "observed" and cost.billable.fee_usd == Decimal("0.5")
 
+    # what the clearinghouse's listener saw of all that (remote): the tenant's routes, each with the tenant
+    # admin key. No signer path, and no actor's key
+    for path, headers in ports.seen:
+        assert path.startswith("/v1/clearinghouse/"), path
+        assert headers.get("Authorization") == f"Bearer {ports.token}"
+    assert (ports.side == "remote") is bool(ports.seen)
+
 
 async def test_a_job_the_signer_refuses_fails_with_its_reason_and_nothing_paid(
     paying: Ports, net: Net
 ) -> None:
-    """An empty allocation is the signer's 402, whichever way the engine reached the signer, and the job
-    records it: ``payment``, ``allowance_exhausted``, nothing paid."""
+    """An empty allocation is the signer's 402, whoever runs the signer, and the job records it:
+    ``payment``, ``allowance_exhausted``, nothing paid."""
     ports, alice = paying, paying.actor("alice")
     await allotted(ports)
     net.sign = [402]

@@ -21,18 +21,33 @@ A clearinghouse failure is classified like a signer failure (D87):
   read) is a ``ProviderError`` with that status, which is no refusal: its body is not quoted.
 
 No request is ever sent twice here, and no redirect is followed: the tenant admin key goes to the
-clearinghouse's address only. The key is in no error text, log line or ``repr``, and no error chains
-one that holds it, or an answer that may hold a payment key (#168 review).
+clearinghouse's address only.
+
+**No error carries a credential** (#168 review). Two are in hand here: the tenant admin key, in every
+request's headers, and the allocation's own Batteries key, which the answer to an allotment or a payment
+key rotation hands over once. Neither is in an error's text, a log line or a ``repr``. Nor can an error
+lead to one: every error is *built* where the request or the answer is in hand (``_exchange``,
+``_parsed``) and *returned*, and it is raised by ``raised`` (``adapters/clean_errors.py``), a frame that
+holds the error and nothing else. So no error chains httpx's or pydantic's own, which hold the request
+and the whole answer, and no frame of an error's traceback has the request or the answer among its
+locals.
 """
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderOutcomeUnknown, ProviderUnavailable
+from livepeer_builder.adapters.clean_errors import raised
+from livepeer_builder.errors import (
+    CursorMismatch,
+    EngineError,
+    ProviderError,
+    ProviderOutcomeUnknown,
+    ProviderUnavailable,
+)
 from livepeer_builder.utils import BODY_LIMIT
 
 # A request that was never written: nothing reached the clearinghouse, so nothing was applied.
@@ -75,30 +90,32 @@ class ClearinghouseWire:
 
     async def read(self, path: str, params: Mapping[str, str] | None = None) -> httpx.Response:
         """One ``GET``. It applies nothing, so its failure is never an unknown outcome."""
-        return await self._send("GET", path, params=params)
+        return raised(await self._exchange("GET", path, params=params))
 
     async def write(self, path: str, body: Mapping[str, Any] | None = None) -> httpx.Response:
         """One ``POST``, sent once. A failure after it left is ``ProviderOutcomeUnknown``."""
-        return await self._send("POST", path, body=dict(body or {}))
+        return raised(await self._exchange("POST", path, body=dict(body or {})))
 
     async def read_as[T: BaseModel](
         self, model: type[T], path: str, params: Mapping[str, str] | None = None
     ) -> T:
-        return _parsed(model, await self.read(path, params))
+        return raised(_parsed(model, await self.read(path, params)))
 
     async def write_as[T: BaseModel](
         self, model: type[T], path: str, body: Mapping[str, Any] | None = None
     ) -> T:
-        return _parsed(model, await self.write(path, body))
+        return raised(_parsed(model, await self.write(path, body)))
 
-    async def _send(
+    async def _exchange(
         self,
         method: Method,
         path: str,
         *,
         params: Mapping[str, str] | None = None,
         body: dict[str, Any] | None = None,
-    ) -> httpx.Response:
+    ) -> "httpx.Response | EngineError":
+        """One request, sent once: the answer, or the error its failure means. The error is returned and
+        never raised here, where the request, with the tenant admin key in its headers, is a local."""
         request = self._client.build_request(
             method,
             self._base_url + path,
@@ -114,47 +131,45 @@ class ClearinghouseWire:
             async with asyncio.timeout(self._timeout_s):
                 response = await self._client.send(request, follow_redirects=False)
         except (TimeoutError, httpx.TransportError) as error:
-            failure, cause = self._failed(method, error), _named(error)
-        else:
-            return self._answered(method, response)
-        # Raised here, outside the except block: httpx's own error, whose request holds the tenant admin key
-        # in its headers, would otherwise stay reachable as the context (#168 review).
-        raise failure from cause
+            failure = self._failed(method, error)
+            failure.__cause__ = _named(error)  # its type alone: httpx's own error holds the request
+            return failure
+        return self._answered(method, response)
 
     def _failed(self, method: Method, error: Exception) -> ProviderUnavailable:
         if isinstance(error, _NEVER_SENT):
             return ProviderUnavailable("the clearinghouse could not be reached; nothing was sent")
         return _no_answer(method, f"the clearinghouse gave no answer within {self._timeout_s:g} s")
 
-    def _answered(self, method: Method, response: httpx.Response) -> httpx.Response:
+    def _answered(self, method: Method, response: httpx.Response) -> "httpx.Response | EngineError":
         if response.status_code >= 400:
-            self._refuse(method, response)
+            return self._refusal(method, response)
         if not response.is_success:  # a redirect is not followed: the key goes to this address only
-            raise ProviderError(
+            return ProviderError(
                 response.status_code, "the clearinghouse answered with a redirect, which is not followed"
             )
         return response
 
-    def _refuse(self, method: Method, response: httpx.Response) -> NoReturn:
-        """Raise what an error status means, each kind of failure by its own error."""
+    def _refusal(self, method: Method, response: httpx.Response) -> EngineError:
+        """What an error status means, each kind of failure by its own error."""
         status = response.status_code
         message, code = _problem(response)
         message = message.replace(self._token.get_secret_value(), "[the tenant admin key]")[:BODY_LIMIT]
         if status == 400 and code == _CURSOR_MISMATCH:
-            raise CursorMismatch(message)
+            return CursorMismatch(message)
         if status == 409 and code == _STILL_RUNNING:
-            raise ProviderOutcomeUnknown(
+            return ProviderOutcomeUnknown(
                 f"the clearinghouse is still running this command; {_APPLIED_OR_NOT}"
             )
         if status in _REFUSALS:
-            raise ProviderError(status, message)
+            return ProviderError(status, message)
         if status == 429:  # turned away before it was handled
-            raise ProviderUnavailable("the clearinghouse is not taking requests now (HTTP 429)")
+            return ProviderUnavailable("the clearinghouse is not taking requests now (HTTP 429)")
         if method == "POST":  # a 5xx or a 408 to a command: it may have been applied on the way
-            raise ProviderOutcomeUnknown(f"the clearinghouse answered HTTP {status}; {_APPLIED_OR_NOT}")
+            return ProviderOutcomeUnknown(f"the clearinghouse answered HTTP {status}; {_APPLIED_OR_NOT}")
         if status in (408, 503):
-            raise ProviderUnavailable(f"the clearinghouse is not ready (HTTP {status})")
-        raise ProviderError(status, message)
+            return ProviderUnavailable(f"the clearinghouse is not ready (HTTP {status})")
+        return ProviderError(status, message)
 
 
 def _no_answer(method: Method, what: str) -> ProviderUnavailable:
@@ -184,15 +199,14 @@ def _problem(response: httpx.Response) -> tuple[str, str | None]:
     return f"the clearinghouse answered HTTP {response.status_code}", None
 
 
-def _parsed[T: BaseModel](model: type[T], response: httpx.Response) -> T:
-    """A 2xx answer as ``model``, or a ``ProviderError`` with the answer's own status: an unknown outcome
-    to the ledger, never a refusal. The body is not quoted: it may hold a payment key. Nor is pydantic's
-    error chained, which holds the whole body: the refusal is raised outside the except block, since
-    ``from None`` hides the context from a printed traceback but keeps it (#168 review)."""
+def _parsed[T: BaseModel](model: type[T], response: httpx.Response) -> T | ProviderError:
+    """A 2xx answer as ``model``, or the ``ProviderError`` an answer the engine cannot read comes to, with
+    the answer's own status: an unknown outcome to the ledger, never a refusal. Its text does not quote
+    the body, which may hold a key. It is returned, for ``raised``: raised here it would chain
+    pydantic's error, which holds the whole body, and carry this frame, which holds the answer."""
     try:
         return model.model_validate_json(response.content)
     except ValidationError:
-        refused = ProviderError(
+        return ProviderError(
             response.status_code, f"the clearinghouse answered with a body that is not {model.__name__}"
         )
-    raise refused

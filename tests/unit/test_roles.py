@@ -1,9 +1,8 @@
 """#169: what an engine in each role serves, wires and runs (D84).
 
 - ``both``, the default: both halves, as before. Self-hosted payments.
-- ``work``: the work half alone. It mounts no clearinghouse route and no signer path, and it is nobody's
-  clearinghouse: it forwards no signer call, reports no wallet, publishes no runner list and issues no
-  payment key.
+- ``work``: the work half alone. It mounts no clearinghouse route, and it is nobody's clearinghouse: it
+  reports no wallet and publishes no runner list.
 - ``clearinghouse``: the clearinghouse half alone, on a public and a private listener. It mounts no job
   route and no other work route, and it starts none of the work half's machinery: no interrupted job
   is resolved, and no cost sync and no retention purge run. It still reads discovery, for the runner
@@ -33,7 +32,7 @@ from livepeer_builder.http import build_app, create_app
 from livepeer_builder.http.app import shared_app
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
 from livepeer_builder.http.work import mount_work_routes
-from livepeer_builder.testing import FakeAllocationManager, FakeSigningTransport, ScriptedStreamTransport
+from livepeer_builder.testing import FakeAllocationManager, ScriptedStreamTransport
 from tests.conftest import EngineFactory
 from tests.unit.role_engines import CLEARINGHOUSE, PRIVATE_PORT, ROLES, Role, in_role, served
 from tests.unit.test_admin_route_sweep import everything_stored, filled
@@ -51,7 +50,7 @@ JOBS = {
     ("POST", "/v1/jobs/{job_id}/usage"),
     ("GET", "/v1/jobs/{job_id}/cost"),
 }
-SIGNING = {("POST", "/sign-orchestrator-info"), ("POST", "/generate-live-payment")}
+SIGNER_PATHS = ("/sign-orchestrator-info", "/generate-live-payment")
 
 
 def client_of(app: FastAPI) -> httpx.AsyncClient:
@@ -145,43 +144,49 @@ async def test_a_clearinghouse_answers_404_on_every_job_route_and_every_other_wo
     assert await house.store.jobs_in_state("running") == []
 
 
-async def test_a_work_engine_answers_404_on_every_clearinghouse_route_and_on_the_signers_two_paths(
+async def test_a_work_engine_answers_404_on_every_clearinghouse_route(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager
 ) -> None:
     """The ticket's "one in its work role mounts no clearinghouse routes". The tenant's routes, what
-    only a clearinghouse admin does, the wallet, the runner list and the signer's two paths are each an
-    unknown path there, to its own admin, to an actor, to a payment key and to nobody."""
+    only a clearinghouse admin does, the wallet and the runner list are each an unknown path there, to
+    its own admin, to an actor and to nobody."""
     whole = await in_role(make_engine, "both")
     clearinghouse = shared_app(whole, manage_lifecycle=False)
-    mount_clearinghouse_routes(clearinghouse, whole)
+    mount_clearinghouse_routes(clearinghouse, whole, deliver_allocation_keys=False)
     routes = {key: route for key, route in served(clearinghouse).items() if not key[1].endswith("z")}
-    assert routes.keys() >= SIGNING | {
+    assert routes.keys() >= {
         ("POST", "/v1/clearinghouse/tenants"),
         ("GET", "/v1/clearinghouse/wallet"),
         ("GET", "/v1/clearinghouse/discovery"),
         ("POST", "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation"),
     }
-    assert len(routes) >= 22, f"the sweep found too few clearinghouse routes to be meaningful: {len(routes)}"
+    assert len(routes) >= 20, f"the sweep found too few clearinghouse routes to be meaningful: {len(routes)}"
 
     enterprise = await in_role(make_engine, "work")
     keys = await keys_of(enterprise, admin)
     params = {"tenant_id": "default", "actor_id": "alice", "key_id": "key_1"}
     stored_before, calls_before = await everything_stored(enterprise), list(manager.calls)
     app = create_app(enterprise, manage_lifecycle=False)
-    callers = {
-        "no credential": {},
-        "its own admin": keys["clearinghouse_admin"],
-        "an actor": keys["actor"],
-        "a payment key": bearer("lpp_" + "a" * 43),
-    }
+    callers = {"no credential": {}, "its own admin": keys["clearinghouse_admin"], "an actor": keys["actor"]}
     wrong = await not_served(app, routes, callers, params)
     assert not wrong, "an engine in its work role answered a clearinghouse route:\n" + "\n".join(wrong)
     assert not served(app).keys() & routes.keys()
     assert not [path for _, path in served(app) if path.startswith("/v1/clearinghouse")]
     assert manager.calls == calls_before
     assert await everything_stored(enterprise) == stored_before
-    transport = enterprise.jobs._transport
-    assert not transport.forwarded  # type: ignore[attr-defined]  # the signer was handed nothing
+
+
+@pytest.mark.parametrize("role", ROLES)
+async def test_no_role_serves_a_signer_path(make_engine: EngineFactory, role: Role) -> None:
+    """No engine signs for another (D85 point 1): an enterprise's engine signs at the signer itself."""
+    engine = await in_role(make_engine, role)
+    listeners = ("public", "private") if role == "clearinghouse" else ("only", "public", "private")
+    for listener in listeners:
+        app = create_app(engine, manage_lifecycle=False, listener=listener)  # type: ignore[arg-type]
+        assert not [path for _, path in served(app) if path in SIGNER_PATHS]
+        async with client_of(app) as client:
+            for path in SIGNER_PATHS:
+                assert (await client.post(path, content=b"{}")).status_code == 404, (listener, path)
 
 
 async def test_a_work_engine_still_serves_its_work_routes(
@@ -283,24 +288,25 @@ async def test_the_both_role_wires_both_halves_as_before(
 ) -> None:
     engine = await in_role(make_engine, "both")
     payments = engine.payments
-    assert payments.signing is not None and payments.wallet is not None and payments.tenants is not None
+    assert payments.wallet is not None and payments.tenants is not None
     assert engine.runner_list is not None and engine.costs._worker is not None
     request = AllotRequest(operation_ref="a-1", tenant_id="default", actor_id="alice", amount=usd("5"))
-    assert (await payments.allot(admin, request)).payment_key is not None
+    assert (await payments.allot(admin, request)).credential_custody == "secret_store"
 
 
 async def test_the_work_role_is_nobodys_clearinghouse(
     make_engine: EngineFactory, admin: ActorContext
 ) -> None:
-    """It forwards no signer call, reports no wallet, publishes no runner list and issues no payment
-    key, whatever its parts could do: here its transport could forward and its provider could report."""
+    """It reports no wallet and publishes no runner list, whatever its parts could do: here its
+    provider could report the escrow and its transport could ask the signer. It keeps its own actors'
+    keys, as any engine that runs jobs."""
     engine = await in_role(make_engine, "work")
     payments = engine.payments
-    assert payments.signing is None and payments.wallet is None
+    assert payments.wallet is None
     assert engine.runner_list is None
     assert engine.costs._worker is not None  # its jobs' costs are synced, through the usage port
     request = AllotRequest(operation_ref="a-1", tenant_id="default", actor_id="alice", amount=usd("5"))
-    assert (await payments.allot(admin, request)).payment_key is None
+    assert (await payments.allot(admin, request)).credential_custody == "secret_store"
 
 
 async def test_the_clearinghouse_role_wires_the_clearinghouse_half_and_no_cost_sync(
@@ -308,11 +314,9 @@ async def test_the_clearinghouse_role_wires_the_clearinghouse_half_and_no_cost_s
 ) -> None:
     engine = await in_role(make_engine, "clearinghouse")
     payments = engine.payments
-    assert payments.signing is not None and payments.wallet is not None and payments.tenants is not None
+    assert payments.wallet is not None and payments.tenants is not None
     assert payments.usage is not None and engine.runner_list is not None
     assert engine.costs._worker is None  # cost sync attributes usage to jobs: it has none
-    request = AllotRequest(operation_ref="a-1", tenant_id="default", actor_id="alice", amount=usd("5"))
-    assert (await payments.allot(admin, request)).payment_key is not None
 
 
 # -- what each role runs --------------------------------------------------------------------------------
@@ -412,7 +416,7 @@ async def test_a_clearinghouse_is_built_from_its_settings_alone() -> None:
     engine = await BuilderEngine.create(clearinghouse_settings())
     try:
         assert engine.role == "clearinghouse"
-        assert engine.payments.signing is not None and engine.payments.tenants is not None
+        assert engine.payments.tenants is not None
         assert engine.payments.wallet is not None and engine.runner_list is not None
     finally:
         await engine.stop()
@@ -421,16 +425,15 @@ async def test_a_clearinghouse_is_built_from_its_settings_alone() -> None:
 @pytest.mark.parametrize(
     ("unset", "named"),
     [
-        ("signer_url", "LPB_SIGNER_URL"),
         ("batteries_url", "LPB_BATTERIES_URL"),
         ("batteries_token", "LPB_BATTERIES_TOKEN"),
         ("batteries_grants_token", "LPB_BATTERIES_GRANTS_TOKEN"),
     ],
 )
-async def test_a_clearinghouse_without_a_signer_or_batteries_does_not_start(unset: str, named: str) -> None:
-    """A clearinghouse signs for its tenants' engines, allots from their grants and onboards them. One
-    that cannot would serve routes that do nothing, so it is refused when it is built, by the setting
-    that is missing. No value is echoed."""
+async def test_a_clearinghouse_without_batteries_does_not_start(unset: str, named: str) -> None:
+    """A clearinghouse allots from its tenants' grants and onboards them. One that cannot would serve
+    routes that do nothing, so it is refused when it is built, by the setting that is missing. No value
+    is echoed."""
     with pytest.raises(ValueError, match="LPB_ROLE=clearinghouse") as error:
         await BuilderEngine.create(clearinghouse_settings(**{unset: None}))
     message = str(error.value)
@@ -439,13 +442,10 @@ async def test_a_clearinghouse_without_a_signer_or_batteries_does_not_start(unse
 
 
 async def test_a_clearinghouse_is_judged_on_the_parts_it_will_run_with(make_engine: EngineFactory) -> None:
-    """Supplied parts count, as they do for the secret store (#112): a transport that forwards signer
-    calls is a signer, and a supplied provider is Batteries' stand-in. A part that is off is refused."""
-    assert (await in_role(make_engine, "clearinghouse")).payments.signing is not None
-    with pytest.raises(ValueError, match="LPB_SIGNER_URL"):
-        await make_engine(**CLEARINGHOUSE)  # the shared scripted transport forwards no signer call
-    signer = FakeSigningTransport()
+    """Supplied parts count, as they do for the secret store (#112): a supplied provider is Batteries'
+    stand-in. A part that is off is refused."""
+    assert (await in_role(make_engine, "clearinghouse")).payments.tenants is not None
     with pytest.raises(ValueError, match="LPB_BATTERIES_TOKEN"):
-        await make_engine(supply=EngineSupply(transport=signer, allocation_manager=None), **CLEARINGHOUSE)
+        await make_engine(supply=EngineSupply(allocation_manager=None), **CLEARINGHOUSE)
     with pytest.raises(ValueError, match="LPB_BATTERIES_GRANTS_TOKEN"):
-        await make_engine(supply=EngineSupply(transport=signer, grants_manager=None), **CLEARINGHOUSE)
+        await make_engine(supply=EngineSupply(grants_manager=None), **CLEARINGHOUSE)

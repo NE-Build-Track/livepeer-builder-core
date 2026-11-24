@@ -39,13 +39,13 @@ from livepeer_builder.contracts import (
     Allowance,
     CostSummary,
     CredentialKind,
+    DeliveredAllocation,
     EngineHealth,
     IssuedKey,
     Job,
     JobCost,
     JobRequest,
     JobResult,
-    KeyedAllocation,
     KnownActor,
     Money,
     Offering,
@@ -53,8 +53,6 @@ from livepeer_builder.contracts import (
     Reconciliation,
     Role,
     Runner,
-    SignerAnswer,
-    SignerCall,
     SyncReport,
     TenantGrant,
     TenantState,
@@ -258,18 +256,14 @@ class WalletApi(Protocol):
     async def report(self, admin: ActorContext) -> WalletReport: ...
 
 
-class PaymentSigningApi(Protocol):
-    """A clearinghouse's signing for the engines of its tenants: present only when the runner transport
-    forwards a signer call (``SignerForwarder``, as the SDK transport with a signer does)."""
-
-    async def payer(self, authorization: str | None) -> ActorAllocation: ...
-    async def forward(
-        self, call: SignerCall, payer: ActorAllocation, body: bytes, content_type: str
-    ) -> SignerAnswer: ...
-
-
 class PaymentsAdminApi(Protocol):
-    async def allot(self, admin: ActorContext, request: AllotRequest) -> KeyedAllocation: ...
+    async def allot_for_delivery(self, admin: ActorContext, request: AllotRequest) -> DeliveredAllocation: ...
+
+    async def rotate_for_delivery(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
+    ) -> DeliveredAllocation: ...
+
+    async def allot(self, admin: ActorContext, request: AllotRequest) -> ActorAllocation: ...
     async def top_up(
         self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
     ) -> ActorAllocation: ...
@@ -278,7 +272,7 @@ class PaymentsAdminApi(Protocol):
     ) -> ActorAllocation: ...
     async def rotate_payment_key(
         self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
-    ) -> KeyedAllocation: ...
+    ) -> ActorAllocation: ...
     async def revoke(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
     async def top_up_grant(self, admin: ActorContext, tenant_id: str, request: TopUpRequest) -> None: ...
     async def list_actors(
@@ -298,8 +292,6 @@ class PaymentsAdminApi(Protocol):
     def usage(self) -> TenantUsageApi | None: ...
     @property
     def wallet(self) -> WalletApi | None: ...
-    @property
-    def signing(self) -> PaymentSigningApi | None: ...
 
 
 class RunnerListApi(Protocol):
@@ -357,7 +349,6 @@ __all__ = [
     "JobStreamApi",
     "JobsApi",
     "KeysApi",
-    "PaymentSigningApi",
     "PaymentsAdminApi",
     "PaymentsApi",
     "RunnerListApi",

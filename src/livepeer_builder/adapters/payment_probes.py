@@ -6,8 +6,8 @@ touches the HTTP client, sends no body and follows no redirect, so a credential 
 setting names and to no other. ``tests/unit/test_payments_check.py`` records every request and reads
 this file to hold that.
 
-The engine's role says what is probed (``LPB_ROLE``, #169), and the report names it. An engine that
-pays through Batteries and a signer of its own, in its ``both`` or its ``clearinghouse`` role, probes:
+The engine's role says what is probed (``LPB_ROLE``, #169), and the report names it. Every engine that
+pays signs at its signer itself, so every role probes:
 
 - **the signer**, at the root of ``LPB_SIGNER_URL`` as the SDK reads it (scheme, host and port). The
   signer's identity call is not a GET, so it cannot be made here. ``GET /sign-orchestrator-info`` is
@@ -15,19 +15,28 @@ pays through Batteries and a signer of its own, in its ``both`` or its ``clearin
   only, so a signer answers 405 and names the method it takes in ``Allow``. That says an HTTP server
   is at the address and has the signer's identity route. It does not say the signer signs, that its
   wallet is funded, or that it is ready: only a payment, or the signer's own ``/readyz`` on its metrics
-  listener, says those;
+  listener, says those. No credential is sent. An engine in its ``clearinghouse`` role signs nothing,
+  and is asked all the same: it runs the signer its tenants' engines sign at, and this is the address
+  its wallet report reads. The probe does not say the signer is reachable at its published address.
+
+An engine that reaches Batteries itself, in its ``both`` or its ``clearinghouse`` role, also probes:
+
 - **Batteries** with the engine's credential: ``GET /v1/usage?limit=1``, the read cost sync makes;
 - **Batteries** with the grants credential, when one is set: ``GET /v1/grants?limit=1``. An engine in
   its ``clearinghouse`` role cannot onboard a tenant without that credential, so there the probe is
   always made, and says so when the credential is not set.
 
-An engine in its ``work`` role probes the payment clearinghouse it uses with its tenant admin key: its
-grant (who it is there), one page of its usage, and the runner list when that is its discovery address.
-The grant and the usage are the tenant's own routes, which name no tenant: the clearinghouse answers for
-the key's tenant, and the grant's id says whether that is ``LPB_CLEARINGHOUSE_TENANT_ID``.
-It also asks, with no credential, whether the clearinghouse serves the signer's identity path, where the
-engine signs: the same GET a signer is asked, and the same 405. Every one is a clearinghouse route: no
-work route is called.
+An engine in its ``work`` role probes the payment clearinghouse it uses instead, with its tenant admin
+key: its grant (who it is there), one page of its usage, and the runner list when that is its discovery
+address. The grant and the usage are the tenant's own routes, which name no tenant: the clearinghouse
+answers for the key's tenant, and the grant's id says whether that is ``LPB_CLEARINGHOUSE_TENANT_ID``.
+A key that belongs to another tenant fails the grant probe, plainly, and the usage probe with it: the
+page it read is that tenant's. An engine with such a key refuses every request to the clearinghouse
+(``adapters/clearinghouse_tenant.py``).
+Every one is a clearinghouse route: no work route is called. Its signer is the clearinghouse's
+published one, at ``LPB_SIGNER_URL``, and is asked there, never at the clearinghouse's address: a
+clearinghouse's engine serves no signer path (D85 point 1, as amended). With ``LPB_SIGNER_URL`` unset
+the probe is ``not_configured`` and the check fails: such an engine runs its jobs unpaid.
 
 Nothing the other side says is repeated: a probe reports a status and the engine's own words.
 """
@@ -40,19 +49,34 @@ import httpx
 from pydantic import ValidationError
 
 from livepeer_builder.adapters.batteries import TOKEN_HEADER
-from livepeer_builder.adapters.clearinghouse import GRANT_PATH, USAGE_PATH
+from livepeer_builder.adapters.clearinghouse_tenant import GRANT_PATH, USAGE_PATH
 from livepeer_builder.config import CLEARINGHOUSE_RUNNER_LIST, EngineSettings
 from livepeer_builder.contracts import (
     PaymentCheck,
     PaymentConfiguration,
     PaymentProbe,
     ProbeOutcome,
+    Role,
     TenantGrant,
 )
 
 TIMEOUT_S = 5.0
 SIGNER_IDENTITY = "/sign-orchestrator-info"
 _NOT_SET = "{setting} is not set"
+# No role is refused at startup for a missing signer address, so this is where each is told what follows.
+_UNPAID = "LPB_SIGNER_URL is not set: this engine runs its jobs unpaid"
+_NO_SIGNER: dict[Role, str] = {
+    "both": _UNPAID,
+    "work": f"{_UNPAID}. Set it to the address of the signer its payment clearinghouse publishes",
+    "clearinghouse": "LPB_SIGNER_URL is not set: the wallet report cannot say whether the signer answers. "
+    "Set it to the address this engine reaches the signer at",
+}
+# The grant the clearinghouse answers with is the key's tenant's. The other tenant's id is not repeated.
+_ANOTHER = (
+    "the tenant admin key in LPB_CLEARINGHOUSE_TOKEN belongs to another tenant than "
+    "LPB_CLEARINGHOUSE_TENANT_ID: the clearinghouse answered with that tenant's grant. An engine with "
+    "these settings refuses every request to the clearinghouse. Set the key and the id of one tenant"
+)
 Answer = httpx.Response | None  # None: no answer came
 
 
@@ -102,7 +126,7 @@ async def _self_hosted(settings: EngineSettings, client: httpx.AsyncClient) -> P
 async def _signer(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentProbe:
     name, setting = "signer", "LPB_SIGNER_URL"
     if settings.signer_url is None:
-        return _probe(name, setting, None, "not_configured", _NOT_SET.format(setting=setting))
+        return _probe(name, setting, None, "not_configured", _NO_SIGNER[settings.role])
     url = settings.signer_url if "://" in settings.signer_url else f"https://{settings.signer_url}"
     parts = urlsplit(url)
     request = f"GET {SIGNER_IDENTITY}"
@@ -194,21 +218,22 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     grant_probe, grant = await _tenant_grant(client, base, tenant_id, headers)
+    own = grant is not None and grant_probe.outcome == "ok"  # the key's tenant is the engine's
     probes = [
         grant_probe,
-        await _tenant_usage(client, base, headers),
-        await _clearinghouse_signer(client, base),
+        await _tenant_usage(client, base, headers, of_another_tenant=grant is not None and not own),
+        await _signer(settings, client),  # the clearinghouse's signer, asked as an engine asks its own
     ]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
         probes.append(await _runner_list(client, settings.discovery_url, headers))
-    return _checked(settings, "clearinghouse", probes, grant)
+    return _checked(settings, "clearinghouse", probes, grant if own else None)  # no other tenant's grant
 
 
 async def _tenant_grant(
     client: httpx.AsyncClient, base: str, tenant_id: str, headers: Mapping[str, str]
 ) -> tuple[PaymentProbe, TenantGrant | None]:
     """Who the engine is at the clearinghouse: the grant of the key's tenant, when the read answered with
-    it, and when that tenant is the one ``LPB_CLEARINGHOUSE_TENANT_ID`` names."""
+    it. The probe passes only when that tenant is the one ``LPB_CLEARINGHOUSE_TENANT_ID`` names."""
     name, request = "clearinghouse_grant", "GET " + GRANT_PATH
     answer = _answered(name, request, await _get(client, base + GRANT_PATH, headers=headers))
     if isinstance(answer, PaymentProbe):
@@ -218,16 +243,16 @@ async def _tenant_grant(
     except ValidationError:
         return _unexpected(name, request, "the grant could not be read", answer), None
     if grant.tenant_id != tenant_id:
-        detail = (
-            "the tenant admin key is another tenant's than LPB_CLEARINGHOUSE_TENANT_ID's: the clearinghouse "
-            "answered with that tenant's grant"
-        )
-        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", detail, 200), None
+        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", _ANOTHER, 200), grant
     detail = "the clearinghouse answered with this tenant's grant"
     return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "ok", detail, 200), grant
 
 
-async def _tenant_usage(client: httpx.AsyncClient, base: str, headers: Mapping[str, str]) -> PaymentProbe:
+async def _tenant_usage(
+    client: httpx.AsyncClient, base: str, headers: Mapping[str, str], *, of_another_tenant: bool
+) -> PaymentProbe:
+    """One page of the key's tenant's usage. The page states no tenant: the grant probe says whose it
+    is, and a page of another tenant than the engine's is no pass."""
     name, request = "clearinghouse_usage", "GET " + USAGE_PATH
     url = base + USAGE_PATH
     answer = _answered(name, request, await _get(client, url, params={"limit": "1"}, headers=headers))
@@ -236,6 +261,9 @@ async def _tenant_usage(client: httpx.AsyncClient, base: str, headers: Mapping[s
     body = _json(answer)
     if not isinstance(body, dict) or not isinstance(body.get("items"), list):
         return _unexpected(name, request, "the usage page could not be read", answer)
+    if of_another_tenant:
+        detail = "the clearinghouse answered with a page of another tenant's payment records: " + _ANOTHER
+        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", detail, 200)
     detail = "the clearinghouse answered with a page of the key's tenant's payment records"
     return _probe(name, "LPB_CLEARINGHOUSE_TOKEN", request, "ok", detail, 200)
 
@@ -249,30 +277,6 @@ async def _runner_list(client: httpx.AsyncClient, url: str, headers: Mapping[str
         return _unexpected(name, request, "the runner list could not be read", answer)
     detail = "the clearinghouse answered with its runner list"
     return _probe(name, "LPB_DISCOVERY_URL", request, "ok", detail, 200)
-
-
-async def _clearinghouse_signer(client: httpx.AsyncClient, base: str) -> PaymentProbe:
-    """Whether the clearinghouse serves the signer's two paths, where the engine signs. Asked as a
-    signer is asked: its identity path with a GET, which it takes with another method only, so the answer
-    is 405. No credential is sent: the tenant admin key is not for a signer path, and a payment key is
-    an actor's. A clearinghouse with no signer serves neither path and answers 404."""
-    name, setting, request = "clearinghouse_signer", "LPB_CLEARINGHOUSE_URL", f"GET {SIGNER_IDENTITY}"
-    answer = await _get(client, base + SIGNER_IDENTITY)
-    if answer is None:
-        return _probe(name, setting, request, "unavailable", "the clearinghouse did not answer")
-    status = answer.status_code
-    if status == 405:
-        detail = (
-            "the clearinghouse serves the signer's identity path. Whether its signer signs, and whether "
-            "its wallet is funded, only a payment shows"
-        )
-        return _probe(name, setting, request, "ok", detail, status)
-    if status >= 500:
-        return _probe(
-            name, setting, request, "unavailable", f"the clearinghouse answered HTTP {status}", status
-        )
-    detail = f"HTTP {status}: what answers at this address does not serve the signer's two paths"
-    return _probe(name, setting, request, "unexpected", detail, status)
 
 
 def _answered(name: str, request: str, answer: Answer) -> PaymentProbe | httpx.Response:

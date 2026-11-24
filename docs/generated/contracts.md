@@ -194,6 +194,7 @@ classDiagram
         +datetime created_at
         +datetime updated_at
         +str label
+        +enum credential_custody
     }
     class SecretRef {
         +str ref

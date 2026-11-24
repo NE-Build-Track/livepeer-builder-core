@@ -77,7 +77,11 @@ async def serve(
     """Run the service. The engine is stopped even when the server never starts (a taken port).
 
     One listener, or two when ``LPB_HTTP_PRIVATE_PORT`` is set: then an address that cannot be bound
-    stops both and the engine, and neither listener serves without the other."""
+    stops both and the engine, and neither listener serves without the other.
+
+    To stop it from your own code, cancel the task that runs it. That does not wait for requests in
+    flight, with one listener or two (two hang up on their callers): the engine is stopped, and the
+    cancellation is raised."""
     import uvicorn
 
     configure_logging(json_lines=settings.log_json)
@@ -168,15 +172,21 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
     for a reason of its own takes the rest with it. The first error a server raised is raised here, and
     so is the exit uvicorn asks for when an app's startup fails, once the other server has ended.
 
-    A signal ends the servers in order: each waits for its open connections, as one listener does. A
-    server that ended with no signal sent leaves a process that must end, so the rest do not wait for
-    theirs (``_end_without_waiting``): uvicorn waits for open connections without limit, and one held
-    open would keep the process up with a listener gone, where no supervisor restarts it."""
+    A signal ends the servers in order: each waits for its open connections, as one listener does. Three
+    things end them without that wait (``_ended``): a second Ctrl-C, a server that ended with no signal
+    sent, and a cancelled ``serve()``. A server that ended by itself leaves a process that must end:
+    uvicorn waits for open connections without limit, and one held open would keep the process up with a
+    listener gone, where no supervisor restarts it. Cancelling is how a caller stops ``serve()``, and for
+    one listener uvicorn raises at once, so here it must not wait for a request that may never end.
+
+    However this is left, the servers have ended and the process has its own signal handlers back. A
+    cancelled caller sees its cancellation, whatever the servers ended with."""
 
     async def run(server: "uvicorn.Server", sock: socket.socket) -> SystemExit | None:
         try:
             await server.serve(sockets=[sock])
-        except SystemExit as asked:  # raised inside a task, it would end the event loop where it stands
+        # Raised inside a task, it would end the event loop where it stands: serve() raises it, below.
+        except SystemExit as asked:  # NOSONAR - re-raised by _serve_together, once both servers have ended
             return asked
         return None
 
@@ -198,42 +208,69 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
         asyncio.create_task(run(server, sock), name=f"lpb-listener-{index}")
         for index, (server, sock) in enumerate(zip(servers, sockets, strict=True))
     ]
-    ended_by_itself = False
+    in_order = False  # only a signal ends the servers in order; a cancel raises out of the wait below
     try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        ended_by_itself = not signalled  # a cancelled serve() is asked to stop too, and never gets here
+        await _ended(servers, tasks, first_only=True)
+        in_order = bool(signalled)
     finally:
         stop()
-        if ended_by_itself:
-            await _end_without_waiting(servers, tasks)
-        ended = await asyncio.gather(*tasks, return_exceptions=True)
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+        try:
+            await _all_ended(servers, tasks, forced=not in_order)
+            ended = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
     for outcome in ended:
         if isinstance(outcome, BaseException):
             raise outcome
 
 
+async def _all_ended(
+    servers: Sequence["uvicorn.Server"], tasks: Sequence["asyncio.Task[SystemExit | None]"], *, forced: bool
+) -> None:
+    """Wait until every server has ended, through any cancellation: a server left running would outlive
+    ``serve()`` with its listener and its connections. A cancel that arrives here forces the servers
+    still running, so the wait is short, and it is raised once they have ended."""
+    cancelled: asyncio.CancelledError | None = None
+    while True:
+        for server in servers:
+            server.force_exit = server.force_exit or forced
+        try:
+            await _ended(servers, tasks)
+        except asyncio.CancelledError as cancel:  # NOSONAR - re-raised below, once the servers have ended
+            cancelled, forced = cancel, True
+            continue
+        if cancelled is not None:
+            raise cancelled
+        return
+
+
 _HANG_UP_EVERY_S = 0.1  # uvicorn's own tick: how soon a server asked to end stops accepting
 
 
-async def _end_without_waiting(
-    servers: Sequence["uvicorn.Server"], tasks: Sequence["asyncio.Task[SystemExit | None]"]
+async def _ended(
+    servers: Sequence["uvicorn.Server"],
+    tasks: Sequence["asyncio.Task[SystemExit | None]"],
+    *,
+    first_only: bool = False,
 ) -> None:
-    """End every server still running without waiting for its callers. ``force_exit`` is uvicorn's
-    forced exit: no wait for open connections or for requests in flight, and no lifespan shutdown. It
-    is not enough by itself: from Python 3.12 the listening server's ``wait_closed()``, which uvicorn
-    awaits last, returns only once every connection is gone. So each open connection is hung up, again
-    on every tick until the servers have ended: one may still be accepted before a server closes its
-    listening socket. A request in flight sees its caller disconnect, as when a caller hangs up."""
-    for server in servers:
-        server.force_exit = True
+    """Wait until every server has ended, or the first one with ``first_only``. A server asked to end
+    waits for its open connections. One forced to exit does not wait for its callers: ``force_exit``
+    is uvicorn's forced exit, with no wait for open connections or for requests in flight, and no
+    lifespan shutdown. It is not enough by itself: from Python 3.12 the listening server's
+    ``wait_closed()``, which uvicorn awaits last, returns only once every connection is gone. So each
+    open connection of a forced server is hung up, again on every tick until it has ended: one may
+    still be accepted before a server closes its listening socket. A request in flight sees its
+    caller disconnect, as when a caller hangs up."""
     running = {task for task in tasks if not task.done()}
-    while running:
+    while running and not (first_only and len(running) < len(tasks)):
         for server in servers:
-            for connection in list(server.server_state.connections):
-                connection.transport.abort()
-        _, running = await asyncio.wait(running, timeout=_HANG_UP_EVERY_S)
+            if server.force_exit:
+                for connection in list(server.server_state.connections):
+                    connection.transport.abort()
+        _, running = await asyncio.wait(
+            running, timeout=_HANG_UP_EVERY_S, return_when=asyncio.FIRST_COMPLETED
+        )
 
 
 __all__ = ["Extend", "actor_dependency", "build_app", "serve"]

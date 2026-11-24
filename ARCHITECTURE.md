@@ -78,27 +78,30 @@ live in `http/` and `services/`. Every module of the two is one half's or shared
 | | Work half | Clearinghouse half | Shared |
 | --- | --- | --- | --- |
 | Does | Network capabilities, runner choice, the runner call, streaming, job records, the cost of each job | Tenants, grants, allocations, payment keys, a tenant's access keys and usage, the runner list it publishes | Access, the operation ledger, health |
-| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse`, in groups that also mount by themselves: a tenant's own routes, which name no tenant and take it from a tenant admin's or an auditor's credential (`mount_tenant_routes`, as amended on 19 November 2026), the same routes under `/v1/clearinghouse/tenants/{tenant_id}` for the clearinghouse admin (`mount_named_tenant_routes`), the runner list at `/v1/clearinghouse/discovery` (`mount_runner_list_routes`, #166), and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165), with the wallet report at `/v1/clearinghouse/wallet` (#167); and `http/signing.py` (`mount_signing_routes`): the signer's two paths at the root, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each called with a payment key (#166) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py`, and `http/listeners.py`: which role and which listener serve which group of routes, and which credentials a listener takes (#167, #169) |
+| Routes | `http/work.py` (`mount_work_routes`): `/v1/offerings`, `/v1/runners`, `/v1/jobs`, `/v1/costs`, `/v1/allowance`, `/v1/events`, `/v1/sessions`, and the engine's own access keys under `/v1/keys` | `http/clearinghouse.py` (`mount_clearinghouse_routes`): everything under `/v1/clearinghouse`, in groups that also mount by themselves: a tenant's own routes, which name no tenant and take it from a tenant admin's or an auditor's credential (`mount_tenant_routes`, as amended on 19 November 2026), the same routes under `/v1/clearinghouse/tenants/{tenant_id}` for the clearinghouse admin (`mount_named_tenant_routes`), the runner list at `/v1/clearinghouse/discovery` (`mount_runner_list_routes`, #166), and what only a clearinghouse admin does (`mount_clearinghouse_admin_routes`, #165), with the wallet report at `/v1/clearinghouse/wallet` (#167) | `http/app.py` (`shared_app`: the lifecycle, the error answers, the request limit, `/livez` and `/readyz`), `http/auth.py`, and `http/listeners.py`: which role and which listener serve which group of routes, which credentials a listener takes, and which role hands allocation keys to the caller (#167, #169) |
 | Facade | `WorkApi` | `ClearinghouseApi` | `EngineApi` is both |
-| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `issued_payment_keys`, `payment_signing`, `tenants`, `tenant_usage`, `runner_list`, `wallet`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
+| Services | `discovery`, `jobs`, `streams`, `failover`, `evidence`, `operations`, `admission`, `costs`, `reconciliation`, `usage_intake`, `usage_reports`, `request_identity`, `failure_codes`, `reserved` | `payments`, `payment_keys`, `allocation_delivery`, `tenants`, `tenant_usage`, `runner_list`, `wallet`, `grants`, `actor_writes` | `policy`, `keys`, `ledger`, `ownership`, `sightings` |
 
 Each set is one function that adds its routes to an app, so a deployment can serve one half. The
 engine's role chooses (`LPB_ROLE`, #169), and `create_app` mounts the routes of that role:
 
-| `LPB_ROLE` | Serves | The payment ports reach | Starts |
-| --- | --- | --- | --- |
-| `both`, the default | Both halves' routes: self-hosted payments | Batteries and the signer | Everything |
-| `work` | The work half's routes | A payment clearinghouse (`runtime/payment_defaults.py`) | Everything; it is nobody's clearinghouse (`runtime/assembly.py`) |
-| `clearinghouse` | The clearinghouse half's routes, on a public and a private listener | Batteries and the signer | Discovery alone: it runs no jobs (`runtime/engine.py`, `services/admission.py`) |
+| `LPB_ROLE` | Serves | Allocation keys | The payment ports reach | Signs | Starts |
+| --- | --- | --- | --- | --- | --- |
+| `both`, the default | Both halves' routes: self-hosted payments | Stored by the engine, for its own jobs | Batteries and its signer | At its signer | Everything |
+| `work` | The work half's routes | Handed over by its clearinghouse, and stored by the engine | A payment clearinghouse, for allocations, the allowance and usage (`runtime/payment_defaults.py`) | At the clearinghouse's published signer | Everything; it is nobody's clearinghouse (`runtime/assembly.py`) |
+| `clearinghouse` | The clearinghouse half's routes, on a public and a private listener | Handed to the caller once; none stored (`http/listeners.py`) | Batteries | Nothing | Discovery alone: it runs no jobs (`runtime/engine.py`, `services/admission.py`) |
 
 The role is read in four places and nowhere else: the settings check that the other settings agree with
 it (`config.py`), `payment_defaults` chooses the adapters, `assemble` leaves out what the role does not
-offer, and the listener table mounts its routes. What each role needs and refuses is in
+offer and asks for the secret store only where keys are stored, and the listener table mounts its routes
+and says who keeps the keys. What each role needs and refuses is in
 [RELIABILITY.md](docs/RELIABILITY.md#roles).
 
 The work half reaches payments through five ports and nothing else: signing inside `RunnerTransport`,
 `CredentialResolver`, `AllocationManager`, `AllowanceReader` and `UsageSource`. An enterprise that uses a
-payment clearinghouse runs the work half alone, with each port pointed at the clearinghouse (#168).
+payment clearinghouse runs the work half alone (#168): `AllocationManager`, `AllowanceReader` and
+`UsageSource` point at the clearinghouse, `CredentialResolver` returns the payment keys the clearinghouse
+handed to the enterprise's own engine, and signing goes to the clearinghouse's signer directly.
 `tests/structure/test_two_halves.py` enforces the seam and prints how to fix a violation: no module of
 one half imports the other, a work module names no payment protocol but the five ports, every protocol
 is classified, and each set of routes is typed against its own half of the facade. It states the rule
@@ -119,7 +122,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |
 | `EngineStore` (+ repos) | `SqlStore` | — (one store; two databases) |
-| `PaymentKeyRepo`, `TenantUsageSource`, `DiscoveryDocumentSource`, `SignerForwarder` (optional, #166) | `SqlStore`, `BatteriesUsageSource`, `HttpDiscoverySource`, `SdkRunnerTransport` | keep the payment keys a clearinghouse issues, read one tenant's usage, hold the discovery document a clearinghouse serves, or hand a signer call to the signer for a clearinghouse. A supplied part without one runs without what it serves |
+| `TenantUsageSource`, `DiscoveryDocumentSource` (optional, #166) | `BatteriesUsageSource`, `HttpDiscoverySource` | read one tenant's usage, or hold the discovery document a clearinghouse serves. A supplied part without one runs without what it serves |
 | `EscrowSource`, `SignerProbe` (optional, #167) | `BatteriesClient`, `SdkRunnerTransport` | report the wallet's deposit and reserve as the payment provider has confirmed them, and ask whether the signer answers: what the wallet report reads. A supplied part without one means no wallet report |
 | `EventFeed`, `SessionManager` | reserved (raise 501) | — events held in M3 (D60); sessions in M4 |
 
@@ -136,7 +139,7 @@ Each third-party package is confined to one module so a dependency change has on
 | `livepeer_gateway` | `adapters/sdk.py`, `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `aiohttp` | `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `yarl` | `adapters/discovery_inventory.py`, `adapters/runner_address.py` |
-| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py`, `adapters/signer_forward.py`, `adapters/clearinghouse_wire.py` (the one module that calls a payment clearinghouse's routes, #168) and `adapters/payment_probes.py` (`lpb payments check`, GET requests only). `adapters/batteries_usage_rows.py`, which reads one Batteries usage item, and `adapters/clearinghouse.py`, the remote adapters, hold no client |
+| `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py`, `adapters/clearinghouse_wire.py` (the one module that calls a payment clearinghouse's routes, #168) and `adapters/payment_probes.py` (`lpb payments check`, GET requests only). `adapters/batteries_usage_rows.py`, which reads one Batteries usage item, and `adapters/clearinghouse.py`, the remote adapters, with `adapters/clearinghouse_tenant.py`, which holds them to the engine's own tenant (#165), hold no client |
 | `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |
 | `sqlalchemy`, `alembic`, `aiosqlite`, `asyncpg` | `store/` |
@@ -151,7 +154,7 @@ Each third-party package is confined to one module so a dependency change has on
 | Access | `services/policy.py`, `services/keys.py`, `adapters/auth.py` | [access](docs/contracts/access.md) |
 | Discovery | `services/discovery.py`; `services/runner_list.py` (the list a clearinghouse serves) | [engine](docs/contracts/engine.md#discovery), [discovery](docs/contracts/discovery.md#the-clearinghouses-runner-list) |
 | Jobs | `services/jobs.py`, `services/dispatch.py` (the paid call), `services/async_jobs.py` (the worker that runs queued async jobs), `services/admission.py`; `store/job_queue.py` (the queue, a queued job's request and a stored result); `http/job_handles.py` (an async job's submit answer, result and cancel) | [engine](docs/contracts/engine.md), [async jobs](docs/contracts/engine.md#async-jobs) |
-| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back), `services/issued_payment_keys.py` (the payment keys a clearinghouse issues), `services/payment_signing.py` (the key swap behind the signer's two paths), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/tenant_usage.py` (a tenant's payment records), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
+| Payments | `services/payments.py`, `services/payment_keys.py` (keeping the key a command gets back, and recording who holds it), `services/allocation_delivery.py` (handing a key to an enterprise's engine in place of storing it), `services/tenants.py` (the tenant desk: onboarding, a tenant's grant and status), `services/tenant_usage.py` (a tenant's payment records), `services/grants.py` (the provider's idempotency keys and grant tag) | [payments](docs/contracts/payments.md) |
 | Costs | `services/costs.py` | [payments](docs/contracts/payments.md#cost-classification) |
 | Events, sessions | `services/reserved.py` | [events](docs/contracts/events.md), [engine](docs/contracts/engine.md#persistent-sessions) |
 | Persistence | `store/` | [persistence](docs/contracts/persistence.md) |

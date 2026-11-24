@@ -157,6 +157,8 @@ actors = Table(
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
     Column("label", String(ID), nullable=False, server_default=""),  # readable beside an opaque actor_id
+    # Who holds the credential secret_ref names (0015): the configured store, or the work engine.
+    Column("credential_custody", String(16), nullable=False, server_default="secret_store"),
 )
 
 # People an identity provider signed in as actors, before or after an allocation (#52, D48).
@@ -253,21 +255,6 @@ usage_set_aside = Table(
     Column("computed_fee_eth", String(AMOUNT), nullable=True),
     Column("computed_fee_usd", String(AMOUNT), nullable=True),
     Column("set_aside_at", UTCDateTime, nullable=False),
-)
-
-# -- 0015: the payment keys a clearinghouse issues (D87, #166) -------------------------------------------
-
-# One payment key for each actor: what an enterprise's engine presents when it asks for a payment for that
-# actor. The hash of the token, never the token. The key is bound to the allocation it was issued for, so
-# it finds its actor only while the actor still holds that allocation.
-payment_keys = Table(
-    "lpb_payment_keys",
-    metadata,
-    Column("tenant_id", String(ID), primary_key=True),
-    Column("actor_id", String(ID), primary_key=True),
-    Column("allocation_id", String(ID), nullable=False),
-    Column("token_hash", String(64), nullable=False, unique=True),
-    Column("created_at", UTCDateTime, nullable=False),
 )
 
 # -- 0016: async jobs (D69, ISS-26) -----------------------------------------------------------------------

@@ -2,6 +2,13 @@
 and their allocations (allot, top up, status, revoke, rotate the payment key), a tenant's access keys and
 its usage, and the runner list the clearinghouse publishes (#165, #166).
 
+Allotment and payment key rotation answer the allocation. Mounted for a standalone clearinghouse
+(``deliver_allocation_keys=True``) they also hand the allocation's own Batteries key to the caller, once:
+the enterprise's engine keeps it and signs at the signer itself, and the clearinghouse stores none (D85
+point 1, D87 point 1; docs/contracts/payments.md, "Payment keys"). The keyword has no default: whoever
+mounts these routes says who keeps the keys, and it is one answer for both forms of a tenant's routes. No
+route here signs or forwards a payment.
+
 One unit, mounted by itself or beside the work set (D84). It is typed against ``ClearinghouseApi``, so it
 cannot run a job. Routes are thin: each authenticates, resolves the tenant it acts on, then makes one
 engine call, and authorization lives in the services' AccessPolicy checks.
@@ -21,14 +28,13 @@ So no route lets one tenant's credential name another tenant: the check of the t
 the credential's, which the services' policy still makes for an embedded caller, has nothing to refuse
 here.
 
-The set is five groups, each one function, so a deployment can serve them on different listeners (#167):
+The set is four groups, each one function, so a deployment can serve them on different listeners (#167):
 
 - ``mount_tenant_routes``: a tenant's own routes, the tenant from the credential;
 - ``mount_named_tenant_routes``: the same routes with the tenant in the path;
 - ``mount_runner_list_routes``: the runner list, which any credential of a tenant reads;
 - ``mount_clearinghouse_admin_routes``: what only a clearinghouse admin does (onboarding, the tenant
-  list, a grant's top-up, a tenant's status and the wallet report);
-- ``mount_signing_routes`` (``http/signing.py``): the signer's two paths, for a payment key.
+  list, a grant's top-up, a tenant's status and the wallet report).
 
 ``http/listeners.py`` says which listener serves which group.
 
@@ -52,7 +58,6 @@ from livepeer_builder.contracts import (
     AllotRequest,
     CredentialKind,
     IssuedKey,
-    KeyedAllocation,
     KnownActor,
     OnboardedTenant,
     TenantGrant,
@@ -72,9 +77,9 @@ from livepeer_builder.http.bodies import (
     TenantKeyBody,
     TenantStatusBody,
 )
+from livepeer_builder.http.delivered import DeliveredAllocationBody, delivered_body
 from livepeer_builder.http.params import GrantTenantId, PathId, QueryId
 from livepeer_builder.http.replies import replay, replayed
-from livepeer_builder.http.signing import mount_signing_routes
 
 CLEARINGHOUSE = "/v1/clearinghouse"
 TENANTS = CLEARINGHOUSE + "/tenants"
@@ -102,14 +107,25 @@ class TenantScope:
 Resolve = Callable[..., TenantScope]  # a FastAPI dependency
 
 
-def mount_clearinghouse_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
-    """Add the clearinghouse half's routes to ``app``: every group, the signer's two paths included,
-    which an enterprise's engine calls with a payment key (``http/signing.py``, #166)."""
-    mount_tenant_routes(app, engine)
-    mount_named_tenant_routes(app, engine)
+def mount_clearinghouse_routes(
+    app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool
+) -> None:
+    """Mount every group. ``deliver_allocation_keys`` is required (Mike, 23 November 2026). ``True``, for a
+    standalone clearinghouse: allotment and rotation hand each allocation's key to the caller once and
+    store none.
+
+    ``False``, for an engine that also runs jobs: it stores the key for its own jobs and returns none.
+    With ``True`` on such an engine the caller is handed each key, the engine stores none, and that
+    actor's jobs fail ``not_provisioned``.
+
+    ``create_app`` passes what the engine's role says, for every listener: ``True`` in the
+    ``clearinghouse`` role and ``False`` in the ``both`` role (``delivers_allocation_keys``,
+    ``http/listeners.py``, #169).
+    """
+    mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
+    mount_named_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
     mount_runner_list_routes(app, engine)
     mount_clearinghouse_admin_routes(app, engine)
-    mount_signing_routes(app, engine)
 
 
 def mount_clearinghouse_admin_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
@@ -186,9 +202,11 @@ def mount_runner_list_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
         return Response(content=document, media_type="application/json")
 
 
-def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
+def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool) -> None:
     """Add a tenant's own routes, at paths that name no tenant: the tenant is the credential's. A tenant
-    admin or auditor credential is taken, and any other is refused (403) before the service is asked."""
+    admin or auditor credential is taken, and any other is refused (403) before the service is asked.
+    ``deliver_allocation_keys`` is required, as for ``mount_clearinghouse_routes``: with it, an allotment
+    or a rotation hands the key to the caller, whose credential names the tenant."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
     def own_tenant(actor: Actor) -> TenantScope:
@@ -204,15 +222,23 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
             )
         return TenantScope(actor, actor.tenant_id)
 
-    _mount_tenant_scoped(app, engine, CLEARINGHOUSE, own_tenant, own_tenant)
+    _mount_tenant_scoped(app, engine, CLEARINGHOUSE, own_tenant, own_tenant, deliver_allocation_keys)
 
 
-def mount_named_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
+def mount_named_tenant_routes(
+    app: FastAPI, engine: ClearinghouseApi, *, deliver_allocation_keys: bool
+) -> None:
     """Add a tenant's routes at paths that name the tenant, under ``/v1/clearinghouse/tenants/{tenant_id}``:
     what a clearinghouse admin calls for the tenant it chooses. Any other credential is refused (403)
-    before the service is asked: a tenant admin or auditor calls its own tenant's routes, which name none."""
+    before the service is asked: a tenant admin or auditor calls its own tenant's routes, which name none.
+
+    ``deliver_allocation_keys`` is required and means what it means for a tenant's own routes: a
+    standalone clearinghouse stores no key, so an allotment or a rotation a clearinghouse admin makes
+    here hands the key to that admin, once, to pass to the tenant. Answered without it, the key would be
+    held by nobody."""
     Actor = Annotated[ActorContext, Depends(actor_dependency(engine))]
 
+    # The tenant's id as stored: a 422 here, before money moves.
     def named_tenant(actor: Actor, tenant_id: PathId) -> TenantScope:
         return _named(actor, tenant_id)
 
@@ -221,7 +247,7 @@ def mount_named_tenant_routes(app: FastAPI, engine: ClearinghouseApi) -> None:
     def named_grant_tenant(actor: Actor, tenant_id: GrantTenantId) -> TenantScope:
         return _named(actor, tenant_id)
 
-    _mount_tenant_scoped(app, engine, TENANT, named_tenant, named_grant_tenant)
+    _mount_tenant_scoped(app, engine, TENANT, named_tenant, named_grant_tenant, deliver_allocation_keys)
 
 
 def _named(actor: ActorContext, tenant_id: str) -> TenantScope:
@@ -234,7 +260,12 @@ def _named(actor: ActorContext, tenant_id: str) -> TenantScope:
 
 
 def _mount_tenant_scoped(
-    app: FastAPI, engine: ClearinghouseApi, prefix: str, tenant: Resolve, grant_tenant: Resolve
+    app: FastAPI,
+    engine: ClearinghouseApi,
+    prefix: str,
+    tenant: Resolve,
+    grant_tenant: Resolve,
+    deliver_allocation_keys: bool,
 ) -> None:
     """A tenant's routes under ``prefix``: its grant, its usage, its actors and their allocations, and its
     access keys. ``tenant`` resolves the tenant a route acts on, and ``grant_tenant`` the tenant of a
@@ -283,10 +314,13 @@ def _mount_tenant_scoped(
         be read."""
         return await engine.payments.get_allocation(scope.actor, scope.tenant_id, actor_id)
 
-    @app.post(prefix + ALLOCATION, status_code=201)
-    async def allot(scope: Scope, actor_id: PathId, body: AllotBody, response: Response) -> KeyedAllocation:
-        """Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment
-        key, whose token is shown once."""
+    @app.post(
+        prefix + ALLOCATION,
+        status_code=201,
+        response_model=DeliveredAllocationBody if deliver_allocation_keys else ActorAllocation,
+    )
+    async def allot(scope: Scope, actor_id: PathId, body: AllotBody, response: Response) -> ActorAllocation:
+        response.headers["Cache-Control"] = "no-store"
         request = AllotRequest(
             tenant_id=scope.tenant_id,
             actor_id=actor_id,
@@ -294,6 +328,9 @@ def _mount_tenant_scoped(
             label=body.label,
             operation_ref=body.operation_ref,
         )
+        if deliver_allocation_keys:  # the key is written out here, and only here
+            delivered = await engine.payments.allot_for_delivery(scope.actor, request)
+            return replay(response, delivered_body(delivered))
         return replay(response, await engine.payments.allot(scope.actor, request))
 
     @app.post(prefix + ALLOCATION + "/top-up")
@@ -310,15 +347,19 @@ def _mount_tenant_scoped(
     async def revoke(scope: Scope, actor_id: PathId) -> ActorAllocation:
         return await engine.payments.revoke(scope.actor, scope.tenant_id, actor_id)
 
-    @app.post(prefix + ALLOCATION + "/rotate-payment-key")
+    @app.post(
+        prefix + ALLOCATION + "/rotate-payment-key",
+        response_model=DeliveredAllocationBody if deliver_allocation_keys else ActorAllocation,
+    )
     async def rotate_payment_key(
         scope: Scope, actor_id: PathId, body: RotateBody, response: Response
-    ) -> KeyedAllocation:
-        """Replace the actor's payment key, and the Batteries key behind it. The old one stops at once."""
-        rotated = await engine.payments.rotate_payment_key(
-            scope.actor, scope.tenant_id, actor_id, body.operation_ref
-        )
-        return replay(response, rotated)
+    ) -> ActorAllocation:
+        response.headers["Cache-Control"] = "no-store"
+        actor, tenant_id, ref = scope.actor, scope.tenant_id, body.operation_ref
+        if deliver_allocation_keys:  # the key is written out here, and only here
+            rotated = await engine.payments.rotate_for_delivery(actor, tenant_id, actor_id, ref)
+            return replay(response, delivered_body(rotated))
+        return replay(response, await engine.payments.rotate_payment_key(actor, tenant_id, actor_id, ref))
 
     if engine.keys is None:  # API keys off: a tenant has no access keys to manage (decision 2)
         return

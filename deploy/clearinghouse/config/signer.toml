@@ -1,7 +1,9 @@
 # livepeer/node signer (on-chain: needs a funded deposit and reserve on Arbitrum One).
 # The key file and its password file are named in compose.yaml, from the wallet's key folder.
-# The listener binds all interfaces so the engine can reach it through the batteries service; no port
-# is published.
+# The listener binds all interfaces so the engine and the signer-relay service can reach it through the
+# batteries service. The relay publishes this port for enterprise engines, which sign here themselves:
+# the authorization webhook below is the only check at signing, and must stay configured. The metrics
+# listener, which also serves /readyz, stays on loopback and is published nowhere.
 Listen = "unsafe@0.0.0.0:8937"
 MetricsListen = "127.0.0.1:8938"
 RPCURLFile = "/run/secrets/rpc-url"

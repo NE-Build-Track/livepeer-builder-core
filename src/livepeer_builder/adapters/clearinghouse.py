@@ -1,83 +1,61 @@
 """The payment ports of an engine that uses a payment clearinghouse: the remote adapters (D84, #168).
 
 An enterprise's engine keeps its own jobs and records and reaches the clearinghouse for payments only.
-Four of its five payment ports are here, each calling the tenant's own routes at the clearinghouse with
-the tenant admin key (``adapters/clearinghouse_wire.py``). The fifth, signing, is inside the runner
-transport: the gateway SDK's, pointed at the clearinghouse, with the actor's payment key
-(``runtime/payment_defaults.py``).
-
-The tenant's own routes name no tenant: the clearinghouse takes it from the key (D87 point 3, as amended
-on 19 November 2026). So a command about another tenant cannot be sent at all: sent, it would act on this
-tenant. It is refused here, before anything is sent, as the clearinghouse refused a path that named
-another tenant: 403, "another tenant". The tenant is the wire's, ``LPB_CLEARINGHOUSE_TENANT_ID``.
+Three of its five payment ports are here, each calling the tenant's own routes at the clearinghouse with
+the tenant admin key. Those routes name no tenant, so every request goes through ``TenantWire``
+(``adapters/clearinghouse_tenant.py``): nothing is sent for another tenant, or with another tenant's key.
 
 - ``ClearinghouseAllocations`` is the ``AllocationManager``. The port names an allocation by its id and
   the routes name an actor, so the manager is asked for the one actor a command is about
   (``AllocationsByActor``). What only a clearinghouse admin does to a grant is refused here, plainly.
 - ``ClearinghouseAllowances`` is the ``AllowanceReader``.
 - ``ClearinghouseUsage`` is the ``UsageSource``: the tenant's own payment records and no other's.
-- ``ClearinghouseCredentials`` is the ``CredentialResolver``: the payment key the clearinghouse issued
-  for the actor, which the engine keeps in its secret store, and never any other secret.
+
+The other two are the engine's own, as with self-hosted payments (D85 point 1, D87 point 1, as amended).
+``CredentialResolver`` is ``PaymentsService``: an allotment or a payment key rotation at the clearinghouse
+answers the allocation's own Batteries key once, the manager here returns it as the port's new key, and
+the engine's ordinary command stores it in its own secret store. Signing is the runner transport at
+``LPB_SIGNER_URL``, the clearinghouse's published signer, with that key.
+
+**A key is handed over once.** The clearinghouse stores none, so an answer that carries no key
+(``replayed``: it finished that command before) leaves the engine with nothing to store, unless the
+engine's own record shows it already stored the key of that answer. It is never a success here: the
+admin is told what replaces the key (``_ActorAllocation._handed``).
 
 The mapping, member by member, is in docs/contracts/payments.md#the-remote-adapters.
 """
 
-import logging
-import uuid
+import base64
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NoReturn
 
 from pydantic import SecretStr
 
-from livepeer_builder.adapters.batteries import segment
+from livepeer_builder.adapters.clearinghouse_tenant import USAGE_PATH, TenantWire, allocation_path, own_tenant
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import (
     ActorAllocation,
-    ActorContext,
     AllocationRead,
     Allowance,
+    DeliveredAllocation,
     GrantPage,
     GrantRecord,
-    KeyedAllocation,
     Money,
     NewAllocationKey,
-    PaymentKey,
     TenantGrant,
     UsagePage,
 )
-from livepeer_builder.contracts.payments import PAYMENT_KEY_PREFIX
 from livepeer_builder.errors import (
     AccessDenied,
     InvalidRequest,
-    NotProvisioned,
     ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import ActorRepo, AllocationManager, SecretStore
 
-_LOG = logging.getLogger(__name__)
 _LISTS_EVERY_TENANT = "lists every tenant"  # what three members of the port would do, and may not
-OWN_TENANT = "/v1/clearinghouse"  # the tenant's own routes: no tenant in the path, the key's is used
-GRANT_PATH = OWN_TENANT + "/grant"
-USAGE_PATH = OWN_TENANT + "/usage"
-
-
-def allocation_path(actor_id: str, rest: str = "") -> str:
-    """The actor's allocation route, among the tenant's own routes."""
-    return OWN_TENANT + "/actors/" + segment(actor_id) + "/allocation" + rest
-
-
-def own_tenant(wire: ClearinghouseWire, tenant_id: str) -> None:
-    """Refuse a command about another tenant than the key's, before anything is sent. The clearinghouse
-    would apply it to the key's own tenant, whose routes name none. A refusal (403), as the clearinghouse
-    refused a path that named another tenant: applied nowhere."""
-    if tenant_id != wire.tenant_id:
-        raise ProviderError(
-            403,
-            f"resource belongs to another tenant: this engine's tenant at the clearinghouse is "
-            f"{wire.tenant_id!r} (LPB_CLEARINGHOUSE_TENANT_ID), not {tenant_id!r}",
-        )
 
 
 def _money(amount: Money) -> dict[str, str]:
@@ -86,24 +64,29 @@ def _money(amount: Money) -> dict[str, str]:
 
 class ClearinghouseAllocations:
     """``AllocationManager`` at a clearinghouse. A command about one actor's allocation goes through
-    ``for_actor``; what this object answers itself is the grant."""
+    ``for_actor``; what this object answers itself is the grant. ``actors`` and ``secrets`` are the
+    engine's own records and secret store, read only to finish a command from the key the engine already
+    stored."""
 
-    def __init__(self, wire: ClearinghouseWire) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire, actors: ActorRepo, secrets: SecretStore) -> None:
+        self._wire = TenantWire.over(wire)
+        self._actors = actors
+        self._secrets = secrets
 
-    def for_actor(self, tenant_id: str, actor_id: str) -> AllocationManager:
-        """The manager for one actor's allocation (``AllocationsByActor``). Each of its members refuses an
-        actor of another tenant before it sends anything."""
-        return _ActorAllocation(self, self._wire, tenant_id, actor_id)
+    def for_actor(self, tenant_id: str, actor_id: str, operation_ref: str | None = None) -> AllocationManager:
+        """The manager for one actor's allocation (``AllocationsByActor``), for the admin command under
+        ``operation_ref`` when it has one."""
+        return _ActorAllocation(self._wire, self._actors, self._secrets, tenant_id, actor_id, operation_ref)
 
     # -- the grant ----------------------------------------------------------------------------------
     # Every member below but ``read_grant`` is async by protocol and awaits nothing: it refuses, or has
     # nothing to do, before anything is sent. Each says so to SonarQube, as the provider fakes do.
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
-        """The tenant's grant. Another tenant's is refused (403) and never asked for."""
+        """The tenant's grant. Another tenant's is refused (403) and never asked for, and so is the
+        grant of another tenant than this one that the key turns out to belong to."""
         own_tenant(self._wire, grant_id)
-        return await self._wire.read_as(TenantGrant, GRANT_PATH)
+        return await self._wire.grant()
 
     async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager)
         self, grant_id: str, amount: Money, idempotency_key: str
@@ -177,23 +160,35 @@ class ClearinghouseAllocations:
         del allocation_id
         _needs_the_actor("read_allocation")
 
-    async def revoke_key(  # NOSONAR - async by protocol (AllocationManager); nothing is sent
+    async def revoke_key(  # NOSONAR - async by protocol (AllocationManager)
         self, api_key_id: str
     ) -> None:
-        """Nothing is sent: a rotation at the clearinghouse ends the old key in the same command."""
         del api_key_id
+        _needs_the_actor("revoke_key")
+
+    async def holds_key(  # NOSONAR - async by protocol (OneKeyPerAllocation)
+        self, allocation_id: str, api_key_id: str
+    ) -> bool:
+        del allocation_id, api_key_id
+        _needs_the_actor("holds_key")
 
 
 class _ActorAllocation(ClearinghouseAllocations):
     """The same manager for one actor: each member that names an allocation calls that actor's route."""
 
     def __init__(
-        self, whole: ClearinghouseAllocations, wire: ClearinghouseWire, tenant_id: str, actor_id: str
+        self,
+        wire: TenantWire,
+        actors: ActorRepo,
+        secrets: SecretStore,
+        tenant_id: str,
+        actor_id: str,
+        operation_ref: str | None,
     ) -> None:
-        super().__init__(wire)
-        self._whole = whole
+        super().__init__(wire, actors, secrets)
         self._tenant_id = tenant_id
         self._actor_id = actor_id
+        self._operation_ref = operation_ref
 
     def _path(self, rest: str = "") -> str:
         own_tenant(self._wire, self._tenant_id)  # before any request about this actor
@@ -202,33 +197,87 @@ class _ActorAllocation(ClearinghouseAllocations):
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
     ) -> NewAllocationKey:
-        """Allot. The engine's idempotency key is the route's ``operation_ref``: a repeat here is a
-        repeat there. An actor with no label of its own is sent with none, so the clearinghouse names
-        the allocation by its own default."""
+        """Allot, and return the key the clearinghouse hands over. A repeat here is a repeat there
+        (``_allotment_ref``). An actor with no label of its own is sent with none, so the clearinghouse
+        names the allocation by its own default."""
         if grant_id != self._tenant_id:  # a tenant's id is its grant's id (D83)
             raise InvalidRequest("an allocation is allotted from its own tenant's grant")
-        path = self._path()
         label = "" if name == f"{self._tenant_id}/{self._actor_id}" else name
-        body = {"amount": _money(amount), "label": label, "operation_ref": idempotency_key}
-        return await self._keyed(await self._wire.write_as(KeyedAllocation, path, body))
+        body = {
+            "amount": _money(amount),
+            "label": label,
+            "operation_ref": self._allotment_ref(idempotency_key),
+        }
+        return await self._handed(await self._wire.write_as(DeliveredAllocation, self._path(), body))
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
-        """Rotate the payment key: one command at the clearinghouse, which ends the old key itself."""
+        """Rotate the payment key, and return the new key the clearinghouse hands over: one command
+        there, which ends the old key itself. The engine's idempotency key is the route's
+        ``operation_ref``: it names the allocation and the admin's reference."""
         del name
         await self._held(allocation_id)
         body = {"operation_ref": idempotency_key}
-        rotated = await self._wire.write_as(KeyedAllocation, self._path("/rotate-payment-key"), body)
-        return await self._keyed(rotated)
+        return await self._handed(
+            await self._wire.write_as(DeliveredAllocation, self._path("/rotate-payment-key"), body),
+            rotated=allocation_id,
+        )
+
+    async def revoke_key(self, api_key_id: str) -> None:
+        """End one key. A clearinghouse has no route that revokes a key by its id: a rotation there ends
+        the key before it, and a revoked allocation takes none. So the actor's allocation is read. A key
+        it no longer holds has ended already, and nothing is sent. The key it holds now cannot be ended
+        without minting another, which nobody asked for: that is refused, plainly. The engine's rotation
+        never asks either (``OneKeyPerAllocation``); this is for a caller of the port alone."""
+        held = await self._wire.read_as(AllocationRead, self._path())
+        if held.status == "revoked" or held.api_key_id != api_key_id:
+            return
+        raise InvalidRequest(
+            f"key {api_key_id!r} is the one allocation {held.allocation_id!r} takes at the clearinghouse "
+            "now, and a clearinghouse ends a key only by the rotation that replaces it: rotate the "
+            f"payment key of actor {self._actor_id!r}"
+        )
+
+    async def holds_key(self, allocation_id: str, api_key_id: str) -> bool:
+        """Whether the clearinghouse takes ``api_key_id`` for ``allocation_id`` now
+        (``OneKeyPerAllocation``): the actor holds that allocation there, it is not revoked, and its key
+        is this one. Of two rotations the clearinghouse ran one after the other, this is true of the
+        later one's key alone."""
+        held = await self._wire.read_as(AllocationRead, self._path())
+        return (held.allocation_id, held.api_key_id) == (
+            allocation_id,
+            api_key_id,
+        ) and held.status != "revoked"
+
+    def _allotment_ref(self, idempotency_key: str) -> str:
+        """An allotment's reference at the clearinghouse, which keys its own ledger on it for this tenant
+        admin key. The engine's idempotency key names the engine and the actor and no reference (two
+        references for one actor meet at Batteries by it), and the clearinghouse answers a reference it
+        finished without the key, for good. So the admin's reference is folded in: a new reference here
+        is a new command there, which the clearinghouse judges by its own record of the actor, and the
+        repeat of one reference is the repeat of one command."""
+        if self._operation_ref is None:
+            return idempotency_key
+        return _digest(idempotency_key, self._operation_ref)
 
     async def top_up_allocation(self, allocation_id: str, amount: Money, idempotency_key: str) -> None:
         await self._held(allocation_id)
-        await self._wire.write(
-            self._path("/top-up"), {"amount": _money(amount), "operation_ref": idempotency_key}
+        body = {"amount": _money(amount), "operation_ref": idempotency_key}
+        self._acted_on(
+            await self._wire.write_as(ActorAllocation, self._path("/top-up"), body),
+            allocation_id,
+            "added this top-up to",
+            "The amount is on that allocation now: revoking that allocation at the clearinghouse returns "
+            "what it has not spent to the grant",
         )
 
     async def set_allocation_status(self, allocation_id: str, status: str) -> None:
         await self._held(allocation_id)
-        await self._wire.write(self._path("/status"), {"status": status})
+        self._acted_on(
+            await self._wire.write_as(ActorAllocation, self._path("/status"), {"status": status}),
+            allocation_id,
+            f"set the status {status!r} on",
+            "Set that allocation's status again at the clearinghouse if this was not meant for it",
+        )
 
     async def revoke_allocation(self, allocation_id: str) -> None:
         """Repeat-safe, as at the provider. An actor that holds another allocation at the clearinghouse
@@ -236,7 +285,14 @@ class _ActorAllocation(ClearinghouseAllocations):
         command's to revoke."""
         held = await self._wire.read_as(AllocationRead, self._path())
         if held.allocation_id == allocation_id and held.status != "revoked":
-            await self._wire.write(self._path("/revoke"))
+            self._acted_on(
+                await self._wire.write_as(ActorAllocation, self._path("/revoke")),
+                allocation_id,
+                "revoked",
+                "Repeat this revoke: the allocation it named has ended there, so the repeat sends "
+                "nothing and records that here. The allocation revoked in its place is ended, and what "
+                "it had not spent is back in the grant: whoever held it allots the actor again",
+            )
 
     async def read_allocation(self, allocation_id: str) -> Allowance:
         return await read_allowance(self._wire, self._tenant_id, self._actor_id, allocation_id)
@@ -244,51 +300,84 @@ class _ActorAllocation(ClearinghouseAllocations):
     async def _held(self, allocation_id: str) -> ActorAllocation:
         """The actor's allocation at the clearinghouse, when it is the one the engine names. The routes
         act on whichever allocation the actor holds there, so a command about another one is refused
-        before it is sent, as the provider answers an allocation id it does not hold."""
+        before it is sent, as the provider answers an allocation id it does not hold. This proves what
+        the clearinghouse held at the read, and no more: the command's own answer is read too
+        (``_acted_on``)."""
         held = await self._wire.read_as(AllocationRead, self._path())
         if held.allocation_id != allocation_id:
             raise _not_held(self._actor_id, allocation_id)
         return held
 
-    async def _keyed(self, answer: KeyedAllocation) -> NewAllocationKey:
-        """The payment key of an allotment or a rotation, as the port's new key. When the answer is a
-        replay, the key was shown to an answer that never arrived: it is rotated once more, under a new
-        reference, and that rotation's key is returned. A rotation moves no money."""
-        issued = answer.payment_key
-        if issued is not None and issued.token is None:
-            _LOG.warning(
-                "payment key shown to a lost answer; rotating it",
-                extra={
-                    "event": "clearinghouse.payment_key_recovered",
-                    "tenant_id": self._tenant_id,
-                    "actor_id": self._actor_id,
-                    "allocation_id": answer.allocation_id,
-                },
+    def _acted_on(self, answer: ActorAllocation, named: str, did: str, then: str) -> None:
+        """Refuse to report a command as done when the clearinghouse applied it to another allocation
+        than the one it named. The routes name an actor and take no allocation id, so a command lands on
+        whichever allocation the actor holds when it arrives: a revoke and a new allotment there, between
+        this adapter's read and its command, move it. Each route answers the allocation it acted on.
+
+        No refusal: something was applied, so the operation ledger keeps the command's reference
+        (``ProviderError`` with the answer's 2xx, as for any answer the engine cannot use). Raised before
+        the engine writes anything, so its record of the actor is not changed as if the command it named
+        had been done."""
+        if answer.allocation_id != named:
+            raise _acted_elsewhere(self._actor_id, named, answer.allocation_id, did, then)
+
+    async def _handed(self, answer: DeliveredAllocation, *, rotated: str | None = None) -> NewAllocationKey:
+        """The key an allotment or a rotation handed over, as the port's new key: the engine's command
+        stores it in the engine's own secret store. ``rotated`` is the allocation a rotation named.
+
+        ``replayed`` says the answer carries none: the clearinghouse finished this reference before, and
+        hands a key over once. When the engine's record of the actor names the allocation and the key of
+        that answer, with the secret in its own store, the engine was handed it then and its run died
+        afterwards: the command finishes from that copy. Otherwise the key never reached this engine. It
+        is refused, with what replaces it, and nothing is stored or saved."""
+        allocation_id, api_key_id, key = answer.allocation_id, answer.api_key_id, answer.allocation_api_key
+        replayed = answer.replayed
+        del answer  # no error raised below has the answer in its frame, and no caller keeps it in one
+        if rotated is not None and allocation_id != rotated:
+            # Revoked and allotted again there between the adapter's read and its command: this key is
+            # another allocation's, and the actor's record here is never pointed at it.
+            del key
+            raise _acted_elsewhere(
+                self._actor_id,
+                rotated,
+                allocation_id,
+                "rotated the key of",
+                "Its new key is in an answer this engine did not keep, and the key it had is ended: "
+                "whoever holds that allocation rotates its key again",
             )
-            body = {"operation_ref": f"lost-payment-key:{uuid.uuid4().hex}"}
-            try:
-                answer = await self._wire.write_as(KeyedAllocation, self._path("/rotate-payment-key"), body)
-            except ProviderError as refused:
-                if refused.status_code != 404:
-                    raise
-                raise ProviderError(
-                    409, f"allocation {answer.allocation_id} is revoked at the clearinghouse"
-                ) from refused
-            issued = answer.payment_key
-        if issued is None or issued.token is None:
-            # No refusal: the allocation exists there. The reference stays held until this is put right.
-            raise ProviderError(200, "the clearinghouse answered with no payment key for the actor")
-        return NewAllocationKey(
-            allocation_id=answer.allocation_id, api_key_id=answer.api_key_id, secret=SecretStr(issued.token)
-        )
+        if key is not None and not replayed:
+            return NewAllocationKey(allocation_id=allocation_id, api_key_id=api_key_id, secret=key)
+        del key
+        if not replayed:
+            # No refusal: the allocation exists there, and its key is in the clearinghouse's own store.
+            raise ProviderError(
+                200,
+                "the clearinghouse answered with no key and did not say the answer was a repeat: it "
+                "keeps each allocation's key itself, as an engine that runs its own jobs does, and "
+                "hands this engine none. LPB_CLEARINGHOUSE_URL must name an engine in its clearinghouse "
+                "role (LPB_ROLE=clearinghouse). The allocation exists there",
+            )
+        own = await self._actors.get_actor(self._tenant_id, self._actor_id)
+        if (
+            own is not None
+            and own.status != "revoked"
+            and own.credential_custody == "secret_store"
+            and (own.allocation_id, own.api_key_id) == (allocation_id, api_key_id)
+        ):
+            return NewAllocationKey(
+                allocation_id=allocation_id,
+                api_key_id=api_key_id,
+                secret=SecretStr(await self._secrets.get(own.secret_ref)),
+            )
+        raise _never_arrived(self._actor_id, allocation_id, rotation=rotated is not None)
 
 
 class ClearinghouseAllowances:
     """``AllowanceReader``. The allocation that pays for an actor is the engine's own record: it is the
     one whose payment key the engine holds. Its allowance is read at the clearinghouse."""
 
-    def __init__(self, wire: ClearinghouseWire, actors: ActorRepo) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire, actors: ActorRepo) -> None:
+        self._wire = TenantWire.over(wire)
         self._actors = actors
 
     async def allocation_for(self, tenant_id: str, actor_id: str) -> str | None:
@@ -308,59 +397,37 @@ class ClearinghouseAllowances:
 class ClearinghouseUsage:
     """``UsageSource``: the tenant's payment records, oldest first. The page is the port's own."""
 
-    def __init__(self, wire: ClearinghouseWire) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire) -> None:
+        self._wire = TenantWire.over(wire)
 
     async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
         params = {"limit": str(limit)} | ({"cursor": cursor} if cursor else {})
         return await self._wire.read_as(UsagePage, USAGE_PATH, params)
 
 
-class ClearinghouseCredentials:
-    """``CredentialResolver``: the actor's payment key (``lpp_``), from the engine's own secret store.
-    A stored secret that is no payment key is a Batteries key from when the engine ran self-hosted
-    payments. It is never returned, so it is never sent to a clearinghouse."""
-
-    def __init__(self, actors: ActorRepo, secrets: SecretStore) -> None:
-        self._actors = actors
-        self._secrets = secrets
-
-    async def credential(self, actor: ActorContext) -> PaymentKey:
-        allotted = await self._actors.get_actor(actor.tenant_id, actor.actor_id)
-        if allotted is None or allotted.status == "revoked":
-            raise NotProvisioned(f"actor {actor.actor_id!r} has no allocation; an admin must allot one")
-        token = await self._secrets.get(allotted.secret_ref)
-        if not token.startswith(PAYMENT_KEY_PREFIX):
-            raise NotProvisioned(
-                f"actor {actor.actor_id!r} holds no payment key of the clearinghouse: its allocation "
-                "was allotted before this engine used one. An admin must allot it at the clearinghouse"
-            )
-        return PaymentKey(token=token, allocation_id=allotted.allocation_id)
-
-
 @dataclass(frozen=True)
 class ClearinghousePorts:
-    """The four remote adapters over one wire. ``allocations`` is also the engine's grants manager: it
-    reads the tenant's grant and refuses the rest."""
+    """The three remote adapters over one wire. ``allocations`` is also the engine's grants manager: it
+    reads the tenant's grant and refuses the rest. ``tenant`` is the wire as all three use it, held to
+    the engine's tenant: whoever else sends the tenant admin key asks it whose key that is first."""
 
     allocations: ClearinghouseAllocations
     allowances: ClearinghouseAllowances
     usage: ClearinghouseUsage
-    credentials: ClearinghouseCredentials
+    tenant: TenantWire
 
     @classmethod
     def over(cls, wire: ClearinghouseWire, actors: ActorRepo, secrets: SecretStore) -> "ClearinghousePorts":
+        own = TenantWire(wire)
         return cls(
-            ClearinghouseAllocations(wire),
-            ClearinghouseAllowances(wire, actors),
-            ClearinghouseUsage(wire),
-            ClearinghouseCredentials(actors, secrets),
+            ClearinghouseAllocations(own, actors, secrets),
+            ClearinghouseAllowances(own, actors),
+            ClearinghouseUsage(own),
+            own,
         )
 
 
-async def read_allowance(
-    wire: ClearinghouseWire, tenant_id: str, actor_id: str, allocation_id: str
-) -> Allowance:
+async def read_allowance(wire: TenantWire, tenant_id: str, actor_id: str, allocation_id: str) -> Allowance:
     """The allowance of the allocation ``allocation_id``, which ``actor_id`` must hold now: read from the
     actor's allocation route, which answers it with the record. Another tenant's actor is refused (403)
     and never asked for. An allowance the clearinghouse could not read at its own provider (``null``) is
@@ -372,6 +439,44 @@ async def read_allowance(
     if read.allowance is None:
         raise ProviderUnavailable("the clearinghouse could not read the allowance at its payment provider")
     return read.allowance
+
+
+def _digest(*parts: str) -> str:
+    """base64url(sha256(parts joined by ``:``)): 43 characters, as the engine's idempotency keys are."""
+    digest = hashlib.sha256(":".join(parts).encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def _never_arrived(actor_id: str, allocation_id: str, *, rotation: bool) -> InvalidRequest:
+    """The refusal of a command the clearinghouse finished before and answers without the key (D87 point
+    1). A refusal, so a first run frees its reference: this engine applied nothing. A resumed run never
+    frees its own (``services/ledger.py``), so the record of a lost answer stays ``started``."""
+    lost = (
+        f"the clearinghouse finished this {'rotation' if rotation else 'allotment'} before (allocation "
+        f"{allocation_id!r}) and handed its key to an answer that never reached this engine. It hands a "
+        "key over once and keeps none, so that key is lost"
+    )
+    if rotation:
+        return InvalidRequest(
+            f"{lost}. A lost key is replaced by a rotation: rotate the payment key of actor {actor_id!r} "
+            "again, under a new operation_ref"
+        )
+    return InvalidRequest(
+        f"{lost}, and this engine has no record of actor {actor_id!r} to rotate it from. Revoke the "
+        "allocation at the clearinghouse, which returns what it has not spent to the grant, then allot "
+        "again here under a new operation_ref"
+    )
+
+
+def _acted_elsewhere(actor_id: str, named: str, acted_on: str, did: str, then: str) -> ProviderError:
+    """What a command the clearinghouse applied to another allocation comes to: which allocation was
+    named, which one was acted on, that nothing is recorded here, and what to do next (``then``)."""
+    return ProviderError(
+        200,
+        f"the clearinghouse {did} allocation {acted_on!r}, which actor {actor_id!r} holds there now, and "
+        f"not {named!r}, which this command named: the actor was revoked and allotted again at the "
+        f"clearinghouse while the command was on its way. Nothing of it is recorded here. {then}",
+    )
 
 
 def _not_held(actor_id: str, allocation_id: str) -> ProviderError:

@@ -24,11 +24,10 @@ ENV_PREFIX = "LPB_"
 CLEARINGHOUSE_RUNNER_LIST = "/v1/clearinghouse/discovery"
 # What selects a payment clearinghouse: set together or not at all (D84, #168).
 _CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_tenant_id")
-# What self-hosted payments sets. An engine that uses a clearinghouse holds none of them.
-_SELF_HOSTED = ("batteries_url", "batteries_token", "batteries_grants_token", "signer_url")
-# The two roles that run one half of the engine (D84, #169). The third, "both", is the default.
-_WORK_ROLE: Role = "work"
-_CLEARINGHOUSE_ROLE: Role = "clearinghouse"
+# What reaches Batteries. An engine that uses a clearinghouse holds none of them: only the clearinghouse's
+# own engine reaches Batteries (D85 point 1). ``signer_url`` is not among them: such an engine signs at
+# the clearinghouse's published signer itself, and is told its address as any paying engine is.
+_BATTERIES = ("batteries_url", "batteries_token", "batteries_grants_token")
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
 # Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
@@ -76,11 +75,9 @@ class EngineSettings(Contract):
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
-    # Which half of the engine this deployment runs (D84, #169). "both": self-hosted payments, the work
-    # half and the clearinghouse half together. "work": an enterprise that uses a payment clearinghouse.
-    # "clearinghouse": a payment clearinghouse, which never runs jobs. The role chooses the routes that
-    # are mounted (http/listeners.py), the payment adapters (runtime/payment_defaults.py) and what the
-    # engine starts (runtime/engine.py); the settings below must agree with it.
+    # Which half of the engine this deployment runs (D84, #169): "both" for self-hosted payments, "work"
+    # for an enterprise that uses a payment clearinghouse, "clearinghouse" for one, which never runs jobs.
+    # It chooses the routes, the payment adapters and what starts; the settings below must agree with it.
     role: Role = "both"
 
     # persistence
@@ -134,12 +131,14 @@ class EngineSettings(Contract):
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
     # An engine that uses a payment clearinghouse (D84, #168): its address, the tenant admin key and the
-    # tenant's id, which is its grant's id (D83). Set together or not at all, and never with the
-    # Batteries or signer settings: the payment ports then reach the clearinghouse and nothing else.
+    # tenant's id, which is its grant's id (D83). Set together or not at all, and never with a Batteries
+    # setting: allotment, the allowance and usage then reach the clearinghouse. Signing does not: the
+    # engine signs at signer_url, the clearinghouse's published signer, with each actor's own key.
     clearinghouse_url: str | None = None
     clearinghouse_token: SecretStr | None = None  # the tenant admin key; sent as a bearer, never logged
     clearinghouse_tenant_id: GrantId | None = None
-    clearinghouse_timeout_s: float = Field(default=30.0, gt=0)  # each request to the clearinghouse
+    # each request to the clearinghouse. Six of them fit in the default stale window, as the rule below asks
+    clearinghouse_timeout_s: float = Field(default=20.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
     operation_stale_s: float = Field(default=120.0, gt=0)
 
@@ -172,7 +171,7 @@ class EngineSettings(Contract):
     http_port: int = Field(default=8080, ge=1, le=65535)
     # The private listener (D84, #167). Unset: one listener, which serves every route. Set: http_host and
     # http_port are the public listener, without the routes only a clearinghouse admin calls, and this
-    # one serves every route to a clearinghouse admin only. Loopback unless the deployment says otherwise.
+    # one serves a clearinghouse admin only, without a tenant's own routes. Loopback unless set otherwise.
     http_private_host: str = "127.0.0.1"
     http_private_port: int | None = Field(default=None, ge=1, le=65535)
     # A /v1/ body over this is refused with 413 before it is read (D59); fits an 8 MiB raw_body as base64
@@ -211,12 +210,11 @@ class EngineSettings(Contract):
     @field_validator("clearinghouse_url")
     @classmethod
     def _clearinghouse_url_is_an_origin(cls, value: str | None) -> str | None:
-        """A scheme, a host and an optional port, and nothing after them. The engine signs at the
-        clearinghouse through the gateway SDK, which keeps that much of a signer's address and drops the
-        rest: with a path, the tenant's routes would be called under it and the signer's two paths at
-        the root. Error text and logs quote the address, so it carries no userinfo either: the tenant
-        admin key is a header. A trailing slash alone names no path and is taken off. The value is not
-        echoed."""
+        """A scheme, a host and an optional port, and nothing after them: the engine calls the
+        clearinghouse's routes (``/v1/clearinghouse/...``) at the root of this address, and builds its
+        default discovery address from it. Error text and logs quote the address, so it carries no
+        userinfo either: the tenant admin key is a header. A trailing slash alone names no path and is
+        taken off. The value is not echoed."""
         if value is None:
             return None
         value = value.strip()
@@ -234,8 +232,8 @@ class EngineSettings(Contract):
         if not valid:
             raise ValueError(
                 "LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, with no "
-                "path, query, fragment or userinfo, such as https://clearinghouse.example: the signer's "
-                "two paths are called at its root"
+                "path, query, fragment or userinfo, such as https://clearinghouse.example: the "
+                "clearinghouse's routes are called at its root"
             )
         return f"{parts.scheme}://{parts.netloc}"
 
@@ -306,8 +304,10 @@ class EngineSettings(Contract):
 
     @model_validator(mode="after")
     def _a_clearinghouse_is_whole_and_alone(self) -> "EngineSettings":
-        """A half setting, or a clearinghouse beside self-hosted payments, is refused before the engine
-        starts (#168). Only names are said: three of these settings are secrets."""
+        """A half setting, or a clearinghouse beside a Batteries setting, is refused before the engine
+        starts (#168), and so is a stale window shorter than six timeouts of a clearinghouse call. Only
+        names are said: three of these settings are secrets. ``LPB_SIGNER_URL`` is no part of this rule:
+        it is the clearinghouse's signer, set or unset as on any engine."""
         named = [name for name in _CLEARINGHOUSE if getattr(self, name) is not None]
         if not named:
             return self
@@ -316,23 +316,34 @@ class EngineSettings(Contract):
             raise ValueError(
                 f"{', '.join(map(_env, _CLEARINGHOUSE))} are set together or not at all; missing: {missing}"
             )
-        mixed = [_env(name) for name in _SELF_HOSTED if getattr(self, name) is not None]
+        mixed = [_env(name) for name in _BATTERIES if getattr(self, name) is not None]
         if mixed:
             raise ValueError(
-                f"{', '.join(mixed)} cannot be set with LPB_CLEARINGHOUSE_URL: an engine that uses a "
-                "payment clearinghouse reaches Batteries and the signer through it, and holds no address "
-                "or credential of theirs"
+                f"{', '.join(mixed)} cannot be set with LPB_CLEARINGHOUSE_URL: only the clearinghouse's "
+                "own engine reaches Batteries, and an engine that uses a payment clearinghouse holds no "
+                "address or credential of it"
             )
-        if self.operation_stale_s < 4 * self.clearinghouse_timeout_s:  # as for Batteries, just above
-            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_CLEARINGHOUSE_TIMEOUT_S")
+        # As for Batteries, just above: the ledger cancels a run at half the stale window, and the longest
+        # command must fit in that half. Through the remote adapters that is three calls, each under one
+        # deadline of the timeout: a rotation that another rotation overtook in the engine reads the
+        # allocation, sends the rotation, and reads which key the allocation takes (OneKeyPerAllocation).
+        # Every other command makes one or two, and none writes after its second call: a read that is cut
+        # short leaves nothing in flight, and the resume asks again. 3 calls in the half, so 6 timeouts
+        # in the whole window, where Batteries' two calls make four.
+        if self.operation_stale_s < 6 * self.clearinghouse_timeout_s:
+            raise ValueError(
+                "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S: a command "
+                "is cancelled at half the stale window, and the longest one makes three calls to the "
+                "clearinghouse"
+            )
         return self
 
     @model_validator(mode="after")
     def _the_settings_agree_with_the_role(self) -> "EngineSettings":
-        """The role is the one switch (D84, #169). ``work`` pays through a payment clearinghouse and so
-        names one; ``both`` and ``clearinghouse`` pay through Batteries and a signer and name none; and
-        ``clearinghouse`` has the private listener, where alone its admin's routes are served. Only
-        names are said. The half setting and the mix with self-hosted payments are refused just above."""
+        """The role is the one switch (D84, #169). ``work`` names a payment clearinghouse; ``both`` and
+        ``clearinghouse`` reach Batteries themselves and name none; and ``clearinghouse`` has the private
+        listener, where alone its admin's routes are served. Only names are said. ``LPB_SIGNER_URL`` is
+        no part of this rule either: every role may name a signer."""
         named = [_env(name) for name in _CLEARINGHOUSE if getattr(self, name) is not None]
         if self.uses_clearinghouse:
             if not named:
@@ -357,7 +368,7 @@ class EngineSettings(Contract):
         return self
 
     def _work_needs_a_clearinghouse(self) -> str:
-        held = [_env(name) for name in _SELF_HOSTED if getattr(self, name) is not None]
+        held = [_env(name) for name in _BATTERIES if getattr(self, name) is not None]
         beside = f", and cannot hold {', '.join(held)}" if held else ""
         return (
             f"LPB_ROLE=work needs {', '.join(map(_env, _CLEARINGHOUSE))}: an engine in its work role pays "
@@ -366,15 +377,15 @@ class EngineSettings(Contract):
 
     @property
     def uses_clearinghouse(self) -> bool:
-        """Whether the payment ports reach a payment clearinghouse, and not Batteries and a signer: the
-        ``work`` role, which alone holds the clearinghouse settings."""
-        return self.role == _WORK_ROLE
+        """Whether allotment, the allowance and usage reach a payment clearinghouse, and not Batteries:
+        the ``work`` role alone. The engine signs at ``signer_url`` either way."""
+        return self.role == "work"
 
     @property
     def runs_jobs(self) -> bool:
         """Whether the engine runs jobs: every role but ``clearinghouse``, a payment clearinghouse's,
         which does payments only (D82)."""
-        return self.role != _CLEARINGHOUSE_ROLE
+        return self.role != "clearinghouse"
 
     @property
     def clearinghouse_runner_list_token(self) -> str | None:

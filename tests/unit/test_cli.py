@@ -195,6 +195,7 @@ def test_serve_runs_the_rest_app(db: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
     async def fake_serve(self: uvicorn.Server) -> None:
         served.append(self.config.app)
+        self.started = True  # a server that started and then ended in order
 
     monkeypatch.setattr(uvicorn.Server, "serve", fake_serve)
     assert run("serve") == 0

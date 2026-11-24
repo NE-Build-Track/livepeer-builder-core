@@ -152,7 +152,7 @@ could not be written. Every other 422 is byte for byte what FastAPI sends.
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
 | `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor of the tenant (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `status` (allocations only), `allotted` and `limit`. A tenant admin or an auditor lists its own tenant; a clearinghouse admin lists any. The single read returns the allocation (`ActorAllocation`). In embedded mode `payments.list_actors` still takes `tenant_id=None`, which is every tenant for a clearinghouse admin and its own for anyone else |
 | `GET /v1/clearinghouse/tenants/{tenant}/grant` | `admin.read` ([payments.md](payments.md#tenants)) |
-| `POST /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants`, `POST .../tenants/{tenant}/grant/top-up`, `POST .../tenants/{tenant}/status` | `admin.tenants`: a clearinghouse admin |
+| `POST /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants`, `POST .../tenants/{tenant}/grant/top-up`, `POST .../tenants/{tenant}/status`, `GET /v1/clearinghouse/wallet` | `admin.tenants`: a clearinghouse admin. With two [listeners](#listeners), on the private one only |
 
 **Every route that names a tenant answers the same way (#165):**
 
@@ -171,6 +171,63 @@ tenant is held to the third row.
 come first.
 
 Enterprises replace the policy for teams, organization admins or RBAC by implementing `AccessPolicy`.
+
+## Listeners
+
+A clearinghouse admin onboards tenants and tops up grants, so a leaked clearinghouse admin key could
+spend the wallet. A deployment can keep what only a clearinghouse admin does off the address it
+publishes (D84, #167).
+
+**One listener is the default.** Without `LPB_HTTP_PRIVATE_PORT` the engine serves one listener, on
+`LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route for every kind of credential, as before #167.
+Self-hosted payments runs this way, and its clearinghouse admin key does everything it did.
+
+**With `LPB_HTTP_PRIVATE_PORT` set, the engine serves two**, each with an app of its own over one engine
+in one process:
+
+| | Public listener | Private listener |
+| --- | --- | --- |
+| Address | `LPB_HTTP_HOST`, `LPB_HTTP_PORT` | `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1` unless set), `LPB_HTTP_PRIVATE_PORT` |
+| Routes | Every route but the private group | Every route |
+| The private group: onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report | 404, as any path the engine does not know, with a credential or without one | Served |
+| A clearinghouse admin credential | 403 on every route that takes a credential, the work routes included | Accepted |
+| A tenant admin, an auditor, an actor or a service credential | Accepted, as with one listener | 403 on every route, its own tenant's included |
+| No credential, or a bad one | 401 | 401 |
+| `/livez`, `/readyz`, `GET /v1/offerings` | Served, with no credential | Served, with no credential |
+| `/openapi.json`, `/docs` | The public listener's routes only | Every route |
+
+- **The private listener is for a clearinghouse admin only.** It is where a clearinghouse admin does
+  everything, for any tenant. A tenant's admin and its auditor use the public listener, and a tenant
+  credential that reaches the private address is refused there.
+- **A tenant admin key of kind `tenant_admin` is issued on the private listener:**
+  `POST .../tenants/{tenant_id}/keys` is served on both, and only a clearinghouse admin may issue that
+  kind ([a tenant's access keys](#a-tenants-access-keys)).
+- **An allocation's key stays with the engine, on one listener or two.** Every app `http/listeners.py`
+  builds mounts the tenant routes with `deliver_allocation_keys=False`: the engine behind a listener
+  runs jobs, so allotment and rotation store the key in its `SecretStore` and answer the allocation
+  alone, on the public listener and on the private one ([payments.md](payments.md#payment-keys)).
+  Handing each key to the caller once is a standalone clearinghouse's, which the `clearinghouse` role
+  (#169) mounts. No listener serves a signer path: an engine signs at the signer itself.
+- **The credential rule is a property of the listener, not of each route.** It is applied where every
+  route authenticates (`http/auth.py`), by kind, after the credential is verified. A route added later
+  is covered with no check of its own, and so is a route an extension adds with `actor_dependency`
+  ([extending the engine](../design-docs/extending-the-engine.md#service-mode)). A JWT with the admin
+  scope is a clearinghouse admin credential and is treated as one.
+- **Which group is on which listener is one table,** in `http/listeners.py`. A group of routes that is
+  in neither of its two tuples fails a test (`tests/unit/test_listeners.py`), which also reads the
+  routes from each app: every route of the private group is 404 on the public listener, and every route
+  that takes a credential refuses a clearinghouse admin key on the public listener before the provider
+  or the store is asked. The routes that take no credential are named there, so a new one is a decision
+  somebody made.
+- **The published schema.** `docs/generated/openapi.json` is generated from a deployment with one
+  listener, so it has every route; the routes of the private group carry the tag `private listener`.
+- **Publish the public listener only.** The private one listens on loopback unless
+  `LPB_HTTP_PRIVATE_HOST` says otherwise. Whoever can reach it still needs a clearinghouse admin
+  credential.
+
+The `clearinghouse` role of ISS-31 (#169) will require the private listener; until then it is a
+deployment's choice. In embedded mode there is no listener: the enterprise app builds the `ActorContext`
+and the policy applies as before.
 
 ## Modes
 
@@ -348,7 +405,8 @@ Both are generic: no enterprise logic lives in the engine.
   clearinghouse admin key comes from `lpb bootstrap-admin`, which works only while no active
   clearinghouse admin key exists, and only when engine API keys are on. There is no network
   bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
-  only a clearinghouse admin issues another.
+  only a clearinghouse admin issues another. A deployment with a private listener accepts a
+  clearinghouse admin credential there only ([listeners](#listeners)).
 - **Payment keys (#166):** an allocation's key (`lpg_`) is no access key. It is a credential at the
   signer and nowhere else: as a bearer on any engine route it gets what no credential gets, 401. The
   engine that runs an actor's jobs holds that actor's key. With self-hosted payments that is the one

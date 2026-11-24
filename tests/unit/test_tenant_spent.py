@@ -86,3 +86,8 @@ async def test_the_tenant_list_and_the_grant_read_show_what_each_tenant_spent(
         one = (await client.get("/v1/clearinghouse/tenants/other/grant", headers=key)).json()
         assert one["spent"] == {"amount": "1.25", "currency": "USD"}
         assert one["unallocated"] == {"amount": "45", "currency": "USD"}
+        assert one["allocated_unspent"] == {"amount": "3.75", "currency": "USD"}
+        # default: alice's allocation holds 5 - 1.25, and bob's revoked one holds nothing
+        assert [tenant["allocated_unspent"] for tenant in listed if tenant["tenant_id"] == "default"] == [
+            {"amount": "3.75", "currency": "USD"}
+        ]

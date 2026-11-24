@@ -673,6 +673,44 @@
         "title": "EngineHealth",
         "type": "object"
       },
+      "EscrowAccount": {
+        "additionalProperties": false,
+        "description": "One on-chain escrow account of the clearinghouse's wallet, as the payment provider reports it\n(#167): the TicketBroker deposit and reserve of one sender on one chain. Both are in ETH, exact to\nthe wei. They are what the provider's on-chain listener has confirmed through\n``confirmed_through_block``, not the chain's head: the engine reads no chain itself.\n\n``sender`` is the wallet's public address, which the provider already reports. No key material, no\nkeystore path and no RPC address is here.",
+        "properties": {
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "string"
+          },
+          "confirmed_through_block": {
+            "title": "Confirmed Through Block",
+            "type": "integer"
+          },
+          "contract_address": {
+            "title": "Contract Address",
+            "type": "string"
+          },
+          "deposit": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "reserve": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "contract_address",
+          "sender",
+          "deposit",
+          "reserve",
+          "confirmed_through_block"
+        ],
+        "title": "EscrowAccount",
+        "type": "object"
+      },
       "EventPage": {
         "additionalProperties": false,
         "properties": {
@@ -2236,6 +2274,37 @@
         "title": "SignedSession",
         "type": "object"
       },
+      "SignerReadiness": {
+        "additionalProperties": false,
+        "description": "Whether the signer answered its identity call just now (#167): the unauthenticated call every\npayment begins with. ``ready`` says the signer is reachable where the engine calls it and answered\nwith an address and a signature, which the engine does not check. It does not say the wallet is\nfunded, that the signer's price feed or event stream is up, or that it can reach the payment\nprovider: those are the signer's own ``/readyz``, on a listener the engine is not given.",
+        "properties": {
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_configured",
+                  "unavailable",
+                  "no_identity"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "ready"
+        ],
+        "title": "SignerReadiness",
+        "type": "object"
+      },
       "StatusBody": {
         "additionalProperties": false,
         "properties": {
@@ -2292,8 +2361,11 @@
       },
       "TenantGrant": {
         "additionalProperties": false,
-        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166).",
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166). ``allocated_unspent`` is what its allocations still hold (#167): for each one,\nwhat it was allotted less what it has spent, and nothing for one that has spent more, so an overdrawn\nallocation takes nothing off another's. A revoked allocation holds nothing: what it had not spent is\nback in ``unallocated``. The two together are what the tenant may still spend.",
         "properties": {
+          "allocated_unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2322,7 +2394,8 @@
           "status",
           "total",
           "unallocated",
-          "spent"
+          "spent",
+          "allocated_unspent"
         ],
         "title": "TenantGrant",
         "type": "object"
@@ -2435,6 +2508,25 @@
         "title": "TopUpRequest",
         "type": "object"
       },
+      "UnspentGrants": {
+        "additionalProperties": false,
+        "description": "What the tenants whose grants are in one currency may still spend (#167): for every grant the\nprovider holds in that currency, whatever its status, what is not yet allotted (``unallocated``) and\nwhat its allocations still hold (``allocated_unspent``), neither counted below zero. It is not the\ngrant's total less what was spent: an allocation that spent more than it held takes nothing off the\nrest. ``grants`` is how many grants were summed. Nothing is converted: a deployment with grants in two\ncurrencies has two of these.",
+        "properties": {
+          "grants": {
+            "title": "Grants",
+            "type": "integer"
+          },
+          "unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          }
+        },
+        "required": [
+          "unspent",
+          "grants"
+        ],
+        "title": "UnspentGrants",
+        "type": "object"
+      },
       "UsageBody": {
         "additionalProperties": false,
         "properties": {
@@ -2490,6 +2582,36 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WalletReport": {
+        "additionalProperties": false,
+        "description": "What a clearinghouse admin watches the wallet by (D82, #167): the deposit and reserve, the total\nof unspent grants, and the signer's readiness. Each amount is in its own currency. Nothing is\nconverted between ETH and a grant's currency, and no margin is computed: the report states, and a\nperson judges.",
+        "properties": {
+          "escrow": {
+            "items": {
+              "$ref": "#/components/schemas/EscrowAccount"
+            },
+            "title": "Escrow",
+            "type": "array"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/SignerReadiness"
+          },
+          "unspent_grants": {
+            "items": {
+              "$ref": "#/components/schemas/UnspentGrants"
+            },
+            "title": "Unspent Grants",
+            "type": "array"
+          }
+        },
+        "required": [
+          "escrow",
+          "unspent_grants",
+          "signer"
+        ],
+        "title": "WalletReport",
         "type": "object"
       }
     },
@@ -2627,7 +2749,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Tenants"
+        "summary": "List Tenants",
+        "tags": [
+          "private listener"
+        ]
       },
       "post": {
         "description": "Create the tenant's grant and its first tenant admin key, whose token is shown once.",
@@ -2669,7 +2794,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Onboard Tenant"
+        "summary": "Onboard Tenant",
+        "tags": [
+          "private listener"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors": {
@@ -3231,7 +3359,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Top Up Grant"
+        "summary": "Top Up Grant",
+        "tags": [
+          "private listener"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/keys": {
@@ -3558,7 +3689,37 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Set Tenant Status"
+        "summary": "Set Tenant Status",
+        "tags": [
+          "private listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/wallet": {
+      "get": {
+        "description": "The wallet's deposit and reserve as the payment provider has confirmed them, the total of\nunspent grants for each currency, and whether the signer answers. Nothing is converted\nbetween currencies and no margin is computed.",
+        "operationId": "wallet_report_v1_clearinghouse_wallet_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Wallet Report",
+        "tags": [
+          "private listener"
+        ]
       }
     },
     "/v1/costs/projections": {
@@ -4546,5 +4707,11 @@
         "summary": "Open Session"
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "description": "Served on the private listener only, when the deployment has one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one listener serves them there.",
+      "name": "private listener"
+    }
+  ]
 }

@@ -123,23 +123,27 @@ clearinghouse has one for each enterprise app.
 | `GET /v1/clearinghouse/tenants` | A clearinghouse admin | Every tenant with its grant and what it spent: `TenantGrant[]` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated` and `spent` |
+| `GET /v1/clearinghouse/wallet` | A clearinghouse admin | The wallet's deposit and reserve, the total of unspent grants and the signer's readiness ([the wallet report](#the-wallet-report)) |
+| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated`, `spent` and `allocated_unspent` |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
 | `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment). Each answers the allocation (`ActorAllocation`). On a standalone clearinghouse, allotting (`201`) and rotating the payment key (`200`) also hand over the allocation's key, once (`allocation_api_key`, with `replayed` and `resumed`); on a self-hosted engine the engine stores the key and the answer has none ([payment keys](#payment-keys)) |
 | `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
 
-A clearinghouse admin may call every route, for any tenant. The first four are what only a clearinghouse
-admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`), which
-#167 serves on a private listener. Today one listener serves everything.
+A clearinghouse admin may call every route, for any tenant. The first five are what only a clearinghouse
+admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A
+deployment with a private listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the
+public listener those five are 404, and a clearinghouse admin credential is 403 on every route
+([access.md](access.md#listeners)). With one listener, which is the default and what self-hosted
+payments runs, every route is served there and nothing is refused.
 
 There is no payments route, and a clearinghouse serves no signer path: an enterprise's engine signs at
 the signer itself, with the allocation's key ([payment keys](#payment-keys)).
 
 **The tenant desk.** Onboarding, the tenant list, the grant read and the tenant's status use the grants
-credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`
-and `allocations.read`). The token is optional. Without it the desk is off: `engine.payments.tenants` is
+credential (`LPB_BATTERIES_GRANTS_TOKEN`: `grants.read`, `grants.create`, `grants.fund`, `grants.status`,
+`allocations.read` and, for [the wallet report](#the-wallet-report), `escrow.read`). The token is optional. Without it the desk is off: `engine.payments.tenants` is
 `None` and those four routes are absent. A grant's top-up uses `LPB_BATTERIES_TOKEN` (`grants.fund`) and
 stays.
 
@@ -155,6 +159,20 @@ allocations have spent, the revoked ones included. Batteries serves `spent_<curr
 and keeps it on a revoked one, late charges too. The tenant list and the grant read already read the
 allocations for the unallocated balance, so `spent` adds no request. The records behind the figure are
 [a tenant's usage](#a-tenants-usage). A `spent` the engine cannot read is a `ProviderError`, never a zero.
+
+**What a tenant's allocations still hold (#167).** `allocated_unspent` is the sum, over the tenant's
+allocations, of what each was allotted less what it has spent, and nothing for an allocation that has
+spent more. Batteries charges after it authorizes and reserves nothing, so an allocation can spend more
+than it holds (verified at Batteries v0.0.3, `internal/store/ingest.go`: its balance goes below zero and
+it becomes `exhausted`). Such an allocation holds nothing, and its overdraft takes nothing off what
+another allocation holds or off the unallocated balance. A paused allocation counts: it can be resumed.
+A revoked one holds nothing: the revoke returned what it had not spent to the grant and took it off the
+allocation's `allocated` amount (`internal/store/manage.go`), so that money is in `unallocated` and is
+counted there only, and a charge that lands later raises `spent` and nothing else. `unallocated` and
+`allocated_unspent` together are what the tenant may still spend, which
+[the wallet report](#the-wallet-report) sums. The figure comes from the allocations the two reads
+already make, at no further request, and from the same `allocated` and `spent` amounts: one the engine
+cannot read is a `ProviderError`, never a zero.
 
 **Batteries refuses what the grant cannot cover.** An allocation, or an allocation's top-up, larger than
 the grant's unallocated balance is refused by Batteries: 409, with its reason, "insufficient unallocated
@@ -213,6 +231,92 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
 - **Optional.** The route is present with a usage source that reads one tenant's records
   (`TenantUsageSource` in `protocols`, which `BatteriesUsageSource` has), and absent without one:
   `engine.payments.usage` is then `None`.
+
+### The wallet report
+
+Each clearinghouse has one wallet. Its deposit stays above the total of unspent grants, with a margin
+for the ETH price, and the clearinghouse admin watches it and funds it by hand (D82). The report
+(`GET /v1/clearinghouse/wallet`, `engine.payments.wallet.report`, #167) states the three things that
+sentence needs. It converts nothing between ETH and a grant's currency, computes no margin, refuses
+nothing by these figures and sends no alert: a person judges.
+
+Only a clearinghouse admin reads it (`admin.tenants`): a tenant admin, an auditor and an actor are 403.
+It is in the private listener's group, so a deployment with two listeners serves it on the private one
+only ([access.md](access.md#listeners)).
+
+```json
+{
+  "escrow": [
+    {
+      "chain_id": "42161",
+      "contract_address": "0xc0c0…",
+      "sender": "0x5e5e…",
+      "deposit": {"amount": "1.5", "currency": "ETH"},
+      "reserve": {"amount": "0.25", "currency": "ETH"},
+      "confirmed_through_block": 412
+    }
+  ],
+  "unspent_grants": [
+    {"unspent": {"amount": "1077", "currency": "USD"}, "grants": 3}
+  ],
+  "signer": {"ready": true, "reason": null}
+}
+```
+
+| Field | Unit | Source | What it says |
+| --- | --- | --- | --- |
+| `escrow[]` | | Batteries, `GET /v1/escrow/report` (`escrow.read`, with the grants credential) | One account for each chain, TicketBroker contract and sender that Batteries' on-chain listener follows. A clearinghouse has one wallet, so one account |
+| `escrow[].chain_id`, `contract_address`, `sender` | | The same | The chain, the TicketBroker contract and the wallet's public address, as Batteries reports them |
+| `escrow[].deposit`, `reserve` | ETH, exact to the wei | The same | The wallet's TicketBroker deposit and reserve, as Batteries' listener has confirmed them from the chain's events |
+| `escrow[].confirmed_through_block` | A block number | The same | How far the listener has read. The amounts are as of that block, not the chain's head: Batteries waits for confirmations (64 blocks by default) and polls (every 5 s by default). `-1` is a first snapshot from before the chain's first block. There is no timestamp |
+| `unspent_grants[]` | | Batteries, the grants and their allocations (`grants.read`, `allocations.read`), as the tenant list reads them | One entry for each currency a grant is in, by currency |
+| `unspent_grants[].unspent` | The grants' currency (`USD` or `ETH`) | The same | The sum, over every grant Batteries holds in that currency, of the grant's `unallocated` and its `allocated_unspent` ([tenants](#tenants)) |
+| `unspent_grants[].grants` | A count | The same | How many grants were summed |
+| `signer.ready` | | The signer, `POST /sign-orchestrator-info` at the root of `LPB_SIGNER_URL` | Whether the signer answered its identity call just now |
+| `signer.reason` | | The same | `null` when ready. `not_configured`: the engine has no `LPB_SIGNER_URL`. `unavailable`: the signer could not be reached, timed out or answered a 5xx. `no_identity`: something answered, but not with a signer's address and a signature |
+
+**What "unspent" sums.** A grant's unspent amount is what is not yet allotted (`unallocated`) and what
+is allotted and not yet spent (`allocated_unspent`). Both are the tenant's to spend, so the wallet may
+still have to pay for both. Every grant counts, whatever its status: a paused grant can be resumed. It
+is not the grant's total less what was spent. Batteries charges after it authorizes, so an allocation
+can spend more than it held. That overdraft is charged already, and it takes nothing off what another
+allocation holds or off what the grant has left to allot: a grant of 100 with 60 allotted, of which 70
+was spent, still has 40 to allot and spend, and counts as 40, not 30. A figure that is too low is the
+unsafe one, since the deposit is held above this total. Neither part of a grant counts below zero, so a
+balance stated below zero hides nothing: not another grant's unspent amount, and not what the same
+grant's allocations still hold. The figure is read as the tenant list is (T31): the grants, then every
+allocation, so a command that lands between the reads can put it off by its amount.
+
+**The deposit and reserve need Batteries' on-chain listener.** Batteries records escrow only with
+`--enable-onchain-listener`, its own RPC address and the signer's address, and the listener is off by
+default. With it off, Batteries reports no account and `escrow` is `[]`: never a deposit of zero. The
+engine reads no chain, holds no RPC address and gains no setting for one.
+
+**What "ready" proves.** The identity call is the one every paid job begins with. It needs no
+credential, signs no payment and costs nothing, and `ready` says the signer is reachable where the engine
+calls it and answered with an address and a signature. The engine does not check that signature: the
+answer does not carry what was signed. `ready` does not say the wallet is funded, that the signer's
+price feed or event stream is up, or that the signer can reach Batteries: those are the signer's own
+`/readyz`, which livepeer/node serves on a separate metrics listener the engine is not given (T34). The
+payment SDK remembers a signer's identity for the life of the process; the report asks the signer each
+time and not that memory.
+
+**Failures.** The three are read one after another and are not one moment. A Batteries that fails a
+read fails the report (503 when it cannot be reached, 502 for an answer the engine cannot read): no
+part is served as if the rest were known, and an amount the engine cannot read is never a zero. A deposit
+or a reserve below zero is such an amount, and is never served as a balance. A grants
+credential without `escrow.read` (Batteries' 403) is a 502 whose message names the permission. A grants
+token Batteries does not know or has revoked (its 401) is a 502 in Batteries' own words, with no
+permission named: none would mend it. A signer that does not answer is an answer, `ready: false`, not an
+error.
+
+**What is never in it.** No key material, no keystore path and no RPC address. The wallet's public
+address is there because Batteries reports it.
+
+**When the route is absent.** It needs a grants manager that reports the escrow (`EscrowSource`, which
+`BatteriesClient` has) and a runner transport that can ask the signer (`SignerProbe`, which
+`SdkRunnerTransport` has). Without the grants credential, or with a supplied part that has neither, the
+engine serves no wallet report: `engine.payments.wallet` is `None` and the route is 404.
 
 ### Records from before a tenant's id was its grant's id
 
@@ -458,7 +562,7 @@ The engine that runs an actor's jobs keeps that actor's key:
 | The commands | `payments.allot`, `payments.rotate_payment_key` | `payments.allot_for_delivery`, `payments.rotate_for_delivery` |
 | They answer | `ActorAllocation` | `DeliveredAllocation`: the allocation, and `allocation_api_key`, `replayed` and `resumed` |
 | `credential_custody` on the allocation | `secret_store` | `work_engine` |
-| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
+| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` for one listener and for each of two ([access.md](access.md#listeners)) | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
 | Signs at the signer | The engine, with the stored key | The enterprise's engine, with the key it was handed |
 
 `lpb serve` runs the combined app, so its allotment and rotation store the key and answer none. The role

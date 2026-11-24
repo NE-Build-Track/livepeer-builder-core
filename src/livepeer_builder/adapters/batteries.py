@@ -18,10 +18,12 @@ from urllib.parse import quote
 import httpx
 from pydantic import SecretStr
 
+from livepeer_builder.adapters.batteries_escrow import read_escrow_report
 from livepeer_builder.adapters.batteries_usage_rows import decimal_or_none, read_usage_item
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
+    EscrowAccount,
     GrantPage,
     GrantRecord,
     Money,
@@ -35,7 +37,8 @@ from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnava
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _GRANTS = "/v1/grants"
-_NOTHING_HELD = (Decimal(0), Decimal(0))  # a grant with no allocation: nothing allotted, nothing spent
+_Held = tuple[Decimal, Decimal, Decimal]  # of a grant's allocations: allotted, spent, still held unspent
+_NOTHING_HELD: _Held = (Decimal(0), Decimal(0), Decimal(0))  # a grant with no allocation
 
 
 def batteries_http_client(base_url: str, token: str, *, timeout_s: float) -> httpx.AsyncClient:
@@ -145,14 +148,32 @@ class BatteriesClient:
     async def set_grant_status(self, grant_id: str, status: str) -> None:
         await self._request("PATCH", f"/v1/grants/{segment(grant_id)}/status", json={"status": status})
 
-    async def _allotted(self, grant_id: str | None) -> dict[str, tuple[Decimal, Decimal]]:
-        """What the allocations of each grant hold and what they have spent, by grant; of one grant when
-        it is named. One read of the allocations gives both (#166)."""
-        held: dict[str, tuple[Decimal, Decimal]] = {}
+    async def escrow_accounts(self) -> tuple[EscrowAccount, ...]:
+        """The wallet's deposit and reserve (``EscrowSource``, #167): Batteries' escrow report, which
+        needs ``escrow.read``. A credential without it (403) is told so: the grants credential had no
+        use for that permission before. A token Batteries does not know (401) is not: no permission
+        mends it, and its failure passes through as it is."""
+        try:
+            response = await self._send("GET", "/v1/escrow/report")
+        except ProviderError as exc:
+            if exc.status_code != 403:
+                raise
+            needed = f"{exc.message}: the grants credential needs the permission escrow.read"
+            raise ProviderError(exc.status_code, needed) from exc
+        return read_escrow_report(json_value(response))
+
+    async def _allotted(self, grant_id: str | None) -> dict[str, _Held]:
+        """What the allocations of each grant hold, what they have spent and what they still hold
+        unspent, by grant; of one grant when it is named. One read of the allocations gives all three
+        (#166, #167). The third is summed allocation by allocation and is never below zero for one: an
+        allocation that spent more than it holds takes nothing off another's."""
+        held: dict[str, _Held] = {}
         for item in await self._pages("/v1/allocations", {"grant_id": grant_id} if grant_id else {}):
             grant = _required(item, "grant_id")
-            allocated, spent = held.get(grant, _NOTHING_HELD)
-            held[grant] = (allocated + _amount(item, "allocated"), spent + _amount(item, "spent"))
+            allocated, spent = _amount(item, "allocated"), _amount(item, "spent")
+            allotted, used, unspent = held.get(grant, _NOTHING_HELD)
+            unspent += max(allocated - spent, Decimal(0))
+            held[grant] = (allotted + allocated, used + spent, unspent)
         return held
 
     async def _pages(self, path: str, filters: dict[str, str]) -> list[dict[str, Any]]:
@@ -178,6 +199,17 @@ class BatteriesClient:
         idempotency_key: str | None = None,
         params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        return json_object(await self._send(method, path, json, idempotency_key, params))
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        json: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """The call's answer once it is no error status; what it holds is the caller's to read."""
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         try:
             # One deadline for the whole call: httpx times each phase separately, and the operation ledger's
@@ -190,7 +222,7 @@ class BatteriesClient:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(response.status_code, error_message(response))
-        return json_object(response)
+        return response
 
 
 class BatteriesUsageSource:
@@ -257,15 +289,21 @@ def json_object(response: httpx.Response) -> dict[str, Any]:
     Only a 2xx is an answer. A redirect is none, whatever its body: the engine follows no redirect, and a
     3xx that held a JSON object read as the call's result (Go's ``ServeMux`` answers a 301 for a path it
     would clean)."""
-    if not response.is_success:
-        raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
-    try:
-        body = response.json()
-    except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
-        body = None
+    body = json_value(response)
     if not isinstance(body, dict):
         raise ProviderError(response.status_code, "Batteries answered with a body that is not a JSON object")
     return body
+
+
+def json_value(response: httpx.Response) -> object:
+    """A 2xx answer's JSON, whatever it is, or ``None`` when the body is none: for the one report that
+    is an array (``adapters/batteries_escrow.py``). A redirect is refused here, as ``json_object`` says."""
+    if not response.is_success:
+        raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
+    try:
+        return response.json()
+    except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
+        return None
 
 
 def list_page(body: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -297,7 +335,7 @@ def grant_from_item(item: dict[str, Any]) -> GrantRecord:
     )
 
 
-def tenant_grant(item: dict[str, Any], held: tuple[Decimal, Decimal]) -> TenantGrant:
+def tenant_grant(item: dict[str, Any], held: _Held) -> TenantGrant:
     """A grant as Batteries serves it, as the tenant whose id it is. Batteries serves a grant's total and
     no unallocated balance (v0.0.3, ``internal/store/manage.go``, ``listQuery``), so that is the total
     less ``allotted``, what the grant's allocations hold: each one's ``allocated`` amount, which a revoke
@@ -305,11 +343,14 @@ def tenant_grant(item: dict[str, Any], held: tuple[Decimal, Decimal]) -> TenantG
     counted and a top-up is not yet, so the difference is held at zero, below which the provider never
     lets the balance go. A figure to show, never one the engine refuses by.
 
-    ``held`` is what the grant's allocations hold and what they have spent. The second is the tenant's
-    payment usage (#166): Batteries serves ``spent_<currency>`` on each allocation, a revoked one too."""
+    ``held`` is what the grant's allocations hold, what they have spent and what they still hold
+    unspent. The second is the tenant's payment usage (#166): Batteries serves ``spent_<currency>`` on
+    each allocation, a revoked one too. The third is ``allocated_unspent`` (#167). A revoked allocation
+    adds nothing to it: the revoke that returned its unspent funds to the grant lowered its ``allocated``
+    to what it had spent, so those funds are in the unallocated balance and counted there only."""
     currency: Currency = "USD" if _optional(item, "currency").lower() == "usd" else "ETH"
     total = _amount(item, "total")
-    allotted, spent = held
+    allotted, spent, unspent = held
     return TenantGrant(
         tenant_id=_required(item, "id"),
         name=_optional(item, "name"),
@@ -317,6 +358,7 @@ def tenant_grant(item: dict[str, Any], held: tuple[Decimal, Decimal]) -> TenantG
         total=Money(amount=total, currency=currency),
         unallocated=Money(amount=max(total - allotted, Decimal(0)), currency=currency),
         spent=Money(amount=spent, currency=currency),
+        allocated_unspent=Money(amount=unspent, currency=currency),
     )
 
 

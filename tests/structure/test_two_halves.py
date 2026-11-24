@@ -77,6 +77,7 @@ CLEARINGHOUSE = {
     "services/runner_list.py",  # the list a clearinghouse publishes: it reaches no work module
     "services/tenant_usage.py",
     "services/tenants.py",
+    "services/wallet.py",  # the wallet report, which only a clearinghouse admin reads (#167)
     "http/clearinghouse.py",
     "http/delivered.py",  # a delivered allocation as the clearinghouse's answer
 }
@@ -95,6 +96,7 @@ SHARED = {
     "http/auth.py",
     "http/bodies.py",
     "http/limits.py",
+    "http/listeners.py",  # which listener serves which group of routes (#167)
     "http/params.py",
     "http/replies.py",
     "http/server.py",
@@ -108,6 +110,9 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
 # both: a work module asks for the narrow repo it needs (JobRepo, CostRepo). TenantUsageSource is how a
 # clearinghouse reads one tenant's usage at the provider: the work half reads usage through UsageSource.
+# EscrowSource and SignerProbe are what the wallet report reads (#167): the wallet's deposit and reserve at
+# the provider, and whether the signer answers. They are the clearinghouse half's, for its admin: the work
+# half pays through the signer inside RunnerTransport and has no use for either.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
@@ -115,6 +120,8 @@ BEHIND_THE_PORTS = {
     "ActorRepo",
     "ActorCommandRepo",
     "TenantUsageSource",
+    "EscrowSource",
+    "SignerProbe",
     "EngineStore",
 }
 NOT_PAYMENTS = {

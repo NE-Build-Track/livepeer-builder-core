@@ -19,6 +19,7 @@ clearinghouse admin on the private one: it stores none, and an answer without it
 key with nobody.
 """
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 import httpx
@@ -116,8 +117,9 @@ async def test_whoever_mounts_a_listeners_routes_says_who_keeps_the_keys(
     engine = await in_role(make_engine, role)
     health = served(shared_app(engine, manage_lifecycle=False)).keys()
     app = shared_app(engine, manage_lifecycle=False)
+    mount: Callable[..., None] = mount_listener_routes  # called below without the keyword, on purpose
     with pytest.raises(TypeError, match="deliver_allocation_keys"):
-        mount_listener_routes(app, engine, listener)  # type: ignore[call-arg]
+        mount(app, engine, listener)
     with pytest.raises(ValueError, match="delivers_allocation_keys") as refused:
         mount_listener_routes(
             app, engine, listener, deliver_allocation_keys=not delivers_allocation_keys(role)

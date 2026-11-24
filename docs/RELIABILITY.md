@@ -18,7 +18,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read`, `grants.create`, `grants.fund`, `grants.status`, `allocations.read` and, for the wallet report (#167), `escrow.read`. Optional: without it the tenant desk is off (`payments.tenants` is `None`; onboarding, the tenant list, a grant's read, a tenant's status and the wallet report are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
-| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
+| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used, by an engine that stores allocation keys, which is one in its `both` or its `work` role: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). An engine in its `clearinghouse` role stores no allocation's key and needs none ([Roles](#roles)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |
@@ -68,7 +68,7 @@ One program covers three deployments (D84, #169). `LPB_ROLE` says which one this
 | `LPB_SIGNER_URL` unset | It starts, and runs its jobs unpaid | It starts, and runs its jobs unpaid | It starts, and its wallet report says the signer is `not_configured` |
 | Refuses | The `LPB_CLEARINGHOUSE_*` settings | Any Batteries setting | The `LPB_CLEARINGHOUSE_*` settings: a clearinghouse is no tenant of another |
 | Starts | Resolving interrupted jobs, discovery, cost sync, retention | The same | Discovery alone, for the runner list it publishes. It holds no job: nothing is resolved, synced or purged, and `LPB_COST_SYNC_INTERVAL_S` and the retention settings do nothing |
-| Runs jobs | Yes | Yes | No. `jobs.run` and `jobs.streaming.stream` refuse an embedding caller too (`InvalidRequest`), before anything is recorded |
+| Runs jobs | Yes | Yes | No. `jobs.run` refuses an embedding caller too: `InvalidRequest`, from admission, before the job's reference is claimed or anything is recorded. `jobs.streaming` is `None`: the role's default transport opens no stream. With a transport a caller supplies that does, `jobs.streaming.stream` is refused the same way |
 | Serves the wallet report and the runner list | Yes, with Batteries | No: it is nobody's clearinghouse | Yes |
 
 - **One place decides who keeps the keys.** `delivers_allocation_keys(role)` in `http/listeners.py`.
@@ -107,9 +107,10 @@ One program covers three deployments (D84, #169). `LPB_ROLE` says which one this
 that would not load does not stop them. `lpb purge`, `bootstrap-admin` and `smoke` load every setting but
 do not need `LPB_DISCOVERY_URL`, since they serve nothing. `lpb serve`, and any engine an application
 starts from its settings, still require it (#112, C23). With a payment provider, `purge` and
-`bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing; `smoke` and `serve` do.
-`gen-secret-key`, `verify` and `gen-docs` read no setting. An engine in its `clearinghouse` role needs no
-`LPB_SECRET_KEY` for any command.
+`bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing. `smoke` and `serve` need it
+in the roles that store allocation keys, `both` and `work`, and not in the `clearinghouse` role, which
+stores none and needs it for no command ([Roles](#roles)). `gen-secret-key`, `verify` and `gen-docs` read
+no setting.
 
 | Command | When |
 | --- | --- |

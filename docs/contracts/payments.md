@@ -383,10 +383,11 @@ provider itself returned, or one an in-process caller passed, cannot name anothe
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:
 
-- **At startup.** An engine with a payment provider and the built-in secret store refuses to start
-  when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the error names the
-  setting; `lpb purge` and `lpb bootstrap-admin`, which never allot, give the store a key for their run
-  only (#106 review). The check runs on the parts the engine will run with, after `decorate`: a
+- **At startup.** An engine that stores allocation keys, one in its `both` or its `work` role, with a
+  payment provider and the built-in secret store refuses to start when that store cannot write, which
+  is when `LPB_SECRET_KEY` is not set, and the error names the setting. An engine in its
+  `clearinghouse` role stores none and is not asked (#169); `lpb purge` and `lpb bootstrap-admin`,
+  which never allot, give the store a key for their run only (#106 review). The check runs on the parts the engine will run with, after `decorate`: a
   decorator that turns the provider off, or installs a store of its own, is not refused, and one that
   adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
   at boot, such as a sealed vault, still starts and is asked per request.

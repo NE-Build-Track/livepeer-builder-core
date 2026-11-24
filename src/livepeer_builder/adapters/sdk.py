@@ -183,7 +183,7 @@ class IdentityOnlyTransport:
     async def signer_readiness(self) -> SignerReadiness:
         return await signer_readiness(self._signer_url)
 
-    async def call(
+    async def call(  # NOSONAR - async by protocol (RunnerTransport)
         self,
         runner: Runner,
         request: JobRequest,

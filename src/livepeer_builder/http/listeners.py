@@ -204,34 +204,45 @@ def mount_listener_routes(
     hand each key over and leave that actor's jobs ``not_provisioned``, and a clearinghouse would keep
     keys its tenants' engines sign with."""
     halves = ROLE_HALVES[engine.role]
-    if WORK_HALF not in halves and name == "only":  # the clearinghouse role
+    _require_the_app_of_the_role(engine.role, name, deliver_allocation_keys)
+    app.state.listener = LISTENERS[name]
+    tagged: set[str] = set()
+    for group in ROUTE_GROUPS:
+        if group.half in halves and group.served_by(name):
+            tagged.update(_mounted(app, engine, group, deliver_allocation_keys))
+    app.openapi_tags = [*(app.openapi_tags or []), *(tag for tag in _TAGS if tag["name"] in tagged)]
+
+
+def _require_the_app_of_the_role(role: Role, name: ListenerName, deliver_allocation_keys: bool) -> None:
+    """Refuse an app the role does not have, before anything is mounted: one listener for a
+    clearinghouse, or allocation keys kept by another party than the role says."""
+    if WORK_HALF not in ROLE_HALVES[role] and name == "only":  # the clearinghouse role
         raise ValueError(
             "an engine in its clearinghouse role serves two listeners, never one: what only a "
             "clearinghouse admin does is on the private listener alone. Run serve(), or build each app "
             'with create_app(engine, listener="public") and create_app(engine, listener="private")'
         )
-    if deliver_allocation_keys != delivers_allocation_keys(engine.role):
+    if deliver_allocation_keys != delivers_allocation_keys(role):
         raise ValueError(
             "deliver_allocation_keys does not agree with the engine's role: an engine in its "
             "clearinghouse role hands each allocation's key to the caller and stores none, and any other "
             "stores each key for its own jobs. Pass delivers_allocation_keys(engine.role)"
         )
-    listener = LISTENERS[name]
-    app.state.listener = listener
-    tagged: set[str] = set()
-    for group in ROUTE_GROUPS:
-        if group.half not in halves or not group.served_by(name):
-            continue
-        before = len(app.routes)
-        if group.allots:  # a tenant's routes, in either form: the same answer for both
-            group.mount(app, engine, deliver_allocation_keys=deliver_allocation_keys)
-        else:
-            group.mount(app, engine)
-        # Tagged here, from the table, and not on each route: a route added to a group is tagged too.
-        side = SIDE_TAGS.get(group.served_on)
-        tags = [HALF_TAGS[group.half], *([side] if side else [])]
-        for route in app.routes[before:]:
-            if isinstance(route, APIRoute):
-                route.tags = [*route.tags, *tags]
-                tagged.update(tags)
-    app.openapi_tags = [*(app.openapi_tags or []), *(tag for tag in _TAGS if tag["name"] in tagged)]
+
+
+def _mounted(app: FastAPI, engine: EngineApi, group: RouteGroup, deliver_allocation_keys: bool) -> list[str]:
+    """Mount one group on ``app`` and tag its routes with its half, and with the tag of the one listener
+    that serves it when it is not served on every listener. The tags given, or none when the group
+    added no route."""
+    before = len(app.routes)
+    if group.allots:  # a tenant's routes, in either form: the same answer for both
+        group.mount(app, engine, deliver_allocation_keys=deliver_allocation_keys)
+    else:
+        group.mount(app, engine)
+    # Tagged here, from the table, and not on each route: a route added to a group is tagged too.
+    side = SIDE_TAGS.get(group.served_on)
+    tags = [HALF_TAGS[group.half], *([side] if side else [])]
+    added = [route for route in app.routes[before:] if isinstance(route, APIRoute)]
+    for route in added:
+        route.tags = [*route.tags, *tags]
+    return tags if added else []

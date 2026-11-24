@@ -236,6 +236,40 @@ async def test_a_default_summary_window_is_judged_by_the_instant_of_end_whatever
     assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
 
 
+class NewYork2026(tzinfo):
+    """New York's wall clock in 2026, with no time zone database: summer time from 8 March to 1 November."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        assert dt is not None
+        summer = datetime(2026, 3, 8, 2) <= dt.replace(tzinfo=None) < datetime(2026, 11, 1, 2)
+        return timedelta(hours=-4 if summer else -5)
+
+    def dst(self, dt: datetime | None) -> timedelta:
+        return self.utcoffset(dt) + timedelta(hours=5)
+
+    def tzname(self, dt: datetime | None) -> str:
+        return "New York"
+
+
+async def test_a_default_summary_window_is_thirty_days_of_time_across_a_clock_change(side: Side) -> None:
+    """The start was taken 30 days back on ``end``'s own wall clock (John, #187 review). Noon on 1 April
+    2026 in New York is 16:00 UTC, and 30 days of wall time before it is noon on 2 March, in winter time:
+    17:00 UTC. The same instant given in UTC started at 16:00, so the first window left an hour of jobs
+    out. The window is 30 days of time, whichever zone names its end."""
+    new_york = datetime(2026, 4, 1, 12, tzinfo=NewYork2026())
+    same_instant = new_york.astimezone(UTC)
+    autumn = datetime(2026, 11, 20, 12, tzinfo=NewYork2026())  # the clock went back on 1 November
+    async with side() as engine:
+        local = await engine.costs.summary(ALICE, None, new_york)
+        utc = await engine.costs.summary(ALICE, None, same_instant)
+        back = await engine.costs.summary(ALICE, None, autumn)
+    assert same_instant == datetime(2026, 4, 1, 16, tzinfo=UTC)
+    assert local.start == utc.start == datetime(2026, 3, 2, 16, tzinfo=UTC)
+    assert local.end - local.start == utc.end - utc.start == timedelta(days=30)
+    assert back.end - back.start == timedelta(days=30)
+    assert back.start == datetime(2026, 10, 21, 17, tzinfo=UTC)  # 17:00 UTC is noon in winter time
+
+
 class NoOffset(tzinfo):
     """A ``tzinfo`` that names no offset: Python reads a datetime that carries it as naive."""
 

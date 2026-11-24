@@ -8,6 +8,10 @@ with ``InvalidRequest`` (400), for the engine and for ``FakeEngine`` alike.
 The window is measured from the instant ``end`` names, as the store reads it: in UTC, and an ``end`` with
 no offset is UTC. Measured in ``end``'s own offset, ``0001-01-31T00:00+01:00`` passed and its start was a
 time before year 1 in UTC, which overflowed where the window is normalized (review of #187).
+
+The default start is that instant less 30 days of time, also counted in UTC, so it is the same instant
+whichever zone names ``end``. Counted on ``end``'s own wall clock, a window that crossed a clock change
+began an hour early or late: for an embedded caller only, since REST gives ``end`` in UTC.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -28,7 +32,6 @@ def summary_window(now: datetime, start: datetime | None, end: datetime | None) 
     since_first = end - first  # between two instants: no offset makes this overflow
     if since_first < SUMMARY_WINDOW:
         raise InvalidRequest("end: must be 0001-01-31T00:00:00Z or later when no start is given")
-    try:
-        return end - SUMMARY_WINDOW, end
-    except OverflowError:  # behind UTC, the start's own wall time is before year 1: the same instant in UTC
-        return first + (since_first - SUMMARY_WINDOW), end
+    # Thirty days of time before the instant, counted in UTC. ``end - SUMMARY_WINDOW`` counts on ``end``'s
+    # own wall clock: across a clock change the start is an hour off, and behind UTC it can be before year 1.
+    return first + (since_first - SUMMARY_WINDOW), end

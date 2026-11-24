@@ -287,9 +287,10 @@ route that allots, so the project allots with a script that calls the embedded A
 
 **`lpb payments check`** is kept from the 13 November design as a read-only command (D87). It prints the
 role and probes what that role needs. Every role probes the signer's address. An engine that reaches
-Batteries itself, in its `both` or its `clearinghouse` role, also probes Batteries. An engine in its
-`work` role probes the clearinghouse it uses instead: who it is, its grant, its usage and the runner
-list. It never writes, and ISS-36's runbook uses it as a precondition.
+Batteries itself, in its `both` or its `clearinghouse` role, also probes Batteries, and its grants
+credential when one is set, which a clearinghouse always needs. An engine in its `work` role probes the
+clearinghouse it uses instead: its grant, which says who it is there, its usage, and the runner list
+when that is its discovery address. It never writes, and ISS-36's runbook uses it as a precondition.
 
 ### Docs to change
 
@@ -620,8 +621,9 @@ Locked by Mike on 18 November 2026. They replace the four answers of 13 November
 - **`lpb payments check`** is kept as a read-only check for each role.
 - **The Keycloak realm's `operator` role** is renamed and maps to `clearinghouse_admin`. A second role
   maps to `tenant_admin` (ISS-33).
-- **A clearinghouse failure** is classified like a signer failure: unreachable or not ready is `retry`,
-  an unknown outcome is `check`, and a refusal keeps its reason (ISS-28).
+- **A failure of a command or a read at the clearinghouse** is classified like a signer failure:
+  unreachable or not ready is `retry`, an unknown outcome is `check`, and a refusal keeps its reason
+  (ISS-28). A failure while signing is the signer's own.
 
 **Not in the first version.** Automated top-ups; federation through the clearinghouse's own sign-in
 service and support for several issuers; wallet alerts and automatic funding; refusing payments to

@@ -119,15 +119,56 @@ async def answers(port: int, path: str = "/livez", headers: dict[str, str] | Non
 
 
 async def both_listen(serving: "asyncio.Task[None]", *ports: int) -> None:
-    """Wait until every port answers, or fail with what ``serve`` raised."""
+    """Wait until every port answers a request, or fail with what ``serve`` raised. A port that takes a
+    connection is not enough: two listeners listen before the engine starts, and answer once it has."""
     for _ in range(200):
         if serving.done():
             serving.result()
             pytest.fail("serve returned before its listeners answered")
         if all(listening(port) for port in ports):
-            return
+            break
         await asyncio.sleep(0.02)
-    pytest.fail("the listeners did not answer within 4 s")
+    else:
+        pytest.fail("the listeners did not answer within 4 s")
+    for port in ports:
+        try:
+            await answers(port)
+        except httpx.HTTPError:
+            if serving.done():
+                serving.result()
+            raise
+
+
+async def test_a_caller_that_connects_while_the_engine_starts_is_answered_once_it_has(
+    store: SqlStore, monkeypatch: pytest.MonkeyPatch, signals: dict[int, object]
+) -> None:
+    """Both listeners listen before the engine starts, so an overlap of their addresses is found first.
+    A request that arrives during the start is not refused and not answered early: it waits."""
+    public, private = free_port(), free_port()
+    start, starting, go = BuilderEngine.start, asyncio.Event(), asyncio.Event()
+
+    async def held_start(self: BuilderEngine) -> None:
+        starting.set()
+        await go.wait()
+        await start(self)
+
+    monkeypatch.setattr(BuilderEngine, "start", held_start)
+    serving = asyncio.create_task(
+        serve(settings(http_port=public, http_private_port=private), supply=EngineSupply(store=store))
+    )
+    try:
+        await asyncio.wait_for(starting.wait(), timeout=5)
+        assert listening(public) and listening(private)
+        asked = asyncio.create_task(answers(public, "/readyz"))
+        done, _ = await asyncio.wait([asked], timeout=0.3)
+        assert not done, "a request was answered before the engine had started"
+        go.set()
+        assert (await asyncio.wait_for(asked, timeout=5)).json()["ready"] is True
+    finally:
+        go.set()
+        serving.cancel()
+        await asyncio.wait([serving], timeout=10)
+    assert not listening(public) and not listening(private)
 
 
 async def test_serve_runs_a_public_and_a_private_listener_over_one_engine(

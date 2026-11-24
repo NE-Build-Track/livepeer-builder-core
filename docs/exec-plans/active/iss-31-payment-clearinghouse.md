@@ -213,10 +213,10 @@ Each pull request ticks its own line here in the same change.
   point 1 and D87 point 1.
 - **23 November 2026, P8, the paid proofs.** Proofs (a) and (b) were run again from the runbook, on the
   direct-signer path, from new volumes: an allotment from the enterprise's engine left the key in its
-  store and none at the clearinghouse; a fixed-price payment and three jobs priced by the second were
-  signed at the published signer and accounted to tenant one alone; an actor with an empty allocation
-  was refused by the signer with nothing signed. $0.001228 was charged. The run found that the
+  store and none at the clearinghouse; a fixed-price image job, a refused fixed-price job and three jobs
+  priced by the second were signed at the published signer and accounted to tenant one alone; an actor
+  with an empty allocation was refused by the signer with nothing signed. $0.021248 was charged. The run found that the
   runbook's helper for the private listener recreated the clearinghouse's engine once the enterprise
-  project had rebuilt the shared image; the helper now runs with `--no-deps`. A fixed-price job that
-  succeeds is still not shown, and the proof of the `both` role was not run again.
+  project had rebuilt the shared image; the helper now runs with `--no-deps`. The proof of the `both`
+  role was not run again.
   [The evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).

@@ -8,7 +8,8 @@ the withdrawn design; what of it still stands is at the top of
 
 The run followed the proof runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook), steps
 0 to 6, on one host, from new volumes. It ran from 00:26 to 00:36 UTC on 24 November 2026, which is the
-evening of 23 November where it was run.
+evening of 23 November where it was run. One more job, the fixed-price image, was run at 01:04 UTC on the
+same volumes, after both projects had been stopped and started again.
 
 | Component | Identity |
 | --- | --- |
@@ -16,7 +17,7 @@ evening of 23 November where it was run.
 | Clearinghouse | `deploy/clearinghouse`: the engine in its `clearinghouse` role with two listeners, Batteries `03bc9fb` with its on-chain listener on, node signer and discovery `eee09c4`, and the relay that publishes the signer |
 | Enterprise | `deploy/enterprise`: the engine in its `work` role, with the clearinghouse's address, a tenant admin key, the published signer's address and its own secret key. No Batteries |
 | Network | real orchestrators on Arbitrum One, and one funded wallet. One signer used it |
-| Spend | $0.001228 charged to one allocation |
+| Spend | $0.021248 charged to one allocation: $0.020020 for the image and $0.001228 for the other jobs |
 
 No address, credential or tenant id is recorded here. Every access credential stayed in a git-ignored
 file, the wallet's files were mounted read-only and never copied, and no allocation's key was printed or
@@ -54,18 +55,19 @@ so nothing else could have signed them.
 | A chat completion | by the second | 8.7 s | `succeeded` | sent; 1 payment row | $0.000195, `observed`, billable |
 | A chat completion | by the second | 3.3 s | `succeeded` | sent; 1 payment row | $0.000195, `observed`, billable |
 | A chat completion | by the second | 30.1 s | `succeeded` | sent; 9 payment rows, one each cycle | $0.000838, `observed`, billable |
+| An image, fixed price | $0.02 | 17.3 s | `succeeded`: one 512 by 512 PNG | sent; 1 payment row | $0.020020, `observed`, billable |
 
 | Check after the jobs | Result | Seen |
 | --- | --- | --- |
-| Tenant one's payment records at the clearinghouse | pass | 12 rows, $0.001228 |
-| The actor's allowance on the enterprise's engine | pass | `spent` $0.001228 of $0.25 |
-| Reconciliation for the actor on the enterprise's engine | pass | `balanced` |
-| Tenant two's payment records | pass | 0 rows |
+| Tenant one's payment records at the clearinghouse | pass | 12 rows, $0.001228; after the image, 13 rows, $0.021248 |
+| The actor's allowance on the enterprise's engine | pass | `spent` $0.001228 of $0.25; after the image, $0.021248 |
+| Reconciliation for the actor on the enterprise's engine | pass | `balanced`, before the image and after it |
+| Tenant two's payment records | pass | 0 rows, before the image and after it |
 | Tenant two's actor | pass | `spent` 0 of $0.25 |
-| The tenant list, on the private listener | pass | tenant one `spent` $0.001228, tenant two `spent` 0 |
+| The tenant list, on the private listener | pass | tenant one `spent` $0.001228, tenant two `spent` 0; after the image, tenant one $0.021248 |
 | Tenant one's admin on five of tenant two's routes | pass | 403 on each: the grant, the actors, the payment records, one allocation, the access keys |
 | The clearinghouse admin's credential on the public listener | pass | 403 |
-| The wallet report after the jobs | pass | the deposit and the reserve as before; unspent grants $0.998772 over 2 grants, which is each grant's unallocated balance and what its allocations still hold |
+| The wallet report after the jobs | pass | the deposit and the reserve as before; unspent grants $0.998772 over 2 grants, which is each grant's unallocated balance and what its allocations still hold; after the image, $0.978752 |
 | Both engines' `lpb payments check` after the jobs | pass | exit 0 on each |
 
 ## An empty allocation is refused by the signer
@@ -91,8 +93,12 @@ The signer's Batteries authorization webhook is the only check at signing, and i
   engine's container as it was.
 - **The first payment of a job priced by the second covers ten seconds.** Each of the two short chat
   jobs was one payment row of ten times the rate. The 30-second job was nine rows.
-- **A fixed-price job that succeeds is still not shown.** The media runner refused the request with a
-  404 after the payment was sent, as on 19 November: its path is not known. The fixed-price payment is
-  shown: one signature at the published signer, a charge to the right allocation, and a cost the engine
-  accounts and does not bill. The $0.02 image runner was not tried again.
+- **A fixed-price job that succeeds is shown, for the first time.** The media runner refused the request
+  with a 404 after the payment was sent, as on 19 November: its path is not known. That payment is a
+  cost the engine accounts and does not bill. The image runner, which had refused a request on 19
+  November, drew the image this time: one payment of the fixed price, a job that `succeeded`, and a cost
+  that is billed.
+- **Both projects came back from a stop with their records.** They were stopped and started again
+  between the two parts of the run, without a rebuild: the tenants, the allocations, the stored key and
+  the payment records were as before, and both `lpb payments check` passed.
 - **Proof (c) was not run again.** It stands as run on 19 November.

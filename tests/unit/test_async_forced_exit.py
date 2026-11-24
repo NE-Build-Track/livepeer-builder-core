@@ -8,10 +8,8 @@ still ended in order: it is given ``LPB_ASYNC_DRAIN_TIMEOUT_S``, then cancelled 
 before the engine closes its database, and when ``serve()`` has returned no task of the worker or of the
 engine is left.
 
-What a cancel does to the listeners themselves is not this file's subject. Two listeners hang up on
-their callers and close (tests/unit/test_listener_serving.py). One listener is uvicorn's own server,
-which a cancel leaves without its shutdown: its socket stays open until the event loop ends, so the
-port is asserted free for two listeners only.
+What a cancel does to the listeners themselves is tests/unit/test_listener_serving.py's subject: one
+listener or two, each is closed and hangs up on its callers. Here every port is asserted free again.
 
 Each test serves on loopback ports the system picked, over a database in a file, which is read again
 once the engine has closed it.
@@ -146,8 +144,7 @@ async def test_a_cancelled_serve_ends_a_running_async_job_and_leaves_no_task_of_
     assert served.serving.cancelled()  # the caller sees its own cancellation
     assert engine_tasks() == []  # no loop, no job and no listener outlives serve()
     assert served.engine.jobs.worker._running == set()
-    if listeners == 2:  # one listener is uvicorn's own server: a cancel leaves its socket open
-        assert not any(listening(port) for port in ports)
+    assert not any(listening(port) for port in ports)
     assert stopped_in_flight(await served.stored(job)) == UNCERTAIN
     assert len(served.transport.calls) == 1  # never run again
     with pytest.raises(RuntimeError, match="engine is stopped"):
